@@ -10,7 +10,7 @@ local get_acd_slice_action = require "acd"
 MADX:load("lhcb1.seq")
 local lhcb1 in MADX
 local RAMPUP = 500
-local FLATTOP = 3000
+local FLATTOP = 6000
 
 --- Define initial coordinates with small offsets ---
 local X0 = { x = 0, px = 0, y = 0, py = 0, t = 0, pt = 0 }
@@ -132,6 +132,7 @@ local track_data = track {
     cmap=true,
     -- debug=5,
 }
+
 track_data:write("data/track_data.tfs")
 
 --- Write out the final magnet strengths to file ---

@@ -243,14 +243,6 @@ class Controller:
                     )
                     break
 
-                # loss_diff = abs(total_loss - previous_loss)
-                # if loss_diff < 1e-5:
-                #     print(
-                #         f"\nLoss change below threshold: {loss_diff:.3e}. Stopping early at epoch {epoch}."
-                #     )
-                #     break
-
-                # previous_loss = total_loss
         except KeyboardInterrupt:
             print(
                 "\nKeyboardInterrupt detected. Terminating early and writing results."

@@ -7,8 +7,8 @@ from pathlib import Path
 
 # Simulation parameters
 MAX_EPOCHS        = int(1100)  # Total number of epochs for optimization
-TRACKS_PER_WORKER = 300         # Number of tracks per worker
-NUM_WORKERS       = 10          # Number of parallel worker processes
+TRACKS_PER_WORKER = 200         # Number of tracks per worker
+NUM_WORKERS       = 30          # Number of parallel worker processes
 TOTAL_TRACKS      = TRACKS_PER_WORKER * NUM_WORKERS  # Total number of tracks
 
 # Learning-rate schedule
@@ -19,7 +19,7 @@ MAX_LR           = 7e-6        # Peak learning rate after warmup
 MIN_LR           = 4e-6        # Final learning rate after decay
 
 RAMP_UP_TURNS   = 500          # Number of turns to ramp up the beam
-FLATTOP_TURNS   = 3000         # Number of turns to flatten the beam
+FLATTOP_TURNS   = 6000         # Number of turns to flatten the beam
 
 if TOTAL_TRACKS > FLATTOP_TURNS:
     raise ValueError(
