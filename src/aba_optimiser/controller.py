@@ -284,7 +284,7 @@ class Controller:
         fig, ax = plt.subplots(figsize=(12, 6))
 
         # Plot the relative difference as a single bar with error bars set to relative uncertainties
-        rects = ax.bar(
+        ax.bar(
             x,
             relative_diff,
             width,
