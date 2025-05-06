@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aba_optimiser"
+version = "0.1.0"
+description = "Parallel knob strength optimisation using PyMAD-NG"
+authors = [
+    { name="Your Name", email="you@example.com" },
+]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "tfs-pandas",
+    "tensorboardX",
+    "pymadng>=0.3.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "ruff"
+]
+
+[tool.setuptools]
+packages = ["aba_optimiser"]
+package-dir = {"" = "src"}
