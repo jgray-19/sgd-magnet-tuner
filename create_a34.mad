@@ -1,0 +1,143 @@
+--- Initialisation of libraries and modules ---
+local track, beam, twiss, match in MAD
+local rand, abs                                             in MAD.gmath
+local observed in MAD.element.flags
+local hkicker, vkicker in MAD.element
+local is_element in MAD.typeid
+local get_acd_slice_action = require "acd"
+
+--- Load the sequence file ---
+MADX:load("lhcb1.seq")
+local lhcb1 in MADX
+local RAMPUP = 500
+local FLATTOP = 3000
+
+--- Define initial coordinates with small offsets ---
+local X0 = { x = 0, px = 0, y = 0, py = 0, t = 0, pt = 0 }
+local tunes = { 0.28, 0.31 }
+local drv_tunes = { 0.27, 0.322 }
+
+--- Define the region of interest ---
+local start_pos = "BPM.13R3.B1"
+local end_pos   = "BPM.13L4.B1"
+local range = start_pos .. "/" .. end_pos
+
+--- Collect quadrupole element names within the defined range ---
+local elem_names = {}
+for i, elm, s, ds in lhcb1:iter(range) do
+    if elm.k1 and elm.k1 ~= 0 and elm.name:match("MQ%.") then
+        -- Check if the element is a main quadrupole
+        table.insert(elem_names, elm.name)
+    end
+end
+
+--- Inject noise into the quadrupole strengths (updated to handle aliases) ---
+local q_nf = 1e-3  -- noise factor for quadrupoles
+
+-- Build groups of magnets by their base name.
+-- The substitution removes an alias of "A" or "B" when it occurs before the main number block.
+local groups = {}
+local base_list = {}
+for i, name in ipairs(elem_names) do
+    local base = name:gsub("%.[AB](%d+[RL]%d%.B%d)$", ".%1")
+    groups[base] = groups[base] or {}
+    table.insert(groups[base], name)
+    table.insert(base_list, base)
+end
+
+-- Inject noise into each group only once, then update all aliases with the same value
+for _, base in ipairs(base_list) do
+    local alias_list = groups[base]
+    local noise = q_nf * ((rand() - 0.5) * 2)
+    for _, name in ipairs(alias_list) do
+         MADX[name].k1 = MADX[name].k1 + noise * abs(MADX[name].k1)
+         -- MADX[name].k1s = MADX[name].k1s + noise * abs(MADX[name].k1)
+    end
+end
+
+--- Write the element names to a file (used by Python) ---
+local outFile = io.open("data/elem_names.txt", "w")
+for _, base in ipairs(base_list) do
+    local alias_list = groups[base]
+    for _, name in ipairs(alias_list) do
+        local spos
+        for i, e, s, ds in lhcb1:siter(range) do
+            if e.name == name then 
+                spos = s
+                break
+            end
+        end
+        outFile:write(spos .. "\t" .. name)
+    end
+    outFile:write("\n")
+end
+outFile:close()
+
+--- Configure the beam for simulation ---
+lhcb1.beam = beam { particle='proton', energy=6800 }
+
+-- Match the tunes
+match {
+    command := twiss {sequence=lhcb1},
+    variables = {
+        rtol=1e-6,
+        { var = 'MADX.dqx_b1_op', name='dQx.b1_op' },
+        { var = 'MADX.dqy_b1_op', name='dQy.b1_op' },
+    },
+    equalities = {
+        { expr = \t -> math.abs(t.q1)-(62+tunes[1]), name='q1' },
+        { expr = \t -> math.abs(t.q2)-(60+tunes[2]), name='q2' },
+    },
+    objective = { fmin=1e-7 },
+};
+
+-- Install the acd dipoles 
+-- Run a twiss to get the beta functions at the BPM locations
+local tws = twiss {sequence = lhcb1}
+local betas = {tws["MKQA.6L4.B1"].beta11, tws["MKQA.6L4.B1"].beta22}
+local voltx_ac = 0.042 * lhcb1.beam.pc * abs(tunes[1] - drv_tunes[1]) / math.sqrt(180.0 * betas[1])
+local volty_ac = 0.042 * lhcb1.beam.pc * abs(tunes[2] - drv_tunes[2]) / math.sqrt(177.0 * betas[2])
+
+local acd = lhcb1["MKQA.6L4.B1"]
+local acd_atslice = get_acd_slice_action(
+    acd, 
+    lhcb1.beam.pc, 
+    tunes, 
+    drv_tunes, 
+    betas, 
+    { 0, RAMPUP, RAMPUP+FLATTOP, 0 } -- turns before ramp, ramp up, flat top, ramp down
+)
+--- Prepare BPM selection for the arc region --- 
+local a34_start = lhcb1:index_of(start_pos)
+local a34_end = lhcb1:index_of(end_pos)
+local function is_element_in_arc34(_, eidx)
+    if eidx >= a34_start and eidx <= a34_end then  -- Changed to include boundaries
+        return true
+    else
+        return false
+    end
+end
+
+-- Select BPMs within the arc region and track their data ---
+lhcb1:deselect(observed)
+lhcb1:  select(observed, {pattern=start_pos}) -- Ensure the start position, in case it is not a BPM
+lhcb1:  select(observed, {pattern=end_pos}) -- Ensure the end position, in case it is not a BPM
+lhcb1:  select(observed, {pattern="BPM", select=is_element_in_arc34})
+-- MAD.dbg()
+local track_data = track {
+    sequence = lhcb1,
+    X0 = X0,
+    nturn = RAMPUP + FLATTOP,
+    atslice=acd_atslice,
+    cmap=true,
+    -- debug=5,
+}
+track_data:write("data/track_data.tfs")
+
+--- Write out the final magnet strengths to file ---
+local outFile = io.open("data/true_strengths.txt", "w")
+
+for base, alias_list in pairs(groups) do
+    outFile:write(base .. "_k1\t" .. MADX[alias_list[1]].k1 .. "\n")  -- Accessing the first alias in the list
+end
+outFile:close()

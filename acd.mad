@@ -1,0 +1,49 @@
+local volt_factor = 0.1 !0.042
+local function get_acd_slice_action(elm, pbeam, tunes, drv_tunes, betas, ramp)
+    -- The settings for the AC dipole
+    local twopi in MAD.constant
+    local abs, cos, max, sqrt in math
+    local voltx = volt_factor * pbeam * abs(tunes[1] - drv_tunes[1]) / sqrt(180.0 * betas[1])
+    local volty = volt_factor * pbeam * abs(tunes[2] - drv_tunes[2]) / sqrt(177.0 * betas[2])
+    
+    local omegax = twopi * drv_tunes[1]
+    local omegay = twopi * drv_tunes[2]
+    local vrfx  = 0.3 * voltx / pbeam
+    local vrfy  = 0.3 * volty / pbeam
+    local atslice
+    local prev_turn = -1
+    if ramp then
+        print("AC dipole: ramp", ramp[1], ramp[2], ramp[3], ramp[4])
+        -- The AC dipole function
+        atslice = \_, mflw, _, _ =>
+            local turn in mflw -- Note: turn starts at 1 (does MAD-X start at 0? - if so, change the following lines)
+            if turn == prev_turn then return end
+            prev_turn = turn
+            local mult
+            if turn < ramp[1] then -- This is how many turns before the ramp starts
+                mult = 0
+            elseif turn < ramp[2] then -- This is how long the ramp up is
+                mult = (turn - ramp[1]) / (ramp[2] - ramp[1])
+            elseif turn < ramp[3] then -- This is the flat top
+                mult = 1
+            elseif turn < ramp[4] then -- This is the ramp down
+                mult = (ramp[4] - turn) / (ramp[4] - ramp[3])
+            else
+                mult = 0
+            end
+            elm.hkick = vrfx * mult * cos(omegax * (turn-1)) -- Note: turn starts at 1 (Change if MAD-X starts at 0)
+            elm.vkick = vrfy * mult * cos(omegay * (turn-1)) -- Note: turn starts at 1 (Change if MAD-X starts at 0)
+        end
+    else
+        print("AC dipole: no ramp")
+        atslice = \_, mflw, _, _ =>
+            local turn in mflw -- Note: turn starts at 1 (does MAD-X start at 0? - if so, change the following lines)
+            if turn == prev_turn then return end
+            prev_turn = turn
+            elm.hkick = vrfx * cos(omegax * (turn-1)) -- Note: turn starts at 1 (Change if MAD-X starts at 0)
+            elm.vkick = vrfy * cos(omegay * (turn-1)) -- Note: turn starts at 1 (Change if MAD-X starts at 0)
+        end
+    end
+    return atslice  
+end
+return get_acd_slice_action
