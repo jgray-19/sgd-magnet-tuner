@@ -11,6 +11,7 @@ from aba_optimiser.config import (
     BPM_RANGE,
     DECAY_EPOCHS,
     ELEM_NAMES_FILE,
+    GRAD_NORM_ALPHA,
     KNOB_TABLE,
     MAX_EPOCHS,
     MAX_LR,
@@ -32,7 +33,7 @@ from aba_optimiser.optimiser import AdamOptimiser
 from aba_optimiser.scheduler import LRScheduler
 from aba_optimiser.utils import (
     read_elem_names,
-    read_true_strengths,
+    read_knobs,
     save_results,
     scientific_notation,
 )
@@ -48,7 +49,7 @@ class Controller:
         # Read element names using the util function; each line now becomes a list of aliases.
         self.elem_pos, self.elem_names = read_elem_names(ELEM_NAMES_FILE)
         # Read true strengths
-        self.true_strengths = read_true_strengths(TRUE_STRENGTHS)
+        self.true_strengths = read_knobs(TRUE_STRENGTHS)
 
         # Initialise MAD interface and knobs
         self.mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
@@ -95,6 +96,8 @@ class Controller:
             if i1 < i0:
                 i0, i1 = i1, i0
             self.window_slices.append(slice(i0, i1 + 1))
+
+        self.smoothed_grad_norm = None  # Initialize smoothed gradient norm
 
     def _write_results(self, uncertainties) -> None:
         """Write final knob strengths and markdown table to file."""
@@ -203,6 +206,17 @@ class Controller:
                 self.current_knobs = dict(zip(self.knob_names, new_vec))
 
                 grad_norm = np.linalg.norm(agg_grad)
+
+                # —— update EMA of grad_norm ——
+                if self.smoothed_grad_norm is None:
+                    self.smoothed_grad_norm = grad_norm
+                else:
+                    self.smoothed_grad_norm = (
+                        GRAD_NORM_ALPHA * self.smoothed_grad_norm
+                        + (1.0 - GRAD_NORM_ALPHA) * grad_norm
+                    )
+
+                writer.add_scalar("grad_norm", grad_norm, epoch)
                 true_diff = [
                     abs(self.current_knobs[k] - self.true_strengths[k])
                     for k in self.knob_names
@@ -217,6 +231,7 @@ class Controller:
                 rel_diff = np.sum(rel_diff)
                 writer.add_scalar("loss", total_loss, epoch)
                 writer.add_scalar("grad_norm", grad_norm, epoch)
+                writer.add_scalar("smoothed_grad_norm", self.smoothed_grad_norm, epoch)                
                 writer.add_scalar("true_diff", true_diff, epoch)
                 writer.add_scalar("rel_diff", rel_diff, epoch)
                 writer.add_scalar("learning_rate", lr, epoch)
@@ -237,9 +252,11 @@ class Controller:
                     end="",
                 )
 
-                if grad_norm < 5e-7:
+                if self.smoothed_grad_norm < 5e-7:
                     print(
-                        f"\nGradient norm below threshold: {grad_norm:.3e}. Stopping early at epoch {epoch}."
+                        f"\nGradient norm below threshold: "
+                        f"{self.smoothed_grad_norm:.3e}. "
+                        f"Stopping early at epoch {epoch}."
                     )
                     break
 
@@ -275,7 +292,7 @@ class Controller:
 
         # Calculate the relative difference between final and true values
         # and scale uncertainties accordingly (avoid division by zero)
-        relative_diff = (final_vals - true_vals) / np.abs(true_vals)
+        relative_diff = np.abs(final_vals - true_vals) / np.abs(true_vals)
         relative_uncertainties = np.abs(uncertainties) / np.abs(true_vals)
 
         x = np.arange(len(knob_names))

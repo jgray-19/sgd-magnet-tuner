@@ -6,20 +6,21 @@ Configuration constants for the knob optimisation pipeline.
 from pathlib import Path
 
 # Simulation parameters
-MAX_EPOCHS        = int(1100)  # Total number of epochs for optimization
-TRACKS_PER_WORKER = 200         # Number of tracks per worker
-NUM_WORKERS       = 30          # Number of parallel worker processes
+MAX_EPOCHS        = int(1_000) # Total number of epochs for optimization
+TRACKS_PER_WORKER = 10         # Number of tracks per worker
+NUM_WORKERS       = 1          # Number of parallel worker processes
 TOTAL_TRACKS      = TRACKS_PER_WORKER * NUM_WORKERS  # Total number of tracks
 
 # Learning-rate schedule
 WARMUP_EPOCHS    = 100         # Epochs for cosine warmup
-DECAY_EPOCHS     = 1000        # Epoch at which cosine decay ends
+DECAY_EPOCHS     = 1_000       # Epoch at which cosine decay ends
 WARMUP_LR_START  = 5e-6        # Initial learning rate at epoch 1
 MAX_LR           = 7e-6        # Peak learning rate after warmup
 MIN_LR           = 4e-6        # Final learning rate after decay
+GRAD_NORM_ALPHA  = 0.7         # Gradient norm smoothing factor
 
-RAMP_UP_TURNS   = 500          # Number of turns to ramp up the beam
-FLATTOP_TURNS   = 6000         # Number of turns to flatten the beam
+RAMP_UP_TURNS   = 1_000        # Number of turns to ramp up the ACD
+FLATTOP_TURNS   = 10_000       # Number of turns on the flat top
 
 if TOTAL_TRACKS > FLATTOP_TURNS:
     raise ValueError(
@@ -33,12 +34,13 @@ TRACK_DATA_FILE  = Path("data/track_data.tfs").absolute()              # Measure
 TRUE_STRENGTHS   = Path("data/true_strengths.txt").absolute()          # Ground-truth knob strengths
 OUTPUT_KNOBS     = Path("data/final_knobs.txt").absolute()             # Where to write final strengths
 KNOB_TABLE       = Path("data/knob_strengths_table.md").absolute()     # Markdown summary of results
-ELEM_NAMES_FILE  = Path("data/elem_names.txt").absolute()            # File with element names
+ELEM_NAMES_FILE  = Path("data/elem_names.txt").absolute()              # File with element names
+TUNE_KNOBS_FILE  = Path("data/matched_tunes.txt").absolute()           # File with tune knobs
 
 # Simulation specifics
 BPM_RANGE        = "BPM.13R3.B1/BPM.13L4.B1"           # BPM selection range for tracking
 BEAM_ENERGY      = 6800                                # Beam energy in GeV
-SEQ_NAME        = "lhcb1"                             # Sequence name in MAD-X
+SEQ_NAME        = "lhcb1"                              # Sequence name in MAD-X (lowercase)
 
 # Instead of a single BPM_RANGE, define multiple overlapping windows:
 start_bpms = [

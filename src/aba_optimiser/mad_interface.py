@@ -1,6 +1,7 @@
 import numpy as np
 from pymadng import MAD
-from aba_optimiser.config import BEAM_ENERGY, SEQ_NAME
+from aba_optimiser.config import BEAM_ENERGY, SEQ_NAME, TUNE_KNOBS_FILE
+from aba_optimiser.utils import read_knobs
 
 class MadInterface:
     """
@@ -18,15 +19,16 @@ class MadInterface:
         self.mad = MAD(**kwargs)
         self._load_sequence()
 
+        self.nbpms = self._count_bpms()
+        self._observe_bpms()
+
+        self._set_tune_knobs()
+
     def _load_sequence(self) -> None:
         """Load the sequence and count BPMs in the specified range."""
         self.mad.send(f'MADX:load("{self.sequence_file}")')
         self.mad.send(f'range = "{self.bpm_range}"')
         self.mad.send(f"MADX.{SEQ_NAME}.beam = beam {{ particle = 'proton', energy = {BEAM_ENERGY} }}")
-        
-        self.nbpms = self._count_bpms()
-        self._observe_bpms()
-
 
     def _count_bpms(self) -> int:
         """Count the number of BPM elements in the given range."""
@@ -52,6 +54,12 @@ local observed in MAD.element.flags
 {SEQ_NAME}:select(observed, {{pattern="BPM"}})
 """
         self.mad.send(code)
+
+    def _set_tune_knobs(self) -> None:
+        """Set up the MAD-NG session to include predefined tune knobs."""
+        tune_knobs = read_knobs(TUNE_KNOBS_FILE)
+        for name, val in tune_knobs.items():
+            self.mad.send(f"MADX.{SEQ_NAME}.{name} = {val}")
 
     def make_knobs(self, elem_groups: list[list[str]]) -> list[str]:
         """

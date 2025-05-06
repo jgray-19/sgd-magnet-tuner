@@ -35,33 +35,31 @@ class Worker(Process):
         self.elem_names = elem_names
 
     @staticmethod
-    def build_batch_tracking_code(num_tracks: int) -> str:
+    def build_batch_tracking_code(num_particles: int) -> str:
         """
         Build Lua code for full-arc tracking on the given initial-condition indices.
         Instead of aggregating gradients and loss inside MAD-NG, we send full derivative
         and difference matrices.
         """
-        lines = []
-        for i in range(1, num_tracks + 1):
-            lines.append(f"""-- Track for initial condition {i}
-sim_trk[{i}] = track{{sequence = MADX.{SEQ_NAME}, X0 = da_x0_c[{i}], nturn = 1, savemap=true, range=range}}
-assert(sim_trk[{i}].lost == 0, "Tracking failed for initial condition {i}")
-for j = 1, nbpms do
-    local map = sim_trk[{i}].__map[j]
-    for k, param in ipairs(knob_names) do
-        dx_dk[{i}]:set(k, j, map.x:get(knob_monomials[param]))
-        dy_dk[{i}]:set(k, j, map.y:get(knob_monomials[param]))
+        return f"""
+num_particles = {num_particles:d}
+sim_trk = track{{sequence = MADX.{SEQ_NAME}, X0 = da_x0_c, nturn = 1, savemap=true, range=range}}
+assert(sim_trk.lost == 0, "Tracking failed for initial conditions")
+for i = 1, num_particles do
+    for j = 1, nbpms do
+        local map = sim_trk.__map[i + (j - 1) * num_particles]
+!        assert(sim_trk.id[i + (j - 1) * num_particles] == i, "Mismatch between track ID and index")
+        for k, param in ipairs(knob_names) do
+            dx_dk[i]:set(k, j, map.x:get(knob_monomials[param]))
+            dy_dk[i]:set(k, j, map.y:get(knob_monomials[param]))
+        end
     end
 end
-x_diffs[{i}] = sim_trk[{i}].x - meas_trk[{i}].x
-y_diffs[{i}] = sim_trk[{i}].y - meas_trk[{i}].y
-""")
-        # After processing all tracks, send full arrays
-        lines.append("py:send(dx_dk)")  # send full (n_quads, n_bpms) array
-        lines.append("py:send(dy_dk)")  # send full (n_quads, n_bpms) array
-        lines.append("py:send(x_diffs)")  # send full (n_bpms,) array
-        lines.append("py:send(y_diffs)")  # send full (n_bpms,) array
-        return "\n".join(lines)
+py:send(dx_dk)
+py:send(dy_dk)
+py:send(sim_trk.x - meas_trk.x)
+py:send(sim_trk.y - meas_trk.y)
+"""
 
     @staticmethod
     def uncertainty_code() -> str:
@@ -131,15 +129,15 @@ py:send(Htot)
 
     def run(self) -> None:
         # Load initial conditions
-        init_coords = tfs.read(TRACK_DATA_FILE, index="turn")
+        track_data = tfs.read(TRACK_DATA_FILE, index="turn")
         # Remove all rows that are not the BPM s.ds.r3.b1
         start_bpm, end_bpm = BPM_RANGE.split("/")
-        init_coords = select_marker(init_coords, start_bpm)
+        track_data = select_marker(track_data, start_bpm)
 
-        selected_init = []
+        init_coords = []
         for turn_idx in self.indices:
-            row = init_coords.iloc[turn_idx]
-            selected_init.append(
+            row = track_data.iloc[turn_idx]
+            init_coords.append(
                 {
                     "x": row["x"],
                     "px": row["px"],
@@ -150,7 +148,7 @@ py:send(Htot)
                     "pt": 0,
                 }
             )
-        num_tracks = len(selected_init)
+        num_particles = len(init_coords)
 
         # Load measurement tracks
         all_data = tfs.read(TRACK_DATA_FILE)
@@ -159,20 +157,41 @@ py:send(Htot)
         if "BPM" not in end_bpm:
             all_data = filter_out_marker(all_data, end_bpm)
 
-        meas_trk: list[dict[str, np.ndarray]] = []
-        for i, turn_idx in enumerate(self.indices):
-            filtered = all_data[all_data["turn"] == turn_idx + 1]
-            meas_trk.append(
-                {
-                    "x": filtered["x"].to_numpy().reshape(-1, 1),
-                    "y": filtered["y"].to_numpy().reshape(-1, 1),
-                }
-            )
-
         # Initialise MAD interface and load sequence
         mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
         mad = mad_iface.mad
+        
+
+        # Run a twiss and to get the beta functions
+        mad.send(f"""
+tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
+        """)
+        tws: tfs.TfsDataFrame = mad.tws.to_df().set_index("name")
+        
+        # Remove all rows that are before the start BPM and after the end BPM
+        start_bpm_idx = tws.index.get_loc(start_bpm)
+        end_bpm_idx = tws.index.get_loc(end_bpm)
+        tws = tws.iloc[start_bpm_idx:end_bpm_idx + 1]
+
+        beta_x = np.sqrt(tws["beta11"].to_numpy())
+        beta_y = np.sqrt(tws["beta22"].to_numpy())
+
+        assert len(beta_x) == len(beta_y), "Beta functions are not the same length"
+        assert len(beta_x) == mad_iface.nbpms, "Beta functions do not match the number of BPMs"
+        
         mad_iface.make_knobs(self.elem_names)
+
+        x_array = np.empty((num_particles, mad_iface.nbpms))
+        y_array = np.empty((num_particles, mad_iface.nbpms))
+        for i, turn_idx in enumerate(self.indices):
+            filtered = all_data[all_data["turn"] == turn_idx + 1] # A pandas dataframe with nbpms rows
+            x_array[i, :] = filtered["x"].to_numpy()
+            y_array[i, :] = filtered["y"].to_numpy()
+        
+        meas_trk = { # Reshape to have a 2D array of shape (num_particles*nbpms, 1)
+            "x": x_array.flatten(order="F").reshape(-1, 1), 
+            "y": y_array.flatten(order="F").reshape(-1, 1),
+        }
 
         # Import required MAD-NG modules
         mad.load("MAD", "damap", "matrix")
@@ -190,63 +209,65 @@ end
 """)
 
         mad.send(f"""
-dx_dk    = table.new({num_tracks}, 0)
-dy_dk    = table.new({num_tracks}, 0)
-meas_trk = table.new({num_tracks}, 0)
-sim_trk  = table.new({num_tracks}, 0)
-x_diffs  = table.new({num_tracks}, 0)
-y_diffs  = table.new({num_tracks}, 0)
+dx_dk    = table.new({num_particles}, 0)
+dy_dk    = table.new({num_particles}, 0)
+for i=1,{num_particles} do
+    dx_dk[i] = matrix(#knob_names, nbpms)
+    dy_dk[i] = matrix(#knob_names, nbpms)
+end
 """)
 
-        self.send_initial_conditions(mad, selected_init)
+        self.send_initial_conditions(mad, init_coords)
 
-        # Allocate derivative matrices
-        for idx in range(1, num_tracks + 1):
-            mad.send(f"dx_dk[{idx}] = matrix(#knob_names, nbpms)")
-            mad.send(f"dy_dk[{idx}] = matrix(#knob_names, nbpms)")
-
-        # Send measurement data into MAD-NG
-        for idx in range(num_tracks):
-            mad.send(f"meas_trk[{idx + 1}] = {{x = py:recv(), y = py:recv()}}")
-            mad.send(meas_trk[idx]["x"])
-            mad.send(meas_trk[idx]["y"])
+        mad.send("meas_trk = {x = py:recv(), y = py:recv()}")
+        mad.send(meas_trk['x'])
+        mad.send(meas_trk['y'])
 
         # Clean up python objects that are no longer needed in the worker loop
-        del init_coords
+        del track_data
         del all_data
         del meas_trk
 
         # Main loop: receive messages, run tracking, and send full per-BPM data
-        track_code = self.build_batch_tracking_code(num_tracks)
-        while True:
-            knob_updates, slc = self.conn.recv()  # assume dict[name->value]
-            if knob_updates is None:
-                break
+        track_code = self.build_batch_tracking_code(num_particles)
+        knob_updates, slc = self.conn.recv()  # assume dict[name->value]
+        while knob_updates is not None:
             for name, val in knob_updates.items():
                 mad.send(f"MADX.{SEQ_NAME}['{name}']:set0({val})")
-            # Run full-arc tracking code and get all per-BPM data.
+            
+            # 1) Run full-arc tracking code and get all per-BPM data.
             mad.send(track_code)
-            dx_dk = np.array(mad.recv())
-            dy_dk = np.array(mad.recv())
-            x_diffs = np.array(mad.recv())
-            y_diffs = np.array(mad.recv())
 
-            # 2) Slice out only the BPMs in current window
-            sub_dx = dx_dk[:, :, slc]
-            sub_dy = dy_dk[:, :, slc]
-            x_col = x_diffs[:, slc, :]
-            y_col = y_diffs[:, slc, :]
+            # This is a list of matrices, one for each particle, each with shape (n_knobs, nbpms)
+            # Stack per-particle matrices along a new axis so that dx_stack has shape (num_particles, n_knobs, nbpms)
+            dx_stack = np.stack(mad.recv(), axis=0)
+            dy_stack = np.stack(mad.recv(), axis=0)
 
-            # 4) Batched mat-vec:
-            grad = (sub_dx @ x_col + sub_dy @ y_col)[..., 0]
-            grad = np.sum(grad, axis=0)
-            loss = np.sum(x_col**2 + y_col**2)
+            # Reshape differences into (num_particles, nbpms)
+            x_diffs = mad.recv().reshape(num_particles, -1, order="F") / beta_x
+            y_diffs = mad.recv().reshape(num_particles, -1, order="F") / beta_y
+            
+            # Select the slice of interest
+            dx_slc = dx_stack[:, :, slc]      # shape: (num_particles, n_knobs, len(slc))
+            dy_slc = dy_stack[:, :, slc]
 
+            x_slc = x_diffs[:, slc]           # shape: (num_particles, len(slc))
+            y_slc = y_diffs[:, slc]
+
+            # Compute the dot product for each particle and sum over particles.
+            # This avoids using an explicit transpose by aligning the axes in einsum.
+            grad = np.einsum('ink,ik->n', dx_slc, x_slc) + np.einsum('ink,ik->n', dy_slc, y_slc)
+            loss = np.sum(x_slc ** 2) + np.sum(y_slc ** 2)
+                
+            # 5) Send back the gradient and loss
             self.conn.send((self.worker_id, grad, loss))
+
+            # 6) Receive the knob updates and new slice
+            knob_updates, slc = self.conn.recv()
 
         # Update the knobs to order 2.
         self.create_base_damap(mad, knob_order=2)
-        self.send_initial_conditions(mad, selected_init)
+        self.send_initial_conditions(mad, init_coords)
         mad.send(f"""
 for i,param in ipairs(knob_names) do
     MADX.{SEQ_NAME}[param] = MADX.{SEQ_NAME}[param]:get0() + da_x0_base[param]

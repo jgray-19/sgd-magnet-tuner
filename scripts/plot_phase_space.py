@@ -1,5 +1,5 @@
 import tfs
-from aba_optimiser.config import TRACK_DATA_FILE, BPM_RANGE, TOTAL_TRACKS, RAMP_UP_TURNS
+from aba_optimiser.config import TRACK_DATA_FILE, BPM_RANGE, RAMP_UP_TURNS
 from aba_optimiser.utils import select_marker
 from matplotlib import pyplot as plt
 
@@ -10,7 +10,6 @@ start_coords = select_marker(init_coords, start_bpm)
 
 # Remove all rows that have turn < num_ramp_up
 start_coords = start_coords[start_coords.index > RAMP_UP_TURNS]
-start_coords = start_coords[start_coords.index < RAMP_UP_TURNS + TOTAL_TRACKS]
 
 # Plot x, px phase space
 plt.figure(figsize=(10, 8))
@@ -37,7 +36,7 @@ end_coords = tfs.read(TRACK_DATA_FILE, index="turn")
 end_coords = select_marker(end_coords, "BPM.14R3.B1")
 # Remove all rows that have turn < num_ramp_up
 end_coords = end_coords[end_coords.index > RAMP_UP_TURNS]
-end_coords = end_coords[end_coords.index < RAMP_UP_TURNS + TOTAL_TRACKS]
+
 # Plot x, px phase space
 plt.subplot(2, 2, 3)
 plt.scatter(end_coords["x"], end_coords["px"], s=1)

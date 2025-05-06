@@ -77,9 +77,9 @@ def read_elem_names(path: str) -> List[str]:
 
     return spos, names
 
-def read_true_strengths(path: str) -> Dict[str, float]:
+def read_knobs(path: str) -> Dict[str, float]:
     """
-    Read true knob strengths from a tab-delimited file.
+    Read knob strengths from a tab-delimited file.
 
     Args:
         path: Path to the file where each line is "knob_name\tstrength".
@@ -97,7 +97,6 @@ def read_true_strengths(path: str) -> Dict[str, float]:
             strengths[knob] = float(val)
     return strengths
 
-
 def scientific_notation(num: float, precision: int = 2) -> str:
     """
     Format a number into scientific notation with a given precision.
@@ -107,7 +106,7 @@ def scientific_notation(num: float, precision: int = 2) -> str:
         precision: Number of decimal places for the mantissa.
 
     Returns:
-        A string of the form "m×10^e" or "0" if num is zero.
+        A string of the form "m*10^e" or "0" if num is zero.
     """
     if num == 0:
         return "0"

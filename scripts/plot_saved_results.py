@@ -1,4 +1,4 @@
-from aba_optimiser.utils import read_results, read_true_strengths, read_elem_names
+from aba_optimiser.utils import read_results, read_knobs, read_elem_names
 from aba_optimiser.config import OUTPUT_KNOBS, TRUE_STRENGTHS, ELEM_NAMES_FILE
 
 import numpy as np
@@ -10,7 +10,7 @@ knob_names, knob_strengths, uncertainties = read_results(OUTPUT_KNOBS)
 knob_strengths = np.array(knob_strengths)
 uncertainties = np.array(uncertainties)
 
-true_strengths = read_true_strengths(TRUE_STRENGTHS)
+true_strengths = read_knobs(TRUE_STRENGTHS)
 true_strengths = np.array([true_strengths[k] for k in knob_names])
 
 # Calculate the relative error
