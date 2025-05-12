@@ -20,8 +20,10 @@ from aba_optimiser.config import (
     OUTPUT_KNOBS,
     RAMP_UP_TURNS,
     SEQUENCE_FILE,
+    SEQ_NAME,
     TOTAL_TRACKS,
-    TRACK_DATA_FILE,
+    # TRACK_DATA_FILE,
+    NOISE_FILE,
     TRACKS_PER_WORKER,
     TRUE_STRENGTHS,
     WARMUP_EPOCHS,
@@ -36,6 +38,7 @@ from aba_optimiser.utils import (
     read_knobs,
     save_results,
     scientific_notation,
+    select_marker
 )
 from aba_optimiser.worker import Worker
 
@@ -47,17 +50,36 @@ class Controller:
 
     def __init__(self):
         # Read element names using the util function; each line now becomes a list of aliases.
-        self.elem_pos, self.elem_names = read_elem_names(ELEM_NAMES_FILE)
+        self.elem_pos, _ = read_elem_names(ELEM_NAMES_FILE)
         # Read true strengths
         self.true_strengths = read_knobs(TRUE_STRENGTHS)
 
         # Initialise MAD interface and knobs
         self.mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
-        self.knob_names = self.mad_iface.make_knobs(self.elem_names)
-        init_vals = self.mad_iface.receive_knob_values(self.knob_names)
+        self.knob_names = self.mad_iface.knob_names
+
+                # Run a twiss and to get the beta functions
+        self.mad_iface.mad.send(f"""
+tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
+        """)
+        tws: tfs.TfsDataFrame = self.mad_iface.mad.tws.to_df().set_index("name")
+        print("Found tunes:", tws.q1, tws.q2)
+        
+        # Remove all rows that are before the start BPM and after the end BPM
+        start_bpm, end_bpm = BPM_RANGE.split("/")
+        start_bpm_idx = tws.index.get_loc(start_bpm)
+        end_bpm_idx = tws.index.get_loc(end_bpm)
+        tws = tws.iloc[start_bpm_idx:end_bpm_idx + 1]
+
+        self.all_bpms = tws.index.tolist()
+        self.beta_x = np.sqrt(tws["beta11"].to_numpy())
+        self.beta_y = np.sqrt(tws["beta22"].to_numpy())
+
+        assert len(self.beta_x) == len(self.beta_y), "Beta functions are not the same length"
+        assert len(self.beta_x) == self.mad_iface.nbpms, "Beta functions do not match the number of BPMs"
+
+        init_vals = self.mad_iface.receive_knob_values()
         self.current_knobs = dict(zip(self.knob_names, init_vals))
-        self.window_ranges = [f"{s}/{e}" for s, e in WINDOWS]
-        self.rel_frac = 1e-7  # Relative fraction for the gradient calculation
 
         # Validate
         missing = set(self.knob_names) ^ set(self.true_strengths)
@@ -82,12 +104,29 @@ class Controller:
             min_lr=MIN_LR,
         )
 
-        tbl = tfs.read(
-            TRACK_DATA_FILE, index=None
-        )  # table with columns: turn, name, x, y
-        self.bpm_names = list(
-            tbl["name"].unique()
-        )  # e.g. ["S.DS.R3.B1", "BPM.9R3.B1", …]
+        # track_data = tfs.read(TRACK_DATA_FILE)
+        track_data = tfs.read(NOISE_FILE)
+
+        self.start_data = select_marker(track_data, start_bpm)
+        # Get indices of the start and end markers from the full list.
+        try:
+            start_idx = self.all_bpms.index(start_bpm)
+            end_idx = self.all_bpms.index(end_bpm)
+        except ValueError:
+            raise ValueError("Start or end BPM not found in the BPM list.")
+
+        # Get the markers to keep
+        markers_to_keep = self.all_bpms[start_idx+1:end_idx]
+        if "BPM" in start_bpm:
+            markers_to_keep = [start_bpm] + markers_to_keep
+        if "BPM" in end_bpm:
+            markers_to_keep = markers_to_keep + [end_bpm]
+
+        # Filter data using pandas' vectorised operation
+        self.comparison_data = track_data[track_data["name"].isin(markers_to_keep)].copy()
+        self.bpm_names = list(self.comparison_data["name"].unique())
+        assert len(self.bpm_names) == self.mad_iface.nbpms, "BPM names from track data do not match the number of BPMs in the sequence"
+
         self.bpm_idx = {name: i for i, name in enumerate(self.bpm_names)}
         self.window_slices = []
         for start, end in WINDOWS:
@@ -152,6 +191,7 @@ class Controller:
     def run(self) -> None:
         """Execute the optimisation loop."""
         run_start = time.time()  # start total timing
+        
         # Prepare worker batches
         indices = list(range(RAMP_UP_TURNS, TOTAL_TRACKS + RAMP_UP_TURNS + 1))
         batches = [
@@ -166,7 +206,7 @@ class Controller:
         workers: list[mp.Process] = []
         for i, batch in enumerate(batches):
             parent, child = mp.Pipe()
-            w = Worker(i, batch, child, self.elem_names)
+            w = Worker(i, batch, child, self.comparison_data, self.start_data, self.beta_x, self.beta_y)
             w.start()
             parent_conns.append(parent)
             workers.append(w)
@@ -231,7 +271,6 @@ class Controller:
                 rel_diff = np.sum(rel_diff)
                 writer.add_scalar("loss", total_loss, epoch)
                 writer.add_scalar("grad_norm", grad_norm, epoch)
-                writer.add_scalar("smoothed_grad_norm", self.smoothed_grad_norm, epoch)                
                 writer.add_scalar("true_diff", true_diff, epoch)
                 writer.add_scalar("rel_diff", rel_diff, epoch)
                 writer.add_scalar("learning_rate", lr, epoch)
@@ -252,7 +291,7 @@ class Controller:
                     end="",
                 )
 
-                if self.smoothed_grad_norm < 5e-7:
+                if self.smoothed_grad_norm < 1e-7:
                     print(
                         f"\nGradient norm below threshold: "
                         f"{self.smoothed_grad_norm:.3e}. "
@@ -269,6 +308,7 @@ class Controller:
             H_global = np.zeros((len(self.knob_names), len(self.knob_names)))
             for conn in parent_conns:
                 conn.send((None, None))  # Signal workers to stop
+            for conn in parent_conns:
                 H_global += conn.recv()
 
             cov = np.linalg.inv(H_global)

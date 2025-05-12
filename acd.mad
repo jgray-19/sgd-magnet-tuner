@@ -19,6 +19,7 @@ local function get_acd_slice_action(elm, pbeam, tunes, drv_tunes, betas, ramp)
             local turn in mflw -- Note: turn starts at 1 (does MAD-X start at 0? - if so, change the following lines)
             if turn == prev_turn then return end
             prev_turn = turn
+            print("New turn, updating acd", turn)
             local mult
             if turn < ramp[1] then -- This is how many turns before the ramp starts
                 mult = 0

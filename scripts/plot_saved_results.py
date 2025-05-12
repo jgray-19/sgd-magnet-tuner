@@ -1,5 +1,6 @@
 from aba_optimiser.utils import read_results, read_knobs, read_elem_names
-from aba_optimiser.config import OUTPUT_KNOBS, TRUE_STRENGTHS, ELEM_NAMES_FILE
+from aba_optimiser.config import OUTPUT_KNOBS, TRUE_STRENGTHS, ELEM_NAMES_FILE, SEQUENCE_FILE, BPM_RANGE
+from aba_optimiser.mad_interface import MadInterface
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -47,6 +48,18 @@ plt.xlabel('Element Position')
 plt.ylabel('Value')
 plt.title('Uncertainty vs Element Position')
 plt.legend()
+plt.grid()
+plt.tight_layout()
+
+mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
+initial_strengths = mad_iface.receive_knob_values()
+error_on_quad = true_strengths - initial_strengths
+
+plt.figure()
+plt.plot(error_on_quad, abs(relative_diff), 'x')
+plt.xlabel('Absolute Error on Quadrupole Strengths')
+plt.ylabel('Relative Difference')
+plt.title('Relative Difference vs Absolute Error on Quadrupole Strengths')
 plt.grid()
 plt.tight_layout()
 

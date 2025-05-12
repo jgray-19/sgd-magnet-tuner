@@ -9,11 +9,8 @@ from aba_optimiser.config import (
     BPM_RANGE,
     SEQ_NAME,
     SEQUENCE_FILE,
-    TRACK_DATA_FILE,
 )
 from aba_optimiser.mad_interface import MadInterface
-from aba_optimiser.utils import filter_out_marker, select_marker
-
 
 class Worker(Process):
     """
@@ -26,13 +23,19 @@ class Worker(Process):
         worker_id: int,
         indices: list[int],
         conn: Connection,
-        elem_names: list[str],
-    ):
+        comparison_data: tfs.TfsDataFrame,
+        start_data: tfs.TfsDataFrame,
+        beta_x: np.ndarray,
+        beta_y: np.ndarray,
+    ) -> None:
         super().__init__()
         self.worker_id = worker_id
         self.indices = indices
         self.conn = conn
-        self.elem_names = elem_names
+        self.comparison_data = comparison_data
+        self.start_data = start_data
+        self.beta_x = beta_x
+        self.beta_y = beta_y
 
     @staticmethod
     def build_batch_tracking_code(num_particles: int) -> str:
@@ -59,6 +62,7 @@ py:send(dx_dk)
 py:send(dy_dk)
 py:send(sim_trk.x - meas_trk.x)
 py:send(sim_trk.y - meas_trk.y)
+collectgarbage()
 """
 
     @staticmethod
@@ -70,11 +74,12 @@ py:send(sim_trk.y - meas_trk.y)
         of the sum of the squares.
         """
         code = f"""
-local monomial, vector in MAD
+local monomial, vector, matrix in MAD
 
 local num_knobs = #knob_names
 local ncoord = #coord_names
 local Htot = matrix(num_knobs, num_knobs):zeros()
+local num_particles = #da_x0_c
 
 local sigma = 1e-4
 local W_vec = vector(nbpms)
@@ -82,26 +87,25 @@ for b = 1, nbpms do W_vec[b] = 1/(sigma^2) end
 local W = W_vec:diag()
 
 local Htot = matrix(num_knobs, num_knobs):zeros()
-for idx = 1, #da_x0_c do
-    local trk = track{{sequence=MADX.{SEQ_NAME}, X0=da_x0_c[idx],
-                       nturn=1, savemap=true, range=range}}
-
-    -- build first-derivative matrices dx, dy -----------------------------
-    local dx = matrix(num_knobs, nbpms):zeros()
-    local dy = matrix(num_knobs, nbpms):zeros()
-
-    for i, param in ipairs(knob_names) do
-        local mono = knob_monomials[param]
-        for b = 1, nbpms do
-            local map = trk.__map[b]
-            dx:set(i,b, map.x:get(mono))
-            dy:set(i,b, map.y:get(mono))
+local trk = track{{sequence=MADX.{SEQ_NAME}, X0=da_x0_c,
+                    nturn=1, savemap=true, range=range}}
+for idx = 1, num_particles do
+    -- build jacobian matrices jx, jy -----------------------------
+    local jx = matrix(num_knobs, nbpms):zeros()
+    local jy = matrix(num_knobs, nbpms):zeros()
+    for b = 1, nbpms do
+        local map = trk.__map[idx + (b - 1) * num_particles]
+        assert(trk.id[idx + (b - 1) * num_particles] == idx, "Mismatch between track ID and index")
+        for k, param in ipairs(knob_names) do
+            local mono = knob_monomials[param]
+            jx:set(k,b, map.x:get(mono))
+            jy:set(k,b, map.y:get(mono))
         end
     end
 
-    local Gx = dx * (W * dx:t())
-    local Gy = dy * (W * dy:t())
-    Htot = Htot + Gx + Gy
+    local Gx = jx * (W * jx:t())
+    local Gy = jy * (W * jy:t())
+    Htot = Htot + (Gx + Gy)
 end
 
 py:send(Htot)
@@ -116,77 +120,42 @@ py:send(Htot)
             f"da_x0_base = damap{{nv=#coord_names, np=#knob_names, mo=2, po={knob_order}, vn=tblcat(coord_names, knob_names)}}"
         )
 
-    def send_initial_conditions(self, mad: MAD, selected_init: list[dict]) -> None:
+    def send_initial_conditions(self, mad: MAD, selected_init: list[list[float]]) -> None:
         """
         Sets the initial conditions for each track in MAD-NG.
         """
-        mad.send(f"da_x0_c = table.new({len(selected_init)}, 0)")
-        for idx, x0 in enumerate(selected_init):
-            mad.send(f"da_x0_c[{idx + 1}] = da_x0_base:copy()")
-            mad.send(
-                f"da_x0_c[{idx + 1}]:set0({{{x0['x']}, {x0['px']}, {x0['y']}, {x0['py']}, {x0['t']}, {x0['pt']}}})"
-            )
+        mad.send("da_x0_c = table.new(num_particles, 0)")
+        mad.send("""
+init_coords = py:recv()
+for i=1,num_particles do 
+    da_x0_c[i] = da_x0_base:copy() 
+    da_x0_c[i]:set0(init_coords[i])
+end
+        """)
+        mad.send(selected_init)
 
     def run(self) -> None:
         # Load initial conditions
-        track_data = tfs.read(TRACK_DATA_FILE, index="turn")
-        # Remove all rows that are not the BPM s.ds.r3.b1
-        start_bpm, end_bpm = BPM_RANGE.split("/")
-        track_data = select_marker(track_data, start_bpm)
-
         init_coords = []
         for turn_idx in self.indices:
-            row = track_data.iloc[turn_idx]
+            row = self.start_data.iloc[turn_idx]
             init_coords.append(
-                {
-                    "x": row["x"],
-                    "px": row["px"],
-                    "y": row["y"],
-                    "py": row["py"],
-                    # t and pt unavailable; default to zero
-                    "t": 0,
-                    "pt": 0,
-                }
+                [row["x"], row["px"], row["y"], row["py"], 0, 0]
             )
+        del self.start_data
         num_particles = len(init_coords)
-
-        # Load measurement tracks
-        all_data = tfs.read(TRACK_DATA_FILE)
-        if "BPM" not in start_bpm:
-            all_data = filter_out_marker(all_data, start_bpm)
-        if "BPM" not in end_bpm:
-            all_data = filter_out_marker(all_data, end_bpm)
 
         # Initialise MAD interface and load sequence
         mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
         mad = mad_iface.mad
-        
-
-        # Run a twiss and to get the beta functions
-        mad.send(f"""
-tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
-        """)
-        tws: tfs.TfsDataFrame = mad.tws.to_df().set_index("name")
-        
-        # Remove all rows that are before the start BPM and after the end BPM
-        start_bpm_idx = tws.index.get_loc(start_bpm)
-        end_bpm_idx = tws.index.get_loc(end_bpm)
-        tws = tws.iloc[start_bpm_idx:end_bpm_idx + 1]
-
-        beta_x = np.sqrt(tws["beta11"].to_numpy())
-        beta_y = np.sqrt(tws["beta22"].to_numpy())
-
-        assert len(beta_x) == len(beta_y), "Beta functions are not the same length"
-        assert len(beta_x) == mad_iface.nbpms, "Beta functions do not match the number of BPMs"
-        
-        mad_iface.make_knobs(self.elem_names)
 
         x_array = np.empty((num_particles, mad_iface.nbpms))
         y_array = np.empty((num_particles, mad_iface.nbpms))
         for i, turn_idx in enumerate(self.indices):
-            filtered = all_data[all_data["turn"] == turn_idx + 1] # A pandas dataframe with nbpms rows
+            filtered = self.comparison_data[self.comparison_data["turn"] == turn_idx + 1] # A pandas dataframe with nbpms rows
             x_array[i, :] = filtered["x"].to_numpy()
             y_array[i, :] = filtered["y"].to_numpy()
+        del self.comparison_data
         
         meas_trk = { # Reshape to have a 2D array of shape (num_particles*nbpms, 1)
             "x": x_array.flatten(order="F").reshape(-1, 1), 
@@ -196,7 +165,6 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
         # Import required MAD-NG modules
         mad.load("MAD", "damap", "matrix")
         mad.load("MAD.utility", "tblcat")
-        mad.send('coord_names = { "x", "px", "y", "py", "t", "pt" }')
 
         # Pre-allocate TPSA and derivative matrices
         self.create_base_damap(mad)
@@ -209,9 +177,10 @@ end
 """)
 
         mad.send(f"""
-dx_dk    = table.new({num_particles}, 0)
-dy_dk    = table.new({num_particles}, 0)
-for i=1,{num_particles} do
+num_particles = {num_particles}
+dx_dk    = table.new(num_particles, 0)
+dy_dk    = table.new(num_particles, 0)
+for i=1,num_particles do
     dx_dk[i] = matrix(#knob_names, nbpms)
     dy_dk[i] = matrix(#knob_names, nbpms)
 end
@@ -224,8 +193,6 @@ end
         mad.send(meas_trk['y'])
 
         # Clean up python objects that are no longer needed in the worker loop
-        del track_data
-        del all_data
         del meas_trk
 
         # Main loop: receive messages, run tracking, and send full per-BPM data
@@ -244,8 +211,8 @@ end
             dy_stack = np.stack(mad.recv(), axis=0)
 
             # Reshape differences into (num_particles, nbpms)
-            x_diffs = mad.recv().reshape(num_particles, -1, order="F") / beta_x
-            y_diffs = mad.recv().reshape(num_particles, -1, order="F") / beta_y
+            x_diffs = mad.recv().reshape(num_particles, -1, order="F") / self.beta_x
+            y_diffs = mad.recv().reshape(num_particles, -1, order="F") / self.beta_y
             
             # Select the slice of interest
             dx_slc = dx_stack[:, :, slc]      # shape: (num_particles, n_knobs, len(slc))

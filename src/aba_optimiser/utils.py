@@ -1,5 +1,7 @@
 from typing import List, Dict
 import tfs
+import pandas as pd
+import numpy as np
 
 def filter_out_marker(tbl: tfs.TfsDataFrame, marker_name: str) -> tfs.TfsDataFrame:
     """
@@ -48,7 +50,7 @@ def select_marker(tbl: tfs.TfsDataFrame, marker_name: str) -> tfs.TfsDataFrame:
     if tbl.index.name != "name":
         return tbl[tbl["name"] == marker_name]
     else:
-        return tbl[tbl.index == marker_name]
+        return tbl[tbl.index == marker_name]   
 
 def read_elem_names(path: str) -> List[str]:
     """
@@ -174,3 +176,39 @@ def read_results(
             uncertainties.append(float(uncertainty))
 
     return knob_names, knob_strengths, uncertainties
+
+def nearest_bpm_to_pi_2(mu: pd.Series, Q1: float) -> pd.DataFrame:
+    """
+    Parameters
+    ----------
+    mu    : Series
+        Cumulative phase advance in *turns*; index order = optic order.
+        The last element *must* be the tune Q1.
+    Q1    : float
+        The (horizontal) tune.  mu.iloc[-1] should equal this value.
+    target: float, optional
+        Desired separation in turns (default 0.25).
+
+    Returns
+    -------
+    DataFrame
+        index        → BPM_i (same order as `mu`)
+        'nearest_bpm'→ BPM_j that minimises |Δ - target|
+        'delta'      → (μ_j - μ_i  mod Q1) - target   (signed)
+    """
+    v = mu.to_numpy(float)            # shape (n,)
+    n = len(v)
+    target = 0.25                    # desired separation in 2π (pi/2)
+
+    # (μ_j - μ_i) taken only in the forward sense, with wrap once at Q1
+    forward = (v.reshape(1, n) - v.reshape(n, 1) + Q1) % Q1
+    np.fill_diagonal(forward, np.nan)       # ignore i = j
+
+    # minimise absolute error from the target quarter-turn
+    partner_idx   = np.nanargmin(np.abs(forward - target), axis=1)
+    partner_names = mu.index[partner_idx]
+    deltas        = forward[np.arange(n), partner_idx] - target
+
+    return pd.DataFrame({"nearest_bpm": partner_names,
+                         "delta": deltas},
+                        index=mu.index)
