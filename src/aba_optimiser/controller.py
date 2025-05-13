@@ -1,6 +1,6 @@
 import datetime
-import time
 import multiprocessing as mp
+import time
 from multiprocessing.connection import Connection
 
 import numpy as np
@@ -11,19 +11,20 @@ from aba_optimiser.config import (
     BPM_RANGE,
     DECAY_EPOCHS,
     ELEM_NAMES_FILE,
+    FILTER_DATA,
     GRAD_NORM_ALPHA,
     KNOB_TABLE,
     MAX_EPOCHS,
     MAX_LR,
     MIN_LR,
+    # TRACK_DATA_FILE,
+    NOISE_FILE,
     NUM_WORKERS,
     OUTPUT_KNOBS,
     RAMP_UP_TURNS,
-    SEQUENCE_FILE,
     SEQ_NAME,
+    SEQUENCE_FILE,
     TOTAL_TRACKS,
-    # TRACK_DATA_FILE,
-    NOISE_FILE,
     TRACKS_PER_WORKER,
     TRUE_STRENGTHS,
     WARMUP_EPOCHS,
@@ -38,9 +39,10 @@ from aba_optimiser.utils import (
     read_knobs,
     save_results,
     scientific_notation,
-    select_marker
+    select_marker,
 )
 from aba_optimiser.worker import Worker
+from aba_optimiser.kalman import BPMKalmanFilter
 
 
 class Controller:
@@ -58,25 +60,29 @@ class Controller:
         self.mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
         self.knob_names = self.mad_iface.knob_names
 
-                # Run a twiss and to get the beta functions
+        # Run a twiss and to get the beta functions
         self.mad_iface.mad.send(f"""
 tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
         """)
         tws: tfs.TfsDataFrame = self.mad_iface.mad.tws.to_df().set_index("name")
         print("Found tunes:", tws.q1, tws.q2)
-        
+
         # Remove all rows that are before the start BPM and after the end BPM
         start_bpm, end_bpm = BPM_RANGE.split("/")
         start_bpm_idx = tws.index.get_loc(start_bpm)
         end_bpm_idx = tws.index.get_loc(end_bpm)
-        tws = tws.iloc[start_bpm_idx:end_bpm_idx + 1]
+        tws = tws.iloc[start_bpm_idx : end_bpm_idx + 1]
 
         self.all_bpms = tws.index.tolist()
         self.beta_x = np.sqrt(tws["beta11"].to_numpy())
         self.beta_y = np.sqrt(tws["beta22"].to_numpy())
 
-        assert len(self.beta_x) == len(self.beta_y), "Beta functions are not the same length"
-        assert len(self.beta_x) == self.mad_iface.nbpms, "Beta functions do not match the number of BPMs"
+        assert len(self.beta_x) == len(self.beta_y), (
+            "Beta functions are not the same length"
+        )
+        assert len(self.beta_x) == self.mad_iface.nbpms, (
+            "Beta functions do not match the number of BPMs"
+        )
 
         init_vals = self.mad_iface.receive_knob_values()
         self.current_knobs = dict(zip(self.knob_names, init_vals))
@@ -106,6 +112,9 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
 
         # track_data = tfs.read(TRACK_DATA_FILE)
         track_data = tfs.read(NOISE_FILE)
+        if FILTER_DATA:
+            kf = BPMKalmanFilter()
+            track_data = kf.run(track_data, x0=np.zeros(4), P0=np.eye(4) * 1e-4)
 
         self.start_data = select_marker(track_data, start_bpm)
         # Get indices of the start and end markers from the full list.
@@ -116,16 +125,20 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
             raise ValueError("Start or end BPM not found in the BPM list.")
 
         # Get the markers to keep
-        markers_to_keep = self.all_bpms[start_idx+1:end_idx]
+        markers_to_keep = self.all_bpms[start_idx + 1 : end_idx]
         if "BPM" in start_bpm:
             markers_to_keep = [start_bpm] + markers_to_keep
         if "BPM" in end_bpm:
             markers_to_keep = markers_to_keep + [end_bpm]
 
         # Filter data using pandas' vectorised operation
-        self.comparison_data = track_data[track_data["name"].isin(markers_to_keep)].copy()
+        self.comparison_data = track_data[
+            track_data["name"].isin(markers_to_keep)
+        ].copy()
         self.bpm_names = list(self.comparison_data["name"].unique())
-        assert len(self.bpm_names) == self.mad_iface.nbpms, "BPM names from track data do not match the number of BPMs in the sequence"
+        assert len(self.bpm_names) == self.mad_iface.nbpms, (
+            "BPM names from track data do not match the number of BPMs in the sequence"
+        )
 
         self.bpm_idx = {name: i for i, name in enumerate(self.bpm_names)}
         self.window_slices = []
@@ -136,7 +149,7 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                 i0, i1 = i1, i0
             self.window_slices.append(slice(i0, i1 + 1))
 
-        self.smoothed_grad_norm = None  # Initialize smoothed gradient norm
+        self.smoothed_grad_norm = None  # Initialize smoothed gradient norm            
 
     def _write_results(self, uncertainties) -> None:
         """Write final knob strengths and markdown table to file."""
@@ -191,7 +204,7 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
     def run(self) -> None:
         """Execute the optimisation loop."""
         run_start = time.time()  # start total timing
-        
+
         # Prepare worker batches
         indices = list(range(RAMP_UP_TURNS, TOTAL_TRACKS + RAMP_UP_TURNS + 1))
         batches = [
@@ -199,14 +212,24 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
             for i in range(NUM_WORKERS)
         ]
         for i, batch in enumerate(batches):
-            assert batch, f"Batch {i} is empty. Check TRACKS_PER_WORKER and NUM_WORKERS."
+            assert batch, (
+                f"Batch {i} is empty. Check TRACKS_PER_WORKER and NUM_WORKERS."
+            )
 
         # Start worker processes
         parent_conns: list[Connection] = []
         workers: list[mp.Process] = []
         for i, batch in enumerate(batches):
             parent, child = mp.Pipe()
-            w = Worker(i, batch, child, self.comparison_data, self.start_data, self.beta_x, self.beta_y)
+            w = Worker(
+                i,
+                batch,
+                child,
+                self.comparison_data,
+                self.start_data,
+                self.beta_x,
+                self.beta_y,
+            )
             w.start()
             parent_conns.append(parent)
             workers.append(w)
@@ -278,10 +301,10 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
 
                 epoch_time = time.time() - epoch_start
                 total_time = time.time() - run_start
-                
+
                 print(
                     f"\rEpoch {epoch}: "
-                    f"loss={total_loss:.3e}, " 
+                    f"loss={total_loss:.3e}, "
                     f"grad_norm={grad_norm:.3e}, "
                     f"true_diff={true_diff:.3e}, "
                     f"rel_diff={rel_diff:.3e}, "
