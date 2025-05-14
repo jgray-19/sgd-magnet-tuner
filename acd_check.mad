@@ -1,0 +1,67 @@
+--- Initialisation of libraries and modules ---
+local track, beam, twiss, match in MAD
+local rand, abs                                             in MAD.gmath
+local observed in MAD.element.flags
+-- local get_acd_slice_action = require "acd"
+local hacdipole, vacdipole in MAD.element
+
+--- Load the sequence file ---
+MADX:load("lhcb1.seq")
+local lhcb1 in MADX
+
+--- Define initial coordinates with small offsets ---
+local X0 = { x = 0, px = 0, y = 0, py = 0, t = 0, pt = 0 }
+local tunes = { 0.28, 0.31 }
+local drv_tunes = { 0.27, 0.322 }
+
+--- Configure the beam for simulation ---
+lhcb1.beam = beam { particle='proton', energy=450 }
+
+-- Match the tunes
+match {
+    command := twiss {sequence=lhcb1},
+    variables = {
+        rtol=1e-6,
+        { var = 'MADX.dqx_b1_op', name='dQx.b1_op' },
+        { var = 'MADX.dqy_b1_op', name='dQy.b1_op' },
+    },
+    equalities = {
+        { expr = \t -> math.abs(t.q1)-(62+tunes[1]), name='q1' },
+        { expr = \t -> math.abs(t.q2)-(60+tunes[2]), name='q2' },
+    },
+    objective = { fmin=1e-7 },
+};
+
+-- Install the acd dipoles (H and V)
+-- Run a twiss to get the beta functions at the BPM locations
+local tws = twiss {sequence = lhcb1}
+local betas = {tws["MKQA.6L4.B1"].beta11, tws["MKQA.6L4.B1"].beta22}
+
+local ampx = 1 ! Change to adapt kick amplitude
+local ampy = 1 ! Change to adapt kick amplitude
+
+local voltx = ampx * 0.042 * pbeam * abs(tunes[1] - drv_tunes[1]) / sqrt(180.0 * betas[1])
+local volty = ampy * 0.042 * pbeam * abs(tunes[2] - drv_tunes[2]) / sqrt(177.0 * betas[2])
+local ramp_schedule = { 0, 200, 800, 1000 }
+
+local mkach_6l4_b1 = hacdipole { 
+    name="MKACH.6L4.B1", volt=voltx, freq=drv_tunes[1], ramp=ramp_schedule, at=0, from="MKQA.6L4.B1" 
+}
+local mkacv_6l4_b1 = vacdipole { 
+    name="MKACV.6L4.B1", volt=volty, freq=drv_tunes[2], ramp=ramp_schedule, at=0, from="MKQA.6L4.B1" 
+}
+
+local acd = lhcb1["MKQA.6L4.B1"]
+acd.l = 0
+lhcb1:install({mkach_6l4_b1, mkacv_6l4_b1})
+
+lhcb1:deselect(observed)
+lhcb1:  select(observed, {pattern="BPM"})
+local track_data = track {
+    sequence = lhcb1,
+    X0 = X0,
+    nturn = 1000,
+}
+
+track_data:write("out/acd_check.tfs", {'name', 'turn', 'id','x', 'px', 'y', 'py'})
+ 

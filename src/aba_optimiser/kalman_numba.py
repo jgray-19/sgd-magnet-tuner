@@ -1,5 +1,6 @@
 import os
 
+from numba import njit
 import numpy as np
 import pandas as pd
 
@@ -184,7 +185,6 @@ _, mflw = track{{sequence={SEQ_NAME}, X0=x0_da, nturn=1, range=\"{prev_b}/{bpm}\
         print("Kalman filter complete.")
         return df_out
 
-
     def _filter_array(
         self,
         measurements: np.ndarray,
@@ -197,126 +197,233 @@ _, mflw = track{{sequence={SEQ_NAME}, X0=x0_da, nturn=1, range=\"{prev_b}/{bpm}\
 
         Returns (x_out, P_out) each shaped (n_turns, n_bpm, …)
         """
-        # 1) Flatten utilities
+        
+        # 1) flatten & stack
         n_turns, n_bpm, _ = measurements.shape
         N = n_turns * n_bpm
-        bpm_of = np.tile(np.arange(n_bpm), n_turns)  # shape (N,)
+        bpm_of    = np.tile(np.arange(n_bpm), n_turns)
         meas_flat = measurements.reshape(N, 4)
-
-        # 2) Initial state & covariance from special BPM on turn 0
+        M_stack   = np.stack(self.bpm_mats)
+        Q_stack   = np.stack(self.Q)
+        R_stack   = np.stack(self.R)
+        
         special_idx = self.bpm_list.index(self.special_bpm)
-
-        # 3) Find reset (special BPM) indices and segment boundaries
         reset_idx = np.where(bpm_of == special_idx)[0]
-        boundaries = np.r_[[-1], reset_idx, [N]]
+        boundaries= np.r_[[-1], reset_idx, [N]]
 
-        # 4) Prepare flat buffers
-        x_fwd = np.empty((N, 4))
-        P_fwd = np.empty((N, 4, 4))
-        x_pr = np.empty((N, 4))
-        P_pr = np.empty((N, 4, 4))
+        # 2) call the JIT‐compiled core
+        x_fwd, P_fwd, x_pr, P_pr = _filter_flat_jit(
+            meas_flat, bpm_of, M_stack, Q_stack, R_stack,
+            boundaries, special_idx
+        )
 
-        # 5) Forward pass: loop over each segment between resets
-        for seg_start, seg_end in zip(boundaries[:-1], boundaries[1:]):
-            if seg_start < 0:
-                # very first segment → no prior
-                x_prev = np.zeros(4)
-                P_prev = np.diag([1e-2]*4)
-            else:
-                # read the raw measurement at the reset point
-                z0 = meas_flat[seg_start]
-                # posterior = just replace state with z0
-                x_up0 = z0.copy()
-                # posterior covariance = diag(diag(R_special))
-                P_up0 = np.diag(np.diag(self.R[special_idx]))
-
-                # store into filtered buffers
-                x_fwd[seg_start] = x_up0
-                P_fwd[seg_start] = P_up0
-
-                # now record that *as* your “predicted” boundary state
-                x_pr[seg_start] = x_up0
-                P_pr[seg_start] = P_up0
-
-                # and seed the next prediction
-                x_prev, P_prev = x_up0, P_up0
-
-            for k in range(seg_start + 1, seg_end):
-                bpm_idx = bpm_of[k]
-                M, Q, R = (self.bpm_mats[bpm_idx],
-                           self.Q[bpm_idx],
-                           self.R[bpm_idx])
-                z = meas_flat[k]
-
-                # — predict —
-                x_pred = M @ x_prev
-                P_pred = M @ P_prev @ M.T + Q
-                x_pr[k], P_pr[k] = x_pred, P_pred
-
-                # — update (measurement) —
-                valid = ~np.isnan(z)
-                if valid.any():
-                    H_eff = self.H[valid]
-                    R_eff = R[np.ix_(valid, valid)]
-                    y = z[valid] - H_eff @ x_pred
-                    S = H_eff @ P_pred @ H_eff.T + R_eff
-                    K = P_pred @ H_eff.T @ np.linalg.inv(S)
-                    x_up = x_pred + K @ y
-                    P_up = (np.eye(4) - K @ H_eff) @ P_pred
-                else:
-                    x_up, P_up = x_pred, P_pred
-
-                x_fwd[k], P_fwd[k] = x_up, P_up
-                x_prev, P_prev     = x_up, P_up
-
-        # 6) Reshape filtered outputs
+        # 3) reshape outputs
         x_filt = x_fwd.reshape(n_turns, n_bpm, 4)
         P_filt = P_fwd.reshape(n_turns, n_bpm, 4, 4)
 
         if not do_smoothing:
             return x_filt, P_filt
+        
+        M_stack = np.stack(self.bpm_mats)  # shape (n_bpm,4,4)
 
-        # 7) RTS smoother on the flat sequence
-        x_s_flat, P_s_flat = self._rts_smooth_flat(x_fwd, P_fwd, x_pr, P_pr, bpm_of)
+        # otherwise run your Python‐RTS smoother
+        x_s_flat, P_s_flat = _rts_smooth_flat_jit(
+            x_fwd, P_fwd, x_pr, P_pr, bpm_of, M_stack
+        )
+        return x_s_flat.reshape(n_turns,n_bpm,4), P_s_flat.reshape(n_turns,n_bpm,4,4)
 
-        # 8) Reshape smoothed outputs
-        x_smooth = x_s_flat.reshape(n_turns, n_bpm, 4)
-        P_smooth = P_s_flat.reshape(n_turns, n_bpm, 4, 4)
-        return x_smooth, P_smooth
+@njit(cache=True)
+def _rts_smooth_flat_jit(
+    x_fwd: np.ndarray,   # (N,4)
+    P_fwd: np.ndarray,   # (N,4,4)
+    x_pr:  np.ndarray,   # (N,4)
+    P_pr:  np.ndarray,   # (N,4,4)
+    bpm_of: np.ndarray,  # (N,)
+    M_stack: np.ndarray  # (n_bpm,4,4)
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Numba-compiled Rauch-Tung-Striebel smoother on a flattened sequence.
 
-    def _rts_smooth_flat(
-        self,
-        x_fwd: np.ndarray,
-        P_fwd: np.ndarray,
-        x_pr: np.ndarray,
-        P_pr: np.ndarray,
-        bpm_of: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Rauch-Tung-Striebel smoother on the flattened sequence of length N.
-        x_fwd, P_fwd: filtered estimates (Nx4), (Nx4x4)
-        x_pr,  P_pr : predicted    estimates (Nx4), (Nx4x4)
-        bpm_of      : BPM index per step (N,)
-        Returns smoothed (x_s, P_s) same shapes.
-        """
-        print("Running RTS smoother...")
-        N = x_fwd.shape[0]
-        x_s = np.empty_like(x_fwd)
-        P_s = np.empty_like(P_fwd)
+    Args:
+        x_fwd: filtered states x_{k|k} (Nx4)
+        P_fwd: filtered covariances P_{k|k} (Nx4x4)
+        x_pr:  predicted states x_{k|k-1} (Nx4)
+        P_pr:  predicted covariances P_{k|k-1} (Nx4x4)
+        bpm_of: BPM index for each flat step (N,)
+        M_stack: transport matrices stacked per BPM (n_bpmx4x4)
 
-        # initialize from last time step
-        x_s[-1] = x_fwd[-1]
-        P_s[-1] = P_fwd[-1]
+    Returns:
+        x_s: smoothed states x_{k|N} (Nx4)
+        P_s: smoothed covariances P_{k|N} (Nx4x4)
+    """
+    N = x_fwd.shape[0]
+    x_s = np.empty_like(x_fwd)
+    P_s = np.empty_like(P_fwd)
 
-        # backward recursion
-        for k in range(N - 2, -1, -1):
-            F = self.bpm_mats[bpm_of[k + 1]]
-            Ck = P_fwd[k] @ F.T @ np.linalg.inv(P_pr[k + 1])
-            x_s[k] = x_fwd[k] + Ck @ (x_s[k + 1] - x_pr[k + 1])
-            P_s[k] = P_fwd[k] + Ck @ (P_s[k + 1] - P_pr[k + 1]) @ Ck.T
+    # initialize at last time step
+    x_s[N-1] = x_fwd[N-1]
+    P_s[N-1] = P_fwd[N-1]
 
-        return x_s, P_s
+    # backward recursion
+    for k in range(N-2, -1, -1):
+        # state‐transition for step k→k+1
+        F = M_stack[bpm_of[k+1]]      # (4x4)
 
+        # compute smoothing gain: Ck = P_fwd[k] F^T P_pr[k+1]^{-1}
+        # solve P_pr[k+1].T * X.T = (P_fwd[k] @ F.T).T  ⇒ X = Ck
+        # note: np.linalg.solve is supported under njit for small arrays
+        PFt = P_fwd[k] @ F.T           # (4x4)
+        Ck = np.linalg.solve(P_pr[k+1].T, PFt.T).T  # (4x4)
+
+        # state update: x_s[k] = x_fwd[k] + Ck @ (x_s[k+1] - x_pr[k+1])
+        for i in range(4):
+            acc = x_fwd[k, i]
+            for j in range(4):
+                acc += Ck[i, j] * (x_s[k+1, j] - x_pr[k+1, j])
+            x_s[k, i] = acc
+
+        # covariance update: P_s[k] = P_fwd[k] + Ck (P_s[k+1] - P_pr[k+1]) Ck^T
+        # first form the difference
+        diff = P_s[k+1] - P_pr[k+1]    # (4x4)
+
+        # compute temp = Ck @ diff
+        temp = np.zeros((4, 4))
+        for i in range(4):
+            for j in range(4):
+                s = 0.0
+                for ell in range(4):
+                    s += Ck[i, ell] * diff[ell, j]
+                temp[i, j] = s
+
+        # now P_s[k] = P_fwd[k] + temp @ Ck.T
+        for i in range(4):
+            for j in range(4):
+                s = P_fwd[k, i, j]
+                for ell in range(4):
+                    s += temp[i, ell] * Ck[j, ell]
+                P_s[k, i, j] = s
+
+    return x_s, P_s
+
+
+@njit(cache=True, nogil=True)
+def _filter_flat_jit(meas_flat, bpm_of, M_stack, Q_stack, R_stack,
+                    boundaries, special_idx):
+    N = meas_flat.shape[0]
+    # allocate exactly the same buffers you used before
+    x_fwd = np.empty((N, 4))
+    P_fwd = np.empty((N, 4, 4))
+    x_pr  = np.empty((N, 4))
+    P_pr  = np.empty((N, 4, 4))
+
+    # forward pass
+    for seg in range(len(boundaries)-1):
+        start = boundaries[seg]
+        end   = boundaries[seg+1]
+
+        if start < 0:
+            # very first segment
+            x_prev = np.zeros(4)
+            P_prev = np.diag(np.array([1e-2,1e-2,1e-2,1e-2]))
+        else:
+            # special BPM reset
+            z0    = meas_flat[start]
+            x_up0 = z0.copy()
+            # diag(diag(R_special))
+            P_up0 = np.zeros((4,4))
+            for i in range(4):
+                P_up0[i,i] = R_stack[special_idx,i,i]
+
+            x_fwd[start] = x_up0
+            P_fwd[start] = P_up0
+            x_pr[start]  = x_up0
+            P_pr[start]  = P_up0
+            x_prev, P_prev = x_up0, P_up0
+
+        for k in range(start + 1, end):
+            bpm_idx = bpm_of[k]
+            # load 4x4 blocks for this BPM
+            M = M_stack[bpm_idx]     # shape (4,4)
+            Q = Q_stack[bpm_idx]     # shape (4,4)
+            R = R_stack[bpm_idx]     # shape (4,4)
+            z = meas_flat[k]         # shape (4,)
+
+            # — predict step —
+            # x_pred = M @ x_prev
+            x_pred = np.zeros(4)
+            for i in range(4):
+                acc = 0.0
+                for j in range(4):
+                    acc += M[i, j] * x_prev[j]
+                x_pred[i] = acc
+
+            # P_pred = M @ P_prev @ M.T + Q
+            # first temp = M @ P_prev
+            temp = np.zeros((4, 4))
+            for i in range(4):
+                for j in range(4):
+                    s = 0.0
+                    for ell in range(4):
+                        s += M[i, ell] * P_prev[ell, j]
+                    temp[i, j] = s
+            # then P_pred = temp @ M.T + Q
+            P_pred = np.zeros((4, 4))
+            for i in range(4):
+                for j in range(4):
+                    s = 0.0
+                    for ell in range(4):
+                        s += temp[i, ell] * M[j, ell]   # note M.T[ell] = M[j,ell]
+                    P_pred[i, j] = s + Q[i, j]
+
+            # store for RTS smoother
+            x_pr[k] = x_pred
+            P_pr[k] = P_pred
+
+            # — update step (measurement) —
+            # scalar‐measurement gating & sequential update
+            x_up = x_pred.copy()
+            P_up = P_pred.copy()
+
+            # loop over each of the 4 components
+            for j in range(4):
+                if not np.isnan(z[j]):
+                    # innovation variance S = P_up[j,j] + R[j,j]
+                    S = P_up[j, j] + R[j, j]
+                    # Kalman gain column K = P_up[:,j] / S
+                    K_col = np.zeros(4)
+                    for ii in range(4):
+                        K_col[ii] = P_up[ii, j] / S
+
+                    # innovation y = z[j] - x_up[j]
+                    y_j = z[j] - x_up[j]
+
+                    # state update x_up += K_col * y_j
+                    for ii in range(4):
+                        x_up[ii] += K_col[ii] * y_j
+
+                    # covariance update P_up = P_up - K_col ⊗ P_up[j,:]
+                    # save the j-th row of P_up before it changes
+                    P_row = np.zeros(4)
+                    for jj in range(4):
+                        P_row[jj] = P_up[j, jj]
+
+                    for ii in range(4):
+                        for jj in range(4):
+                            P_up[ii, jj] -= K_col[ii] * P_row[jj]
+
+            # write back filtered state
+            x_fwd[k] = x_up
+            P_fwd[k] = P_up
+
+            # seed next step
+            for ii in range(4):
+                x_prev[ii] = x_up[ii]
+                for jj in range(4):
+                    P_prev[ii, jj] = P_up[ii, jj]
+
+    # (Optionally inject your RTS‐smoother here in numba as well)
+
+    return x_fwd, P_fwd, x_pr, P_pr
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt

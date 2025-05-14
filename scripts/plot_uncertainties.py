@@ -11,21 +11,23 @@ import numpy as np
 import tfs
 
 from aba_optimiser.config import (
+    ACD_ON,
     BPM_RANGE,
+    FLATTOP_TURNS,
     NUM_WORKERS,
     RAMP_UP_TURNS,
     SEQ_NAME,
     SEQUENCE_FILE,
-    FLATTOP_TURNS,
     TRACK_DATA_FILE,
     TRUE_STRENGTHS,
 )
 from aba_optimiser.mad_interface import MadInterface
 from aba_optimiser.utils import (
     filter_out_marker,
-    select_marker,
     read_knobs,
+    select_marker,
 )
+
 from .worker_uncertainty import Worker
 
 run_start = time.time()  # start total timing
@@ -63,7 +65,11 @@ for num_files in num_files_list:
         f"({FLATTOP_TURNS})."
     )
     # Prepare worker batches
-    indices = list(range(RAMP_UP_TURNS, num_files + RAMP_UP_TURNS + 1))
+    if ACD_ON:
+        indices = list(range(RAMP_UP_TURNS, num_files + RAMP_UP_TURNS + 1))
+    else:
+        indices = list(range(num_files + 1))
+
     num_workers = min(NUM_WORKERS, num_files)
     tracks_per_worker = num_files // num_workers
     batches = [

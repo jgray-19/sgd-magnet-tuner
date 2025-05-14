@@ -2,20 +2,20 @@
 local track, beam, twiss, match in MAD
 local rand, abs                                             in MAD.gmath
 local observed in MAD.element.flags
-local hkicker, vkicker in MAD.element
-local is_element in MAD.typeid
-local get_acd_slice_action = require "acd"
+local hacdipole, vacdipole in MAD.element
+local sqrt in math
 
 --- Load the sequence file ---
 MADX:load("lhcb1.seq")
 local lhcb1 in MADX
 local RAMPUP = 1000
-local FLATTOP = 2e4
+local FLATTOP = 1e4
 
 --- Define initial coordinates with small offsets ---
 local X0 = { x = 0, px = 0, y = 0, py = 0, t = 0, pt = 0 }
 local tunes = { 0.28, 0.31 }
 local drv_tunes = { 0.27, 0.322 }
+local do_acd = false
 
 --- Define the region of interest ---
 -- local track_start = "BPM.8R3.B1" ! Doing everything right now !
@@ -103,20 +103,45 @@ outFile:write("dqx_b1_op\t" .. format_num(MADX.dqx_b1_op) .. "\n")
 outFile:write("dqy_b1_op\t" .. format_num(MADX.dqy_b1_op) .. "\n")
 outFile:close()
 
--- Install the acd dipoles 
+-- Install the acd dipoles (H and V)
 -- Run a twiss to get the beta functions at the BPM locations
 local tws = twiss {sequence = lhcb1}
-local betas = {tws["MKQA.6L4.B1"].beta11, tws["MKQA.6L4.B1"].beta22}
+local nturns
+if do_acd then
+    local betas = {tws["MKQA.6L4.B1"].beta11, tws["MKQA.6L4.B1"].beta22}
 
-local acd = lhcb1["MKQA.6L4.B1"]
-local acd_atslice = get_acd_slice_action(
-    acd, 
-    lhcb1.beam.pc, 
-    tunes, 
-    drv_tunes, 
-    betas, 
-    { 0, RAMPUP, RAMPUP+FLATTOP, 0 } -- turns before ramp, ramp up, flat top, ramp down
-)
+    local ampx = 1 ! Change to adapt kick amplitude
+    local ampy = 1 ! Change to adapt kick amplitude
+    print(lhcb1.beam.pc, MAD.tostring(betas))
+    local voltx = ampx * 0.042 * lhcb1.beam.pc * abs(tunes[1] - drv_tunes[1]) / sqrt(180.0 * betas[1])
+    local volty = ampy * 0.042 * lhcb1.beam.pc * abs(tunes[2] - drv_tunes[2]) / sqrt(177.0 * betas[2])
+    print("voltx", voltx, "volty", volty)
+
+    local ramp_schedule = {0, RAMPUP, RAMPUP + FLATTOP, 2*RAMPUP + FLATTOP}
+
+    local mkach_6l4_b1 = hacdipole { 
+        name="MKACH.6L4.B1", volt=voltx, freq=drv_tunes[1], ramp=ramp_schedule, at=6.7065629327563011e+03
+    }
+    local mkacv_6l4_b1 = vacdipole { 
+        name="MKACV.6L4.B1", volt=volty, freq=drv_tunes[2], ramp=ramp_schedule, at=6.7065629327563011e+03
+    }
+
+    local removed = lhcb1:remove("MKQA.6L4.B1")
+    print(MAD.tostring(removed))
+    local installed = lhcb1:install{mkach_6l4_b1, mkacv_6l4_b1}
+    print(MAD.tostring(installed))
+    nturns = RAMPUP + FLATTOP
+else
+    X0 = { 
+        x  = 5e-3 / sqrt(tws["$start"].beta11),
+        px = -1e-6,
+        y  = 5e-3 / sqrt(tws["$start"].beta22),
+        py = -1e-6,
+        t  = 0,
+        pt = 0
+    }
+    nturns = FLATTOP
+end
 --- Prepare BPM selection for the arc region --- 
 -- local a34_start = lhcb1:index_of(track_start)
 -- local a34_end = lhcb1:index_of(end_pos)
@@ -136,11 +161,9 @@ lhcb1:  select(observed, {pattern="BPM"})!, select=is_element_in_arc34})
 local track_data = track {
     sequence = lhcb1,
     X0 = X0,
-    nturn = RAMPUP + FLATTOP,
-    atslice=acd_atslice,
+    nturn = nturns,
     cmap=true,
-    debug=1,
-    info=5,
+    info=1,
 }
 
 track_data:write("data/track_data.tfs", {'name', 'turn','x', 'px', 'y', 'py'})

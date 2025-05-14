@@ -6,21 +6,22 @@ Configuration constants for the knob optimisation pipeline.
 from pathlib import Path
 
 # Simulation parameters
-MAX_EPOCHS        = int(1_000) # Total number of epochs for optimization
-TRACKS_PER_WORKER = 200        # Number of tracks per worker
-NUM_WORKERS       = 20         # Number of parallel worker processes
+MAX_EPOCHS        = int(150) # Total number of epochs for optimization
+TRACKS_PER_WORKER = 250        # Number of tracks per worker
+NUM_WORKERS       = 40         # Number of parallel worker processes
 TOTAL_TRACKS      = TRACKS_PER_WORKER * NUM_WORKERS  # Total number of tracks
 
 # Learning-rate schedule
-WARMUP_EPOCHS    = 50         # Epochs for cosine warmup
-DECAY_EPOCHS     = 500         # Epoch at which cosine decay ends
+WARMUP_EPOCHS    = 30          # Epochs for cosine warmup
+DECAY_EPOCHS     = 30          # Epoch at which cosine decay ends
 WARMUP_LR_START  = 5e-8        # Initial learning rate at epoch 1
-MAX_LR           = 1e-6        # Peak learning rate after warmup
-MIN_LR           = 1e-7        # Final learning rate after decay
+MAX_LR           = 4e-7        # Peak learning rate after warmup
+MIN_LR           = 2e-7        # Final learning rate after decay
 GRAD_NORM_ALPHA  = 0.7         # Gradient norm smoothing factor
 
 RAMP_UP_TURNS   = 1_000        # Number of turns to ramp up the ACD
-FLATTOP_TURNS   = 2_000       # Number of turns on the flat top
+FLATTOP_TURNS   = 10_000       # Number of turns on the flat top
+ACD_ON          = False        # Whether the ACD was used or not (Ignores the ramp up turns)
 
 if TOTAL_TRACKS > FLATTOP_TURNS:
     raise ValueError(
@@ -32,6 +33,7 @@ if TOTAL_TRACKS > FLATTOP_TURNS:
 SEQUENCE_FILE    = Path("lhcb1.seq").absolute()                        # MAD-X sequence file
 TRACK_DATA_FILE  = Path("data/track_data.tfs").absolute()              # Measurement TFS file
 NOISE_FILE       = Path("data/noise_data.tfs.bz2").absolute()          # Noise TFS file
+FILTERED_FILE    = Path("data/filtered_data.tfs.bz2").absolute()       # Filtered TFS file
 TRUE_STRENGTHS   = Path("data/true_strengths.txt").absolute()          # Ground-truth knob strengths
 OUTPUT_KNOBS     = Path("data/final_knobs.txt").absolute()             # Where to write final strengths
 KNOB_TABLE       = Path("data/knob_strengths_table.md").absolute()     # Markdown summary of results

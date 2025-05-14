@@ -4,6 +4,8 @@ import pandas as pd
 
 from aba_optimiser.config import (
     BPM_RANGE,
+    FILTERED_FILE,
+    FILTER_DATA,
     SEQ_NAME,
     SEQUENCE_FILE,
     TRACK_DATA_FILE,
@@ -12,6 +14,7 @@ from aba_optimiser.config import (
 )
 from aba_optimiser.mad_interface import MadInterface
 from aba_optimiser.utils import read_knobs
+from aba_optimiser.kalman_numba import BPMKalmanFilter
 
 # -------------------------------------------------------------------------
 # CONFIGURATION
@@ -58,7 +61,7 @@ data["y"] += np.random.normal(0, BPM_NOISE, size=len(data))
 # 2) INITIALISE MAD-X & GET TWISS
 # -------------------------------------------------------------------------
 
-mad = MadInterface(SEQUENCE_FILE, BPM_RANGE)
+mad = MadInterface(SEQUENCE_FILE, BPM_RANGE, stdout="/dev/null", redirect_sterr=True)
 true_str = read_knobs(TRUE_STRENGTHS)
 for knob, val in true_str.items():
     mad.mad.send(f"MADX.lhcb1['{knob}'] = {val}")
@@ -217,3 +220,21 @@ print("x_diff mean", x_diff.abs().mean(), "±", x_diff.std())
 print("px_diff mean", px_diff.abs().mean(), "±", px_diff.std())
 print("y_diff mean", y_diff.abs().mean(), "±", y_diff.std())
 print("py_diff mean", py_diff.abs().mean(), "±", py_diff.std())
+
+if FILTER_DATA:
+    print("Filtering data with Kalman filter")
+    kf = BPMKalmanFilter()
+    filtered_df = kf.run(data[out_cols])
+    tfs.write(
+        FILTERED_FILE,
+        filtered_df,
+    )
+    print("→ Saved:", FILTERED_FILE)
+    x_diff  = filtered_df["x"] - orig_data["x"]
+    px_diff = filtered_df["px"] - orig_data["px"]
+    y_diff  = filtered_df["y"] - orig_data["y"]
+    py_diff = filtered_df["py"] - orig_data["py"]
+    print("x_diff mean", x_diff.abs().mean(), "±", x_diff.std())
+    print("px_diff mean", px_diff.abs().mean(), "±", px_diff.std())
+    print("y_diff mean", y_diff.abs().mean(), "±", y_diff.std())
+    print("py_diff mean", py_diff.abs().mean(), "±", py_diff.std())

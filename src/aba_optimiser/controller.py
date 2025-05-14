@@ -8,10 +8,12 @@ import tfs
 from tensorboardX import SummaryWriter
 
 from aba_optimiser.config import (
+    ACD_ON,
     BPM_RANGE,
     DECAY_EPOCHS,
     ELEM_NAMES_FILE,
     FILTER_DATA,
+    FILTERED_FILE,
     GRAD_NORM_ALPHA,
     KNOB_TABLE,
     MAX_EPOCHS,
@@ -42,7 +44,6 @@ from aba_optimiser.utils import (
     select_marker,
 )
 from aba_optimiser.worker import Worker
-from aba_optimiser.kalman import BPMKalmanFilter
 
 
 class Controller:
@@ -111,10 +112,11 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
         )
 
         # track_data = tfs.read(TRACK_DATA_FILE)
-        track_data = tfs.read(NOISE_FILE)
         if FILTER_DATA:
-            kf = BPMKalmanFilter()
-            track_data = kf.run(track_data, x0=np.zeros(4), P0=np.eye(4) * 1e-4)
+            track_data = tfs.read(FILTERED_FILE)
+        else:
+            track_data = tfs.read(NOISE_FILE)
+
 
         self.start_data = select_marker(track_data, start_bpm)
         # Get indices of the start and end markers from the full list.
@@ -206,7 +208,11 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
         run_start = time.time()  # start total timing
 
         # Prepare worker batches
-        indices = list(range(RAMP_UP_TURNS, TOTAL_TRACKS + RAMP_UP_TURNS + 1))
+        if ACD_ON:
+            indices = list(range(RAMP_UP_TURNS, TOTAL_TRACKS + RAMP_UP_TURNS + 1))
+        else:
+            indices = list(range(TOTAL_TRACKS + 1))
+
         batches = [
             indices[i * TRACKS_PER_WORKER : (i + 1) * TRACKS_PER_WORKER]
             for i in range(NUM_WORKERS)
@@ -314,7 +320,7 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                     end="",
                 )
 
-                if self.smoothed_grad_norm < 1e-7:
+                if self.smoothed_grad_norm < 1e-8:
                     print(
                         f"\nGradient norm below threshold: "
                         f"{self.smoothed_grad_norm:.3e}. "
