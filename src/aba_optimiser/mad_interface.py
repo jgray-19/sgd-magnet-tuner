@@ -126,7 +126,7 @@ py:send(knob_names)
         """
         base_names = [name.replace("_k1", "") for name in self.knob_names]
         self.mad.send(f"""
-knob_names = py:recv()
+local knob_names = py:recv()
 positions = {{}}
 for i, elm, spos, ds in MADX.{SEQ_NAME}:iter() do
     base_name = elm.name:gsub("%.[AB](%d+[RL]%d%.B%d)$", ".%1")

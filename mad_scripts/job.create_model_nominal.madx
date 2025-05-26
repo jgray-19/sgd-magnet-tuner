@@ -1,0 +1,38 @@
+title, "LHC Model created by omc3";
+! Model directory        /afs/cern.ch/work/j/jmgray/private/dpp_corr
+! Acc-Models             /afs/cern.ch/work/j/jmgray/private/dpp_corr/model_b1__t0.28_0.31_30cm/acc-models-lhc
+! LHC year               2025
+! Natural Tune X              0.280
+! Natural Tune Y              0.310
+! Best Knowledge                 NO
+! Excitation                    ACD
+! > Driven Tune X             0.280
+! > Driven Tune Y             0.310
+
+
+call, file = 'macros/general.macros.madx';
+call, file = 'macros/lhc.macros.madx';
+omc3_beam_energy = 6800.0;
+exec, define_nominal_beams();
+
+call, file = 'macros/lhc.macros.run3.madx';
+
+! ----- Calling Sequence -----
+option, -echo;  ! suppress output from base sequence loading to keep the log small
+call, file = 'acc-models-lhc/lhc.seq';
+option, echo;  ! re-enable output to see the optics settings
+
+! ---- Call optics and other modifiers ----
+call, file = 'acc-models-lhc/operation/optics/R2025aRP_A30cmC30cmA10mL200cm_Flat.madx'; !@modifier
+
+! ----- Remove IR symmetry definitions -----
+
+call, file="acc-models-lhc/toolkit/remove-triplet-symmetry-knob.madx"; ! removes 'ktqx.r1 := -ktqx.l1'-type issues
+
+! ----- Finalize Sequence -----
+exec, cycle_sequences();
+set, format="-.16e";
+use, sequence = LHCB1;
+exec, match_tunes(0.28, 0.31, 1);
+exec, coupling_knob(1);
+save, sequence = LHCB1, file = 'lhcb1.seq';

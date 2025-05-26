@@ -177,38 +177,48 @@ def read_results(
 
     return knob_names, knob_strengths, uncertainties
 
-def nearest_bpm_to_pi_2(mu: pd.Series, Q1: float) -> pd.DataFrame:
-    """
-    Parameters
-    ----------
-    mu    : Series
-        Cumulative phase advance in *turns*; index order = optic order.
-        The last element *must* be the tune Q1.
-    Q1    : float
-        The (horizontal) tune.  mu.iloc[-1] should equal this value.
-    target: float, optional
-        Desired separation in turns (default 0.25).
+# -------------------------------------------------------------------------
+# HELPER: find the previous BPM ~pi/2 phase advance
+# -------------------------------------------------------------------------
 
-    Returns
-    -------
-    DataFrame
-        index        → BPM_i (same order as `mu`)
-        'nearest_bpm'→ BPM_j that minimises |Δ - target|
-        'delta'      → (μ_j - μ_i  mod Q1) - target   (signed)
+def prev_bpm_to_pi_2(mu: pd.Series, tune: float) -> pd.DataFrame:
     """
-    v = mu.to_numpy(float)            # shape (n,)
+    For each BPM_i find the previous BPM_j whose backward phase advance
+    (mu_i - mu_j) is closest to pi/2 phase advance.
+    Returns a DataFrame indexed by BPM_i with columns:
+      - prev_bpm : name of BPM_j
+      - delta    : (mu_i - mu_j - 0.25) signed error in turns
+    """
+    v = mu.to_numpy(float)
     n = len(v)
-    target = 0.25                    # desired separation in 2π (pi/2)
 
-    # (μ_j - μ_i) taken only in the forward sense, with wrap once at Q1
-    forward = (v.reshape(1, n) - v.reshape(n, 1) + Q1) % Q1
-    np.fill_diagonal(forward, np.nan)       # ignore i = j
+    # backward differences mod Q: (mu_i - mu_j) ∈ [0, tune)
+    backward = (v.reshape(n,1) - v.reshape(1,n) + tune) % tune
+    np.fill_diagonal(backward, np.nan)
 
-    # minimise absolute error from the target quarter-turn
-    partner_idx   = np.nanargmin(np.abs(forward - target), axis=1)
-    partner_names = mu.index[partner_idx]
-    deltas        = forward[np.arange(n), partner_idx] - target
+    # pick j minimizing |Δ_ij - target|. target = 0.25 (*2pi) -> pi/2
+    idx   = np.nanargmin(np.abs(backward - 0.25), axis=1)
+    delta = backward[np.arange(n), idx] - 0.25
+    names = mu.index[idx]
 
-    return pd.DataFrame({"nearest_bpm": partner_names,
-                         "delta": deltas},
-                        index=mu.index)
+    return pd.DataFrame({"prev_bpm": names, "delta": delta}, index=mu.index)
+
+# 1) define your new forward-phase helper
+def next_bpm_to_pi_2(mu: pd.Series, tune: float) -> pd.DataFrame:
+    """
+    For each BPM_i find the *next* BPM_j whose forward phase advance
+    (mu_j - mu_i) mod Q is closest to pi/2 phase advance.
+    """
+    v = mu.to_numpy(float)
+    n = len(v)
+
+    # forward differences mod Q: (mu_j - mu_i) ∈ [0, tune)
+    forward = (v.reshape(1,n) - v.reshape(n,1) + tune) % tune
+    np.fill_diagonal(forward, np.nan)
+
+    # pick j minimizing |Δ_ij - target|
+    idx   = np.nanargmin(np.abs(forward - 0.25), axis=1)
+    delta = forward[np.arange(n), idx] - 0.25
+    names = mu.index[idx]
+
+    return pd.DataFrame({"next_bpm": names, "delta": delta}, index=mu.index)

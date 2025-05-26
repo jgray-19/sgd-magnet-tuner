@@ -1,6 +1,6 @@
 --- Initialisation of libraries and modules ---
 local track, beam, twiss, match in MAD
-local rand, abs                                             in MAD.gmath
+local randseed, randn, abs                                             in MAD.gmath
 local observed in MAD.element.flags
 local hacdipole, vacdipole in MAD.element
 local sqrt in math
@@ -10,6 +10,8 @@ MADX:load("lhcb1.seq")
 local lhcb1 in MADX
 local RAMPUP = 1000
 local FLATTOP = 1e4
+
+randseed(42)  -- Set the random seed for reproducibility
 
 --- Define initial coordinates with small offsets ---
 local X0 = { x = 0, px = 0, y = 0, py = 0, t = 0, pt = 0 }
@@ -29,8 +31,17 @@ local function format_num(num)
 end
 
 --- Collect quadrupole element names within the defined range ---
-local elem_names = {}
+local elem_names_range = {}
 for i, elm, s, ds in lhcb1:iter(knob_range) do
+    if elm.k1 and elm.k1 ~= 0 and elm.name:match("MQ%.") then
+        -- Check if the element is a main quadrupole
+        table.insert(elem_names_range, elm.name)
+    end
+end
+
+-- Collect all the quadrupole element names in the sequence
+local elem_names = {}
+for i, elm, s, ds in lhcb1:iter() do 
     if elm.k1 and elm.k1 ~= 0 and elm.name:match("MQ%.") then
         -- Check if the element is a main quadrupole
         table.insert(elem_names, elm.name)
@@ -38,31 +49,39 @@ for i, elm, s, ds in lhcb1:iter(knob_range) do
 end
 
 --- Inject noise into the quadrupole strengths (updated to handle aliases) ---
-local q_nf = 1e-3  -- noise factor for quadrupoles
+local q_nf = 1e-4  -- noise factor for quadrupoles
 
 -- Build groups of magnets by their base name.
 -- The substitution removes an alias of "A" or "B" when it occurs before the main number block.
 local groups = {}
 local base_list = {}
-for i, name in ipairs(elem_names) do
+for i, name in ipairs(elem_names_range) do
     local base = name:gsub("%.[AB](%d+[RL]%d%.B%d)$", ".%1")
     groups[base] = groups[base] or {}
     table.insert(groups[base], name)
     table.insert(base_list, base)
 end
+local groups_all = {}
+local base_list_all = {}
+for i, name in ipairs(elem_names) do
+    local base = name:gsub("%.[AB](%d+[RL]%d%.B%d)$", ".%1")
+    groups_all[base] = groups_all[base] or {}
+    table.insert(groups_all[base], name)
+    table.insert(base_list_all, base)
+end
 
 -- Inject noise into each group only once, then update all aliases with the same value
-for _, base in ipairs(base_list) do
-    local alias_list = groups[base]
-    local noise = q_nf * ((rand() - 0.5) * 2)
+for _, base in ipairs(base_list_all) do
+    local alias_list = groups_all[base]
+    local noise = q_nf * randn()
     for _, name in ipairs(alias_list) do
          MADX[name].k1 = MADX[name].k1 + noise * abs(MADX[name].k1)
          -- MADX[name].k1s = MADX[name].k1s + noise * abs(MADX[name].k1)
     end
 end
 
---- Write the element names to a file (used by Python) ---
-local outFile = io.open("data/elem_names.txt", "w")
+--- Write the element names to a file (used by Python) and only the ones within the range ---
+local outFile = io.open("../data/elem_names.txt", "w")
 for _, base in ipairs(base_list) do
     local alias_list = groups[base]
     for _, name in ipairs(alias_list) do
@@ -98,7 +117,7 @@ match {
 };
 
 -- Write out the matched tunes
-local outFile = io.open("data/matched_tunes.txt", "w")
+local outFile = io.open("../data/matched_tunes.txt", "w")
 outFile:write("dqx_b1_op\t" .. format_num(MADX.dqx_b1_op) .. "\n")
 outFile:write("dqy_b1_op\t" .. format_num(MADX.dqy_b1_op) .. "\n")
 outFile:close()
@@ -142,21 +161,9 @@ else
     }
     nturns = FLATTOP
 end
---- Prepare BPM selection for the arc region --- 
--- local a34_start = lhcb1:index_of(track_start)
--- local a34_end = lhcb1:index_of(end_pos)
--- local function is_element_in_arc34(_, eidx)
---     if eidx >= a34_start and eidx <= a34_end then  -- Changed to include boundaries
---         return true
---     else
---         return false
---     end
--- end
 
 -- Select BPMs within the arc region and track their data ---
 lhcb1:deselect(observed)
--- lhcb1:  select(observed, {pattern=track_start}) -- Ensure the start position, in case it is not a BPM
--- lhcb1:  select(observed, {pattern=end_pos}) -- Ensure the end position, in case it is not a BPM
 lhcb1:  select(observed, {pattern="BPM"})!, select=is_element_in_arc34})
 local track_data = track {
     sequence = lhcb1,
@@ -166,10 +173,10 @@ local track_data = track {
     info=1,
 }
 
-track_data:write("data/track_data.tfs", {'name', 'turn','x', 'px', 'y', 'py'})
+track_data:write("../data/track_data.tfs", {'name', 'turn', 'id', 'eidx', 'x', 'px', 'y', 'py'})
 
 --- Write out the final magnet strengths to file ---
-local outFile = io.open("data/true_strengths.txt", "w")
+local outFile = io.open("../data/true_strengths.txt", "w")
 
 MAD.option.numfmt = "% -.15e"
 for base, alias_list in pairs(groups) do

@@ -6,6 +6,7 @@ from multiprocessing.connection import Connection
 import numpy as np
 import tfs
 from tensorboardX import SummaryWriter
+import pandas as pd
 
 from aba_optimiser.config import (
     ACD_ON,
@@ -15,26 +16,33 @@ from aba_optimiser.config import (
     FILTER_DATA,
     FILTERED_FILE,
     GRAD_NORM_ALPHA,
+    # GRAD_PENALTY_COEFF,
+    # REL_K1_STD_DEV,
     KNOB_TABLE,
     MAX_EPOCHS,
     MAX_LR,
     MIN_LR,
-    # TRACK_DATA_FILE,
+    TRACK_DATA_FILE,
+    MOMENTUM_STD_DEV,
     NOISE_FILE,
     NUM_WORKERS,
+    OPTIMISER_TYPE,
     OUTPUT_KNOBS,
+    POSITION_STD_DEV,
     RAMP_UP_TURNS,
     SEQ_NAME,
     SEQUENCE_FILE,
     TOTAL_TRACKS,
     TRACKS_PER_WORKER,
     TRUE_STRENGTHS,
+    USE_NOISY_DATA,
     WARMUP_EPOCHS,
     WARMUP_LR_START,
     WINDOWS,
 )
 from aba_optimiser.mad_interface import MadInterface
-from aba_optimiser.optimiser import AdamOptimiser
+from aba_optimiser.adam import AdamOptimiser
+from aba_optimiser.amsgrad import AMSGradOptimiser
 from aba_optimiser.scheduler import LRScheduler
 from aba_optimiser.utils import (
     read_elem_names,
@@ -75,8 +83,8 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
         tws = tws.iloc[start_bpm_idx : end_bpm_idx + 1]
 
         self.all_bpms = tws.index.tolist()
-        self.beta_x = np.sqrt(tws["beta11"].to_numpy())
-        self.beta_y = np.sqrt(tws["beta22"].to_numpy())
+        self.beta_x = tws["beta11"].to_numpy()
+        self.beta_y = tws["beta22"].to_numpy()
 
         assert len(self.beta_x) == len(self.beta_y), (
             "Beta functions are not the same length"
@@ -96,13 +104,17 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
             )
 
         # Set up optimiser and scheduler
-        self.optimiser = AdamOptimiser(
-            shape=init_vals.shape,
-            beta1=0.9,
-            beta2=0.999,
-            eps=1e-8,
-            weight_decay=0.0,
-        )
+        optimiser_kwargs = {
+            "shape": init_vals.shape,
+            "beta1": 0.9,
+            "beta2": 0.999,
+            "weight_decay": 0.0,
+        }
+        if OPTIMISER_TYPE == "amsgrad":
+            self.optimiser = AMSGradOptimiser(**optimiser_kwargs)
+        else:
+            self.optimiser = AdamOptimiser(**optimiser_kwargs)
+
         self.scheduler = LRScheduler(
             warmup_epochs=WARMUP_EPOCHS,
             decay_epochs=DECAY_EPOCHS,
@@ -111,14 +123,28 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
             min_lr=MIN_LR,
         )
 
-        # track_data = tfs.read(TRACK_DATA_FILE)
-        if FILTER_DATA:
-            track_data = tfs.read(FILTERED_FILE)
+        if not USE_NOISY_DATA:
+            track_data = tfs.read(TRACK_DATA_FILE)
+        elif FILTER_DATA:
+            track_data = pd.read_feather(FILTERED_FILE)
+            numeric_cols = [col for col in track_data.columns if col not in ["name", "turn", 'id', 'eidx']]
+            track_data[numeric_cols] = track_data[numeric_cols].astype("float64")
         else:
-            track_data = tfs.read(NOISE_FILE)
+            track_data = pd.read_feather(NOISE_FILE)
+            numeric_cols = [col for col in track_data.columns if col not in ["name", "turn", 'id', 'eidx']]
+            track_data[numeric_cols] = track_data[numeric_cols].astype("float64")
+        if not FILTER_DATA:
+            track_data["var_x" ] = (POSITION_STD_DEV)**2
+            track_data["var_y" ] = (POSITION_STD_DEV)**2
+            track_data["var_px"] = (MOMENTUM_STD_DEV)**2
+            track_data["var_py"] = (MOMENTUM_STD_DEV)**2
 
 
-        self.start_data = select_marker(track_data, start_bpm)
+        # instead of one static start_data, build one per WINDOW
+        self.start_data_dict = {
+            start: select_marker(track_data, start)
+            for start, _ in WINDOWS
+        }
         # Get indices of the start and end markers from the full list.
         try:
             start_idx = self.all_bpms.index(start_bpm)
@@ -142,8 +168,20 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
             "BPM names from track data do not match the number of BPMs in the sequence"
         )
 
+        # In track data, there is a column called "var_x" and "var_y" which are the variances
+        # of the x and y coordinates respectively. I would like to calculate the variance for each
+        # BPM and store it in a list, one for x and one for y. This will just be the mean of the
+        # variances for each BPM. The variance is the square of the standard deviation.
+
+        # Get the variances for each BPM
+        self.var_x = self.comparison_data.groupby("name")["var_x"].mean().to_numpy()
+        self.var_px = self.comparison_data.groupby("name")["var_px"].mean().to_numpy()
+        
+        self.var_y = self.comparison_data.groupby("name")["var_y"].mean().to_numpy()
+        self.var_py = self.comparison_data.groupby("name")["var_py"].mean().to_numpy()
+
         self.bpm_idx = {name: i for i, name in enumerate(self.bpm_names)}
-        self.window_slices = []
+        self.window_slices: list[slice] = []
         for start, end in WINDOWS:
             i0 = self.bpm_idx[start]
             i1 = self.bpm_idx[end]
@@ -151,7 +189,14 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                 i0, i1 = i1, i0
             self.window_slices.append(slice(i0, i1 + 1))
 
-        self.smoothed_grad_norm = None  # Initialize smoothed gradient norm            
+        self.smoothed_grad_norm = None  # Initialize smoothed gradient norm     
+
+        # num_knobs = len(self.knob_names)
+        # # Create the importance weights as a exponential decay function
+        # self.importance_weights = np.exp(-0.75 * np.arange(num_knobs))
+        # print(
+        #     f"Importance weights for knobs: {self.importance_weights}"
+        # )   
 
     def _write_results(self, uncertainties) -> None:
         """Write final knob strengths and markdown table to file."""
@@ -232,32 +277,47 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                 batch,
                 child,
                 self.comparison_data,
-                self.start_data,
+                self.start_data_dict,
+                self.window_slices,
                 self.beta_x,
                 self.beta_y,
             )
             w.start()
             parent_conns.append(parent)
             workers.append(w)
+            parent.send((self.var_x, self.var_y))
+        
+        # Collect initial Hessian diagonal from workers
+        # H_diag_vec = np.zeros((len(self.knob_names),))
+        # for conn in parent_conns:
+        #     H_diag_vec += conn.recv().squeeze()
+        # # Levenberg–Marquardt damping: start μ ~ 10⁻³ × trace(H)
+        # self.mu = 1e-3 * np.sum(H_diag_vec)
 
         # TensorBoard logging
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         writer = SummaryWriter(log_dir=f"runs/{ts}_opt")
-        # previous_loss = 1e100  # Initialize previous loss tracker
+
+        # Initialize live plot for relative differences (log scale)
+        import matplotlib.pyplot as plt
+        plt.ion()
+        rel_diff_history = {k: [] for k in self.knob_names}
+        fig, ax = plt.subplots()
+        # Initialize new figure for consecutive differences (delta)
+        fig_delta, ax_delta = plt.subplots()
+
+        # current_cell = 0
         try:
             # Main optimisation
             for epoch in range(MAX_EPOCHS):
                 epoch_start = time.time()  # start epoch timing
 
-                # choose sub-arc for this epoch
-                win = epoch % len(self.window_slices)
-                slc = self.window_slices[win]
-
                 # Broadcast updated knob values, and window range to workers
                 for conn in parent_conns:
-                    conn.send((self.current_knobs, slc))
+                    conn.send(self.current_knobs)
 
                 lr = self.scheduler(epoch)
+                # Linearly increase learning rate for the first 100 epoch, and then reset to min 
 
                 total_loss = 0.0
                 agg_grad = None
@@ -267,6 +327,7 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                     _, grad, loss = conn.recv()
                     agg_grad = grad if agg_grad is None else agg_grad + grad
                     total_loss += loss
+                total_loss /= TOTAL_TRACKS
 
                 agg_grad = agg_grad.flatten() / TOTAL_TRACKS
 
@@ -296,6 +357,53 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                     else 0
                     for k, diff in zip(self.knob_names, true_diff)
                 ]
+                # ----- Live plot update (non-blocking) -----
+                for i, k in enumerate(self.knob_names):
+                    rel_diff_history[k].append(rel_diff[i])
+                if (epoch+1) % 10 == 0:
+                    # Update log scale figure
+                    ax.clear()
+                    for i, k in enumerate(self.knob_names):
+                        ax.plot(rel_diff_history[k], label=str(k))
+                        if rel_diff_history[k]:
+                            x_val = len(rel_diff_history[k]) - 1
+                            ax.text(x_val, rel_diff_history[k][-1], str(i), 
+                                    ha="left", va="center", fontsize="small")
+                    ax.set_xlabel("Epoch")
+                    ax.set_ylabel("Relative Difference")
+                    ax.set_yscale("log", nonpositive="clip")
+                    ax.set_ylim(1e-6, 1e-3)
+                    
+                    # Update delta (difference) plot to show only the last 300 results
+                    ax_delta.clear()
+                    for i, k in enumerate(self.knob_names):
+                        # Use only last 300 results, if available
+                        history = rel_diff_history[k]
+                        if len(history) > 300:
+                            history_tail = history[-300:]
+                            x_vals = range(len(history) - 300, len(history)-1)
+                        else:
+                            history_tail = history
+                            x_vals = range(1, len(history))
+                        # Calculate differences between consecutive elements.
+                        diffs = np.diff(history_tail)
+                        if diffs.size > 0:
+                            ax_delta.plot(x_vals, diffs)
+                            ax_delta.text(
+                                x_vals[-1],
+                                diffs[-1],
+                                str(i),
+                                ha="left",
+                                va="center",
+                                fontsize="small",
+                            )
+                    # Draw a horizontal line at y=0
+                    ax_delta.axhline(0, color="red", linestyle="--")
+                    ax_delta.set_xlabel("Epoch (delta index)")
+                    
+                    plt.pause(0.001)
+                    
+                # ----------------------------------------------
                 true_diff = np.sum(true_diff)
                 rel_diff = np.sum(rel_diff)
                 writer.add_scalar("loss", total_loss, epoch)
@@ -317,26 +425,28 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                     f"lr={lr:.3e}, "
                     f"epoch_time={epoch_time:.3f}s, "
                     f"total_time={total_time:.3f}s",
-                    end="",
+                    end="\n",
                 )
 
-                if self.smoothed_grad_norm < 1e-8:
-                    print(
-                        f"\nGradient norm below threshold: "
-                        f"{self.smoothed_grad_norm:.3e}. "
-                        f"Stopping early at epoch {epoch}."
-                    )
-                    break
+                # if self.smoothed_grad_norm < 1e-8:
+                #     print(
+                #         f"\nGradient norm below threshold: "
+                #         f"{self.smoothed_grad_norm:.3e}. "
+                #         f"Stopping early at epoch {epoch}."
+                #     )
+                #     break
 
         except KeyboardInterrupt:
             print(
                 "\nKeyboardInterrupt detected. Terminating early and writing results."
             )
         else:
+            fig.savefig(f"runs/{ts}_relative_difference.png")
             print("\nTerminating workers...")
             H_global = np.zeros((len(self.knob_names), len(self.knob_names)))
             for conn in parent_conns:
-                conn.send((None, None))  # Signal workers to stop
+                conn.send(None)  # Signal workers to stop the training loop
+            
             for conn in parent_conns:
                 H_global += conn.recv()
 

@@ -69,3 +69,4 @@ class LRScheduler:
         # After decay phase: Learning rate stays at min_lr.
         else:
             return self.min_lr
+

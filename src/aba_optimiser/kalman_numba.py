@@ -10,6 +10,9 @@ from aba_optimiser.config import (
     FLATTOP_TURNS,
     SEQ_NAME,
     SEQUENCE_FILE,
+    POSITION_STD_DEV, 
+    MOMENTUM_STD_DEV,
+    REL_K1_STD_DEV,
 )
 from aba_optimiser.mad_interface import MadInterface
 
@@ -26,7 +29,11 @@ class BPMKalmanFilter:
     Call `run(meas_df, x0, P0)` to execute filtering; returns a pandas DataFrame of filtered states.
     """
 
-    def __init__(self, override_q: bool = False, q_file: str = "data/Q_matrix.npy"):
+    def __init__(
+            self,
+            override_q: bool = True,
+            q_file: str = "data/Q_matrix.npy",
+        ):          
         # Initialize MAD-X interface
         self.mad_iface = MadInterface(
             SEQUENCE_FILE, BPM_RANGE, stdout="/dev/null", redirect_sterr=True
@@ -40,19 +47,21 @@ class BPMKalmanFilter:
         # Compute transfer matrices
         self.bpm_mats = self._compute_bpm_mats()
         # Compute or load process noise
-        self.q_file = q_file
-        if not override_q and os.path.exists(self.q_file):
-            print(f"Loading Q from {self.q_file}")
-            loaded_q = np.load(self.q_file, allow_pickle=True)
-            self.Q = [np.array(qi, dtype=np.float64) for qi in loaded_q]
+        if not override_q and os.path.exists(q_file):
+            print(f"Loading Q from {q_file}")
+            loaded_q = np.load(q_file, allow_pickle=True)
+            self.Q = [np.array(qi) for qi in loaded_q]
+            print("Q loaded.")
         else:
             print("Calculating Q...")
-            self.Q = self._compute_Q(sigma_p=1e-3)
-            np.save(self.q_file, np.array(self.Q, dtype=object))
+            self.Q = self._compute_Q(rel_sigma_p=REL_K1_STD_DEV)
+            np.save(q_file, np.array(self.Q, dtype=object))
+            print(f"Q saved to {q_file}.")
+        
         # Measurement noise (same for all BPMs)
-        sigma = [1e-4, 3e-6, 1e-4, 3e-6]
-        R_mat = np.diag(np.square(sigma))
-        self.R = [R_mat.copy() for _ in range(self.n_bpm)]
+        sigma = [POSITION_STD_DEV, 10*MOMENTUM_STD_DEV, POSITION_STD_DEV, 10*MOMENTUM_STD_DEV]
+        R_mat = np.diag(np.square(np.array(sigma)))
+        self.R = np.repeat(R_mat[np.newaxis, :, :], self.n_bpm, axis=0)
 
     def _get_bpm_list(self) -> list[str]:
         code = f"""
@@ -77,10 +86,10 @@ py:send(mflw[1]:get1())
 """
             self.mad_iface.mad.send(code)
             M_full = self.mad_iface.mad.recv()
-            mats.append(M_full[:4, :4].copy())
+            mats.append(np.array(M_full[:4, :4].copy()))
         return mats
 
-    def _compute_Q(self, sigma_p: float) -> list[np.ndarray]:
+    def _compute_Q(self, rel_sigma_p: float) -> list[np.ndarray]:
         # Compute Q for each BPM segment, similar to _compute_bpm_mats
         Q_list = []
         # Load MAD-NG modules and functions (not using local variables)
@@ -90,6 +99,7 @@ py:send(mflw[1]:get1())
         self.mad_iface.mad.load("MAD.element", "marker")
         self.mad_iface.mad.load("math", "sqrt")
         # Send the setup code to MAD-NG
+        quad_strengths = self.mad_iface.receive_knob_values()
         self.mad_iface.mad.send(f"""
 local tws = twiss {{sequence = {SEQ_NAME}}}
 local coords = {{"x","px","y","py","t","pt"}}
@@ -101,16 +111,10 @@ X0 = {{
     0,
     0
 }}
-elems = {{}}
-for _, e in {SEQ_NAME}:iter() do
-    if e.k1 and e.k1~=0 and e.name:match("MQ%.") then 
-        table.insert(elems, e.name)
-    end
-end
-num_quads = #elems
-x0_da = damap{{nv=#coords, np=num_quads, mo=2, po=1, vn=tblcat(coords, elems)}}
-for i, name in ipairs(elems) do
-    {SEQ_NAME}[name].k1 = {SEQ_NAME}[name].k1 + x0_da[name]
+num_quads = #knob_names
+x0_da = damap{{nv=#coords, np=num_quads, mo=1, po=1, vn=tblcat(coords, knob_names)}}
+for i, knob in ipairs(knob_names) do
+    {SEQ_NAME}[knob] = {SEQ_NAME}[knob] + x0_da[knob]
 end
 x0_da:set0(X0)
 """)
@@ -120,7 +124,7 @@ x0_da:set0(X0)
 local m = mflw[1]
 local jx=matrix(num_quads,1):zeros(); local jpx=matrix(num_quads,1):zeros()
 local jy=matrix(num_quads,1):zeros(); local jpy=matrix(num_quads,1):zeros()
-for k,name in ipairs(elems) do
+for k,name in ipairs(knob_names) do
     local mono = string.rep("0", 6 + k - 1) .. "1"
     jx :set(k,1, m.x:get(mono))
     jpx:set(k,1, m.px:get(mono))
@@ -129,7 +133,8 @@ for k,name in ipairs(elems) do
 end
 py:send(jx); py:send(jpx); py:send(jy); py:send(jpy)
 """
-        num_quads = self.mad_iface.mad.num_quads
+        Sigma_p = np.diag(np.square(quad_strengths * rel_sigma_p))
+        print("Sigma_p:", Sigma_p)
         for i, bpm in enumerate(self.bpm_list):
             prev_b = self.bpm_list[(i - 1) % self.n_bpm]
             bpm_track = f"""
@@ -140,15 +145,10 @@ _, mflw = track{{sequence={SEQ_NAME}, X0=x0_da, nturn=1, range=\"{prev_b}/{bpm}\
             jpx = self.mad_iface.mad.recv()
             jy = self.mad_iface.mad.recv()
             jpy = self.mad_iface.mad.recv()
-            Sigma_p = np.eye(num_quads) * sigma_p**2
             G = np.vstack([jx[:, 0], jpx[:, 0], jy[:, 0], jpy[:, 0]])
-            Q_i = G @ Sigma_p @ G.T
-            
-            # if Q_i.sum() == 0:
-            #     Q_i = np.eye(4) * 1e-12
-            eps = 1e-12
+            Q_i = np.array(G @ Sigma_p @ G.T)
+            eps = 1e-16
             Q_i += np.eye(4) * eps
-            
             Q_list.append(Q_i)
         return Q_list
 
@@ -166,71 +166,113 @@ _, mflw = track{{sequence={SEQ_NAME}, X0=x0_da, nturn=1, range=\"{prev_b}/{bpm}\
         turns = range(int(meas_df["turn"].min()), int(meas_df["turn"].max() + 1))
         n_turns = len(turns)
         # Build measurement array
-        meas = np.zeros((n_turns, self.n_bpm, 4))
-        for i, bpm in enumerate(self.bpm_list):
-            dfb = meas_df[meas_df["name"] == bpm]
-            for j, comp in enumerate(["x", "px", "y", "py"]):
-                meas[:, i, j] = dfb[comp].values
-        # Run standard filter
-        x_hat, _ = self._filter_array(meas, do_smoothing=True)
-        # Build output DataFrame
-        rows = []
-        for ti, turn in enumerate(turns):
-            for i, bpm in enumerate(self.bpm_list):
-                row = {"turn": turn, "name": bpm}
-                for j, comp in enumerate(["x", "px", "y", "py"]):
-                    row[comp] = x_hat[ti, i, j]
-                rows.append(row)
-        df_out = pd.DataFrame(rows)
+        pivot = meas_df.pivot(index="turn", columns="name", values=["x", "px", "y", "py"])
+        pivot = pivot.reindex(columns=self.bpm_list, level=1)  # ensure correct BPM order
+        meas = np.stack(
+            [pivot[comp].loc[sorted(pivot.index)].values for comp in ["x", "px", "y", "py"]],
+            axis=-1
+        )
+        # ------------------------------------------------------------------
+        #  EM ITERATION LOOP
+        # ------------------------------------------------------------------
+        # working copies of Q/R in double precision for EM stability
+        x_hat, P_hat, _ = self._filter_array(
+            meas,
+            do_smoothing=False,
+            return_cross=True
+        )
+
+        # Build output DataFrame vectorized
+        n_turns, n_bpm = x_hat.shape[0], len(self.bpm_list)
+        turn_arr = np.repeat(np.array(list(turns)), n_bpm)
+        name_arr = np.tile(np.array(self.bpm_list), n_turns)
+        df_out = pd.DataFrame({
+            "turn": turn_arr,
+            "name": name_arr,
+            "x": x_hat[:,:,0].reshape(-1),
+            "px": x_hat[:,:,1].reshape(-1),
+            "y": x_hat[:,:,2].reshape(-1),
+            "py": x_hat[:,:,3].reshape(-1),
+            "var_x": P_hat[:,:,0,0].reshape(-1),
+            "var_px": P_hat[:,:,1,1].reshape(-1),
+            "var_y": P_hat[:,:,2,2].reshape(-1),
+            "var_py": P_hat[:,:,3,3].reshape(-1),
+        })
+        df_out['id'] = meas_df['id']
+        df_out['eidx'] = meas_df['eidx']
         print("Kalman filter complete.")
         return df_out
 
     def _filter_array(
         self,
         measurements: np.ndarray,
-        do_smoothing: bool = False
-    ) -> tuple[np.ndarray, np.ndarray]:
+        do_smoothing: bool      = False,
+        Q_in: list[np.ndarray] | None = None,
+        R_in: np.ndarray       | None = None,
+        return_cross: bool     = False
+    ) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, tuple[np.ndarray, np.ndarray]]:
         """
         Core Kalman filter (and optional RTS-smoother) over flattened turn x BPM data.
         measurements: (n_turns, n_bpm, 4)
+        Q_in:         optional list of per-BPM process-noise matrices
+        R_in:         optional array of per-BPM measurement-noise matrices
+        return_cross: if True, also return (x_pr, P_pr) from the forward pass
         do_smoothing: apply Rauch-Tung-Striebel smoothing if True.
-
-        Returns (x_out, P_out) each shaped (n_turns, n_bpm, …)
         """
-        
+        print("Filtering data...")
         # 1) flatten & stack
         n_turns, n_bpm, _ = measurements.shape
         N = n_turns * n_bpm
         bpm_of    = np.tile(np.arange(n_bpm), n_turns)
         meas_flat = measurements.reshape(N, 4)
         M_stack   = np.stack(self.bpm_mats)
-        Q_stack   = np.stack(self.Q)
-        R_stack   = np.stack(self.R)
+        Q_stack   = np.stack(Q_in if Q_in is not None else self.Q)
+        R_stack   = np.stack(R_in if R_in is not None else self.R)
         
         special_idx = self.bpm_list.index(self.special_bpm)
-        reset_idx = np.where(bpm_of == special_idx)[0]
-        boundaries= np.r_[[-1], reset_idx, [N]]
-
-        # 2) call the JIT‐compiled core
+        reset_idx   = np.where(bpm_of == special_idx)[0]
+        boundaries  = np.r_[[-1], reset_idx, [N]]
+        # 2) call the JIT-compiled core
         x_fwd, P_fwd, x_pr, P_pr = _filter_flat_jit(
             meas_flat, bpm_of, M_stack, Q_stack, R_stack,
             boundaries, special_idx
         )
-
         # 3) reshape outputs
         x_filt = x_fwd.reshape(n_turns, n_bpm, 4)
         P_filt = P_fwd.reshape(n_turns, n_bpm, 4, 4)
 
         if not do_smoothing:
-            return x_filt, P_filt
-        
-        M_stack = np.stack(self.bpm_mats)  # shape (n_bpm,4,4)
-
-        # otherwise run your Python‐RTS smoother
-        x_s_flat, P_s_flat = _rts_smooth_flat_jit(
+            if return_cross:
+                return x_filt, P_filt, (x_pr, P_pr)
+            else:
+                return x_filt, P_filt, None
+ 
+        # otherwise run your Python-RTS smoother
+        print("Running RTS smoother...")
+        # after smoothing we get a flat list of length N-1
+        x_s_flat, P_s_flat, P_cross_flat = _rts_smooth_flat_jit(
             x_fwd, P_fwd, x_pr, P_pr, bpm_of, M_stack
         )
-        return x_s_flat.reshape(n_turns,n_bpm,4), P_s_flat.reshape(n_turns,n_bpm,4,4)
+        if return_cross:
+            # Build a (T, B, 4, 4) array by padding then reshaping,
+            # then drop the first “dummy” turn to get (T-1, B, 4, 4).
+            # 1) pad one zero-matrix at the front so length becomes N
+            pad = np.zeros((1, 4, 4))
+            P_pad = np.concatenate([pad, P_cross_flat], axis=0)  # shape (N,4,4)
+
+            # 2) reshape into (T, B, 4, 4)
+            P_all = P_pad.reshape(n_turns, n_bpm, 4, 4)
+
+            # 3) drop the turn=0 “dummy” (there is no cross from turn -1→0)
+            P_cross = P_all[1:]   # now shape is (T-1, B, 4, 4)
+
+            return (
+                x_s_flat.reshape(n_turns, n_bpm, 4),
+                P_s_flat.reshape(n_turns, n_bpm, 4, 4),
+                P_cross
+            )
+        else:
+            return x_s_flat.reshape(n_turns, n_bpm, 4), P_s_flat.reshape(n_turns, n_bpm, 4, 4)
 
 @njit(cache=True)
 def _rts_smooth_flat_jit(
@@ -240,7 +282,7 @@ def _rts_smooth_flat_jit(
     P_pr:  np.ndarray,   # (N,4,4)
     bpm_of: np.ndarray,  # (N,)
     M_stack: np.ndarray  # (n_bpm,4,4)
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Numba-compiled Rauch-Tung-Striebel smoother on a flattened sequence.
 
@@ -257,24 +299,37 @@ def _rts_smooth_flat_jit(
         P_s: smoothed covariances P_{k|N} (Nx4x4)
     """
     N = x_fwd.shape[0]
-    x_s = np.empty_like(x_fwd)
-    P_s = np.empty_like(P_fwd)
+    x_s = np.empty(x_fwd.shape)
+    P_s = np.empty(P_fwd.shape)
+    # allocate cross-covariances for N-1 transitions:
+    P_cross_flat = np.empty((N-1, 4, 4))
+
+    # small regularization constant
+    eps = 1e-16
 
     # initialize at last time step
     x_s[N-1] = x_fwd[N-1]
     P_s[N-1] = P_fwd[N-1]
-
+    
     # backward recursion
     for k in range(N-2, -1, -1):
-        # state‐transition for step k→k+1
+        # state-transition for step k→k+1
         F = M_stack[bpm_of[k+1]]      # (4x4)
-
-        # compute smoothing gain: Ck = P_fwd[k] F^T P_pr[k+1]^{-1}
-        # solve P_pr[k+1].T * X.T = (P_fwd[k] @ F.T).T  ⇒ X = Ck
-        # note: np.linalg.solve is supported under njit for small arrays
+    
+        # smoothing gain: Ck = P_fwd[k] F^T (P_pr[k+1] + eps I)^{-1}
         PFt = P_fwd[k] @ F.T           # (4x4)
-        Ck = np.linalg.solve(P_pr[k+1].T, PFt.T).T  # (4x4)
-
+        Ppr_next = P_pr[k+1] + np.eye(4) * eps
+        Ck = np.linalg.solve(Ppr_next.T, PFt.T).T  # (4x4)
+    
+        # *** record cross-covariance for transition k→k+1: ***
+        #    P_cross[k] = Ck @ P_fwd[k]
+        for i in range(4):
+            for j in range(4):
+                s = 0.0
+                for m in range(4):
+                    s += Ck[i, m] * P_fwd[k, m, j]
+                P_cross_flat[k, i, j] = s
+    
         # state update: x_s[k] = x_fwd[k] + Ck @ (x_s[k+1] - x_pr[k+1])
         for i in range(4):
             acc = x_fwd[k, i]
@@ -282,11 +337,8 @@ def _rts_smooth_flat_jit(
                 acc += Ck[i, j] * (x_s[k+1, j] - x_pr[k+1, j])
             x_s[k, i] = acc
 
-        # covariance update: P_s[k] = P_fwd[k] + Ck (P_s[k+1] - P_pr[k+1]) Ck^T
-        # first form the difference
-        diff = P_s[k+1] - P_pr[k+1]    # (4x4)
-
-        # compute temp = Ck @ diff
+        # covariance update: P_s[k] = P_fwd[k] + Ck @ (P_s[k+1] - (P_pr[k+1]+eps I)) @ Ck^T
+        diff = P_s[k+1] - Ppr_next
         temp = np.zeros((4, 4))
         for i in range(4):
             for j in range(4):
@@ -294,8 +346,6 @@ def _rts_smooth_flat_jit(
                 for ell in range(4):
                     s += Ck[i, ell] * diff[ell, j]
                 temp[i, j] = s
-
-        # now P_s[k] = P_fwd[k] + temp @ Ck.T
         for i in range(4):
             for j in range(4):
                 s = P_fwd[k, i, j]
@@ -303,14 +353,15 @@ def _rts_smooth_flat_jit(
                     s += temp[i, ell] * Ck[j, ell]
                 P_s[k, i, j] = s
 
-    return x_s, P_s
+    # Return all three:
+    return x_s, P_s, P_cross_flat
 
 
 @njit(cache=True, nogil=True)
 def _filter_flat_jit(meas_flat, bpm_of, M_stack, Q_stack, R_stack,
                     boundaries, special_idx):
     N = meas_flat.shape[0]
-    # allocate exactly the same buffers you used before
+    # allocate outputs
     x_fwd = np.empty((N, 4))
     P_fwd = np.empty((N, 4, 4))
     x_pr  = np.empty((N, 4))
@@ -321,24 +372,25 @@ def _filter_flat_jit(meas_flat, bpm_of, M_stack, Q_stack, R_stack,
         start = boundaries[seg]
         end   = boundaries[seg+1]
 
+        # --- initialize first point of segment ---
         if start < 0:
-            # very first segment
-            x_prev = np.zeros(4)
-            P_prev = np.diag(np.array([1e-2,1e-2,1e-2,1e-2]))
+            bpm_idx = 0
         else:
-            # special BPM reset
-            z0    = meas_flat[start]
-            x_up0 = z0.copy()
-            # diag(diag(R_special))
-            P_up0 = np.zeros((4,4))
-            for i in range(4):
-                P_up0[i,i] = R_stack[special_idx,i,i]
+            bpm_idx = special_idx
+        
+        # special BPM reset
+        z0    = meas_flat[start]
+        x_up0 = z0.copy()
+        # diag(diag(R_special))
+        P_up0 = np.zeros((4,4))
+        for i in range(4):
+            P_up0[i,i] = R_stack[bpm_idx,i,i]
 
-            x_fwd[start] = x_up0
-            P_fwd[start] = P_up0
-            x_pr[start]  = x_up0
-            P_pr[start]  = P_up0
-            x_prev, P_prev = x_up0, P_up0
+        x_fwd[start] = x_up0
+        P_fwd[start] = P_up0
+        x_pr[start]  = x_up0
+        P_pr[start]  = P_up0
+        x_prev, P_prev = x_up0, P_up0
 
         for k in range(start + 1, end):
             bpm_idx = bpm_of[k]
@@ -354,12 +406,12 @@ def _filter_flat_jit(meas_flat, bpm_of, M_stack, Q_stack, R_stack,
             for i in range(4):
                 acc = 0.0
                 for j in range(4):
-                    acc += M[i, j] * x_prev[j]
+                    acc += M[i,j] * x_prev[j]
                 x_pred[i] = acc
 
             # P_pred = M @ P_prev @ M.T + Q
-            # first temp = M @ P_prev
-            temp = np.zeros((4, 4))
+            # temp = M @ P_prev
+            temp = np.zeros((4,4))
             for i in range(4):
                 for j in range(4):
                     s = 0.0
@@ -372,7 +424,7 @@ def _filter_flat_jit(meas_flat, bpm_of, M_stack, Q_stack, R_stack,
                 for j in range(4):
                     s = 0.0
                     for ell in range(4):
-                        s += temp[i, ell] * M[j, ell]   # note M.T[ell] = M[j,ell]
+                        s += temp[i, ell] * M[j, ell]
                     P_pred[i, j] = s + Q[i, j]
 
             # store for RTS smoother
@@ -380,7 +432,7 @@ def _filter_flat_jit(meas_flat, bpm_of, M_stack, Q_stack, R_stack,
             P_pr[k] = P_pred
 
             # — update step (measurement) —
-            # scalar‐measurement gating & sequential update
+            # scalar-measurement gating & sequential update
             x_up = x_pred.copy()
             P_up = P_pred.copy()
 
@@ -415,13 +467,9 @@ def _filter_flat_jit(meas_flat, bpm_of, M_stack, Q_stack, R_stack,
             x_fwd[k] = x_up
             P_fwd[k] = P_up
 
-            # seed next step
-            for ii in range(4):
-                x_prev[ii] = x_up[ii]
-                for jj in range(4):
-                    P_prev[ii, jj] = P_up[ii, jj]
-
-    # (Optionally inject your RTS‐smoother here in numba as well)
+            # seed next
+            x_prev = x_up.copy()
+            P_prev = P_up.copy()
 
     return x_fwd, P_fwd, x_pr, P_pr
 
@@ -466,29 +514,18 @@ if __name__ == "__main__":
 
     # Print RMS errors per plane
     for idx, plane in enumerate(["x", "px", "y", "py"]):
-        rms_f = np.sqrt(
-            np.sum(
-                (
-                    filtered_df.loc[plot_bpm][plane].values
-                    - true_df.loc[plot_bpm][plane].values
-                )
-                ** 2
-            )
-        )
-        rms_raw = np.sqrt(
-            np.sum(
-                (
-                    meas_df.loc[plot_bpm][plane].values
-                    - true_df.loc[plot_bpm][plane].values
-                )
-                ** 2
-            )
-        )
+        filtered_diff = filtered_df[plane] - true_df[plane]
+        meas_diff = meas_df[plane] - true_df[plane]
+        rms_f = filtered_diff.to_numpy().std()
+        rms_raw = meas_diff.to_numpy().std()
         print(f"RMS filtered {plane}: {rms_f:.2e}, raw: {rms_raw:.2e}")
 
     # Plot phase-space for a sample BPM
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
+    plt.scatter(
+        meas_df.loc[plot_bpm]["x"], meas_df.loc[plot_bpm]["px"], s=1, label="Meas"
+    )
     plt.scatter(
         filtered_df.loc[plot_bpm]["x"],
         filtered_df.loc[plot_bpm]["px"],
@@ -498,15 +535,15 @@ if __name__ == "__main__":
     plt.scatter(
         true_df.loc[plot_bpm]["x"], true_df.loc[plot_bpm]["px"], s=1, label="True"
     )
-    plt.scatter(
-        meas_df.loc[plot_bpm]["x"], meas_df.loc[plot_bpm]["px"], s=1, label="Meas"
-    )
     plt.xlabel("x")
     plt.ylabel("px")
     plt.title("x-px")
     plt.legend()
 
     plt.subplot(1, 2, 2)
+    plt.scatter(
+        meas_df.loc[plot_bpm]["y"], meas_df.loc[plot_bpm]["py"], s=1, label="Meas"
+    )
     plt.scatter(
         filtered_df.loc[plot_bpm]["y"],
         filtered_df.loc[plot_bpm]["py"],
@@ -515,9 +552,6 @@ if __name__ == "__main__":
     )
     plt.scatter(
         true_df.loc[plot_bpm]["y"], true_df.loc[plot_bpm]["py"], s=1, label="True"
-    )
-    plt.scatter(
-        meas_df.loc[plot_bpm]["y"], meas_df.loc[plot_bpm]["py"], s=1, label="Meas"
     )
     plt.xlabel("y")
     plt.ylabel("py")

@@ -46,7 +46,8 @@ class AdamOptimiser:
         self,
         params: np.ndarray,
         grads: np.ndarray,
-        lr: float
+        lr: float,
+        # diag_hessian: np.ndarray,
     ) -> np.ndarray:
         """
         Perform a single optimisation step.
@@ -74,5 +75,5 @@ class AdamOptimiser:
         v_hat = self.v / (1 - self.beta2 ** self.t)
 
         # Parameter update
-        update = lr * m_hat / (np.sqrt(v_hat) + self.eps)
+        update = lr * (m_hat / (np.sqrt(v_hat) + self.eps)) #/ (np.sqrt(diag_hessian) + self.eps)
         return params - update

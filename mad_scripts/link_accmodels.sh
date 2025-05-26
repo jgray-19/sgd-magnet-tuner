@@ -1,0 +1,1 @@
+ln -s /afs/cern.ch/eng/acc-models/lhc/2025 acc-models-lhc
