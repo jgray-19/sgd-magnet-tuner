@@ -23,7 +23,8 @@ from aba_optimiser.config import (
     MAX_LR,
     MIN_LR,
     TRACK_DATA_FILE,
-    MOMENTUM_STD_DEV,
+    # MOMENTUM_STD_DEV,
+    # MIN_FRACTION_MAX,
     NOISE_FILE,
     NUM_WORKERS,
     OPTIMISER_TYPE,
@@ -39,6 +40,10 @@ from aba_optimiser.config import (
     WARMUP_EPOCHS,
     WARMUP_LR_START,
     WINDOWS,
+    X_BPM_START,
+    Y_BPM_START,
+    XY_MIN,
+    PXPY_MIN,
 )
 from aba_optimiser.mad_interface import MadInterface
 from aba_optimiser.adam import AdamOptimiser
@@ -123,27 +128,24 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
             min_lr=MIN_LR,
         )
 
-        if not USE_NOISY_DATA:
+        if USE_NOISY_DATA is False:
             track_data = tfs.read(TRACK_DATA_FILE)
         elif FILTER_DATA:
             track_data = pd.read_feather(FILTERED_FILE)
-            numeric_cols = [col for col in track_data.columns if col not in ["name", "turn", 'id', 'eidx']]
-            track_data[numeric_cols] = track_data[numeric_cols].astype("float64")
         else:
             track_data = pd.read_feather(NOISE_FILE)
-            numeric_cols = [col for col in track_data.columns if col not in ["name", "turn", 'id', 'eidx']]
-            track_data[numeric_cols] = track_data[numeric_cols].astype("float64")
-        if not FILTER_DATA:
-            track_data["var_x" ] = (POSITION_STD_DEV)**2
-            track_data["var_y" ] = (POSITION_STD_DEV)**2
-            track_data["var_px"] = (MOMENTUM_STD_DEV)**2
-            track_data["var_py"] = (MOMENTUM_STD_DEV)**2
+        no_noise = tfs.read(TRACK_DATA_FILE)
+        no_noise["var_x"] = (POSITION_STD_DEV)**2
+        no_noise["var_y"] = (POSITION_STD_DEV)**2
 
+        if not FILTER_DATA:
+            track_data["var_x"] = (POSITION_STD_DEV)**2
+            track_data["var_y"] = (POSITION_STD_DEV)**2
+            
 
         # instead of one static start_data, build one per WINDOW
         self.start_data_dict = {
-            start: select_marker(track_data, start)
-            for start, _ in WINDOWS
+            start: select_marker(no_noise, start) for start, _ in WINDOWS
         }
         # Get indices of the start and end markers from the full list.
         try:
@@ -175,10 +177,7 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
 
         # Get the variances for each BPM
         self.var_x = self.comparison_data.groupby("name")["var_x"].mean().to_numpy()
-        self.var_px = self.comparison_data.groupby("name")["var_px"].mean().to_numpy()
-        
         self.var_y = self.comparison_data.groupby("name")["var_y"].mean().to_numpy()
-        self.var_py = self.comparison_data.groupby("name")["var_py"].mean().to_numpy()
 
         self.bpm_idx = {name: i for i, name in enumerate(self.bpm_names)}
         self.window_slices: list[slice] = []
@@ -189,14 +188,59 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                 i0, i1 = i1, i0
             self.window_slices.append(slice(i0, i1 + 1))
 
-        self.smoothed_grad_norm = None  # Initialize smoothed gradient norm     
+        self.smoothed_grad_norm = None  # Initialize smoothed gradient norm
 
-        # num_knobs = len(self.knob_names)
-        # # Create the importance weights as a exponential decay function
-        # self.importance_weights = np.exp(-0.75 * np.arange(num_knobs))
-        # print(
-        #     f"Importance weights for knobs: {self.importance_weights}"
-        # )   
+        # Instead of filtering based on a threshold, filter by the BPM start names.
+        start_bpm_df_x = self.comparison_data.loc[
+            self.comparison_data["name"] == X_BPM_START
+        ]
+        start_bpm_df_y = self.comparison_data.loc[
+            self.comparison_data["name"] == Y_BPM_START
+        ]
+
+        self.available_x = start_bpm_df_x.loc[
+            (abs(start_bpm_df_x["x"])  > XY_MIN)
+            & (abs(start_bpm_df_x["y"]) > XY_MIN/2)
+            & (abs(start_bpm_df_x["px"]) > PXPY_MIN)
+            & (abs(start_bpm_df_x["py"]) > PXPY_MIN)
+            ,
+            "turn",
+        ].tolist()
+        self.available_y = start_bpm_df_y.loc[
+            (abs(start_bpm_df_y["x"]) > XY_MIN/2)
+            & (abs(start_bpm_df_y["y"]) > XY_MIN)
+            & (abs(start_bpm_df_y["px"]) > PXPY_MIN)
+            & (abs(start_bpm_df_y["py"]) > PXPY_MIN)
+            ,
+            "turn",
+        ].tolist()
+
+        # Convert every entry to an integer
+        self.available_x = [int(turn) for turn in self.available_x]
+        self.available_y = [int(turn) for turn in self.available_y]
+
+        num_turns_needed = NUM_WORKERS * TRACKS_PER_WORKER
+        if (
+            len(self.available_x) < num_turns_needed
+            or len(self.available_y) < num_turns_needed
+        ):
+            raise ValueError(
+                f"Not enough available turns for x or y BPMs. "
+                f"Need {num_turns_needed}, but found {len(self.available_x)} for x and {len(self.available_y)} for y."
+            )
+        print(
+            f"Available x turns: {len(self.available_x)}, from {len(start_bpm_df_x)} total x turns.\n"
+            f"Available y turns: {len(self.available_y)}, from {len(start_bpm_df_y)} total y turns."
+        )
+
+        # Remove turns < RAMP_UP_TURNS if ACD_ON
+        if ACD_ON:
+            self.available_x = [
+                turn for turn in self.available_x if turn >= RAMP_UP_TURNS
+            ]
+            self.available_y = [
+                turn for turn in self.available_y if turn >= RAMP_UP_TURNS
+            ]
 
     def _write_results(self, uncertainties) -> None:
         """Write final knob strengths and markdown table to file."""
@@ -252,17 +296,15 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
         """Execute the optimisation loop."""
         run_start = time.time()  # start total timing
 
-        # Prepare worker batches
-        if ACD_ON:
-            indices = list(range(RAMP_UP_TURNS, TOTAL_TRACKS + RAMP_UP_TURNS + 1))
-        else:
-            indices = list(range(TOTAL_TRACKS + 1))
-
-        batches = [
-            indices[i * TRACKS_PER_WORKER : (i + 1) * TRACKS_PER_WORKER]
+        x_batches = [
+            self.available_x[i * TRACKS_PER_WORKER : (i + 1) * TRACKS_PER_WORKER]
             for i in range(NUM_WORKERS)
         ]
-        for i, batch in enumerate(batches):
+        y_batches = [
+            self.available_y[i * TRACKS_PER_WORKER : (i + 1) * TRACKS_PER_WORKER]
+            for i in range(NUM_WORKERS)
+        ]
+        for i, batch in enumerate(x_batches + y_batches):
             assert batch, (
                 f"Batch {i} is empty. Check TRACKS_PER_WORKER and NUM_WORKERS."
             )
@@ -270,11 +312,14 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
         # Start worker processes
         parent_conns: list[Connection] = []
         workers: list[mp.Process] = []
-        for i, batch in enumerate(batches):
+        for i in range(NUM_WORKERS):
+            batch_x = x_batches[i]
+            batch_y = y_batches[i]
             parent, child = mp.Pipe()
             w = Worker(
                 i,
-                batch,
+                batch_x,
+                batch_y,
                 child,
                 self.comparison_data,
                 self.start_data_dict,
@@ -286,7 +331,7 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
             parent_conns.append(parent)
             workers.append(w)
             parent.send((self.var_x, self.var_y))
-        
+
         # Collect initial Hessian diagonal from workers
         # H_diag_vec = np.zeros((len(self.knob_names),))
         # for conn in parent_conns:
@@ -299,12 +344,13 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
         writer = SummaryWriter(log_dir=f"runs/{ts}_opt")
 
         # Initialize live plot for relative differences (log scale)
-        import matplotlib.pyplot as plt
-        plt.ion()
+        # import matplotlib.pyplot as plt
+
+        # plt.ion()
         rel_diff_history = {k: [] for k in self.knob_names}
-        fig, ax = plt.subplots()
+        # fig, ax = plt.subplots()
         # Initialize new figure for consecutive differences (delta)
-        fig_delta, ax_delta = plt.subplots()
+        # fig_delta, ax_delta = plt.subplots()
 
         # current_cell = 0
         try:
@@ -317,7 +363,7 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                     conn.send(self.current_knobs)
 
                 lr = self.scheduler(epoch)
-                # Linearly increase learning rate for the first 100 epoch, and then reset to min 
+                # Linearly increase learning rate for the first 100 epoch, and then reset to min
 
                 total_loss = 0.0
                 agg_grad = None
@@ -358,51 +404,57 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                     for k, diff in zip(self.knob_names, true_diff)
                 ]
                 # ----- Live plot update (non-blocking) -----
-                for i, k in enumerate(self.knob_names):
-                    rel_diff_history[k].append(rel_diff[i])
-                if (epoch+1) % 10 == 0:
-                    # Update log scale figure
-                    ax.clear()
-                    for i, k in enumerate(self.knob_names):
-                        ax.plot(rel_diff_history[k], label=str(k))
-                        if rel_diff_history[k]:
-                            x_val = len(rel_diff_history[k]) - 1
-                            ax.text(x_val, rel_diff_history[k][-1], str(i), 
-                                    ha="left", va="center", fontsize="small")
-                    ax.set_xlabel("Epoch")
-                    ax.set_ylabel("Relative Difference")
-                    ax.set_yscale("log", nonpositive="clip")
-                    ax.set_ylim(1e-6, 1e-3)
-                    
-                    # Update delta (difference) plot to show only the last 300 results
-                    ax_delta.clear()
-                    for i, k in enumerate(self.knob_names):
-                        # Use only last 300 results, if available
-                        history = rel_diff_history[k]
-                        if len(history) > 300:
-                            history_tail = history[-300:]
-                            x_vals = range(len(history) - 300, len(history)-1)
-                        else:
-                            history_tail = history
-                            x_vals = range(1, len(history))
-                        # Calculate differences between consecutive elements.
-                        diffs = np.diff(history_tail)
-                        if diffs.size > 0:
-                            ax_delta.plot(x_vals, diffs)
-                            ax_delta.text(
-                                x_vals[-1],
-                                diffs[-1],
-                                str(i),
-                                ha="left",
-                                va="center",
-                                fontsize="small",
-                            )
-                    # Draw a horizontal line at y=0
-                    ax_delta.axhline(0, color="red", linestyle="--")
-                    ax_delta.set_xlabel("Epoch (delta index)")
-                    
-                    plt.pause(0.001)
-                    
+                # for i, k in enumerate(self.knob_names):
+                #     rel_diff_history[k].append(rel_diff[i])
+                # if (epoch + 1) % 10 == 0:
+                #     # Update log scale figure
+                #     ax.clear()
+                #     for i, k in enumerate(self.knob_names):
+                #         ax.plot(rel_diff_history[k], label=str(k))
+                #         if rel_diff_history[k]:
+                #             x_val = len(rel_diff_history[k]) - 1
+                #             ax.text(
+                #                 x_val,
+                #                 rel_diff_history[k][-1],
+                #                 str(i),
+                #                 ha="left",
+                #                 va="center",
+                #                 fontsize="small",
+                #             )
+                #     ax.set_xlabel("Epoch")
+                #     ax.set_ylabel("Relative Difference")
+                #     ax.set_yscale("log", nonpositive="clip")
+                #     ax.set_ylim(1e-6, 1e-3)
+
+                #     # Update delta (difference) plot to show only the last 300 results
+                #     ax_delta.clear()
+                #     for i, k in enumerate(self.knob_names):
+                #         # Use only last 300 results, if available
+                #         history = rel_diff_history[k]
+                #         if len(history) > 300:
+                #             history_tail = history[-300:]
+                #             x_vals = range(len(history) - 300, len(history) - 1)
+                #         else:
+                #             history_tail = history
+                #             x_vals = range(1, len(history))
+                #         # Calculate differences between consecutive elements.
+                #         diffs = np.diff(history_tail)
+                #         if diffs.size > 0:
+                #             ax_delta.plot(x_vals, diffs)
+                #             ax_delta.text(
+                #                 x_vals[-1],
+                #                 diffs[-1],
+                #                 str(i),
+                #                 ha="left",
+                #                 va="center",
+                #                 fontsize="small",
+                #             )
+                #     # Draw a horizontal line at y=0
+                #     ax_delta.axhline(0, color="red", linestyle="--")
+                #     ax_delta.set_xlabel("Epoch (delta index)")
+
+                    # plt.pause(0.001)
+
                 # ----------------------------------------------
                 true_diff = np.sum(true_diff)
                 rel_diff = np.sum(rel_diff)
@@ -441,14 +493,14 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                 "\nKeyboardInterrupt detected. Terminating early and writing results."
             )
         else:
-            fig.savefig(f"runs/{ts}_relative_difference.png")
+            # fig.savefig(f"runs/{ts}_relative_difference.png")
             print("\nTerminating workers...")
             H_global = np.zeros((len(self.knob_names), len(self.knob_names)))
             for conn in parent_conns:
                 conn.send(None)  # Signal workers to stop the training loop
-            
+
             for conn in parent_conns:
-                H_global += conn.recv()
+                 H_global += conn.recv()
 
             cov = np.linalg.inv(H_global)
             comb_uncertainty = np.sqrt(np.diag(cov))

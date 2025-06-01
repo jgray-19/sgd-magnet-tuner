@@ -10,6 +10,8 @@ from aba_optimiser.config import (
     SEQ_NAME,
     SEQUENCE_FILE,
     WINDOWS,
+    X_BPM_START,
+    # Y_BPM_START,
 )
 from aba_optimiser.mad_interface import MadInterface
 
@@ -22,7 +24,8 @@ class Worker(Process):
     def __init__(
         self,
         worker_id: int,
-        indices: list[int],
+        x_indices: list[int],
+        y_indices: list[int],
         conn: Connection,
         comparison_data: tfs.TfsDataFrame,
         start_data_dict: dict[str, tfs.TfsDataFrame],
@@ -32,10 +35,16 @@ class Worker(Process):
     ) -> None:
         super().__init__()
         self.worker_id = worker_id
-        self.indices = indices
+        self.x_indices = x_indices
+        self.y_indices = y_indices
+        self.num_particles = len(x_indices)  # Assuming x_indices and y_indices are of the same length
+        assert len(y_indices) == self.num_particles, "x_indices and y_indices must have the same length."
+        
         self.conn = conn
         self.comparison_data = comparison_data
         self.start_data_dict = start_data_dict
+        assert len(self.start_data_dict.keys()) == 2, "Expected two sets of initial conditions for x and y tracking."
+
         self.window_slices = window_slices
         self.beta_x = beta_x
         self.beta_y = beta_y
@@ -87,7 +96,6 @@ local monomial, matrix in MAD
 local num_knobs = #knob_names
 local ncoord = #coord_names
 local Htot = matrix(num_knobs, num_knobs):zeros()
-print(MAD.tostring(da_x0_c[starting_bpm]), starting_bpm, MAD.tostring(da_x0_c))
 
 local trk = track{{sequence=MADX.{SEQ_NAME}, X0=da_x0_c[starting_bpm], nturn=1, savemap=true, range=range}}
 for idx = 1, num_particles do
@@ -137,7 +145,6 @@ end
         da_x0_c['{key}'][i] = da_x0_base:copy() 
         da_x0_c['{key}'][i]:set0(init_coords[i])
     end
-    print(num_particles, "initial conditions for {key} set")
             """)
             mad.send(value)
 
@@ -148,64 +155,89 @@ end
         for start_bpm, start_df in self.start_data_dict.items():
             init_coords[start_bpm] = []
             init_vars[start_bpm] = []
-            for turn_idx in self.indices:
+            indices = self.x_indices if start_bpm == X_BPM_START else self.y_indices
+            
+            for turn_idx in indices:
                 row = start_df.iloc[turn_idx]
                 init_coords[start_bpm].append(
                     [row["x"], row["px"], row["y"], row["py"], 0, 0]
                 )
-                x_var = row["var_x"] + row["var_px"] #* (row["x"]/row["px"])**2
-                y_var = row["var_y"] + row["var_py"] #* (row["y"]/row["py"])**2
                 init_vars[start_bpm].append(
-                    [x_var, y_var]
+                    [row["var_x"], row["var_y"]]
                 )
         del self.start_data_dict
-        num_particles = len(self.indices)
 
         # Initialise MAD interface and load sequence
         mad_iface = MadInterface(
-            SEQUENCE_FILE, BPM_RANGE, #stdout="/dev/null", redirect_sterr=True
+            SEQUENCE_FILE, BPM_RANGE
         )
         mad = mad_iface.mad
         BPM_VERY_START = BPM_RANGE.split("/")[0]
         mad.send(f"starting_bpm = '{BPM_VERY_START}'")
             
-        var_x  = []
-        var_y  = []
+        # var_x  = []
+        # var_y  = []
         win_lengths = []
 
         for i, win_slice in enumerate(self.window_slices):
-            start = WINDOWS[i][0]
-            win_vars = init_vars[start]
+            # start = WINDOWS[i][0]
+            # win_vars = init_vars[start]
             win_length = win_slice.stop - win_slice.start
             win_lengths.append(win_length)
-            
-            var_x.append(np.empty((num_particles, win_length)))
-            var_y.append(np.empty((num_particles, win_length)))
 
-            for j, turn_idx in enumerate(self.indices):
-                filtered = self.comparison_data[self.comparison_data["turn"] == turn_idx + 1]
-                filtered = filtered.iloc[win_slice]
-                var_x[i][j, :]  = filtered["var_x"].to_numpy() + win_vars[j][0]
-                var_y[i][j, :]  = filtered["var_y"].to_numpy() + win_vars[j][1]
+            # var_x.append(np.empty((self.num_particles, win_length)))
+            # var_y.append(np.empty((self.num_particles, win_length)))
+            
+            # indices = self.x_indices if start == X_BPM_START else self.y_indices
+            # for j, turn_idx in enumerate(indices):
+            #     filtered = self.comparison_data[self.comparison_data["turn"] == turn_idx + 1]
+            #     filtered = filtered.iloc[win_slice]
+            #     var_x[i][j, :]  = filtered["var_x"].to_numpy() + win_vars[j][0]
+            #     var_y[i][j, :]  = filtered["var_y"].to_numpy() + win_vars[j][1]
 
         mad_iface.mad["win_lengths"] = win_lengths
-        mad_iface.mad["num_particles"] = num_particles
+        mad_iface.mad["num_particles"] = self.num_particles
 
         # Calculate the weights for each BPM.
-        weight_x  = [(1.0 / np.sqrt(v)) for v in var_x ]
-        weight_y  = [(1.0 / np.sqrt(v)) for v in var_y ]
-        del var_x
-        del var_y
+        # weight_x  = [(1.0 / np.sqrt(v)) for v in var_x ]
+        # weight_y  = [(1.0 / np.sqrt(v)) for v in var_y ]
+        # del var_x
+        # del var_y
 
         x_comparisons  = []
         y_comparisons  = []
+        x_masks = []
+        y_masks = []
 
         for i, win_slice in enumerate(self.window_slices):
-            x_comparisons.append(np.empty((num_particles, win_lengths[i])))
-            y_comparisons.append(np.empty((num_particles, win_lengths[i])))
-            for j, turn_idx in enumerate(self.indices):
+            x_comparisons.append(np.empty((self.num_particles, win_lengths[i])))
+            y_comparisons.append(np.empty((self.num_particles, win_lengths[i])))
+            x_masks.append(np.zeros((self.num_particles, win_lengths[i]), dtype=bool))
+            y_masks.append(np.zeros((self.num_particles, win_lengths[i]), dtype=bool))
+
+            start = WINDOWS[i][0]
+            if start == X_BPM_START:
+                x_masks[i][:, ::2] = True  # x BPMs are even indexed
+                y_masks[i][:, 1::2] = True  # y BPMs are odd indexed
+                indices = self.x_indices
+            else:
+                x_masks[i][:, 1::2] = True  # x BPMs are odd indexed
+                y_masks[i][:, ::2] = True  # y BPMs are even indexed
+                indices = self.y_indices
+
+            for j, turn_idx in enumerate(indices):
                 filtered = self.comparison_data[self.comparison_data["turn"] == turn_idx + 1]
                 filtered = filtered.iloc[win_slice]
+                
+                nan_mask_x = filtered["x"].isna()
+                nan_mask_y = filtered["y"].isna()
+                
+                filtered["x"].fillna(0, inplace=True)
+                filtered["y"].fillna(0, inplace=True)
+                
+                x_masks[i][j, :] = ~nan_mask_x.to_numpy() & x_masks[i][j, :]
+                y_masks[i][j, :] = ~nan_mask_y.to_numpy() & y_masks[i][j, :]
+
                 x_comparisons[i][j, :]  = filtered["x"].to_numpy() 
                 y_comparisons[i][j, :]  = filtered["y"].to_numpy() 
 
@@ -279,8 +311,8 @@ W_y = vector(py:recv()):diag()
                 dy_stack = np.stack(mad.recv(), axis=0)
 
                 # Replace the recv/reshape for differences:
-                x_diffs  = mad.recv().reshape(num_particles, -1, order="F") * weight_x[win_idx]
-                y_diffs  = mad.recv().reshape(num_particles, -1, order="F") * weight_y[win_idx]
+                x_diffs  = mad.recv().reshape(self.num_particles, -1, order="F") * masks[win_idx][0]# * weight_x[win_idx]# 
+                y_diffs  = mad.recv().reshape(self.num_particles, -1, order="F") * masks[win_idx][1]# * weight_y[win_idx]# 
                 
                 # Build gradient and loss
                 grad += (
@@ -288,8 +320,8 @@ W_y = vector(py:recv()):diag()
                     np.einsum('ijk,ik->j', dy_stack, y_diffs) #+
                 )
                 loss += (
-                    np.sum(x_diffs ** 2) + 
-                    np.sum(y_diffs ** 2)# + 
+                    np.sum(abs(x_diffs)) + 
+                    np.sum(abs(y_diffs))# + 
                 )
                 
             # 5) Send back the gradient and loss

@@ -13,7 +13,7 @@ from aba_optimiser.config import (
 )
 from aba_optimiser.mad_interface import MadInterface
 from aba_optimiser.utils import prev_bpm_to_pi_2, next_bpm_to_pi_2
-from aba_optimiser.kalman_numba import BPMKalmanFilter
+from aba_optimiser.filtering import BPMKalmanFilter
 
 # -------------------------------------------------------------------------
 # CONFIGURATION
@@ -256,8 +256,14 @@ print("py_diff mean (prev, will write)", py_diff_p.abs().mean(), "±", py_diff_p
 
 data_p[out_cols].to_feather(NOISE_FILE, compression="lz4")
 print("→ Saved:", NOISE_FILE)
+from aba_optimiser.filtering import filter_noisy_data
+filtered_data = filter_noisy_data(data_p)
 
+filtered_data[out_cols].to_feather(FILTERED_FILE, compression="lz4")
+print("→ Saved filtered data:", FILTERED_FILE)
 
+import sys
+sys.exit(0)  # Exit early for testing purposes
 # What is the difference between the original and noisy data?
 x_diff_p  = data_p["x"] - orig_data["x"]
 px_diff_p = data_p["px"] - orig_data["px"]
@@ -301,11 +307,6 @@ px_diff_n = df_n["px"] - orig_data["px"]
 y_diff_n  = df_n["y"] - orig_data["y"]
 py_diff_n = df_n["py"] - orig_data["py"]
 
-# print("x_diff", x_diff)
-# print("px_diff", px_diff)
-# print("y_diff", y_diff)
-# print("py_diff", py_diff)
-
 print("x_diff mean (prev w/ k)", x_diff_p.abs().mean(), "±", x_diff_p.std())
 print("y_diff mean (prev w/ k)", y_diff_p.abs().mean(), "±", y_diff_p.std())
 
@@ -319,40 +320,43 @@ print("y_diff mean (next w/ k)", y_diff_n.abs().mean(), "±", y_diff_n.std())
 print("px_diff mean (next w/ k)", px_diff_n.abs().mean(), "±", px_diff_n.std())
 print("py_diff mean (next w/ k)", py_diff_n.abs().mean(), "±", py_diff_n.std())
 
+df_p.to_feather(FILTERED_FILE, compression="lz4")
+print("→ Saved previous:", FILTERED_FILE)
+
 # Fuse results via weighted averaging
-cols = [col for col in out_cols if col not in ["x", "px", "y", "py"]]
-filtered_df = data_n[cols].copy()
-for comp in ["x", "px", "y", "py"]:
-    var = f"var_{comp}"
-    weight_n = 1/df_n[var]
-    weight_p = 1/df_p[var]
-    filtered_df[comp] = (df_n[comp] * weight_n + df_p[comp] * weight_p) / (weight_n + weight_p)
-    filtered_df[var] = 1 / (weight_n + weight_p)
+# cols = [col for col in out_cols if col not in ["x", "px", "y", "py"]]
+# filtered_df = data_n[cols].copy()
+# for comp in ["x", "px", "y", "py"]:
+#     var = f"var_{comp}"
+#     weight_n = 1/df_n[var]
+#     weight_p = 1/df_p[var]
+#     filtered_df[comp] = (df_n[comp] * weight_n + df_p[comp] * weight_p) / (weight_n + weight_p)
+#     filtered_df[var] = 1 / (weight_n + weight_p)
 
-filtered_df = kf.run(filtered_df)
-# -------------------------------------------------------------------------
-# 4) Write filtered data and log differences
-# -------------------------------------------------------------------------
-numeric_cols = [col for col in filtered_df.columns if col not in ["name", "turn", 'id', 'eidx']]
-filtered_df[numeric_cols] = filtered_df[numeric_cols]
+# filtered_df = kf.run(filtered_df)
+# # -------------------------------------------------------------------------
+# # 4) Write filtered data and log differences
+# # -------------------------------------------------------------------------
+# numeric_cols = [col for col in filtered_df.columns if col not in ["name", "turn", 'id', 'eidx']]
+# filtered_df[numeric_cols] = filtered_df[numeric_cols]
 
-x_diff_n = filtered_df["x"] - orig_data["x"]
-px_diff  = filtered_df["px"] - orig_data["px"]
-y_diff   = filtered_df["y"] - orig_data["y"]
-py_diff  = filtered_df["py"] - orig_data["py"]
+# x_diff_n = filtered_df["x"] - orig_data["x"]
+# px_diff  = filtered_df["px"] - orig_data["px"]
+# y_diff   = filtered_df["y"] - orig_data["y"]
+# py_diff  = filtered_df["py"] - orig_data["py"]
 
-print("x_diff mean", x_diff_n.abs().mean(), "±", x_diff_n.std())
-print("x calc std", np.sqrt(filtered_df["var_x"]).mean())
+# print("x_diff mean", x_diff_n.abs().mean(), "±", x_diff_n.std())
+# print("x calc std", np.sqrt(filtered_df["var_x"]).mean())
 
-print("px_diff mean", px_diff.abs().mean(), "±", px_diff.std())
-print("px calc std", np.sqrt(filtered_df["var_px"]).mean())
+# print("px_diff mean", px_diff.abs().mean(), "±", px_diff.std())
+# print("px calc std", np.sqrt(filtered_df["var_px"]).mean())
 
-print("y_diff mean", y_diff.abs().mean(), "±", y_diff.std())
-print("y calc std", np.sqrt(filtered_df["var_y"]).mean())
+# print("y_diff mean", y_diff.abs().mean(), "±", y_diff.std())
+# print("y calc std", np.sqrt(filtered_df["var_y"]).mean())
 
-print("py_diff mean", py_diff.abs().mean(), "±", py_diff.std())
-print("py calc std", np.sqrt(filtered_df["var_py"]).mean())
+# print("py_diff mean", py_diff.abs().mean(), "±", py_diff.std())
+# print("py calc std", np.sqrt(filtered_df["var_py"]).mean())
 
-# 2. Write out as Feather with LZ4 compression
-filtered_df.to_feather(FILTERED_FILE, compression="lz4")
+# # 2. Write out as Feather with LZ4 compression
+# filtered_df.to_feather(FILTERED_FILE, compression="lz4")
 print("→ Saved:", FILTERED_FILE)

@@ -12,10 +12,15 @@ class MadInterface:
         self,
         sequence_file: str,
         bpm_range: str,
+        discard_mad_output: bool = True,
         **kwargs,
     ):
         self.sequence_file = sequence_file
         self.bpm_range = bpm_range
+        
+        if discard_mad_output:
+            kwargs['stdout'] = '/dev/null'
+            kwargs['redirect_sterr'] = True
         self.mad = MAD(**kwargs)
         self._load_sequence()
 
@@ -60,9 +65,9 @@ local observed in MAD.element.flags
         """Set up the MAD-NG session to include predefined tune knobs."""
         tune_knobs = read_knobs(TUNE_KNOBS_FILE)
         for name, val in tune_knobs.items():
-            before = self.mad.recv_vars(f"MADX.{name}")
+            # before = self.mad.recv_vars(f"MADX.{name}")
             self.mad.send(f"MADX.{name} = {val}")
-            print(f"Set {name} from {before} to {val}")
+            # print(f"Set {name} from {before} to {val}")
 
     def _make_adj_knobs(self) -> list[str]:
         """

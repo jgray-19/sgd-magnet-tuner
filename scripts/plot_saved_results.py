@@ -35,7 +35,7 @@ rects = ax.bar(
     width, 
     color='mediumpurple', 
     label='Final Relative Difference',
-    # yerr=relative_uncertainties, 
+    yerr=relative_uncertainties, 
     capsize=5
 )
 ax.bar(
