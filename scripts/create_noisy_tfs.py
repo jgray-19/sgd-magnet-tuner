@@ -17,11 +17,10 @@ from aba_optimiser.ellipse_filtering import filter_noisy_data
 from aba_optimiser.mad_interface import MadInterface
 from aba_optimiser.utils import next_bpm_to_pi_2, prev_bpm_to_pi_2
 
-# -------------------------------------------------------------------------
-# CONFIGURATION
-# -------------------------------------------------------------------------
 out_cols = ["name", "turn", "id", "eidx", "x", "px", "y", "py"]
 numeric_cols = ["x", "px", "y", "py"]
+np.random.seed(42)
+
 # -------------------------------------------------------------------------
 # 1) READ TRACK DATA + ADD NOISE
 # -------------------------------------------------------------------------
