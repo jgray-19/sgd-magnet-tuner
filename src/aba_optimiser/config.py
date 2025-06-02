@@ -7,16 +7,16 @@ from pathlib import Path
 
 # Simulation parameters
 MAX_EPOCHS        = int(500) # Total number of epochs for optimization
-TRACKS_PER_WORKER = 182         # Number of tracks per worker
-NUM_WORKERS       = 60         # Number of parallel worker processes
+TRACKS_PER_WORKER = 100         # Number of tracks per worker
+NUM_WORKERS       = 10          # Number of parallel worker processes
 TOTAL_TRACKS      = TRACKS_PER_WORKER * NUM_WORKERS  # Total number of tracks
 
 # Learning-rate schedule
 WARMUP_EPOCHS    = 30          # Epochs for cosine warmup
 DECAY_EPOCHS     = MAX_EPOCHS - WARMUP_EPOCHS         # Epoch at which cosine decay ends
-WARMUP_LR_START  = 5e-8       # Initial learning rate at epoch 1
-MAX_LR           = 5e-9       # Peak learning rate after warmup
-MIN_LR           = 5e-9
+WARMUP_LR_START  = 5e-7       # Initial learning rate at epoch 1
+MAX_LR           = 5e-8       # Peak learning rate after warmup
+MIN_LR           = 5e-8
 OPTIMISER_TYPE   = "adam"      # Optimiser type: "adam" or "amsgrad"
 GRAD_NORM_ALPHA  = 0.7         # Gradient norm smoothing factor for smoothing loss
 GRAD_PENALTY_COEFF = 1e-5   # Coefficient for gradient penalty
@@ -27,7 +27,7 @@ PXPY_MIN         = 0#5e-6
 STD_CUT          = 0.5
 
 # Standard error of the noise
-POSITION_STD_DEV = 1e-7   # Standard deviation of the position noise
+POSITION_STD_DEV = 1e-8   # Standard deviation of the position noise
 MOMENTUM_STD_DEV = 3e-6   # Standard deviation of the momentum noise
 REL_K1_STD_DEV   = 1e-2   # Standard deviation of the K1 noise
 

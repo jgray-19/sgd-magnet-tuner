@@ -2,7 +2,7 @@ import numpy as np
 from pymadng import MAD
 from aba_optimiser.config import BEAM_ENERGY, SEQ_NAME, TUNE_KNOBS_FILE, ELEM_NAMES_FILE
 from aba_optimiser.utils import read_knobs, read_elem_names
-
+import tfs
 class MadInterface:
     """
     Encapsulates communication with MAD-NG via pymadng.MAD.
@@ -148,6 +148,12 @@ py:send(positions)
         # Convert the dictionary to a list of positions
         positions = [positions[name] for name in base_names]
         return np.array(positions, dtype=float)
+    
+    def run_twiss(self) -> tfs.TfsDataFrame:
+        self.mad.send(f"""
+tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
+""")
+        return self.mad.tws.to_df().set_index("name")
 
     def __del__(self):
         """Clean up the MAD-NG session."""

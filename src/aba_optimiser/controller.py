@@ -31,7 +31,6 @@ from aba_optimiser.config import (
     OUTPUT_KNOBS,
     POSITION_STD_DEV,
     RAMP_UP_TURNS,
-    SEQ_NAME,
     SEQUENCE_FILE,
     TOTAL_TRACKS,
     TRACKS_PER_WORKER,
@@ -75,10 +74,7 @@ class Controller:
         self.knob_names = self.mad_iface.knob_names
 
         # Run a twiss and to get the beta functions
-        self.mad_iface.mad.send(f"""
-tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
-        """)
-        tws: tfs.TfsDataFrame = self.mad_iface.mad.tws.to_df().set_index("name")
+        tws = self.mad_iface.run_twiss()
         print("Found tunes:", tws.q1, tws.q2)
 
         # Remove all rows that are before the start BPM and after the end BPM
@@ -139,11 +135,6 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
         track_data["var_x"] = (POSITION_STD_DEV) ** 2
         track_data["var_y"] = (POSITION_STD_DEV) ** 2
 
-        # instead of one static start_data, build one per WINDOW
-        self.start_data_dict = {
-            start: select_marker(track_data, start) for start, _ in WINDOWS
-        }
-        # Get indices of the start and end markers from the full list.
         try:
             start_idx = self.all_bpms.index(start_bpm)
             end_idx = self.all_bpms.index(end_bpm)
@@ -151,12 +142,10 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
             raise ValueError("Start or end BPM not found in the BPM list.")
 
         # Get the markers to keep
-        markers_to_keep = self.all_bpms[start_idx + 1 : end_idx]
-        if "BPM" in start_bpm:
-            markers_to_keep = [start_bpm] + markers_to_keep
-        if "BPM" in end_bpm:
-            markers_to_keep = markers_to_keep + [end_bpm]
-
+        markers_to_keep = self.all_bpms[start_idx : end_idx + 1]
+        assert "BPM" in end_bpm, "End BPM not a BPM"
+        assert "BPM" in start_bpm, "Start BPM not a BPM"
+        
         # Filter data using pandas' vectorised operation
         self.comparison_data = track_data[
             track_data["name"].isin(markers_to_keep)
@@ -171,16 +160,18 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
         self.var_y = self.comparison_data.groupby("name")["var_y"].mean().to_numpy()
 
         self.bpm_idx = {name: i for i, name in enumerate(self.bpm_names)}
-        self.window_slices: list[slice] = []
+        self.window_slices: dict[str, slice] = {}
         for start, end in WINDOWS:
+            assert start not in self.window_slices.keys(), (
+                f"Start BPM {start} already exists in window slices."
+            )
             i0 = self.bpm_idx[start]
             i1 = self.bpm_idx[end]
-            if i1 < i0:
-                i0, i1 = i1, i0
-            self.window_slices.append(slice(i0, i1 + 1))
+            assert i0 < i1, 'Start BPM is after or the same as End BPM'
+            self.window_slices[start] = slice(i0, i1 + 1)
 
         self.smoothed_grad_norm = None  # Initialize smoothed gradient norm
-
+        
         # Instead of filtering based on a threshold, filter by the BPM start names.
         start_bpm_df_x = self.comparison_data.loc[
             self.comparison_data["name"] == X_BPM_START
@@ -188,8 +179,12 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
         start_bpm_df_y = self.comparison_data.loc[
             self.comparison_data["name"] == Y_BPM_START
         ]
+        self.start_data_dict = {
+            X_BPM_START: select_marker(start_bpm_df_x, X_BPM_START),
+            Y_BPM_START: select_marker(start_bpm_df_y, Y_BPM_START)
+        }
 
-        def _get_available_turns(df: pd.DataFrame, coord: str) -> list[int]:
+        def _cut_coordinates(df: pd.DataFrame, coord: str) -> list[int]:
             x_min = XY_MIN if coord == "x" else XY_MIN / 2
             y_min = XY_MIN if coord == "y" else XY_MIN / 2
             return df.loc[
@@ -200,12 +195,8 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                 "turn",
             ].tolist()
 
-        self.available_x = _get_available_turns(
-            start_bpm_df_x, "x"
-        )
-        self.available_y = _get_available_turns(
-            start_bpm_df_y, "y"
-        )
+        self.available_x = _cut_coordinates(start_bpm_df_x, "x")
+        self.available_y = _cut_coordinates(start_bpm_df_y, "y")
 
         # Convert every entry to an integer
         self.available_x = [int(turn) for turn in self.available_x]
@@ -309,27 +300,18 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
             batch_y = y_batches[i]
             parent, child = mp.Pipe()
             w = Worker(
+                child,
                 i,
                 batch_x,
                 batch_y,
-                child,
                 self.comparison_data,
                 self.start_data_dict,
                 self.window_slices,
-                self.beta_x,
-                self.beta_y,
             )
             w.start()
             parent_conns.append(parent)
             workers.append(w)
             parent.send((self.var_x, self.var_y))
-
-        # Collect initial Hessian diagonal from workers
-        # H_diag_vec = np.zeros((len(self.knob_names),))
-        # for conn in parent_conns:
-        #     H_diag_vec += conn.recv().squeeze()
-        # # Levenberg–Marquardt damping: start μ ~ 10⁻³ × trace(H)
-        # self.mu = 1e-3 * np.sum(H_diag_vec)
 
         # TensorBoard logging
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

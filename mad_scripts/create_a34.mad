@@ -22,7 +22,7 @@ local do_acd = false
 --- Define the region of interest ---
 -- local track_start = "BPM.8R3.B1" ! Doing everything right now !
 local knob_start = "BPM.13R3.B1"
-local end_pos   = "BPM.13L4.B1"
+local end_pos   = "BPM.12L4.B1"
 local knob_range = knob_start .. "/" .. end_pos
 
 

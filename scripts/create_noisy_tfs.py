@@ -1,24 +1,26 @@
-import tfs
+import sys
+
 import numpy as np
+import tfs
 
 from aba_optimiser.config import (
     BPM_RANGE,
     FILTERED_FILE,
-    SEQ_NAME,
-    SEQUENCE_FILE,
-    TRACK_DATA_FILE,
     NOISE_FILE,
     POSITION_STD_DEV,
     # TRUE_STRENGTHS,
+    SEQ_NAME,
+    SEQUENCE_FILE,
+    TRACK_DATA_FILE,
 )
+from aba_optimiser.ellipse_filtering import filter_noisy_data
 from aba_optimiser.mad_interface import MadInterface
-from aba_optimiser.utils import prev_bpm_to_pi_2, next_bpm_to_pi_2
-from aba_optimiser.filtering import BPMKalmanFilter
+from aba_optimiser.utils import next_bpm_to_pi_2, prev_bpm_to_pi_2
 
 # -------------------------------------------------------------------------
 # CONFIGURATION
 # -------------------------------------------------------------------------
-out_cols = ["name", "turn", 'id', 'eidx', "x", "px", "y", "py"]
+out_cols = ["name", "turn", "id", "eidx", "x", "px", "y", "py"]
 numeric_cols = ["x", "px", "y", "py"]
 # -------------------------------------------------------------------------
 # 1) READ TRACK DATA + ADD NOISE
@@ -74,10 +76,12 @@ prev_y_df = prev_bpm_to_pi_2(tws["mu2"], tws.q2).rename(
 )
 
 # find downstream BPMs & phase errors
-next_x_df = next_bpm_to_pi_2(tws["mu1"], tws.q1) \
-                .rename(columns={"next_bpm":"next_bpm_x","delta":"delta_x"})
-next_y_df = next_bpm_to_pi_2(tws["mu2"], tws.q2) \
-                .rename(columns={"next_bpm":"next_bpm_y","delta":"delta_y"})
+next_x_df = next_bpm_to_pi_2(tws["mu1"], tws.q1).rename(
+    columns={"next_bpm": "next_bpm_x", "delta": "delta_x"}
+)
+next_y_df = next_bpm_to_pi_2(tws["mu2"], tws.q2).rename(
+    columns={"next_bpm": "next_bpm_y", "delta": "delta_y"}
+)
 
 # Assuming the BPMs are in the same order as the twiss data
 # and the track data
@@ -102,71 +106,63 @@ for col, mapper in (
     data_n[col] = data_n["name"].map(mapper)
 
 # build a BPM→ring‐index map
-bpm_index = {b:i for i,b in enumerate(bpm_list)}
+bpm_index = {b: i for i, b in enumerate(bpm_list)}
 
 # 1) compute whether each “previous” BPM actually wrapped around
-cur_i_p  = data_p["name"].map(bpm_index)
-prev_ix  = data_p["prev_bpm_x"].map(bpm_index)
-prev_iy  = data_p["prev_bpm_y"].map(bpm_index)
+cur_i_p = data_p["name"].map(bpm_index)
+prev_ix = data_p["prev_bpm_x"].map(bpm_index)
+prev_iy = data_p["prev_bpm_y"].map(bpm_index)
 
-cur_i_n  = data_n["name"].map(bpm_index)
-next_ix  = data_n["next_bpm_x"].map(bpm_index)
-next_iy  = data_n["next_bpm_y"].map(bpm_index)
+cur_i_n = data_n["name"].map(bpm_index)
+next_ix = data_n["next_bpm_x"].map(bpm_index)
+next_iy = data_n["next_bpm_y"].map(bpm_index)
 
 # if current BPM index < prev index, it really came from turn-1
 turn_x_p = data_p["turn"] - (cur_i_p < prev_ix).astype(int)
 turn_y_p = data_p["turn"] - (cur_i_p < prev_iy).astype(int)
 
 # if next BPM index > current index, it wrapped into turn+1
-turn_x_n  = data_n["turn"] + (cur_i_n > next_ix).astype(int)
-turn_y_n  = data_n["turn"] + (cur_i_n > next_iy).astype(int)
+turn_x_n = data_n["turn"] + (cur_i_n > next_ix).astype(int)
+turn_y_n = data_n["turn"] + (cur_i_n > next_iy).astype(int)
 
 # 2) flatten your coords table to prepare for merging:
 coords_df_p = (
-    data_p[["turn","name","x","y"]]
-    .set_index(["turn","name"])
-    .reset_index()
+    data_p[["turn", "name", "x", "y"]].set_index(["turn", "name"]).reset_index()
 )
 
 coords_df_n = (
-    data_n[["turn","name","x","y"]]
-    .set_index(["turn","name"])
-    .reset_index()
+    data_n[["turn", "name", "x", "y"]].set_index(["turn", "name"]).reset_index()
 )
 
 # 3) make small lookup tables for x and y
-coords_x_p = (
-    coords_df_p
-    .rename(columns={"turn":"turn_x_p","name":"prev_bpm_x","x":"prev_x"})
-    [["turn_x_p","prev_bpm_x","prev_x"]]
-)
-coords_y_p = (
-    coords_df_p
-    .rename(columns={"turn":"turn_y_p","name":"prev_bpm_y","y":"prev_y"})
-    [["turn_y_p","prev_bpm_y","prev_y"]]
-)
+coords_x_p = coords_df_p.rename(
+    columns={"turn": "turn_x_p", "name": "prev_bpm_x", "x": "prev_x"}
+)[["turn_x_p", "prev_bpm_x", "prev_x"]]
+coords_y_p = coords_df_p.rename(
+    columns={"turn": "turn_y_p", "name": "prev_bpm_y", "y": "prev_y"}
+)[["turn_y_p", "prev_bpm_y", "prev_y"]]
 
 coords_x_n = coords_df_n.rename(
-    columns={"turn":"turn_x_n","name":"next_bpm_x","x":"next_x"}
-)[["turn_x_n","next_bpm_x","next_x"]]
+    columns={"turn": "turn_x_n", "name": "next_bpm_x", "x": "next_x"}
+)[["turn_x_n", "next_bpm_x", "next_x"]]
 
 coords_y_n = coords_df_n.rename(
-    columns={"turn":"turn_y_n","name":"next_bpm_y","y":"next_y"}
-)[["turn_y_n","next_bpm_y","next_y"]]
+    columns={"turn": "turn_y_n", "name": "next_bpm_y", "y": "next_y"}
+)[["turn_y_n", "next_bpm_y", "next_y"]]
 
 # 4) attach the “real” turn_x_p/turn_y_p to data
 data_p = data_p.assign(turn_x_p=turn_x_p, turn_y_p=turn_y_p)
 
 # 5) merge to get prev_x, prev_y; fill missing with 0
-data_p = (
-    data_p
-    .merge(coords_x_p, on=["turn_x_p","prev_bpm_x"], how="left")
-    .merge(coords_y_p, on=["turn_y_p","prev_bpm_y"], how="left")
+data_p = data_p.merge(coords_x_p, on=["turn_x_p", "prev_bpm_x"], how="left").merge(
+    coords_y_p, on=["turn_y_p", "prev_bpm_y"], how="left"
 )
 
-data_n = data_n.assign(turn_x_n=turn_x_n, turn_y_n=turn_y_n) \
-           .merge(coords_x_n, on=["turn_x_n","next_bpm_x"], how="left") \
-           .merge(coords_y_n, on=["turn_y_n","next_bpm_y"], how="left")
+data_n = (
+    data_n.assign(turn_x_n=turn_x_n, turn_y_n=turn_y_n)
+    .merge(coords_x_n, on=["turn_x_n", "next_bpm_x"], how="left")
+    .merge(coords_y_n, on=["turn_y_n", "next_bpm_y"], how="left")
+)
 
 data_p["prev_x"] = data_p["prev_x"].fillna(0)
 data_p["prev_y"] = data_p["prev_y"].fillna(0)
@@ -174,8 +170,8 @@ data_n["next_x"] = data_n["next_x"].fillna(0)
 data_n["next_y"] = data_n["next_y"].fillna(0)
 
 # 6) clean up helper columns
-data_p = data_p.drop(columns=["turn_x_p","turn_y_p"])
-data_n = data_n.drop(columns=["turn_x_n","turn_y_n"])
+data_p = data_p.drop(columns=["turn_x_p", "turn_y_p"])
+data_n = data_n.drop(columns=["turn_x_n", "turn_y_n"])
 
 # 7) map upstream lattice functions
 data_p["sqrt_betax_p"] = data_p["prev_bpm_x"].map(map_sqrt_betax)
@@ -190,10 +186,10 @@ data_n["sqrt_betay_n"] = data_n["next_bpm_y"].map(map_sqrt_betay)
 
 # normalised coords
 d2_p = data_p.copy()  # alias
-x1 = d2_p["prev_x"] / d2_p["sqrt_betax_p"]   # z1 / √β1
-x2 = d2_p["x"]      / d2_p["sqrt_betax"]     # z2 / √β2
+x1 = d2_p["prev_x"] / d2_p["sqrt_betax_p"]  # z1 / √β1
+x2 = d2_p["x"] / d2_p["sqrt_betax"]  # z2 / √β2
 y1 = d2_p["prev_y"] / d2_p["sqrt_betay_p"]
-y2 = d2_p["y"]      / d2_p["sqrt_betay"]
+y2 = d2_p["y"] / d2_p["sqrt_betay"]
 
 # phase error in radians
 phi_x = d2_p["delta_x"] * 2 * np.pi
@@ -205,41 +201,36 @@ c_y, s_y, t_y = np.cos(phi_y), np.sin(phi_y), np.tan(phi_y)
 
 # apply formula: pz2 = -(z1/√β1*(cos+sin tan) + z2/√β2*(tan+α2)) / √β2
 
-data_p["px"] = -(
-    x1 * (c_x + s_x * t_x)
-  + x2 * (t_x + d2_p["alfax"])
-) / d2_p["sqrt_betax"]
+data_p["px"] = (
+    -(x1 * (c_x + s_x * t_x) + x2 * (t_x + d2_p["alfax"])) / d2_p["sqrt_betax"]
+)
 
 
-data_p["py"] = -(
-    y1 * (c_y + s_y * t_y)
-  + y2 * (t_y + d2_p["alfay"])
-) / d2_p["sqrt_betay"]
+data_p["py"] = (
+    -(y1 * (c_y + s_y * t_y) + y2 * (t_y + d2_p["alfay"])) / d2_p["sqrt_betay"]
+)
 
 
 # Use new formula to compute px/py - pz1 = ((z2/√β2 - z1/√β1 * cos) / sin - α1* z1/√β1 )/√β1
 
 d2_n = data_n.copy()  # alias
-x1 = d2_n["x"]      / d2_n["sqrt_betax"]     # z1 / √β1
+x1 = d2_n["x"] / d2_n["sqrt_betax"]  # z1 / √β1
 x2 = d2_n["next_x"] / d2_n["sqrt_betax_n"]  # z2 / √β2
-y1 = d2_n["y"]      / d2_n["sqrt_betay"]
+y1 = d2_n["y"] / d2_n["sqrt_betay"]
 y2 = d2_n["next_y"] / d2_n["sqrt_betay_n"]
 
-phi_x = (d2_n["delta_x"] + 0.25) * 2*np.pi
-phi_y = (d2_n["delta_y"] + 0.25) * 2*np.pi
+phi_x = (d2_n["delta_x"] + 0.25) * 2 * np.pi
+phi_y = (d2_n["delta_y"] + 0.25) * 2 * np.pi
 
 c_x, s_x = np.cos(phi_x), np.sin(phi_x)
 c_y, s_y = np.cos(phi_y), np.sin(phi_y)
 
 data_n["px"] = (
-    (x2 - x1*c_x) / s_x      # (z2/√β2 − z1/√β1⋅cosφ)/sinφ
-    - d2_n["alfax"] * x1     # − α1⋅(z1/√β1)
-) / d2_n["sqrt_betax"]       # ÷ √β1
+    (x2 - x1 * c_x) / s_x  # (z2/√β2 − z1/√β1⋅cosφ)/sinφ
+    - d2_n["alfax"] * x1  # − α1⋅(z1/√β1)
+) / d2_n["sqrt_betax"]  # ÷ √β1
 
-data_n["py"] = (
-    (y2 - y1*c_y) / s_y
-    - d2_n["alfay"] * y1
-) / d2_n["sqrt_betay"]
+data_n["py"] = ((y2 - y1 * c_y) / s_y - d2_n["alfay"] * y1) / d2_n["sqrt_betay"]
 
 # -------------------------------------------------------------------------
 # 6) WRITE OUTPUT (only original cols + px/py)
@@ -256,23 +247,21 @@ print("py_diff mean (prev, will write)", py_diff_p.abs().mean(), "±", py_diff_p
 
 data_p[out_cols].to_feather(NOISE_FILE, compression="lz4")
 print("→ Saved:", NOISE_FILE)
-from aba_optimiser.filtering import filter_noisy_data
 filtered_data = filter_noisy_data(data_p)
 
 filtered_data[out_cols].to_feather(FILTERED_FILE, compression="lz4")
 print("→ Saved filtered data:", FILTERED_FILE)
 
-import sys
 sys.exit(0)  # Exit early for testing purposes
 # What is the difference between the original and noisy data?
-x_diff_p  = data_p["x"] - orig_data["x"]
+x_diff_p = data_p["x"] - orig_data["x"]
 px_diff_p = data_p["px"] - orig_data["px"]
-y_diff_p  = data_p["y"] - orig_data["y"]
+y_diff_p = data_p["y"] - orig_data["y"]
 py_diff_p = data_p["py"] - orig_data["py"]
 
-x_diff_n  = data_n["x"] - orig_data["x"]
+x_diff_n = data_n["x"] - orig_data["x"]
 px_diff_n = data_n["px"] - orig_data["px"]
-y_diff_n  = data_n["y"] - orig_data["y"]
+y_diff_n = data_n["y"] - orig_data["y"]
 py_diff_n = data_n["py"] - orig_data["py"]
 
 # print("x_diff", x_diff)
@@ -292,19 +281,21 @@ print("py_diff mean (next)", py_diff_n.abs().mean(), "±", py_diff_n.std())
 
 
 print("Filtering data with Kalman filter ------------------")
+from aba_optimiser.kalman_filtering import BPMKalmanFilter
+
 kf = BPMKalmanFilter()
 
 # Run Kalman filter on both datasets
 df_n, df_p = kf.run(data_n), kf.run(data_p)
 
-x_diff_p  = df_p["x"] - orig_data["x"]
+x_diff_p = df_p["x"] - orig_data["x"]
 px_diff_p = df_p["px"] - orig_data["px"]
-y_diff_p  = df_p["y"] - orig_data["y"]
+y_diff_p = df_p["y"] - orig_data["y"]
 py_diff_p = df_p["py"] - orig_data["py"]
 
-x_diff_n  = df_n["x"] - orig_data["x"]
+x_diff_n = df_n["x"] - orig_data["x"]
 px_diff_n = df_n["px"] - orig_data["px"]
-y_diff_n  = df_n["y"] - orig_data["y"]
+y_diff_n = df_n["y"] - orig_data["y"]
 py_diff_n = df_n["py"] - orig_data["py"]
 
 print("x_diff mean (prev w/ k)", x_diff_p.abs().mean(), "±", x_diff_p.std())

@@ -18,10 +18,7 @@ for key, value in true_strengths.items():
     mad_iface.mad.send(f"MADX.lhcb1['{key}'] = {value}")
 
 # Run a twiss and to get the beta functions
-mad_iface.mad.send(f"""
-tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
-""")
-tws: tfs.TfsDataFrame = mad_iface.mad.tws.to_df().set_index("name")
+tws = mad_iface.run_twiss()
 print("Found tunes:", tws.q1, tws.q2)
 
 sqrt_beta_x = np.sqrt(tws["beta11"].to_numpy())

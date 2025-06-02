@@ -16,7 +16,6 @@ from aba_optimiser.config import (
     FLATTOP_TURNS,
     NUM_WORKERS,
     RAMP_UP_TURNS,
-    SEQ_NAME,
     SEQUENCE_FILE,
     TRACK_DATA_FILE,
     TRUE_STRENGTHS,
@@ -28,7 +27,7 @@ from aba_optimiser.utils import (
     select_marker,
 )
 
-from .worker_uncertainty import Worker
+from aba_optimiser.worker import Worker
 
 run_start = time.time()  # start total timing
 start_bpm, end_bpm = BPM_RANGE.split("/")
@@ -42,10 +41,7 @@ if "BPM" not in end_bpm:
     comparison_data = filter_out_marker(comparison_data, end_bpm)
 
 mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
-mad_iface.mad.send(f"""
-tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
-        """)
-tws: tfs.TfsDataFrame = mad_iface.mad.tws.to_df().set_index("name")
+tws = mad_iface.run_twiss()
 start_bpm_idx = tws.index.get_loc(start_bpm)
 end_bpm_idx = tws.index.get_loc(end_bpm)
 tws = tws.iloc[start_bpm_idx : end_bpm_idx + 1]
