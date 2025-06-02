@@ -1,449 +1,376 @@
 import matplotlib.pyplot as plt
-# import numpy as np
 import tfs
-# from matplotlib.patches import Ellipse
-# from skimage.measure import EllipseModel, ransac
+import pandas as pd
 
 from aba_optimiser.config import (
-    ACD_ON,
-    BPM_RANGE,
-    FILTERED_FILE,
-    NOISE_FILE,
-    RAMP_UP_TURNS,
-    TRACK_DATA_FILE,
-    MIN_FRACTION_MAX,
-    XY_MIN,
-    PXPY_MIN,
+    ACD_ON, BPM_RANGE, FILTERED_FILE, NOISE_FILE,
+    RAMP_UP_TURNS, TRACK_DATA_FILE, MIN_FRACTION_MAX,
+    XY_MIN, PXPY_MIN,
 )
 from aba_optimiser.utils import select_marker
 from aba_optimiser.phase_space import PhaseSpaceDiagnostics
-import pandas as pd
 
-# Read non-noisy data (TRACK_DATA_FILE)
-init_coords = tfs.read(TRACK_DATA_FILE, index="turn")
-non_noisy_other = init_coords.copy()
+# Extract BPM names
 start_bpm, _ = BPM_RANGE.split("/")
-other_bpm = "BPM.14R3.B1"  # Example of another BPM
+other_bpm = "BPM.14R3.B1"
 
+# Load non-noisy data
+init_coords = tfs.read(TRACK_DATA_FILE, index="turn")
 non_noisy_start = select_marker(init_coords, start_bpm)
-non_noisy_other = select_marker(non_noisy_other, other_bpm)
+non_noisy_other = select_marker(init_coords, other_bpm)
+
+# Load noisy data
+noise_init = pd.read_feather(NOISE_FILE).set_index("turn")
+noisy_start = select_marker(noise_init, start_bpm)
+noise_other = select_marker(noise_init, other_bpm)
+
+# Load filtered data
+filtered_start_full = pd.read_feather(FILTERED_FILE).set_index("turn")
+filtered_start = select_marker(filtered_start_full, start_bpm)
+filtered_other = select_marker(filtered_start_full, other_bpm)
+
+# Apply ramp-up filter if ACD_ON
 if ACD_ON:
     non_noisy_start = non_noisy_start[non_noisy_start.index > RAMP_UP_TURNS]
     non_noisy_other = non_noisy_other[non_noisy_other.index > RAMP_UP_TURNS]
-
-# Read noisy data (NOISE_FILE)
-noise_init = pd.read_feather(NOISE_FILE).set_index("turn")
-noise_other = noise_init.copy()
-noisy_start = select_marker(noise_init, start_bpm)
-noise_other = select_marker(noise_other, other_bpm)
-if ACD_ON:
     noisy_start = noisy_start[noisy_start.index > RAMP_UP_TURNS]
     noise_other = noise_other[noise_other.index > RAMP_UP_TURNS]
-
-filtered_start = pd.read_feather(FILTERED_FILE).set_index("turn")
-filtered_other = filtered_start.copy()
-
-filtered_start = select_marker(filtered_start, start_bpm)
-filtered_other = select_marker(filtered_other, other_bpm)
-
-if ACD_ON:
     filtered_start = filtered_start[filtered_start.index > RAMP_UP_TURNS]
     filtered_other = filtered_other[filtered_other.index > RAMP_UP_TURNS]
 
-max_x_start = noisy_start["x"].abs().max()
-x_start_lim = XY_MIN
-ps_diag = PhaseSpaceDiagnostics(
+# Prepare analytical ellipses for start BPM
+ps_diag_start = PhaseSpaceDiagnostics(
     bpm=start_bpm,
     x_data=noisy_start["x"], px_data=noisy_start["px"],
     y_data=noisy_start["y"], py_data=noisy_start["py"]
 )
+x_ellipse, px_ellipse, y_ellipse, py_ellipse = ps_diag_start.ellipse_points()
+x_upper, px_upper, y_upper, py_upper = ps_diag_start.ellipse_sigma(sigma_level=1.0)
+x_lower, px_lower, y_lower, py_lower = ps_diag_start.ellipse_sigma(sigma_level=-1.0)
 
-# Get analytical ellipse
-x_ellipse, px_ellipse, y_ellipse, py_ellipse = ps_diag.ellipse_points()
-
-# Get +1 sigma ellipse
-x_upper, px_upper, y_upper, py_upper = ps_diag.ellipse_sigma(sigma_level=1.0)
-x_lower, px_lower, y_lower, py_lower = ps_diag.ellipse_sigma(sigma_level=-1.0)
-
-# Create a 2x2 subplot for phase space plots
-fig, axs = plt.subplots(2, 2, figsize=(10, 8))
-
-# Subplot 0,0: x vs px for start BPM
-axs[0, 0].scatter(noisy_start["x"], noisy_start["px"], s=1, color="blue", label="Noisy")
-axs[0, 0].scatter(
-    non_noisy_start["x"], non_noisy_start["px"], s=1, color="red", label="Non-noisy"
-)
-axs[0, 0].scatter(
-    filtered_start["x"], filtered_start["px"], s=1, color="green", label="Filtered"
-)
-# PLot the max x line +/-
-axs[0, 0].axvline(
-    x_start_lim, color="black", linestyle="--", label="Max x"
-)
-axs[0, 0].axvline(
-    -x_start_lim, color="black", linestyle="--"
-)
-axs[0, 0].axhline(
-    PXPY_MIN, color="black", linestyle="--", label="Min px"
-)
-axs[0, 0].axhline(
-    -PXPY_MIN, color="black", linestyle="--"
-)
-axs[0, 0].plot(x_ellipse, px_ellipse, color="orange", label="Analytical Ellipse")
-axs[0, 0].plot(x_upper, px_upper, color="orange", linestyle="--", label="+1 Sigma Ellipse")
-axs[0, 0].plot(x_lower, px_lower, color="orange", linestyle="--", label="-1 Sigma Ellipse")
-
-axs[0, 0].set_xlabel("x")
-axs[0, 0].set_ylabel("px")
-axs[0, 0].set_title(f"x, px Phase Space ({start_bpm})")
-axs[0, 0].grid()
-
-# Subplot 0,1: y vs py for start BPM
-axs[0, 1].scatter(noisy_start["y"], noisy_start["py"], s=1, color="blue", label="Noisy", alpha=0.5)
-axs[0, 1].scatter(
-    non_noisy_start["y"], non_noisy_start["py"], s=1, color="red", label="Non-noisy", alpha=0.5
-)
-axs[0, 1].scatter(
-    filtered_start["y"], filtered_start["py"], s=1, color="green", label="Filtered", alpha=0.5
-)
-# Plot the y points where the x points are above the max x 
-max_x_mask = noisy_start["x"].abs() > x_start_lim
-axs[0, 1].scatter(
-    noisy_start["y"][max_x_mask],
-    noisy_start["py"][max_x_mask],
-    s=1, color="cyan", label="Noisy (x > max x)"
-)
-axs[0, 1].scatter(
-    non_noisy_start["y"][max_x_mask],
-    non_noisy_start["py"][max_x_mask],
-    s=1, color="orange", label="Non-noisy (x > max x)"
-)
-axs[0, 1].scatter(
-    filtered_start["y"][max_x_mask],
-    filtered_start["py"][max_x_mask],
-    s=1, color="purple", label="Filtered (x > max x)"
-)
-axs[0, 1].axvline(
-    XY_MIN/2, color="black", linestyle="--", label="Min y"
-)
-axs[0, 1].axvline(
-    -XY_MIN/2, color="black", linestyle="--"
-)
-axs[0, 1].axhline(
-    PXPY_MIN, color="black", linestyle="--", label="Min py"
-)
-axs[0, 1].axhline(
-    -PXPY_MIN, color="black", linestyle="--"
-)
-axs[0, 1].plot(y_ellipse, py_ellipse, color="orange", label="Analytical Ellipse")
-axs[0, 1].plot(y_upper, py_upper, color="orange", linestyle="--", label="+1 Sigma Ellipse")
-axs[0, 1].plot(y_lower, py_lower, color="orange", linestyle="--", label="-1 Sigma Ellipse")
-
-axs[0, 1].set_xlabel("y")
-axs[0, 1].set_ylabel("py")
-axs[0, 1].set_title(f"y, py Phase Space ({start_bpm})")
-axs[0, 1].grid()
-
-
-max_y_other = noise_other["y"].abs().max()
-y_other_lim = max_y_other * MIN_FRACTION_MAX
-# Calculate analytical ellipse for the other BPM
+# Prepare analytical ellipses for other BPM
 ps_diag_other = PhaseSpaceDiagnostics(
     bpm=other_bpm,
     x_data=noise_other["x"], px_data=noise_other["px"],
     y_data=noise_other["y"], py_data=noise_other["py"]
 )
-# Get analytical ellipse for the other BPM
 ana_x_other, ana_px_other, ana_y_other, ana_py_other = ps_diag_other.ellipse_points()
-# Get +1 sigma ellipse for the other BPM
 ana_x_upper_other, ana_px_upper_other, ana_y_upper_other, ana_py_upper_other = ps_diag_other.ellipse_sigma(sigma_level=1.0)
 ana_x_lower_other, ana_px_lower_other, ana_y_lower_other, ana_py_lower_other = ps_diag_other.ellipse_sigma(sigma_level=-1.0)
 
-# Subplot 1,0: x vs px for end BPM
-axs[1, 0].scatter(noise_other["x"], noise_other["px"], s=1, color="blue", label="Noisy", alpha=0.5)
-axs[1, 0].scatter(
-    non_noisy_other["x"], non_noisy_other["px"], s=1, color="red", label="Non-noisy", alpha=0.5
-)
-axs[1, 0].scatter(
-    filtered_other["x"], filtered_other["px"], s=1, color="green", label="Filtered", alpha=0.5
-)
-axs[1, 0].set_xlabel("x")
-axs[1, 0].set_ylabel("px")
-axs[1, 0].set_title(f"x, px Phase Space ({other_bpm})")
-axs[1, 0].grid()
-# Plot the x points where the y points are above the max y
-y_other_mask = noise_other["y"].abs() > y_other_lim
-axs[1, 0].scatter(
-    noise_other["x"][y_other_mask],
-    noise_other["px"][y_other_mask],
-    s=1, color="cyan", label="Noisy (y > max y)"
-)
-axs[1, 0].scatter(
-    non_noisy_other["x"][y_other_mask],
-    non_noisy_other["px"][y_other_mask],
-    s=1, color="orange", label="Non-noisy (y > max y)"
-)
-axs[1, 0].scatter(
-    filtered_other["x"][y_other_mask],
-    filtered_other["px"][y_other_mask],
-    s=1, color="purple", label="Filtered (y > max y)"
-)
-axs[1, 0].axvline(
-    XY_MIN/2, color="black", linestyle="--", label="Min x"
-)
-axs[1, 0].axvline(
-    -XY_MIN/2, color="black", linestyle="--"
-)
-axs[1, 0].axhline(
-    PXPY_MIN, color="black", linestyle="--", label="Min px"
-)
-axs[1, 0].axhline(
-    -PXPY_MIN, color="black", linestyle="--"
-)
-axs[1, 0].plot(ana_x_other, ana_px_other, color="orange", label="Analytical Ellipse")
-axs[1, 0].plot(ana_x_upper_other, ana_px_upper_other, color="orange", linestyle="--", label="+1 Sigma Ellipse")
-axs[1, 0].plot(ana_x_lower_other, ana_px_lower_other, color="orange", linestyle="--", label="-1 Sigma Ellipse")
+# Prepare limits
+max_x_start = noisy_start["x"].abs().max()
+x_start_lim = XY_MIN
 
+max_y_other = noise_other["y"].abs().max()
+y_other_lim = max_y_other * MIN_FRACTION_MAX
 
-# Subplot 1,1: y vs py for end BPM
-axs[1, 1].scatter(noise_other["y"], noise_other["py"], s=1, color="blue", label="Noisy")
-axs[1, 1].scatter(
-    non_noisy_other["y"], non_noisy_other["py"], s=1, color="red", label="Non-noisy"
-)
-axs[1, 1].scatter(
-    filtered_other["y"], filtered_other["py"], s=1, color="green", label="Filtered"
-)
-axs[1, 1].set_xlabel("y")
-axs[1, 1].set_ylabel("py")
-axs[1, 1].set_title(f"y, py Phase Space ({other_bpm})")
-axs[1, 1].grid()
-axs[1, 1].axvline(
-    y_other_lim, color="black", linestyle="--", label="Max y"
-)
-axs[1, 1].axvline(
-    -y_other_lim, color="black", linestyle="--"
-)
-axs[1, 1].axhline(
-    PXPY_MIN, color="black", linestyle="--", label="Min py"
-)
-axs[1, 1].axhline(
-    -PXPY_MIN, color="black", linestyle="--"
-)
-axs[1, 1].plot(ana_y_other, ana_py_other, color="orange", label="Analytical Ellipse")
-axs[1, 1].plot(ana_y_upper_other, ana_py_upper_other, color="orange", linestyle="--", label="+1 Sigma Ellipse")
-axs[1, 1].plot(ana_y_lower_other, ana_py_lower_other, color="orange", linestyle="--", label="-1 Sigma Ellipse")
-
-# Create one global legend for the entire figure
-handles, labels = axs[0, 0].get_legend_handles_labels()
-fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1, 1))
-
-plt.suptitle("Phase Space Comparison", y=0.98)
-plt.tight_layout(rect=[0, 0, 1, 0.95])
-plt.savefig("merged_phase_space_comparison.png", dpi=300)
-plt.show()
-from aba_optimiser.config import XY_MIN, PXPY_MIN
+# Prepare masks for filtering points (used in later difference plots)
 x_mask_start = ((noisy_start["px"].abs() > PXPY_MIN) & (abs(noisy_start["x"]) > XY_MIN))
 y_mask_start = ((noisy_start["py"].abs() > PXPY_MIN) & (abs(noisy_start["y"]) > XY_MIN/2))
 mask_start = x_mask_start & y_mask_start
+
+filtered_mask_start = ((filtered_start["px"].abs() > PXPY_MIN) & (abs(filtered_start["x"]) > XY_MIN))
+filtered_mask_start &= ((filtered_start["py"].abs() > PXPY_MIN) & (abs(filtered_start["y"]) > XY_MIN/2))
 
 x_mask_other = ((noise_other["px"].abs() > PXPY_MIN) & (abs(noise_other["x"]) > XY_MIN/2))
 y_mask_other = ((noise_other["py"].abs() > PXPY_MIN) & (abs(noise_other["y"]) > XY_MIN))
 mask_other = x_mask_other & y_mask_other
 
+filtered_mask_other = ((filtered_other["px"].abs() > PXPY_MIN) & (abs(filtered_other["x"]) > XY_MIN/2))
+filtered_mask_other &= ((filtered_other["py"].abs() > PXPY_MIN) & (abs(filtered_other["y"]) > XY_MIN))
+
+# === First plot: full phase space plots with ellipses ===
+# === Simplified first plot with functions and loops ===
+
+def plot_phase_space(ax, noisy, non_noisy, filtered, coord1, coord2, title,
+                     limits=None, ellipse=None, extra_mask=None, extra_labels=None):
+    """General phase space plot function"""
+
+    ax.scatter(noisy[coord1], noisy[coord2], s=1, color="blue", label="Noisy")
+    ax.scatter(non_noisy[coord1], non_noisy[coord2], s=1, color="red", label="Non-noisy")
+    ax.scatter(filtered[coord1], filtered[coord2], s=1, color="green", label="Filtered")
+
+    if extra_mask is not None and extra_labels is not None:
+        ax.scatter(noisy[coord1][extra_mask], noisy[coord2][extra_mask], s=1, color="cyan", label=extra_labels[0])
+        ax.scatter(non_noisy[coord1][extra_mask], non_noisy[coord2][extra_mask], s=1, color="orange", label=extra_labels[1])
+        ax.scatter(filtered[coord1][extra_mask], filtered[coord2][extra_mask], s=1, color="purple", label=extra_labels[2])
+
+    if limits is not None:
+        for (v, axis, label) in limits:
+            if axis == 'x':
+                ax.axvline(v, color="black", linestyle="--", label=label)
+                ax.axvline(-v, color="black", linestyle="--")
+            if axis == 'y':
+                ax.axhline(v, color="black", linestyle="--", label=label)
+                ax.axhline(-v, color="black", linestyle="--")
+
+    if ellipse is not None:
+        # ellipse: (center, upper, lower) tuples
+        center_x, center_y = ellipse[0]
+        upper_x, upper_y = ellipse[1]
+        lower_x, lower_y = ellipse[2]
+        ax.plot(center_x, center_y, color="orange", label="Analytical Ellipse")
+        ax.plot(upper_x, upper_y, color="orange", linestyle="--", label="+1 Sigma Ellipse")
+        ax.plot(lower_x, lower_y, color="orange", linestyle="--", label="-1 Sigma Ellipse")
+
+    ax.set_xlabel(coord1)
+    ax.set_ylabel(coord2)
+    ax.set_title(title)
+    ax.grid()
+
+# Create subplots
 fig, axs = plt.subplots(2, 2, figsize=(10, 8))
-axs[0, 0].scatter(
-    abs(noisy_start["x"] - non_noisy_start["x"])[mask_start],
-    abs(noisy_start["px"] - non_noisy_start["px"])[mask_start],
-    s=1, color="blue", label="Noisy"
-)
-axs[0, 0].scatter(
-    abs(filtered_start["x"] - non_noisy_start["x"])[mask_start],
-    abs(filtered_start["px"] - non_noisy_start["px"])[mask_start],
-    s=1, color="green", label="Filtered"
-)
-axs[0, 0].set_xlabel("Absolute difference of x")
-axs[0, 0].set_ylabel("Absolute difference of px")
-axs[0, 0].set_title(f"Difference of x and px ({start_bpm})")
-axs[0, 0].grid()
-axs[0, 1].scatter(
-    abs(noisy_start["y"] - non_noisy_start["y"])[mask_start],
-    abs(noisy_start["py"] - non_noisy_start["py"])[mask_start],
-    s=1, color="blue", label="Noisy"
-)
-axs[0, 1].scatter(
-    abs(filtered_start["y"] - non_noisy_start["y"])[mask_start],
-    abs(filtered_start["py"] - non_noisy_start["py"])[mask_start],
-    s=1, color="green", label="Filtered"
-)
-axs[0, 1].set_xlabel("Absolute difference of y")
-axs[0, 1].set_ylabel("Absolute difference of py")
-axs[0, 1].set_title(f"Difference of y and py ({start_bpm})")
-axs[0, 1].grid()
 
+# Settings for each subplot
+plot_configs = [
+    {
+        "ax": axs[0, 0],
+        "noisy": noisy_start, "non_noisy": non_noisy_start, "filtered": filtered_start,
+        "coord1": "x", "coord2": "px", "title": f"x, px Phase Space ({start_bpm})",
+        "limits": [(x_start_lim, 'x', "Max x"), (PXPY_MIN, 'y', "Min px")],
+        "ellipse": [(x_ellipse, px_ellipse), (x_upper, px_upper), (x_lower, px_lower)]
+    },
+    {
+        "ax": axs[0, 1],
+        "noisy": noisy_start, "non_noisy": non_noisy_start, "filtered": filtered_start,
+        "coord1": "y", "coord2": "py", "title": f"y, py Phase Space ({start_bpm})",
+        "limits": [(XY_MIN/2, 'x', "Min y"), (PXPY_MIN, 'y', "Min py")],
+        "ellipse": [(y_ellipse, py_ellipse), (y_upper, py_upper), (y_lower, py_lower)],
+        "extra_mask": noisy_start["x"].abs() > x_start_lim,
+        "extra_labels": ["Noisy (x > max x)", "Non-noisy (x > max x)", "Filtered (x > max x)"]
+    },
+    {
+        "ax": axs[1, 0],
+        "noisy": noise_other, "non_noisy": non_noisy_other, "filtered": filtered_other,
+        "coord1": "x", "coord2": "px", "title": f"x, px Phase Space ({other_bpm})",
+        "limits": [(XY_MIN/2, 'x', "Min x"), (PXPY_MIN, 'y', "Min px")],
+        "ellipse": [(ana_x_other, ana_px_other), (ana_x_upper_other, ana_px_upper_other), (ana_x_lower_other, ana_px_lower_other)],
+        "extra_mask": noise_other["y"].abs() > y_other_lim,
+        "extra_labels": ["Noisy (y > max y)", "Non-noisy (y > max y)", "Filtered (y > max y)"]
+    },
+    {
+        "ax": axs[1, 1],
+        "noisy": noise_other, "non_noisy": non_noisy_other, "filtered": filtered_other,
+        "coord1": "y", "coord2": "py", "title": f"y, py Phase Space ({other_bpm})",
+        "limits": [(y_other_lim, 'x', "Max y"), (PXPY_MIN, 'y', "Min py")],
+        "ellipse": [(ana_y_other, ana_py_other), (ana_y_upper_other, ana_py_upper_other), (ana_y_lower_other, ana_py_lower_other)]
+    }
+]
 
-axs[1, 0].scatter(
-    abs(noise_other["x"] - non_noisy_other["x"])[mask_other],
-    abs(noise_other["px"] - non_noisy_other["px"])[mask_other],
-    s=1, color="blue", label="Noisy"
-)
-axs[1, 0].scatter(
-    abs(filtered_other["x"] - non_noisy_other["x"])[mask_other],
-    abs(filtered_other["px"] - non_noisy_other["px"])[mask_other],
-    s=1, color="green", label="Filtered"
-)
-axs[1, 0].set_xlabel("Absolute difference of x")
-axs[1, 0].set_ylabel("Absolute difference of px")
-axs[1, 0].set_title(f"Difference of x and px ({start_bpm})")
-axs[1, 0].grid()
+# Loop over subplots
+for cfg in plot_configs:
+    plot_phase_space(**cfg)
 
-axs[1, 1].scatter(
-    abs(noise_other["y"] - non_noisy_other["y"])[mask_other],
-    abs(noise_other["py"] - non_noisy_other["py"])[mask_other],
-    s=1, color="blue", label="Noisy"
-)
-axs[1, 1].scatter(
-    abs(filtered_other["y"] - non_noisy_other["y"])[mask_other],
-    abs(filtered_other["py"] - non_noisy_other["py"])[mask_other],
-    s=1, color="green", label="Filtered"
-)
-axs[1, 1].set_xlabel("Absolute difference of y")
-axs[1, 1].set_ylabel("Absolute difference of py")
-axs[1, 1].set_title(f"Difference of y and py ({start_bpm})")
-axs[1, 1].grid()
-# Create one global legend for the entire figure
-
+# Global legend
+handles, labels = axs[0, 0].get_legend_handles_labels()
 fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1, 1))
-plt.suptitle("Differences Comparison", y=0.98)
+
+plt.suptitle("Phase Space Comparison", y=0.98)
 plt.tight_layout(rect=[0, 0, 1, 0.95])
-plt.savefig("differences_comparison.png", dpi=300)
+# plt.savefig("merged_phase_space_comparison.png", dpi=300)
 # plt.show()
 
-# Now one final plot that plots the relationship between the amplitude of x or y and the difference in x, px or y, py
-fig, axs = plt.subplots(2, 2, figsize=(10, 8))
-axs[0, 0].scatter(
-    abs(noisy_start["x"][mask_start]),
-    abs((noisy_start["px"][mask_start] - non_noisy_start["px"][mask_start]) / non_noisy_start["px"][mask_start]),
-    s=1, color="blue", label="Noisy"
-)
-axs[0, 0].scatter(
-    abs(filtered_start["x"][mask_start]),
-    abs((filtered_start["px"][mask_start] - non_noisy_start["px"][mask_start]) / non_noisy_start["px"][mask_start]),
-    s=1, color="green", label="Filtered"
-)
+# === Second plot: absolute differences ===
 
-axs[0, 0].set_xlabel("Amplitude of x")
-axs[0, 0].set_ylabel("Relative difference of px")
-axs[0, 0].set_title(f"Amplitude of x vs Difference of px ({start_bpm})")
-axs[0, 1].scatter(
-    abs(noisy_start["y"][mask_start]),
-    abs((noisy_start["py"][mask_start] - non_noisy_start["py"][mask_start]) / non_noisy_start["py"][mask_start]),
-    s=1, color="blue", label="Noisy", alpha=0.5
-)
-axs[0, 1].scatter(
-    abs(filtered_start["y"][mask_start]),
-    abs((filtered_start["py"][mask_start] - non_noisy_start["py"][mask_start]) / non_noisy_start["py"][mask_start]),
-    s=1, color="green", label="Filtered", alpha=0.5
-)
-axs[0, 1].set_xlabel("Amplitude of y")
-axs[0, 1].set_ylabel("Relative difference of py")
-axs[0, 1].set_title(f"Amplitude of y vs Difference of py ({start_bpm})")
-
-axs[1, 0].scatter(
-    abs(noise_other["x"][mask_other]),
-    abs((noise_other["px"][mask_other] - non_noisy_other["px"][mask_other]) / non_noisy_other["px"][mask_other]),
-    s=1, color="blue", label="Noisy", alpha=0.5
-)
-axs[1, 0].scatter(
-    abs(filtered_other["x"][mask_other]),
-    abs((filtered_other["px"][mask_other] - non_noisy_other["px"][mask_other]) / non_noisy_other["px"][mask_other]),
-    s=1, color="green", label="Filtered", alpha=0.5
-)
-axs[1, 0].set_xlabel("Amplitude of x")
-axs[1, 0].set_ylabel("Relative difference of px")
-axs[1, 0].set_title(f"Amplitude of x vs Difference of px ({other_bpm})")
-axs[1, 1].scatter(
-    abs(noise_other["y"][mask_other]),
-    abs((noise_other["py"][mask_other] - non_noisy_other["py"][mask_other]) / non_noisy_other["py"][mask_other]),
-    s=1, color="blue", label="Noisy"
-)
-axs[1, 1].scatter(
-    abs(filtered_other["y"][mask_other]),
-    abs((filtered_other["py"][mask_other] - non_noisy_other["py"][mask_other]) / non_noisy_other["py"][mask_other]),
-    s=1, color="green", label="Filtered"
-)
-axs[1, 1].set_xlabel("Amplitude of y")
-axs[1, 1].set_ylabel("Relative difference of py")
-axs[1, 1].set_title(f"Amplitude of y vs Difference of py ({other_bpm})")
-for ax in axs.flat:
+def plot_absolute_difference(ax, noisy, filtered, non_noisy, coord1, coord2, mask, title):
+    """Plot absolute difference for a given pair of coordinates."""
+    # Noisy differences
+    ax.scatter(
+        abs(noisy[coord1] - non_noisy[coord1])[mask],
+        abs(noisy[coord2] - non_noisy[coord2])[mask],
+        s=1, color="blue", label="Noisy"
+    )
+    # Filtered differences
+    ax.scatter(
+        abs(filtered[coord1] - non_noisy[coord1])[mask],
+        abs(filtered[coord2] - non_noisy[coord2])[mask],
+        s=1, color="green", label="Filtered"
+    )
+    ax.set_xlabel(f"Absolute difference of {coord1}")
+    ax.set_ylabel(f"Absolute difference of {coord2}")
+    ax.set_title(title)
     ax.grid()
-    ax.set_yscale("log")  # Set y-axis to logarithmic scale for better visibility of differences
-# Create one global legend for the entire figure
+
+# Create subplots
+fig, axs = plt.subplots(2, 2, figsize=(10, 8))
+
+# Settings for each subplot
+difference_configs = [
+    {
+        "ax": axs[0, 0],
+        "noisy": noisy_start, "filtered": filtered_start, "non_noisy": non_noisy_start,
+        "coord1": "x", "coord2": "px", "mask": mask_start,
+        "title": f"Difference of x and px ({start_bpm})"
+    },
+    {
+        "ax": axs[0, 1],
+        "noisy": noisy_start, "filtered": filtered_start, "non_noisy": non_noisy_start,
+        "coord1": "y", "coord2": "py", "mask": mask_start,
+        "title": f"Difference of y and py ({start_bpm})"
+    },
+    {
+        "ax": axs[1, 0],
+        "noisy": noise_other, "filtered": filtered_other, "non_noisy": non_noisy_other,
+        "coord1": "x", "coord2": "px", "mask": mask_other,
+        "title": f"Difference of x and px ({other_bpm})"
+    },
+    {
+        "ax": axs[1, 1],
+        "noisy": noise_other, "filtered": filtered_other, "non_noisy": non_noisy_other,
+        "coord1": "y", "coord2": "py", "mask": mask_other,
+        "title": f"Difference of y and py ({other_bpm})"
+    }
+]
+
+# Loop over subplots
+for cfg in difference_configs:
+    plot_absolute_difference(**cfg)
+
+# Global legend
+handles, labels = axs[0, 0].get_legend_handles_labels()
 fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1, 1))
+
+plt.suptitle("Differences Comparison", y=0.98)
+plt.tight_layout(rect=[0, 0, 1, 0.95])
+# plt.savefig("differences_comparison.png", dpi=300)
+# plt.show()
+
+# === Third plot: amplitude vs relative difference ===
+
+def plot_relative_difference(ax, noisy, filtered, non_noisy, coord_amp, coord_diff, mask_noisy, mask_filtered, title):
+    """Plot amplitude vs relative difference."""
+    
+    # Noisy relative difference
+    ax.scatter(
+        abs(noisy[coord_amp][mask_noisy]),
+        abs((noisy[coord_diff][mask_noisy] - non_noisy[coord_diff][mask_noisy]) / non_noisy[coord_diff][mask_noisy]),
+        s=1, color="blue", label="Noisy"
+    )
+
+    # Filtered relative difference
+    # Align non_noisy to filtered turns
+    filtered_turns = filtered.index
+    non_noisy_filtered_aligned = non_noisy.loc[filtered_turns]
+
+    ax.scatter(
+        abs(filtered[coord_amp][mask_filtered]),
+        abs((filtered[coord_diff][mask_filtered] - non_noisy_filtered_aligned[coord_diff][mask_filtered]) / 
+            non_noisy_filtered_aligned[coord_diff][mask_filtered]),
+        s=1, color="green", label="Filtered"
+    )
+
+    ax.set_xlabel(f"Amplitude of {coord_amp}")
+    ax.set_ylabel(f"Relative difference of {coord_diff}")
+    ax.set_title(title)
+    ax.set_yscale("log")
+    ax.grid()
+
+# Create subplots
+fig, axs = plt.subplots(2, 2, figsize=(10, 8))
+
+# Settings for each subplot
+relative_configs = [
+    {
+        "ax": axs[0, 0],
+        "noisy": noisy_start, "filtered": filtered_start, "non_noisy": non_noisy_start,
+        "coord_amp": "x", "coord_diff": "px",
+        "mask_noisy": mask_start, "mask_filtered": filtered_mask_start,
+        "title": f"Amplitude of x vs Difference of px ({start_bpm})"
+    },
+    {
+        "ax": axs[0, 1],
+        "noisy": noisy_start, "filtered": filtered_start, "non_noisy": non_noisy_start,
+        "coord_amp": "y", "coord_diff": "py",
+        "mask_noisy": mask_start, "mask_filtered": filtered_mask_start,
+        "title": f"Amplitude of y vs Difference of py ({start_bpm})"
+    },
+    {
+        "ax": axs[1, 0],
+        "noisy": noise_other, "filtered": filtered_other, "non_noisy": non_noisy_other,
+        "coord_amp": "x", "coord_diff": "px",
+        "mask_noisy": mask_other, "mask_filtered": filtered_mask_other,
+        "title": f"Amplitude of x vs Difference of px ({other_bpm})"
+    },
+    {
+        "ax": axs[1, 1],
+        "noisy": noise_other, "filtered": filtered_other, "non_noisy": non_noisy_other,
+        "coord_amp": "y", "coord_diff": "py",
+        "mask_noisy": mask_other, "mask_filtered": filtered_mask_other,
+        "title": f"Amplitude of y vs Difference of py ({other_bpm})"
+    }
+]
+
+# Loop over subplots
+for cfg in relative_configs:
+    plot_relative_difference(**cfg)
+
+# Global legend
+handles, labels = axs[0, 0].get_legend_handles_labels()
+fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1, 1))
+
 plt.suptitle("Amplitude vs Differences Comparison", y=0.98)
 plt.tight_layout(rect=[0, 0, 1, 0.95])
-plt.savefig("amplitude_vs_differences_comparison.png", dpi=300)
+# plt.savefig("amplitude_vs_differences_comparison.png", dpi=300)
+# plt.show()
 
-# Create a new phase space plot of x, px and y, py for the start and end BPMs. 
-# Instead of plotting all points, only plot the points where the relative difference is above the median of the relative difference
+# === Fourth plot: filtered phase space after masks ===
 
-fig, axs = plt.subplots(2, 2, figsize=(10, 8))
-axs[0, 0].scatter(
-    noisy_start["x"][mask_start],
-    noisy_start["px"][mask_start],
-    s=1, color="blue", label="Noisy"
-)
-axs[0, 0].scatter(
-    filtered_start["x"][mask_start],
-    filtered_start["px"][mask_start],
-    s=1, color="green", label="Filtered (x > max x)"
-)
-axs[0, 0].set_xlabel("x")
-axs[0, 0].set_ylabel("px")
-axs[0, 0].set_title(f"x, px Phase Space ({start_bpm})")
-axs[0, 0].grid()
-axs[0, 1].scatter(
-    noisy_start["y"][mask_start],
-    noisy_start["py"][mask_start],
-    s=1, color="blue", label="Noisy", alpha=0.5
-)
-axs[0, 1].scatter(
-    filtered_start["y"][mask_start],
-    filtered_start["py"][mask_start],
-    s=1, color="green", label="Filtered", alpha=0.5
-)
-axs[0, 1].set_xlabel("y")
-axs[0, 1].set_ylabel("py")
-axs[0, 1].set_title(f"y, py Phase Space ({start_bpm})")
-axs[1, 0].scatter(
-    noise_other["x"][mask_other],
-    noise_other["px"][mask_other],
-    s=1, color="blue", label="Noisy", alpha=0.5
-)
-axs[1, 0].scatter(
-    filtered_other["x"][mask_other],
-    filtered_other["px"][mask_other],
-    s=1, color="green", label="Filtered", alpha=0.5
-)
-axs[1, 0].set_xlabel("x")
-axs[1, 0].set_ylabel("px")
-axs[1, 0].set_title(f"x, px Phase Space ({other_bpm})")
-axs[1, 0].grid()
-axs[1, 1].scatter(
-    noise_other["y"][mask_other],
-    noise_other["py"][mask_other],
-    s=1, color="blue", label="Noisy"
-)
-axs[1, 1].scatter(
-    filtered_other["y"][mask_other],
-    filtered_other["py"][mask_other],
-    s=1, color="green", label="Filtered"
-)
-axs[1, 1].set_xlabel("y")
-axs[1, 1].set_ylabel("py")
-axs[1, 1].set_title(f"y, py Phase Space ({other_bpm})")
-for ax in axs.flat:
+def plot_masked_phase_space(ax, noisy, filtered, coord1, coord2, mask, title):
+    """Plot phase space for noisy and filtered data after applying mask."""
+    
+    ax.scatter(noisy[coord1][mask], noisy[coord2][mask], s=1, color="blue", label="Noisy")
+    ax.scatter(filtered[coord1][mask], filtered[coord2][mask], s=1, color="green", label="Filtered")
+    
+    ax.set_xlabel(coord1)
+    ax.set_ylabel(coord2)
+    ax.set_title(title)
     ax.grid()
-plt.tight_layout()
 
+# Create subplots
+fig, axs = plt.subplots(2, 2, figsize=(10, 8))
 
+# Settings for each subplot
+masked_configs = [
+    {
+        "ax": axs[0, 0],
+        "noisy": noisy_start, "filtered": filtered_start,
+        "coord1": "x", "coord2": "px",
+        "mask": mask_start,
+        "title": f"x, px Phase Space ({start_bpm})"
+    },
+    {
+        "ax": axs[0, 1],
+        "noisy": noisy_start, "filtered": filtered_start,
+        "coord1": "y", "coord2": "py",
+        "mask": mask_start,
+        "title": f"y, py Phase Space ({start_bpm})"
+    },
+    {
+        "ax": axs[1, 0],
+        "noisy": noise_other, "filtered": filtered_other,
+        "coord1": "x", "coord2": "px",
+        "mask": mask_other,
+        "title": f"x, px Phase Space ({other_bpm})"
+    },
+    {
+        "ax": axs[1, 1],
+        "noisy": noise_other, "filtered": filtered_other,
+        "coord1": "y", "coord2": "py",
+        "mask": mask_other,
+        "title": f"y, py Phase Space ({other_bpm})"
+    }
+]
+
+# Loop over subplots
+for cfg in masked_configs:
+    plot_masked_phase_space(**cfg)
+
+# Global legend
+handles, labels = axs[0, 0].get_legend_handles_labels()
+fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1, 1))
+
+plt.suptitle("Masked Phase Space Comparison", y=0.98)
+plt.tight_layout(rect=[0, 0, 1, 0.95])
+# plt.savefig("masked_phase_space_comparison.png", dpi=300)
 plt.show()

@@ -1,22 +1,27 @@
 import os
 
-from numba import njit
 import numpy as np
 import pandas as pd
+import tfs
+from numba import njit
+from tqdm import tqdm
 
 from aba_optimiser.config import (
     ACD_ON,
     BPM_RANGE,
     FLATTOP_TURNS,
+    MOMENTUM_STD_DEV,
+    NOISE_FILE,
+    POSITION_STD_DEV,
+    REL_K1_STD_DEV,
     SEQ_NAME,
     SEQUENCE_FILE,
-    POSITION_STD_DEV, 
-    MOMENTUM_STD_DEV,
-    REL_K1_STD_DEV,
+    STD_CUT,
     WINDOWS,
 )
 from aba_optimiser.mad_interface import MadInterface
 from aba_optimiser.phase_space import PhaseSpaceDiagnostics
+
 
 class BPMKalmanFilter:
     """
@@ -474,82 +479,24 @@ def _filter_flat_jit(meas_flat, bpm_of, M_stack, Q_stack, R_stack,
 
     return x_fwd, P_fwd, x_pr, P_pr
 
-import pandas as pd
-import numpy as np
-from tqdm import tqdm
-
-from aba_optimiser.phase_space import PhaseSpaceDiagnostics
-from aba_optimiser.config import (
-    NOISE_FILE, WINDOWS, SEQUENCE_FILE, BPM_RANGE, SEQ_NAME
-)
-from aba_optimiser.mad_interface import MadInterface
-import tfs
-
 def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
-
     data.set_index(['turn', 'name'], inplace=True)
-
+    
     # Get Twiss data
-    mad = MadInterface(SEQUENCE_FILE, BPM_RANGE, stdout="/dev/null", redirect_sterr=True)
-    mad.mad.send(f"tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}")
-    tws: tfs.TfsDataFrame = mad.mad.tws.to_df().set_index("name")
-
-    # Get full list of BPMs (matching your config)
-    all_bpms = tws.index.tolist()
-
-    # Compute BPM windows (same as you do in your pipeline)
     bpm_names = []
-    for start_bpm, end_bpm in WINDOWS:
-        try:
-            start_idx = all_bpms.index(start_bpm)
-            end_idx = all_bpms.index(end_bpm)
-        except ValueError:
-            raise ValueError("Start or end BPM not found in Twiss file")
-
-        markers_to_keep = all_bpms[start_idx + 1:end_idx]
-        if "BPM" in start_bpm:
-            markers_to_keep = [start_bpm] + markers_to_keep
-        if "BPM" in end_bpm:
-            markers_to_keep = markers_to_keep + [end_bpm]
-
-        bpm_names.extend(markers_to_keep)
-
-    bpm_names = list(set(bpm_names))  # deduplicate
+    for start_bpm, _ in WINDOWS:
+        bpm_names.append(start_bpm)
+    bpm_names = list(set(bpm_names))
 
     # Pre-split dataframe for efficiency
     bpm_groups = {bpm: data.xs(bpm, level='name') for bpm in bpm_names if bpm in data.index.get_level_values('name')}
 
-    # Start BPM processing
-    for start_bpm, _ in WINDOWS:
-        if start_bpm not in bpm_groups:
-            continue
-
-        start_data = bpm_groups[start_bpm]
-        x, px, y, py = start_data["x"].values, start_data["px"].values, start_data["y"].values, start_data["py"].values
-
-        ps_diag = PhaseSpaceDiagnostics(start_bpm, x, px, y, py)
-        std_x, std_y = ps_diag.compute_residuals()
-
-        gamma_x = (1 + ps_diag.alfax**2) / ps_diag.betax
-        inv_x = gamma_x * x**2 + 2 * ps_diag.alfax * x * px + ps_diag.betax * px**2
-        gamma_y = (1 + ps_diag.alfay**2) / ps_diag.betay
-        inv_y = gamma_y * y**2 + 2 * ps_diag.alfay * y * py + ps_diag.betay * py**2
-
-        residual_x = (inv_x/2 - ps_diag.emit_x) / ps_diag.emit_x
-        residual_y = (inv_y/2 - ps_diag.emit_y) / ps_diag.emit_y
-
-        mask = (np.abs(residual_x) <= std_x) & (np.abs(residual_y) <= std_y)
-        failing_turns = start_data.index[~mask]
-        print(f"Filtering {len(failing_turns)} turns for {start_bpm} with start BPM")   
-        data.drop(index=pd.MultiIndex.from_product([failing_turns, [start_bpm]]), inplace=True)
-
+    failed_turns = set()
     # Process remaining BPMs
     for bpm in tqdm(bpm_names, desc="Filtering BPMs"):
-        if bpm in [start for start, _ in WINDOWS]:
-            continue
-
         bpm_data = bpm_groups[bpm]
         if bpm_data.empty:
+            print(f"Warning: No data available for BPM {bpm}")
             continue
 
         # Subset to existing rows after drop
@@ -571,14 +518,13 @@ def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
         residual_y = (inv_y/2 - ps_diag.emit_y) / ps_diag.emit_y
 
         full_idx = bpm_data.index
-        fail_x = full_idx[np.abs(residual_x) > std_x]
-        fail_y = full_idx[np.abs(residual_y) > std_y]
+        fail_x = full_idx[np.abs(residual_x) > std_x * STD_CUT]
+        fail_y = full_idx[np.abs(residual_y) > std_y * STD_CUT]
+        failed_turns.update(fail_x)
+        failed_turns.update(fail_y)
 
-        data.loc[(fail_x, bpm), ["x", "px"]] = np.nan
-        data.loc[(fail_y, bpm), ["y", "py"]] = np.nan
-
-    # Save filtered result
-    filtered = data.reset_index()
+    data.reset_index(inplace=True)
+    filtered = data[~data['turn'].isin(failed_turns)]
     return filtered
 
 if __name__ == "__main__":

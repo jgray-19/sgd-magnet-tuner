@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Simulation parameters
 MAX_EPOCHS        = int(500) # Total number of epochs for optimization
-TRACKS_PER_WORKER = 141         # Number of tracks per worker
+TRACKS_PER_WORKER = 182         # Number of tracks per worker
 NUM_WORKERS       = 60         # Number of parallel worker processes
 TOTAL_TRACKS      = TRACKS_PER_WORKER * NUM_WORKERS  # Total number of tracks
 
@@ -22,11 +22,12 @@ GRAD_NORM_ALPHA  = 0.7         # Gradient norm smoothing factor for smoothing lo
 GRAD_PENALTY_COEFF = 1e-5   # Coefficient for gradient penalty
 
 MIN_FRACTION_MAX = 0.5  # Fraction of the maximum coordinate value that is the minimum to be considered
-XY_MIN           = 1e-3
-PXPY_MIN         = 5e-6
+XY_MIN           = 0#1e-3
+PXPY_MIN         = 0#5e-6
+STD_CUT          = 0.5
 
 # Standard error of the noise
-POSITION_STD_DEV = 1e-4   # Standard deviation of the position noise
+POSITION_STD_DEV = 1e-7   # Standard deviation of the position noise
 MOMENTUM_STD_DEV = 3e-6   # Standard deviation of the momentum noise
 REL_K1_STD_DEV   = 1e-2   # Standard deviation of the K1 noise
 
@@ -58,36 +59,8 @@ TUNE_KNOBS_FILE  = module_path / "data/matched_tunes.txt"       # File with tune
 BPM_RANGE        = "BPM.13R3.B1/BPM.12L4.B1"           # BPM selection range for tracking
 BEAM_ENERGY      = 6800                                # Beam energy in GeV
 SEQ_NAME         = "lhcb1"                             # Sequence name in MAD-X (lowercase)
-FILTER_DATA      = True                                # Whether to filter data with a Kalman filter
+FILTER_DATA      = False                                # Whether to filter data with a Kalman filter
 USE_NOISY_DATA   = True                                 # Whether to use noisy data for optimisation
-
-# Instead of a single BPM_RANGE, define multiple overlapping windows:
-# start_bpms = [
-#     # 'BPM.11R3.B1',
-#     # 'BPM.12R3.B1',
-#     "BPM.13R3.B1",
-#     "BPM.14R3.B1",
-# ]
-
-# end_bpms = [
-#     # 'BPM.13L4.B1',
-#     # 'BPM.13L4.B1',
-#     "BPM.13L4.B1",
-#     "BPM.13L4.B1",
-#     # "BPM.10L2.B1" # When doing further than the first BPM
-# ]
-
-# Create a list of tuples representing the start and end BPMs, it must be 
-# every permutation of start and end BPMs
-# WINDOWS = [
-#     (start, end_bpms[i])
-#     for i, start in enumerate(start_bpms)
-#     # if (end != end_bpms[-1] or start == start_bpms[0]) and start != end
-# ]
-# # Ensure that the start and end BPMs are not the same
-# for start, end in WINDOWS:
-#     if start == end:
-#         raise ValueError(f"Start and end BPMs cannot be the same: {start} == {end}")
 
 X_BPM_START = "BPM.13R3.B1"  # Starting BPM for tracking
 X_BPM_END = "BPM.13L4.B1"    # Ending BPM for tracking

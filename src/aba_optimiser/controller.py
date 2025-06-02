@@ -134,18 +134,14 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
             track_data = pd.read_feather(FILTERED_FILE)
         else:
             track_data = pd.read_feather(NOISE_FILE)
-        no_noise = tfs.read(TRACK_DATA_FILE)
-        no_noise["var_x"] = (POSITION_STD_DEV)**2
-        no_noise["var_y"] = (POSITION_STD_DEV)**2
 
-        if not FILTER_DATA:
-            track_data["var_x"] = (POSITION_STD_DEV)**2
-            track_data["var_y"] = (POSITION_STD_DEV)**2
-            
+        # if not FILTER_DATA:
+        track_data["var_x"] = (POSITION_STD_DEV) ** 2
+        track_data["var_y"] = (POSITION_STD_DEV) ** 2
 
         # instead of one static start_data, build one per WINDOW
         self.start_data_dict = {
-            start: select_marker(no_noise, start) for start, _ in WINDOWS
+            start: select_marker(track_data, start) for start, _ in WINDOWS
         }
         # Get indices of the start and end markers from the full list.
         try:
@@ -170,11 +166,6 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
             "BPM names from track data do not match the number of BPMs in the sequence"
         )
 
-        # In track data, there is a column called "var_x" and "var_y" which are the variances
-        # of the x and y coordinates respectively. I would like to calculate the variance for each
-        # BPM and store it in a list, one for x and one for y. This will just be the mean of the
-        # variances for each BPM. The variance is the square of the standard deviation.
-
         # Get the variances for each BPM
         self.var_x = self.comparison_data.groupby("name")["var_x"].mean().to_numpy()
         self.var_y = self.comparison_data.groupby("name")["var_y"].mean().to_numpy()
@@ -198,22 +189,23 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
             self.comparison_data["name"] == Y_BPM_START
         ]
 
-        self.available_x = start_bpm_df_x.loc[
-            (abs(start_bpm_df_x["x"])  > XY_MIN)
-            & (abs(start_bpm_df_x["y"]) > XY_MIN/2)
-            & (abs(start_bpm_df_x["px"]) > PXPY_MIN)
-            & (abs(start_bpm_df_x["py"]) > PXPY_MIN)
-            ,
-            "turn",
-        ].tolist()
-        self.available_y = start_bpm_df_y.loc[
-            (abs(start_bpm_df_y["x"]) > XY_MIN/2)
-            & (abs(start_bpm_df_y["y"]) > XY_MIN)
-            & (abs(start_bpm_df_y["px"]) > PXPY_MIN)
-            & (abs(start_bpm_df_y["py"]) > PXPY_MIN)
-            ,
-            "turn",
-        ].tolist()
+        def _get_available_turns(df: pd.DataFrame, coord: str) -> list[int]:
+            x_min = XY_MIN if coord == "x" else XY_MIN / 2
+            y_min = XY_MIN if coord == "y" else XY_MIN / 2
+            return df.loc[
+                (abs(df["x"]) > x_min)
+                & (abs(df["y"]) > y_min)
+                & (abs(df["px"]) > PXPY_MIN)
+                & (abs(df["py"]) > PXPY_MIN),
+                "turn",
+            ].tolist()
+
+        self.available_x = _get_available_turns(
+            start_bpm_df_x, "x"
+        )
+        self.available_y = _get_available_turns(
+            start_bpm_df_y, "y"
+        )
 
         # Convert every entry to an integer
         self.available_x = [int(turn) for turn in self.available_x]
@@ -347,7 +339,7 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
         # import matplotlib.pyplot as plt
 
         # plt.ion()
-        rel_diff_history = {k: [] for k in self.knob_names}
+        # rel_diff_history = {k: [] for k in self.knob_names}
         # fig, ax = plt.subplots()
         # Initialize new figure for consecutive differences (delta)
         # fig_delta, ax_delta = plt.subplots()
@@ -453,7 +445,7 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                 #     ax_delta.axhline(0, color="red", linestyle="--")
                 #     ax_delta.set_xlabel("Epoch (delta index)")
 
-                    # plt.pause(0.001)
+                # plt.pause(0.001)
 
                 # ----------------------------------------------
                 true_diff = np.sum(true_diff)
@@ -500,7 +492,7 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
                 conn.send(None)  # Signal workers to stop the training loop
 
             for conn in parent_conns:
-                 H_global += conn.recv()
+                H_global += conn.recv()
 
             cov = np.linalg.inv(H_global)
             comb_uncertainty = np.sqrt(np.diag(cov))
