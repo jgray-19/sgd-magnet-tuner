@@ -3,7 +3,6 @@ import tfs
 
 from aba_optimiser.config import (
     BPM_RANGE,
-    SEQ_NAME,
     SEQUENCE_FILE,
     TRACK_DATA_FILE,
     TRUE_STRENGTHS,

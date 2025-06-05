@@ -9,7 +9,7 @@ local sqrt in math
 MADX:load("lhcb1.seq")
 local lhcb1 in MADX
 local RAMPUP = 1000
-local FLATTOP = 1e4
+local FLATTOP = 1e5
 
 randseed(42)  -- Set the random seed for reproducibility
 

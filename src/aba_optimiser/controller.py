@@ -145,11 +145,13 @@ class Controller:
         markers_to_keep = self.all_bpms[start_idx : end_idx + 1]
         assert "BPM" in end_bpm, "End BPM not a BPM"
         assert "BPM" in start_bpm, "Start BPM not a BPM"
-        
-        # Filter data using pandas' vectorised operation
+
+        # Filter data out BPMs that are not used
         self.comparison_data = track_data[
             track_data["name"].isin(markers_to_keep)
         ].copy()
+        del track_data  # Free memory
+        
         self.bpm_names = list(self.comparison_data["name"].unique())
         assert len(self.bpm_names) == self.mad_iface.nbpms, (
             "BPM names from track data do not match the number of BPMs in the sequence"
@@ -158,6 +160,7 @@ class Controller:
         # Get the variances for each BPM
         self.var_x = self.comparison_data.groupby("name")["var_x"].mean().to_numpy()
         self.var_y = self.comparison_data.groupby("name")["var_y"].mean().to_numpy()
+        print("Average variances for x and y BPMs:")
 
         self.bpm_idx = {name: i for i, name in enumerate(self.bpm_names)}
         self.window_slices: dict[str, slice] = {}
@@ -172,7 +175,17 @@ class Controller:
 
         self.smoothed_grad_norm = None  # Initialize smoothed gradient norm
         
-        # Instead of filtering based on a threshold, filter by the BPM start names.
+        # no_noise_data = tfs.read(TRACK_DATA_FILE)
+        # no_noise_data["var_x"] = (POSITION_STD_DEV) ** 2
+        # no_noise_data["var_y"] = (POSITION_STD_DEV) ** 2
+        # start_bpm_df_x = no_noise_data.loc[
+        #     no_noise_data["name"] == X_BPM_START
+        # ]
+        # start_bpm_df_y = no_noise_data.loc[
+        #     no_noise_data["name"] == Y_BPM_START
+        # ]
+        # del no_noise_data  # Free memory
+
         start_bpm_df_x = self.comparison_data.loc[
             self.comparison_data["name"] == X_BPM_START
         ]
@@ -187,11 +200,13 @@ class Controller:
         def _cut_coordinates(df: pd.DataFrame, coord: str) -> list[int]:
             x_min = XY_MIN if coord == "x" else XY_MIN / 2
             y_min = XY_MIN if coord == "y" else XY_MIN / 2
+            px_min = PXPY_MIN if coord == "x" else PXPY_MIN / 2
+            py_min = PXPY_MIN if coord == "y" else PXPY_MIN / 2
             return df.loc[
                 (abs(df["x"]) > x_min)
                 & (abs(df["y"]) > y_min)
-                & (abs(df["px"]) > PXPY_MIN)
-                & (abs(df["py"]) > PXPY_MIN),
+                & (abs(df["px"]) > px_min)
+                & (abs(df["py"]) > py_min),
                 "turn",
             ].tolist()
 
@@ -205,7 +220,7 @@ class Controller:
         num_turns_needed = NUM_WORKERS * TRACKS_PER_WORKER
         if (
             len(self.available_x) < num_turns_needed
-            or len(self.available_y) < num_turns_needed
+            and len(self.available_y) < num_turns_needed
         ):
             raise ValueError(
                 f"Not enough available turns for x or y BPMs. "
@@ -278,19 +293,21 @@ class Controller:
     def run(self) -> None:
         """Execute the optimisation loop."""
         run_start = time.time()  # start total timing
-
+        x_tracks_per_worker = min(len(self.available_x) // NUM_WORKERS, TRACKS_PER_WORKER)
+        y_tracks_per_worker = min(len(self.available_y) // NUM_WORKERS, TRACKS_PER_WORKER)
         x_batches = [
-            self.available_x[i * TRACKS_PER_WORKER : (i + 1) * TRACKS_PER_WORKER]
+            self.available_x[i * x_tracks_per_worker : (i + 1) * x_tracks_per_worker]
             for i in range(NUM_WORKERS)
         ]
         y_batches = [
-            self.available_y[i * TRACKS_PER_WORKER : (i + 1) * TRACKS_PER_WORKER]
+            self.available_y[i * y_tracks_per_worker : (i + 1) * y_tracks_per_worker]
             for i in range(NUM_WORKERS)
         ]
         for i, batch in enumerate(x_batches + y_batches):
             assert batch, (
                 f"Batch {i} is empty. Check TRACKS_PER_WORKER and NUM_WORKERS."
             )
+        total_tracks = NUM_WORKERS * (x_tracks_per_worker + y_tracks_per_worker) / 2
 
         # Start worker processes
         parent_conns: list[Connection] = []
@@ -347,9 +364,9 @@ class Controller:
                     _, grad, loss = conn.recv()
                     agg_grad = grad if agg_grad is None else agg_grad + grad
                     total_loss += loss
-                total_loss /= TOTAL_TRACKS
+                total_loss /= total_tracks
 
-                agg_grad = agg_grad.flatten() / TOTAL_TRACKS
+                agg_grad = agg_grad.flatten() / total_tracks
 
                 param_vec = np.array([self.current_knobs[k] for k in self.knob_names])
                 new_vec = self.optimiser.step(param_vec, agg_grad, lr)

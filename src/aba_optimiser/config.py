@@ -6,28 +6,28 @@ Configuration constants for the knob optimisation pipeline.
 from pathlib import Path
 
 # Simulation parameters
-MAX_EPOCHS        = int(500) # Total number of epochs for optimization
-TRACKS_PER_WORKER = 100         # Number of tracks per worker
+MAX_EPOCHS        = int(2000) # Total number of epochs for optimization
+TRACKS_PER_WORKER = 217        # Number of tracks per worker
 NUM_WORKERS       = 10          # Number of parallel worker processes
 TOTAL_TRACKS      = TRACKS_PER_WORKER * NUM_WORKERS  # Total number of tracks
 
 # Learning-rate schedule
 WARMUP_EPOCHS    = 30          # Epochs for cosine warmup
 DECAY_EPOCHS     = MAX_EPOCHS - WARMUP_EPOCHS         # Epoch at which cosine decay ends
-WARMUP_LR_START  = 5e-7       # Initial learning rate at epoch 1
-MAX_LR           = 5e-8       # Peak learning rate after warmup
-MIN_LR           = 5e-8
+WARMUP_LR_START  = 5e-9       # Initial learning rate at epoch 1
+MAX_LR           = 5e-9      # Peak learning rate after warmup
+MIN_LR           = 5e-9
 OPTIMISER_TYPE   = "adam"      # Optimiser type: "adam" or "amsgrad"
 GRAD_NORM_ALPHA  = 0.7         # Gradient norm smoothing factor for smoothing loss
 GRAD_PENALTY_COEFF = 1e-5   # Coefficient for gradient penalty
 
 MIN_FRACTION_MAX = 0.5  # Fraction of the maximum coordinate value that is the minimum to be considered
-XY_MIN           = 0#1e-3
-PXPY_MIN         = 0#5e-6
-STD_CUT          = 0.5
+XY_MIN           = 1e-3
+PXPY_MIN         = 15e-6
+STD_CUT          = 1
 
 # Standard error of the noise
-POSITION_STD_DEV = 1e-8   # Standard deviation of the position noise
+POSITION_STD_DEV = 1e-5   # Standard deviation of the position noise
 MOMENTUM_STD_DEV = 3e-6   # Standard deviation of the momentum noise
 REL_K1_STD_DEV   = 1e-2   # Standard deviation of the K1 noise
 
@@ -56,17 +56,17 @@ ELEM_NAMES_FILE  = module_path / "data/elem_names.txt"          # File with elem
 TUNE_KNOBS_FILE  = module_path / "data/matched_tunes.txt"       # File with tune knobs
 
 # Simulation specifics
-BPM_RANGE        = "BPM.13R3.B1/BPM.12L4.B1"           # BPM selection range for tracking
+BPM_RANGE        = "BPM.13R3.B1/BPM.12L5.B1"           # BPM selection range for tracking
 BEAM_ENERGY      = 6800                                # Beam energy in GeV
 SEQ_NAME         = "lhcb1"                             # Sequence name in MAD-X (lowercase)
-FILTER_DATA      = False                                # Whether to filter data with a Kalman filter
-USE_NOISY_DATA   = True                                 # Whether to use noisy data for optimisation
+FILTER_DATA      = True                               # Whether to filter data with a Kalman filter
+USE_NOISY_DATA   = True                               # Whether to use noisy data for optimisation
 
 X_BPM_START = "BPM.13R3.B1"  # Starting BPM for tracking
-X_BPM_END = "BPM.13L4.B1"    # Ending BPM for tracking
+X_BPM_END = "BPM.13L5.B1"    # Ending BPM for tracking
 
 Y_BPM_START = "BPM.14R3.B1"  # Starting BPM for tracking
-Y_BPM_END = "BPM.12L4.B1"    # Ending BPM for tracking
+Y_BPM_END = "BPM.12L5.B1"    # Ending BPM for tracking
 
 WINDOWS = [
     (X_BPM_START, X_BPM_END),
