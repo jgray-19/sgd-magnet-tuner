@@ -4,10 +4,12 @@ import time
 from multiprocessing.connection import Connection
 
 import numpy as np
+import pandas as pd
 import tfs
 from tensorboardX import SummaryWriter
-import pandas as pd
 
+from aba_optimiser.adam import AdamOptimiser
+from aba_optimiser.amsgrad import AMSGradOptimiser
 from aba_optimiser.config import (
     ACD_ON,
     BPM_RANGE,
@@ -22,7 +24,6 @@ from aba_optimiser.config import (
     MAX_EPOCHS,
     MAX_LR,
     MIN_LR,
-    TRACK_DATA_FILE,
     # MOMENTUM_STD_DEV,
     # MIN_FRACTION_MAX,
     NOISE_FILE,
@@ -30,9 +31,11 @@ from aba_optimiser.config import (
     OPTIMISER_TYPE,
     OUTPUT_KNOBS,
     POSITION_STD_DEV,
+    PXPY_MIN,
     RAMP_UP_TURNS,
     SEQUENCE_FILE,
     TOTAL_TRACKS,
+    TRACK_DATA_FILE,
     TRACKS_PER_WORKER,
     TRUE_STRENGTHS,
     USE_NOISY_DATA,
@@ -40,13 +43,10 @@ from aba_optimiser.config import (
     WARMUP_LR_START,
     WINDOWS,
     X_BPM_START,
-    Y_BPM_START,
     XY_MIN,
-    PXPY_MIN,
+    Y_BPM_START,
 )
 from aba_optimiser.mad_interface import MadInterface
-from aba_optimiser.adam import AdamOptimiser
-from aba_optimiser.amsgrad import AMSGradOptimiser
 from aba_optimiser.scheduler import LRScheduler
 from aba_optimiser.utils import (
     read_elem_names,
@@ -151,7 +151,7 @@ class Controller:
             track_data["name"].isin(markers_to_keep)
         ].copy()
         del track_data  # Free memory
-        
+
         self.bpm_names = list(self.comparison_data["name"].unique())
         assert len(self.bpm_names) == self.mad_iface.nbpms, (
             "BPM names from track data do not match the number of BPMs in the sequence"
@@ -159,10 +159,14 @@ class Controller:
 
         # Get the variances for each BPM
         self.var_x = (
-            self.comparison_data.groupby("name", observed=True)["var_x"].mean().to_numpy()
+            self.comparison_data.groupby("name", observed=True)["var_x"]
+            .mean()
+            .to_numpy()
         )
         self.var_y = (
-            self.comparison_data.groupby("name", observed=True)["var_y"].mean().to_numpy()
+            self.comparison_data.groupby("name", observed=True)["var_y"]
+            .mean()
+            .to_numpy()
         )
         print("Average variances for x and y BPMs:")
 
@@ -174,11 +178,11 @@ class Controller:
             )
             i0 = self.bpm_idx[start]
             i1 = self.bpm_idx[end]
-            assert i0 < i1, 'Start BPM is after or the same as End BPM'
+            assert i0 < i1, "Start BPM is after or the same as End BPM"
             self.window_slices[start] = slice(i0, i1 + 1)
 
         self.smoothed_grad_norm = None  # Initialize smoothed gradient norm
-        
+
         # no_noise_data = tfs.read(TRACK_DATA_FILE)
         # no_noise_data["var_x"] = (POSITION_STD_DEV) ** 2
         # no_noise_data["var_y"] = (POSITION_STD_DEV) ** 2
@@ -198,7 +202,7 @@ class Controller:
         ]
         self.start_data_dict = {
             X_BPM_START: select_marker(start_bpm_df_x, X_BPM_START),
-            Y_BPM_START: select_marker(start_bpm_df_y, Y_BPM_START)
+            Y_BPM_START: select_marker(start_bpm_df_y, Y_BPM_START),
         }
 
         def _cut_coordinates(df: pd.DataFrame, coord: str) -> list[int]:
@@ -297,8 +301,12 @@ class Controller:
     def run(self) -> None:
         """Execute the optimisation loop."""
         run_start = time.time()  # start total timing
-        x_tracks_per_worker = min(len(self.available_x) // NUM_WORKERS, TRACKS_PER_WORKER)
-        y_tracks_per_worker = min(len(self.available_y) // NUM_WORKERS, TRACKS_PER_WORKER)
+        x_tracks_per_worker = min(
+            len(self.available_x) // NUM_WORKERS, TRACKS_PER_WORKER
+        )
+        y_tracks_per_worker = min(
+            len(self.available_y) // NUM_WORKERS, TRACKS_PER_WORKER
+        )
         x_batches = [
             self.available_x[i * x_tracks_per_worker : (i + 1) * x_tracks_per_worker]
             for i in range(NUM_WORKERS)
