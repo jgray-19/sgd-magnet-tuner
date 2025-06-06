@@ -13,6 +13,8 @@ from aba_optimiser.phase_space import PhaseSpaceDiagnostics
 
 def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
     data.set_index(['turn', 'name'], inplace=True)
+    mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
+    tws = mad_iface.run_twiss()
     
     # Get Twiss data
     bpm_names = []
@@ -40,7 +42,7 @@ def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
             continue
 
         x, px, y, py = bpm_data["x"].values, bpm_data["px"].values, bpm_data["y"].values, bpm_data["py"].values
-        ps_diag = PhaseSpaceDiagnostics(bpm, x, px, y, py)
+        ps_diag = PhaseSpaceDiagnostics(bpm, x, px, y, py, tws=tws)
         residual_x, residual_y, std_x, std_y = ps_diag.compute_residuals()
 
         full_idx = bpm_data.index
@@ -53,8 +55,6 @@ def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
     filtered = data[~data['turn'].isin(failed_turns)].copy()  # Ensure filtered is a copy
 
     # Run through all the BPMs between the start and end, and set the weight_x and weight_y according to residuals
-    mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
-    tws = mad_iface.run_twiss()
     start_bpm, end_bpm = BPM_RANGE.split("/")
     start_bpm_idx = tws.index.get_loc(start_bpm)
     end_bpm_idx = tws.index.get_loc(end_bpm)
@@ -73,7 +73,7 @@ def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
         if bpm_data.empty:
             continue
         x, px, y, py = bpm_data["x"].values, bpm_data["px"].values, bpm_data["y"].values, bpm_data["py"].values
-        ps_diag = PhaseSpaceDiagnostics(bpm, x, px, y, py)
+        ps_diag = PhaseSpaceDiagnostics(bpm, x, px, y, py, tws=tws)
         residual_x, residual_y, std_x, std_y = ps_diag.compute_residuals()
         full_idx = bpm_data.index
 
@@ -83,10 +83,10 @@ def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
         abs_residual_y = np.abs(residual_y)
         with np.errstate(divide='ignore', invalid='ignore'):
             # Clamp exponent to max 10 to avoid overflow
-            exp_x = np.clip(np.where(abs_residual_x != 0, abs_residual_x, np.nan)/std_x, 1, 100)
-            exp_y = np.clip(np.where(abs_residual_y != 0, abs_residual_y, np.nan)/std_y, 1, 100)
-            weight_x = 1/(5**(exp_x-1))
-            weight_y = 1/(5**(exp_y-1))
+            exp_x = np.clip(abs_residual_x/std_x, 1, 100)
+            exp_y = np.clip(abs_residual_y/std_y, 1, 100)
+            weight_x = 1/(10**(exp_x-1))
+            weight_y = 1/(10**(exp_y-1))
             assert np.all(weight_x >= 0) and np.all(weight_y >= 0), "Weights must be non-negative"
             assert np.all(weight_x <= 1) and np.all(weight_y <= 1), "Weights must be less than or equal to 1"
 

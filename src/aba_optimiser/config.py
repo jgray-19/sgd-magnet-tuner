@@ -7,8 +7,8 @@ from pathlib import Path
 
 # Simulation parameters
 MAX_EPOCHS        = int(2000) # Total number of epochs for optimization
-TRACKS_PER_WORKER = 217        # Number of tracks per worker
-NUM_WORKERS       = 10          # Number of parallel worker processes
+TRACKS_PER_WORKER = 1        # Number of tracks per worker
+NUM_WORKERS       = 60          # Number of parallel worker processes
 TOTAL_TRACKS      = TRACKS_PER_WORKER * NUM_WORKERS  # Total number of tracks
 
 # Learning-rate schedule
@@ -22,25 +22,20 @@ GRAD_NORM_ALPHA  = 0.7         # Gradient norm smoothing factor for smoothing lo
 GRAD_PENALTY_COEFF = 1e-5   # Coefficient for gradient penalty
 
 MIN_FRACTION_MAX = 0.5  # Fraction of the maximum coordinate value that is the minimum to be considered
-XY_MIN           = 1e-3
-PXPY_MIN         = 15e-6
-STD_CUT          = 1
+XY_MIN           = 0#0.5e-3
+PXPY_MIN         = 0#5e-6
+STD_CUT          = 1/2
 
 # Standard error of the noise
 POSITION_STD_DEV = 1e-5   # Standard deviation of the position noise
 MOMENTUM_STD_DEV = 3e-6   # Standard deviation of the momentum noise
-REL_K1_STD_DEV   = 1e-2   # Standard deviation of the K1 noise
+REL_K1_STD_DEV   = 1e-4   # Standard deviation of the K1 noise
 
 # ACD parameters
 RAMP_UP_TURNS   = 1_000        # Number of turns to ramp up the ACD
-FLATTOP_TURNS   = 50_000       # Number of turns on the flat top
+FLATTOP_TURNS   = 40_000       # Number of turns on the flat top
+NUM_TRACKS      = 4            # Number of tracks of FLATTOP_TURNS, so total number of turns is FLATTOP_TURNS * NUM_TRACKS (asssuming acd is off)
 ACD_ON          = False        # Whether the ACD was used or not (Ignores the ramp up turns)
-
-if TOTAL_TRACKS > FLATTOP_TURNS:
-    raise ValueError(
-        f"Total number of tracks ({TOTAL_TRACKS}) must be less than the "
-        f"number of turns in the flat top ({FLATTOP_TURNS})."
-    )
 
 module_path = Path(__file__).absolute().parent.parent.parent
 print(f"Current module path: {module_path}")
@@ -56,17 +51,17 @@ ELEM_NAMES_FILE  = module_path / "data/elem_names.txt"          # File with elem
 TUNE_KNOBS_FILE  = module_path / "data/matched_tunes.txt"       # File with tune knobs
 
 # Simulation specifics
-BPM_RANGE        = "BPM.13R3.B1/BPM.12L5.B1"           # BPM selection range for tracking
+BPM_RANGE        = "BPM.13R3.B1/BPM.12L4.B1"           # BPM selection range for tracking
 BEAM_ENERGY      = 6800                                # Beam energy in GeV
 SEQ_NAME         = "lhcb1"                             # Sequence name in MAD-X (lowercase)
 FILTER_DATA      = True                               # Whether to filter data with a Kalman filter
 USE_NOISY_DATA   = True                               # Whether to use noisy data for optimisation
 
 X_BPM_START = "BPM.13R3.B1"  # Starting BPM for tracking
-X_BPM_END = "BPM.13L5.B1"    # Ending BPM for tracking
+X_BPM_END = "BPM.12L4.B1"    # Ending BPM for tracking
 
 Y_BPM_START = "BPM.14R3.B1"  # Starting BPM for tracking
-Y_BPM_END = "BPM.12L5.B1"    # Ending BPM for tracking
+Y_BPM_END = "BPM.12L4.B1"    # Ending BPM for tracking
 
 WINDOWS = [
     (X_BPM_START, X_BPM_END),

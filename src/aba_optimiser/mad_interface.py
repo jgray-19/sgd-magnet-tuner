@@ -20,7 +20,7 @@ class MadInterface:
         
         if discard_mad_output:
             kwargs['stdout'] = '/dev/null'
-            kwargs['redirect_sterr'] = True
+            kwargs['redirect_stderr'] = True
         self.mad = MAD(**kwargs)
         self._load_sequence()
 
@@ -98,7 +98,7 @@ end
 coord_names = {{ "x", "px", "y", "py", "t", "pt" }}
 py:send(knob_names)
 """)
-        knob_names = self.mad.recv()
+        knob_names = self.mad.recv('knob_names').eval()
         return knob_names
 
     def receive_knob_values(self) -> np.ndarray:
@@ -157,4 +157,5 @@ tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}
 
     def __del__(self):
         """Clean up the MAD-NG session."""
-        del self.mad
+        if hasattr(self, 'mad'):
+            del self.mad

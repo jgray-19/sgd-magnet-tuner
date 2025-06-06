@@ -4,7 +4,7 @@ from aba_optimiser.mad_interface import MadInterface
 from aba_optimiser.config import SEQUENCE_FILE, module_path, BPM_RANGE
 
 class PhaseSpaceDiagnostics:
-    def __init__(self, bpm, x_data, px_data, y_data, py_data, num_points=500):
+    def __init__(self, bpm, x_data, px_data, y_data, py_data, tws=None, num_points=500):
         self.bpm = bpm
         self.num_points = num_points
         self.x0 = 0#np.mean(x_data)
@@ -18,7 +18,13 @@ class PhaseSpaceDiagnostics:
         self.dpy = py_data - self.py0
 
         # Get Twiss parameters
-        self._load_twiss()
+        if tws is None:
+            self._load_twiss()
+        else:
+            self.betax = tws.loc[self.bpm, "beta11"]
+            self.alfax = tws.loc[self.bpm, "alfa11"]
+            self.betay = tws.loc[self.bpm, "beta22"]
+            self.alfay = tws.loc[self.bpm, "alfa22"]
 
         # Compute emittances
         self._compute_emittances()
@@ -31,21 +37,21 @@ class PhaseSpaceDiagnostics:
         
 
     def _load_twiss(self):
-        analysis_dir = module_path / 'analysis'
-        beta_phase_x = tfs.read(analysis_dir / "beta_phase_x.tfs", index="NAME")
-        beta_phase_y = tfs.read(analysis_dir / "beta_phase_y.tfs", index="NAME")
-        if self.bpm in beta_phase_x.index and self.bpm in beta_phase_y.index:
-            self.betax = beta_phase_x.loc[self.bpm, "BETX"]
-            self.alfax = beta_phase_x.loc[self.bpm, "ALFX"]
-            self.betay = beta_phase_y.loc[self.bpm, "BETY"]
-            self.alfay = beta_phase_y.loc[self.bpm, "ALFY"]
-        else:
-            mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
-            tws = mad_iface.run_twiss()
-            self.betax = tws.loc[self.bpm, "beta11"]
-            self.alfax = tws.loc[self.bpm, "alfa11"]
-            self.betay = tws.loc[self.bpm, "beta22"]
-            self.alfay = tws.loc[self.bpm, "alfa22"]
+        # analysis_dir = module_path / 'analysis'
+        # beta_phase_x = tfs.read(analysis_dir / "beta_phase_x.tfs", index="NAME")
+        # beta_phase_y = tfs.read(analysis_dir / "beta_phase_y.tfs", index="NAME")
+        # if False: #self.bpm in beta_phase_x.index and self.bpm in beta_phase_y.index:
+        #     self.betax = beta_phase_x.loc[self.bpm, "BETX"]
+        #     self.alfax = beta_phase_x.loc[self.bpm, "ALFX"]
+        #     self.betay = beta_phase_y.loc[self.bpm, "BETY"]
+        #     self.alfay = beta_phase_y.loc[self.bpm, "ALFY"]
+        # else:
+        mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
+        tws = mad_iface.run_twiss()
+        self.betax = tws.loc[self.bpm, "beta11"]
+        self.alfax = tws.loc[self.bpm, "alfa11"]
+        self.betay = tws.loc[self.bpm, "beta22"]
+        self.alfay = tws.loc[self.bpm, "alfa22"]
 
     def _compute_emittances(self):
         cov_x = np.cov(self.dx, self.dpx)

@@ -57,8 +57,8 @@ class Worker(Process):
         and difference matrices.
         """
         return f"""
-local dx_dk = table.new(num_particles[starting_bpm], 0)
-local dy_dk = table.new(num_particles[starting_bpm], 0)
+dx_dk = table.new(num_particles[starting_bpm], 0)
+dy_dk = table.new(num_particles[starting_bpm], 0)
 for i=1,num_particles[starting_bpm] do
     dx_dk[i] = matrix(#knob_names, win_lengths[starting_bpm])
     dy_dk[i] = matrix(#knob_names, win_lengths[starting_bpm])
@@ -75,9 +75,6 @@ for i = 1, num_particles[starting_bpm] do
         end
     end
 end
-py:send(dx_dk)
-py:send(dy_dk)
-
 py:send(sim_trk.x)
 py:send(sim_trk.y)
 collectgarbage()
@@ -209,18 +206,11 @@ end
 
         # Initialise MAD interface and load sequence
         mad_iface = MadInterface(
-            SEQUENCE_FILE, BPM_RANGE, #discard_mad_output=False
+            SEQUENCE_FILE, BPM_RANGE#, discard_mad_output=False
         )
         mad = mad_iface.mad
-        # mad_iface.mad["num_particles"] = self.num_particles
-        mad.send('num_particles = {}')
-        for start_bpm, num_parts in self.num_particles.items():
-            mad.send(f"num_particles['{start_bpm}'] = {num_parts}")
-
-        mad.send("win_lengths = {}")
-        for start_bpm, win_length in win_lengths.items():
-            mad.send(f"win_lengths['{start_bpm}'] = py:recv()")
-            mad.send(win_length)
+        mad['num_particles'] = self.num_particles
+        mad['win_lengths'] = win_lengths
 
         # Import required MAD-NG modules
         mad.load("MAD", "damap", "matrix")
@@ -256,13 +246,15 @@ end
                 mad.send("\n".join(update_string))
                 mad.send(track_code)
 
-                # This is a list of matrices, one for each particle, each with shape (n_knobs, nbpms)
-                # Stack per-particle matrices along a new axis so that dx/y_stack has shape (num_particles, n_knobs, nbpms)
-                dx_stack = np.stack(mad.recv(), axis=0)
-                dy_stack = np.stack(mad.recv(), axis=0)
-                
                 x_res = mad.recv().reshape(self.num_particles[start_bpm], win_lengths[start_bpm], order='F')
                 y_res = mad.recv().reshape(self.num_particles[start_bpm], win_lengths[start_bpm], order='F')
+
+                # This is a list of matrices, one for each particle, each with shape (n_knobs, nbpms)
+                # Stack per-particle matrices along a new axis so that dx/y_stack has shape (num_particles, n_knobs, nbpms)
+                dx_dk, dy_dk = mad.recv_vars('dx_dk', 'dy_dk', shallow_copy=True)
+                dx_stack = np.stack(dx_dk, axis=0)
+                dy_stack = np.stack(dy_dk, axis=0)
+
                 x_diffs = (x_res - x_comparisons[start_bpm]) * x_masks[start_bpm] * x_weights[start_bpm]
                 y_diffs = (y_res - y_comparisons[start_bpm]) * y_masks[start_bpm] * y_weights[start_bpm]
 

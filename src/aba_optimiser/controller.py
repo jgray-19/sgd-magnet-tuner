@@ -158,8 +158,12 @@ class Controller:
         )
 
         # Get the variances for each BPM
-        self.var_x = self.comparison_data.groupby("name")["var_x"].mean().to_numpy()
-        self.var_y = self.comparison_data.groupby("name")["var_y"].mean().to_numpy()
+        self.var_x = (
+            self.comparison_data.groupby("name", observed=True)["var_x"].mean().to_numpy()
+        )
+        self.var_y = (
+            self.comparison_data.groupby("name", observed=True)["var_y"].mean().to_numpy()
+        )
         print("Average variances for x and y BPMs:")
 
         self.bpm_idx = {name: i for i, name in enumerate(self.bpm_names)}
@@ -471,13 +475,13 @@ class Controller:
                     end="\n",
                 )
 
-                # if self.smoothed_grad_norm < 1e-8:
-                #     print(
-                #         f"\nGradient norm below threshold: "
-                #         f"{self.smoothed_grad_norm:.3e}. "
-                #         f"Stopping early at epoch {epoch}."
-                #     )
-                #     break
+                if self.smoothed_grad_norm < 5e-7:
+                    print(
+                        f"\nGradient norm below threshold: "
+                        f"{self.smoothed_grad_norm:.3e}. "
+                        f"Stopping early at epoch {epoch}."
+                    )
+                    break
 
         except KeyboardInterrupt:
             print(
