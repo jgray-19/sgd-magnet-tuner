@@ -1,65 +1,74 @@
+import re
+
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
 from aba_optimiser.config import (
-    STD_CUT,
-    WINDOWS,
+    MAGNET_RANGE,
     SEQUENCE_FILE,
-    BPM_RANGE,
 )
 from aba_optimiser.mad_interface import MadInterface
 from aba_optimiser.phase_space import PhaseSpaceDiagnostics
 
+regexpr = r"BPM\.([0-9]+)[RL][34]\.B1"
+
+
+def is_x_bpm(name: str) -> bool:
+    # Odd R3 and odd L4 BPMs are X BPMs
+    bpm_num = re.match(regexpr, name)
+    if bpm_num:
+        bpm_num = int(bpm_num.group(1))
+        return bpm_num % 2 == 1
+    raise ValueError(f"Invalid BPM name: {name}")
+
 
 def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
+    data = data.copy()
     data.set_index(["turn", "name"], inplace=True)
-    mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
+    mad_iface = MadInterface(SEQUENCE_FILE, MAGNET_RANGE)
     tws = mad_iface.run_twiss()
 
     # Get Twiss data
-    bpm_names = []
-    for start_bpm, _ in WINDOWS:
-        bpm_names.append(start_bpm)
-    bpm_names = list(set(bpm_names))
+    # bpm_names = [BPM_START, Y_BPM_START]
 
     # Pre-split dataframe for efficiency
-    bpm_groups = {
-        bpm: data.xs(bpm, level="name")
-        for bpm in bpm_names
-        if bpm in data.index.get_level_values("name")
-    }
+    # bpm_groups = {
+    #     bpm: data.xs(bpm, level="name")
+    #     for bpm in bpm_names
+    #     if bpm in data.index.get_level_values("name")
+    # }
     data = data.reset_index()
     data.set_index("turn", inplace=True)
 
     failed_turns = set()
     # Delete the turns for the failed BPMs
-    for bpm in tqdm(bpm_names, desc="Filtering BPMs"):
-        bpm_data = bpm_groups[bpm]
-        if bpm_data.empty:
-            print(f"Warning: No data available for BPM {bpm}")
-            continue
+    # for bpm in tqdm(bpm_names, desc="Filtering BPMs"):
+    #     bpm_data = bpm_groups[bpm]
+    #     if bpm_data.empty:
+    #         print(f"Warning: No data available for BPM {bpm}")
+    #         continue
 
-        # Subset to existing rows after drop
-        bpm_data = bpm_data[bpm_data.index.isin(data.index.get_level_values("turn"))]
+    #     # Subset to existing rows after drop
+    #     bpm_data = bpm_data[bpm_data.index.isin(data.index.get_level_values("turn"))]
 
-        if bpm_data.empty:
-            continue
+    #     if bpm_data.empty:
+    #         continue
 
-        x, px, y, py = (
-            bpm_data["x"].values,
-            bpm_data["px"].values,
-            bpm_data["y"].values,
-            bpm_data["py"].values,
-        )
-        ps_diag = PhaseSpaceDiagnostics(bpm, x, px, y, py, tws=tws)
-        residual_x, residual_y, std_x, std_y = ps_diag.compute_residuals()
+    #     x, px, y, py = (
+    #         bpm_data["x"].values,
+    #         bpm_data["px"].values,
+    #         bpm_data["y"].values,
+    #         bpm_data["py"].values,
+    #     )
+    #     ps_diag = PhaseSpaceDiagnostics(bpm, x, px, y, py, tws=tws)
+    #     residual_x, residual_y, std_x, std_y = ps_diag.compute_residuals()
 
-        full_idx = bpm_data.index
-        fail_x = full_idx[np.abs(residual_x) > std_x * STD_CUT]
-        fail_y = full_idx[np.abs(residual_y) > std_y * STD_CUT]
-        failed_turns.update(fail_x)
-        failed_turns.update(fail_y)
+    #     full_idx = bpm_data.index
+    #     fail_y = full_idx[np.abs(residual_y) > std_y]
+    #     fail_x = full_idx[np.abs(residual_x) > std_x]
+    #     failed_turns.update(fail_x)
+    #     failed_turns.update(fail_y)
 
     data.reset_index(inplace=True)
     filtered = data[
@@ -67,7 +76,7 @@ def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
     ].copy()  # Ensure filtered is a copy
 
     # Run through all the BPMs between the start and end, and set the weight_x and weight_y according to residuals
-    start_bpm, end_bpm = BPM_RANGE.split("/")
+    start_bpm, end_bpm = MAGNET_RANGE.split("/")
     start_bpm_idx = tws.index.get_loc(start_bpm)
     end_bpm_idx = tws.index.get_loc(end_bpm)
     tws = tws.iloc[start_bpm_idx : end_bpm_idx + 1]

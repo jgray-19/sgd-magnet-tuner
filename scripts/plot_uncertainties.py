@@ -12,8 +12,8 @@ import tfs
 
 from aba_optimiser.config import (
     ACD_ON,
-    BPM_RANGE,
     FLATTOP_TURNS,
+    MAGNET_RANGE,
     NUM_WORKERS,
     RAMP_UP_TURNS,
     SEQUENCE_FILE,
@@ -24,23 +24,22 @@ from aba_optimiser.mad_interface import MadInterface
 from aba_optimiser.utils import (
     filter_out_marker,
     read_knobs,
-    select_marker,
+    select_markers,
 )
-
-from aba_optimiser.worker import Worker
+from aba_optimiser.worker import build_worker
 
 run_start = time.time()  # start total timing
-start_bpm, end_bpm = BPM_RANGE.split("/")
+start_bpm, end_bpm = MAGNET_RANGE.split("/")
 
 track_data = tfs.read(TRACK_DATA_FILE)
-start_data = select_marker(track_data, start_bpm)
+start_data = select_markers(track_data, start_bpm)
 comparison_data = track_data.copy()
 if "BPM" not in start_bpm:
     comparison_data = filter_out_marker(comparison_data, start_bpm)
 if "BPM" not in end_bpm:
     comparison_data = filter_out_marker(comparison_data, end_bpm)
 
-mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
+mad_iface = MadInterface(SEQUENCE_FILE, MAGNET_RANGE)
 tws = mad_iface.run_twiss()
 start_bpm_idx = tws.index.get_loc(start_bpm)
 end_bpm_idx = tws.index.get_loc(end_bpm)
@@ -80,7 +79,7 @@ for num_files in num_files_list:
     workers: list[mp.Process] = []
     for i, batch in enumerate(batches):
         parent, child = mp.Pipe()
-        w = Worker(i, batch, child, comparison_data, start_data, beta_x, beta_y)
+        w = build_worker(i, batch, child, comparison_data, start_data, beta_x, beta_y)
         w.start()
         parent_conns.append(parent)
         workers.append(w)

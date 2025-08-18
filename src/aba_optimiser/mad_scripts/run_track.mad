@@ -1,0 +1,47 @@
+! run_track.mad
+
+! Assumes the following variables are defined:
+! loaded_sequence: the sequence to be used for tracking
+! num_particles: a table with the number of particles for each starting bpm
+! x: a list of vectors to store the x positions of the simulation
+! y: a list of vectors to store the y positions of the simulation
+! dx_dk: a list of matrices to store the gradients of the x w.r.t parameters
+! dy_dk: a list of matrices to store the gradients of the y w.r.t parameters
+! knob_names: a table with the names of the knobs
+! da_x0_c: a table with the initial conditions for each particle
+! range: the range of elements to track as a string
+! vector: a MAD vector object for creating vectors
+! matrix: a MAD matrix object for creating matrices
+! py: a Python interface object for sending data
+
+assert(
+    loaded_sequence and num_particles and x and y and dx_dk and dy_dk and
+    n_run_turns and da_x0_c and observe_from_turn and save_data and
+    observe_count,
+    "Missing required variables for tracking"
+)
+
+for i=1,num_particles do
+    x[i]:zeros()
+    y[i]:zeros()
+    dx_dk[i]:zeros()
+    dy_dk[i]:zeros()
+end
+
+! Reset the observe count in the save_data
+observe_count = 1
+local _, mflw= track{
+    sequence=loaded_sequence,
+    X0=da_x0_c,
+    nturn=n_run_turns,
+    save=false,
+    observe=observe_from_turn,
+    atexit=save_data,
+    range=tracking_range,
+}
+assert(mflw.tpar == mflw.npar, "Lost some particles during tracking")
+py:send(x, true)
+py:send(y, true)
+py:send(dx_dk, true)
+py:send(dy_dk, true)
+!collectgarbage("collect")  -- Clean up memory after sending data

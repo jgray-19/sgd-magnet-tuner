@@ -1,0 +1,56 @@
+! run_track_init.mad
+
+! Assumes the following variables are defined:
+! loaded_sequence: the sequence to be used for tracking
+! num_particles: a table with the number of particles for each starting bpm
+! nbpms: the number of BPMs to track
+! knob_names: a table with the names of the knobs
+! vector: a MAD vector object for creating vectors
+! matrix: a MAD matrix object for creating matrices
+! py: a Python interface object for sending data
+
+assert(
+    num_particles and nbpms and
+    knob_names and vector and matrix and py and n_compare_turns,
+    "Missing required variables for initialising"
+)
+
+num_knobs = #knob_names
+set_range = vector(num_knobs):seq() ! I want to set 1 to num_knobs
+! I want to get 7 to 7 + num_knobs. idx 1 is the scalar. idx 2 - 7 is dx/dx, dx/px, dx/dy, dx/dpy, dx/dt, dx/dpt
+get_range = vector(num_knobs):seq(7)
+
+! Create tables to hold the x, y, dx_dk, and dy_dk data for each particle.
+! Specifying how many indexable slots we want in each table. (lujit)
+x = table.new(num_particles, 0)
+y = table.new(num_particles, 0)
+dx_dk = table.new(num_particles, 0)
+dy_dk = table.new(num_particles, 0)
+
+for i=1,num_particles do
+    x[i] = vector(nbpms*n_compare_turns)
+    y[i] = vector(nbpms*n_compare_turns)
+    dx_dk[i] = matrix(num_knobs, nbpms*n_compare_turns)
+    dy_dk[i] = matrix(num_knobs, nbpms*n_compare_turns)
+end
+
+function get_knob_vec(xy_damap)
+    local all_first_deriv = xy_damap:getvec(1, num_knobs+7)
+    return all_first_deriv:getvec(get_range) ! Remove x, px, y, py, t, pt
+end
+
+observe_count = 1
+function save_data(elm, mflw, _, slc)
+    local turn in mflw
+    -- Observe the BPMs at the specified intervals
+    if slc == -2 and elm:is_observed() and turn >= mflw.observe then
+        for i=1,num_particles do
+            x[i]:seti(observe_count, mflw[i].x:get0()) ! get0 returns the scalar
+            y[i]:seti(observe_count, mflw[i].y:get0()) ! get0 returns the scalar
+            dx_dk[i]:setsub(set_range, observe_count, get_knob_vec(mflw[i].x))
+            dy_dk[i]:setsub(set_range, observe_count, get_knob_vec(mflw[i].y))
+        end
+        -- Increment the index for the next bpm
+        observe_count = observe_count + 1
+    end
+end

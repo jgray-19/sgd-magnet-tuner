@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 import datetime
+import logging
 import multiprocessing as mp
+import random
 import time
-from multiprocessing.connection import Connection
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -12,50 +17,63 @@ from aba_optimiser.adam import AdamOptimiser
 from aba_optimiser.amsgrad import AMSGradOptimiser
 from aba_optimiser.config import (
     ACD_ON,
-    BPM_RANGE,
+    BPM_START_POINTS,
     DECAY_EPOCHS,
-    ELEM_NAMES_FILE,
     FILTER_DATA,
-    FILTERED_FILE,
+    FLATTOP_TURNS,
     GRAD_NORM_ALPHA,
-    # GRAD_PENALTY_COEFF,
-    # REL_K1_STD_DEV,
     KNOB_TABLE,
+    MAGNET_RANGE,
     MAX_EPOCHS,
     MAX_LR,
     MIN_LR,
-    # MOMENTUM_STD_DEV,
-    # MIN_FRACTION_MAX,
+    N_COMPARE_TURNS,
+    N_RUN_TURNS,
     NOISE_FILE,
+    NUM_TRACKS,
     NUM_WORKERS,
     OPTIMISER_TYPE,
     OUTPUT_KNOBS,
     POSITION_STD_DEV,
-    PXPY_MIN,
     RAMP_UP_TURNS,
+    # BPM_START_POINTS,
+    RUN_ARC_BY_ARC,
     SEQUENCE_FILE,
-    TOTAL_TRACKS,
     TRACK_DATA_FILE,
     TRACKS_PER_WORKER,
     TRUE_STRENGTHS,
     USE_NOISY_DATA,
     WARMUP_EPOCHS,
     WARMUP_LR_START,
-    WINDOWS,
-    X_BPM_START,
-    XY_MIN,
-    Y_BPM_START,
 )
 from aba_optimiser.mad_interface import MadInterface
 from aba_optimiser.scheduler import LRScheduler
 from aba_optimiser.utils import (
-    read_elem_names,
     read_knobs,
     save_results,
     scientific_notation,
-    select_marker,
+    select_markers,
 )
-from aba_optimiser.worker import Worker
+from aba_optimiser.worker import build_worker
+
+if TYPE_CHECKING:
+    from multiprocessing.connection import Connection
+
+LOGGER = logging.getLogger(__name__)
+
+
+def circular_far_samples(arr, k, start_offset=0):
+    """
+    Pick k indices as far apart as possible on a circular array.
+    k must be <= len(arr). start_offset rotates the selection.
+    """
+    n = len(arr)
+    if k > n:
+        raise ValueError("k must be <= len(arr)")
+    step = n / k
+    # bin centers → unique indices even when step is non-integer
+    idx = (np.floor((np.arange(k) + 0.5) * step + start_offset) % n).astype(int)
+    return arr[idx], idx
 
 
 class Controller:
@@ -64,49 +82,57 @@ class Controller:
     """
 
     def __init__(self):
-        # Read element names using the util function; each line now becomes a list of aliases.
-        self.elem_pos, _ = read_elem_names(ELEM_NAMES_FILE)
         # Read true strengths
         self.true_strengths = read_knobs(TRUE_STRENGTHS)
 
         # Initialise MAD interface and knobs
-        self.mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
+        self.mad_iface = MadInterface(
+            SEQUENCE_FILE, MAGNET_RANGE, discard_mad_output=True
+        )
         self.knob_names = self.mad_iface.knob_names
+        self.elem_spos = self.mad_iface.elem_spos
 
         # Run a twiss and to get the beta functions
         tws = self.mad_iface.run_twiss()
-        print("Found tunes:", tws.q1, tws.q2)
+        LOGGER.info(f"Found tunes: {tws['q1']}, {tws['q2']}")
 
         # Remove all rows that are before the start BPM and after the end BPM
-        start_bpm, end_bpm = BPM_RANGE.split("/")
-        start_bpm_idx = tws.index.get_loc(start_bpm)
-        end_bpm_idx = tws.index.get_loc(end_bpm)
-        tws = tws.iloc[start_bpm_idx : end_bpm_idx + 1]
-
-        self.all_bpms = tws.index.tolist()
-        self.beta_x = tws["beta11"].to_numpy()
-        self.beta_y = tws["beta22"].to_numpy()
-
-        assert len(self.beta_x) == len(self.beta_y), (
-            "Beta functions are not the same length"
-        )
-        assert len(self.beta_x) == self.mad_iface.nbpms, (
-            "Beta functions do not match the number of BPMs"
-        )
-
-        init_vals = self.mad_iface.receive_knob_values()
-        self.current_knobs = dict(zip(self.knob_names, init_vals))
-
-        # Validate
-        missing = set(self.knob_names) ^ set(self.true_strengths)
-        if missing:
-            raise ValueError(
-                f"Mismatch between model knobs and true strengths: {missing}"
+        all_bpms = tws.index.to_numpy()
+        if RUN_ARC_BY_ARC:
+            LOGGER.warning(
+                "Arc by arc chosen, ignoring N_RUN_TURNS, OBSERVE_TURNS_FROM, N_COMPARE_TURNS"
             )
+            for bpm in BPM_START_POINTS:
+                if bpm not in all_bpms:
+                    raise ValueError(f"BPM {bpm} not found in the sequence.")
+            self.bpm_start_points = BPM_START_POINTS
+        else:
+            LOGGER.warning(
+                "Whole ring chosen, BPM start points ignored, taking an even distribution based on NUM_WORKERS"
+            )
+            self.bpm_start_points, _ = circular_far_samples(
+                all_bpms, min(NUM_WORKERS, len(all_bpms))
+            )
+
+        initial_strengths = self.mad_iface.receive_knob_values()
+        self.initial_strengths = initial_strengths
+        self.current_knobs = dict(zip(self.knob_names, initial_strengths))
+
+        if RUN_ARC_BY_ARC:
+            self.true_strengths = {
+                knob: self.true_strengths[knob] for knob in self.knob_names
+            }
+        else:
+            # Validate
+            missing = set(self.knob_names) ^ set(self.true_strengths)
+            if missing:
+                raise ValueError(
+                    f"Mismatch between model knobs and true strengths: {missing}"
+                )
 
         # Set up optimiser and scheduler
         optimiser_kwargs = {
-            "shape": init_vals.shape,
+            "shape": initial_strengths.shape,
             "beta1": 0.9,
             "beta2": 0.999,
             "weight_decay": 0.0,
@@ -127,7 +153,13 @@ class Controller:
         if USE_NOISY_DATA is False:
             track_data = tfs.read(TRACK_DATA_FILE)
         elif FILTER_DATA:
+            from aba_optimiser.config import FILTERED_FILE
+
             track_data = pd.read_feather(FILTERED_FILE)
+
+            # from aba_optimiser.config import KALMAN_FILE
+
+            # track_data = pd.read_feather(KALMAN_FILE)
         else:
             track_data = pd.read_feather(NOISE_FILE)
 
@@ -135,27 +167,8 @@ class Controller:
         track_data["var_x"] = (POSITION_STD_DEV) ** 2
         track_data["var_y"] = (POSITION_STD_DEV) ** 2
 
-        try:
-            start_idx = self.all_bpms.index(start_bpm)
-            end_idx = self.all_bpms.index(end_bpm)
-        except ValueError:
-            raise ValueError("Start or end BPM not found in the BPM list.")
-
-        # Get the markers to keep
-        markers_to_keep = self.all_bpms[start_idx : end_idx + 1]
-        assert "BPM" in end_bpm, "End BPM not a BPM"
-        assert "BPM" in start_bpm, "Start BPM not a BPM"
-
         # Filter data out BPMs that are not used
-        self.comparison_data = track_data[
-            track_data["name"].isin(markers_to_keep)
-        ].copy()
-        del track_data  # Free memory
-
-        self.bpm_names = list(self.comparison_data["name"].unique())
-        assert len(self.bpm_names) == self.mad_iface.nbpms, (
-            "BPM names from track data do not match the number of BPMs in the sequence"
-        )
+        self.comparison_data = select_markers(track_data, all_bpms)
 
         # Get the variances for each BPM
         self.var_x = (
@@ -168,85 +181,26 @@ class Controller:
             .mean()
             .to_numpy()
         )
-        print("Average variances for x and y BPMs:")
-
-        self.bpm_idx = {name: i for i, name in enumerate(self.bpm_names)}
-        self.window_slices: dict[str, slice] = {}
-        for start, end in WINDOWS:
-            assert start not in self.window_slices.keys(), (
-                f"Start BPM {start} already exists in window slices."
-            )
-            i0 = self.bpm_idx[start]
-            i1 = self.bpm_idx[end]
-            assert i0 < i1, "Start BPM is after or the same as End BPM"
-            self.window_slices[start] = slice(i0, i1 + 1)
-
-        self.smoothed_grad_norm = None  # Initialize smoothed gradient norm
-
-        # no_noise_data = tfs.read(TRACK_DATA_FILE)
-        # no_noise_data["var_x"] = (POSITION_STD_DEV) ** 2
-        # no_noise_data["var_y"] = (POSITION_STD_DEV) ** 2
-        # start_bpm_df_x = no_noise_data.loc[
-        #     no_noise_data["name"] == X_BPM_START
-        # ]
-        # start_bpm_df_y = no_noise_data.loc[
-        #     no_noise_data["name"] == Y_BPM_START
-        # ]
-        # del no_noise_data  # Free memory
-
-        start_bpm_df_x = self.comparison_data.loc[
-            self.comparison_data["name"] == X_BPM_START
-        ]
-        start_bpm_df_y = self.comparison_data.loc[
-            self.comparison_data["name"] == Y_BPM_START
-        ]
-        self.start_data_dict = {
-            X_BPM_START: select_marker(start_bpm_df_x, X_BPM_START),
-            Y_BPM_START: select_marker(start_bpm_df_y, Y_BPM_START),
-        }
-
-        def _cut_coordinates(df: pd.DataFrame, coord: str) -> list[int]:
-            x_min = XY_MIN if coord == "x" else XY_MIN / 2
-            y_min = XY_MIN if coord == "y" else XY_MIN / 2
-            px_min = PXPY_MIN if coord == "x" else PXPY_MIN / 2
-            py_min = PXPY_MIN if coord == "y" else PXPY_MIN / 2
-            return df.loc[
-                (abs(df["x"]) > x_min)
-                & (abs(df["y"]) > y_min)
-                & (abs(df["px"]) > px_min)
-                & (abs(df["py"]) > py_min),
-                "turn",
-            ].tolist()
-
-        self.available_x = _cut_coordinates(start_bpm_df_x, "x")
-        self.available_y = _cut_coordinates(start_bpm_df_y, "y")
 
         # Convert every entry to an integer
-        self.available_x = [int(turn) for turn in self.available_x]
-        self.available_y = [int(turn) for turn in self.available_y]
+        self.turn_list = [
+            int(turn)
+            for turn in self.comparison_data["turn"].unique()
+            if turn < FLATTOP_TURNS * NUM_TRACKS - N_RUN_TURNS
+        ]
 
-        num_turns_needed = NUM_WORKERS * TRACKS_PER_WORKER
-        if (
-            len(self.available_x) < num_turns_needed
-            and len(self.available_y) < num_turns_needed
-        ):
+        num_turns_needed = TRACKS_PER_WORKER
+        if len(self.turn_list) < num_turns_needed:
             raise ValueError(
                 f"Not enough available turns for x or y BPMs. "
-                f"Need {num_turns_needed}, but found {len(self.available_x)} for x and {len(self.available_y)} for y."
+                f"Need {num_turns_needed}, but found {len(self.turn_list)} turns."
             )
-        print(
-            f"Available x turns: {len(self.available_x)}, from {len(start_bpm_df_x)} total x turns.\n"
-            f"Available y turns: {len(self.available_y)}, from {len(start_bpm_df_y)} total y turns."
-        )
 
         # Remove turns < RAMP_UP_TURNS if ACD_ON
         if ACD_ON:
-            self.available_x = [
-                turn for turn in self.available_x if turn >= RAMP_UP_TURNS
-            ]
-            self.available_y = [
-                turn for turn in self.available_y if turn >= RAMP_UP_TURNS
-            ]
+            self.turn_list = [turn for turn in self.turn_list if turn >= RAMP_UP_TURNS]
+
+        self.smoothed_grad_norm = None  # Initialize smoothed gradient norm
 
     def _write_results(self, uncertainties) -> None:
         """Write final knob strengths and markdown table to file."""
@@ -279,12 +233,9 @@ class Controller:
         # Order rows by relative difference (descending order)
         rows.sort(key=lambda row: abs(row["reldiff"]), reverse=True)
 
-        # Write the markdown table with an extra index column
-        with open(KNOB_TABLE, "w") as f:
+        with Path(KNOB_TABLE).open("w") as f:
             f.write(
                 "| Index |   Knob   |   True   |   Diff   | Uncertainty | Relative Diff | Relative Uncertainty |\n"
-            )
-            f.write(
                 "|-------|----------|----------|----------|-------------|---------------|----------------------|\n"
             )
             for row in rows:
@@ -296,46 +247,38 @@ class Controller:
                     f"{scientific_notation(row['reldiff'])}|"
                     f"{scientific_notation(row['rel_uncertainty'])}|\n"
                 )
-        print("Optimization complete.")
+        LOGGER.info("Optimisation complete.")
 
     def run(self) -> None:
         """Execute the optimisation loop."""
         run_start = time.time()  # start total timing
-        x_tracks_per_worker = min(
-            len(self.available_x) // NUM_WORKERS, TRACKS_PER_WORKER
-        )
-        y_tracks_per_worker = min(
-            len(self.available_y) // NUM_WORKERS, TRACKS_PER_WORKER
-        )
-        x_batches = [
-            self.available_x[i * x_tracks_per_worker : (i + 1) * x_tracks_per_worker]
+        # Randomize available turns for x and y
+        tracks_per_worker = min(len(self.turn_list) // NUM_WORKERS, TRACKS_PER_WORKER)
+        self.turn_list = random.sample(self.turn_list, tracks_per_worker * NUM_WORKERS)
+        batches = [
+            self.turn_list[i * tracks_per_worker : (i + 1) * tracks_per_worker]
             for i in range(NUM_WORKERS)
         ]
-        y_batches = [
-            self.available_y[i * y_tracks_per_worker : (i + 1) * y_tracks_per_worker]
-            for i in range(NUM_WORKERS)
-        ]
-        for i, batch in enumerate(x_batches + y_batches):
+        for i, batch in enumerate(batches):
             assert batch, (
                 f"Batch {i} is empty. Check TRACKS_PER_WORKER and NUM_WORKERS."
             )
-        total_tracks = NUM_WORKERS * (x_tracks_per_worker + y_tracks_per_worker) / 2
+        total_turns = NUM_WORKERS * tracks_per_worker * N_COMPARE_TURNS
 
         # Start worker processes
         parent_conns: list[Connection] = []
         workers: list[mp.Process] = []
         for i in range(NUM_WORKERS):
-            batch_x = x_batches[i]
-            batch_y = y_batches[i]
+            batch_i = batches[i]
             parent, child = mp.Pipe()
-            w = Worker(
+            # start_bpm = BPM_START_POINTS[i % len(BPM_START_POINTS)]
+            start_bpm = self.bpm_start_points[i % len(self.bpm_start_points)]
+            w = build_worker(
                 child,
                 i,
-                batch_x,
-                batch_y,
+                batch_i,
                 self.comparison_data,
-                self.start_data_dict,
-                self.window_slices,
+                start_bpm,
             )
             w.start()
             parent_conns.append(parent)
@@ -346,16 +289,6 @@ class Controller:
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         writer = SummaryWriter(log_dir=f"runs/{ts}_opt")
 
-        # Initialize live plot for relative differences (log scale)
-        # import matplotlib.pyplot as plt
-
-        # plt.ion()
-        # rel_diff_history = {k: [] for k in self.knob_names}
-        # fig, ax = plt.subplots()
-        # Initialize new figure for consecutive differences (delta)
-        # fig_delta, ax_delta = plt.subplots()
-
-        # current_cell = 0
         try:
             # Main optimisation
             for epoch in range(MAX_EPOCHS):
@@ -376,9 +309,9 @@ class Controller:
                     _, grad, loss = conn.recv()
                     agg_grad = grad if agg_grad is None else agg_grad + grad
                     total_loss += loss
-                total_loss /= total_tracks
+                total_loss /= total_turns
 
-                agg_grad = agg_grad.flatten() / total_tracks
+                agg_grad = agg_grad.flatten() / total_turns
 
                 param_vec = np.array([self.current_knobs[k] for k in self.knob_names])
                 new_vec = self.optimiser.step(param_vec, agg_grad, lr)
@@ -406,57 +339,6 @@ class Controller:
                     else 0
                     for k, diff in zip(self.knob_names, true_diff)
                 ]
-                # ----- Live plot update (non-blocking) -----
-                # for i, k in enumerate(self.knob_names):
-                #     rel_diff_history[k].append(rel_diff[i])
-                # if (epoch + 1) % 10 == 0:
-                #     # Update log scale figure
-                #     ax.clear()
-                #     for i, k in enumerate(self.knob_names):
-                #         ax.plot(rel_diff_history[k], label=str(k))
-                #         if rel_diff_history[k]:
-                #             x_val = len(rel_diff_history[k]) - 1
-                #             ax.text(
-                #                 x_val,
-                #                 rel_diff_history[k][-1],
-                #                 str(i),
-                #                 ha="left",
-                #                 va="center",
-                #                 fontsize="small",
-                #             )
-                #     ax.set_xlabel("Epoch")
-                #     ax.set_ylabel("Relative Difference")
-                #     ax.set_yscale("log", nonpositive="clip")
-                #     ax.set_ylim(1e-6, 1e-3)
-
-                #     # Update delta (difference) plot to show only the last 300 results
-                #     ax_delta.clear()
-                #     for i, k in enumerate(self.knob_names):
-                #         # Use only last 300 results, if available
-                #         history = rel_diff_history[k]
-                #         if len(history) > 300:
-                #             history_tail = history[-300:]
-                #             x_vals = range(len(history) - 300, len(history) - 1)
-                #         else:
-                #             history_tail = history
-                #             x_vals = range(1, len(history))
-                #         # Calculate differences between consecutive elements.
-                #         diffs = np.diff(history_tail)
-                #         if diffs.size > 0:
-                #             ax_delta.plot(x_vals, diffs)
-                #             ax_delta.text(
-                #                 x_vals[-1],
-                #                 diffs[-1],
-                #                 str(i),
-                #                 ha="left",
-                #                 va="center",
-                #                 fontsize="small",
-                #             )
-                #     # Draw a horizontal line at y=0
-                #     ax_delta.axhline(0, color="red", linestyle="--")
-                #     ax_delta.set_xlabel("Epoch (delta index)")
-
-                # plt.pause(0.001)
 
                 # ----------------------------------------------
                 true_diff = np.sum(true_diff)
@@ -471,7 +353,7 @@ class Controller:
                 epoch_time = time.time() - epoch_start
                 total_time = time.time() - run_start
 
-                print(
+                LOGGER.info(
                     f"\rEpoch {epoch}: "
                     f"loss={total_loss:.3e}, "
                     f"grad_norm={grad_norm:.3e}, "
@@ -480,11 +362,9 @@ class Controller:
                     f"lr={lr:.3e}, "
                     f"epoch_time={epoch_time:.3f}s, "
                     f"total_time={total_time:.3f}s",
-                    end="\n",
                 )
-
-                if self.smoothed_grad_norm < 5e-7:
-                    print(
+                if self.smoothed_grad_norm < 1e-8:
+                    LOGGER.info(
                         f"\nGradient norm below threshold: "
                         f"{self.smoothed_grad_norm:.3e}. "
                         f"Stopping early at epoch {epoch}."
@@ -492,20 +372,22 @@ class Controller:
                     break
 
         except KeyboardInterrupt:
-            print(
+            logging.warning(
                 "\nKeyboardInterrupt detected. Terminating early and writing results."
             )
         else:
             # fig.savefig(f"runs/{ts}_relative_difference.png")
-            print("\nTerminating workers...")
-            H_global = np.zeros((len(self.knob_names), len(self.knob_names)))
+            logging.info("\nTerminating workers...")
+            h_global = np.zeros((len(self.knob_names), len(self.knob_names)))
             for conn in parent_conns:
                 conn.send(None)  # Signal workers to stop the training loop
 
             for conn in parent_conns:
-                H_global += conn.recv()
+                h_global += conn.recv()
 
-            cov = np.linalg.inv(H_global)
+            cov = np.linalg.inv(h_global)
+            # Have zero uncertainty for now
+            # cov = np.zeros_like(h_global)
             comb_uncertainty = np.sqrt(np.diag(cov))
 
             for w in workers:
@@ -520,39 +402,97 @@ class Controller:
         import numpy as np
 
         knob_names = self.knob_names
+        initial_vals = np.array(
+            [self.initial_strengths[i] for i in range(len(knob_names))]
+        )
         final_vals = np.array([self.current_knobs[k] for k in knob_names])
         true_vals = np.array([self.true_strengths[k] for k in knob_names])
         uncertainties = np.array(uncertainties)
 
-        # Calculate the relative difference between final and true values
-        # and scale uncertainties accordingly (avoid division by zero)
-        relative_diff = np.abs(final_vals - true_vals) / np.abs(true_vals)
-        relative_uncertainties = np.abs(uncertainties) / np.abs(true_vals)
+        # Calculate the relative differences
+        initial_relative_diff = np.abs(initial_vals - true_vals) / np.abs(true_vals)
+        final_relative_diff = np.abs(final_vals - true_vals) / np.abs(true_vals)
 
         x = np.arange(len(knob_names))
-        width = 0.5  # width of the bars
+        width = 0.35  # width of the bars
 
-        fig, ax = plt.subplots(figsize=(12, 6))
+        fig, ax = plt.subplots(figsize=(14, 8))
 
-        # Plot the relative difference as a single bar with error bars set to relative uncertainties
+        # Plot both initial and final relative differences as side-by-side bars
         ax.bar(
-            x,
-            relative_diff,
+            x - width / 2,
+            initial_relative_diff,
+            width,
+            color="lightcoral",
+            label="Initial Relative Difference",
+        )
+        ax.bar(
+            x + width / 2,
+            final_relative_diff,
             width,
             color="mediumpurple",
-            yerr=relative_uncertainties,
-            capsize=5,
+            label="Final Relative Difference",
         )
 
         ax.set_xlabel("Knob Names")
         ax.set_ylabel("Relative Difference")
-        ax.set_title("Relative Difference between Final and True Knob Strengths")
+        ax.set_title(
+            "Initial vs Final Relative Difference between Knob Strengths and True Values"
+        )
         ax.set_xticks(x)
         ax.set_xticklabels(knob_names, rotation=45, ha="right")
+        ax.legend()
+        ax.grid(axis="y", alpha=0.3)
+        fig.savefig("plots/relative_difference_comparison.png", bbox_inches="tight")
 
+        # Original single bar plot for final relative differences only
+        plt.figure(figsize=(12, 6))
+        plt.bar(
+            x,
+            final_relative_diff,
+            width=0.5,
+            color="mediumpurple",
+            # yerr=relative_uncertainties,
+            capsize=5,
+        )
+        plt.xlabel("Knob Names")
+        plt.ylabel("Relative Difference")
+        plt.title("Relative Difference between Final and True Knob Strengths")
+        plt.xticks(x, knob_names, rotation=45, ha="right")
+        plt.grid(axis="y", alpha=0.3)
+        plt.tight_layout()
+        plt.savefig("plots/relative_difference_plot.png", bbox_inches="tight")
+
+        # Position plots comparing initial and final
+        plt.figure(figsize=(12, 6))
+        plt.plot(
+            self.elem_spos,
+            initial_relative_diff,
+            "o",
+            label="Initial Relative Difference",
+            color="lightcoral",
+        )
+        plt.plot(
+            self.elem_spos,
+            final_relative_diff,
+            "o",
+            label="Final Relative Difference",
+            color="mediumpurple",
+        )
+        plt.xlabel("Element Position")
+        plt.ylabel("Relative Difference")
+        plt.title("Initial vs Final Relative Difference vs Element Position")
+        plt.legend()
+        plt.grid()
+        plt.tight_layout()
+        plt.savefig(
+            "plots/relative_difference_vs_position_comparison.png", bbox_inches="tight"
+        )
+
+        # Original position plot for final only
         plt.figure()
-        # plt.plot(self.elem_pos, relative_uncertainties, "o", label="Uncertainty")
-        plt.plot(self.elem_pos, relative_diff, "o", label="Relative Difference")
+        # plt.plot(self.spos_list, relative_uncertainties, "o", label="Uncertainty")
+        plt.plot(self.elem_spos, final_relative_diff, "o", label="Relative Difference")
         plt.xlabel("Element Position")
         plt.ylabel("Value")
         # plt.title("Uncertainty and Relative Difference vs Element Position")
@@ -561,6 +501,7 @@ class Controller:
         plt.grid()
 
         plt.tight_layout()
+        plt.savefig("plots/relative_difference_vs_position.png", bbox_inches="tight")
         plt.show()
 
 

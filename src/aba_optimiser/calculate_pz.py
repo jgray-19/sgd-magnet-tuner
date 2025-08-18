@@ -6,11 +6,9 @@ import numpy as np
 
 from aba_optimiser.config import (
     MAGNET_RANGE,
-    # BPM_START,
     POSITION_STD_DEV,
     SEQ_NAME,
     SEQUENCE_FILE,
-    # Y_BPM_START,
 )
 from aba_optimiser.mad_interface import MadInterface
 from aba_optimiser.utils import next_bpm_to_pi_2, prev_bpm_to_pi_2
@@ -18,62 +16,43 @@ from aba_optimiser.utils import next_bpm_to_pi_2, prev_bpm_to_pi_2
 if TYPE_CHECKING:
     import tfs
 
-OUT_COLS = ["name", "turn", "x", "px", "y", "py"]
 
-
-def make_noisy_track_data(
-    orig_data: tfs.TfsDataFrame, seed=42, info=True
+def calculate_pz(
+    orig_data: tfs.TfsDataFrame,
+    inject_noise: bool = True,
+    tws: None | tfs.TfsDataFrame = None,
+    info: bool = True,
+    rng: np.random.Generator | None = None,
 ) -> tuple[tfs.TfsDataFrame, tfs.TfsDataFrame]:
     """
     Generates two noisy DataFrames (data_p, data_n) based on config values.
     Prioritizes computation speed and avoids unnecessary RAM usage.
     """
-    rng = np.random.default_rng(seed)
+    out_cols = ["name", "turn", "x", "px", "y", "py"]
+    # np.random.seed(seed)
+
     # 1. READ TRACK DATA + ADD NOISE (only x/y, in-place)
-    for col in OUT_COLS:
-        if col not in orig_data.columns:
+    for col in out_cols:
+        if col not in orig_data.columns and (info or col not in ["px", "py"]):
             raise ValueError(f"Column '{col}' not found in the original data.")
     data = orig_data.copy(deep=True)  # share underlying data, just new view
 
-    # is_doros_bpm = data["name"].str.endswith("DOROS")
-    # start_bpms = (data["name"] == X_BPM_START) | (data["name"] == Y_BPM_START)
-    # low_noise_bpms = is_doros_bpm | start_bpms
-    # num_low_noise_bpms = low_noise_bpms.sum()
-    # num_high_noise_bpms = (~low_noise_bpms).sum()
+    if rng is None:
+        rng = np.random.default_rng()  # Use new Generator API
 
-    # data.loc[low_noise_bpms, "x"] = data.loc[low_noise_bpms, "x"] + rng.normal(
-    #     0, POSITION_STD_DEV / 10, size=num_low_noise_bpms
-    # )
-    # data.loc[low_noise_bpms, "y"] = data.loc[low_noise_bpms, "y"] + rng.normal(
-    #     0, POSITION_STD_DEV / 10, size=num_low_noise_bpms
-    # )
-
-    # data.loc[~low_noise_bpms, "x"] = data.loc[~low_noise_bpms, "x"] + rng.normal(
-    #     0, POSITION_STD_DEV, size=num_high_noise_bpms
-    # )
-    # data.loc[~low_noise_bpms, "y"] = data.loc[~low_noise_bpms, "y"] + rng.normal(
-    #     0, POSITION_STD_DEV, size=num_high_noise_bpms
-    # )
-    data.loc[:, "x"] = data.loc[:, "x"] + rng.normal(
-        0, POSITION_STD_DEV, size=data.shape[0]
-    )
-    data.loc[:, "y"] = data.loc[:, "y"] + rng.normal(
-        0, POSITION_STD_DEV, size=data.shape[0]
-    )
-
-    # Add weight_x and weight_y = 1 for all rows
-    data["weight_x"] = 1.0
-    data["weight_y"] = 1.0
-
-    # Now the data needs to be discretised to simulate a real BPM measurement.
-    # The unit of discretisation is 2.333e-5. But discretise to these values: ..., -3.333e-5, -1e-5, 1.333e-5, 3.666e-5, ...
-    # data["x"] = np.round((data["x"] + 1e-5) / 2.333e-5) * 2.333e-5 - 1e-5
-    # data["y"] = np.round((data["y"] + 1e-5) / 2.333e-5) * 2.333e-5 - 1e-5
+    if inject_noise:
+        data["x"] = orig_data["x"] + rng.normal(
+            0, POSITION_STD_DEV, size=len(orig_data)
+        )
+        data["y"] = orig_data["y"] + rng.normal(
+            0, POSITION_STD_DEV, size=len(orig_data)
+        )
 
     # 2. INITIALISE MAD-X & GET TWISS (small, only once)
-    mad = MadInterface(SEQUENCE_FILE, MAGNET_RANGE)
-    mad.mad.send(f"tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}")
-    tws = mad.mad.tws.to_df().set_index("name")
+    if tws is None:
+        mad = MadInterface(SEQUENCE_FILE, MAGNET_RANGE)
+        mad.mad.send(f"tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}")
+        tws = mad.mad.tws.to_df().set_index("name")
 
     # 3. PRECOMPUTE LATTICE FUNCTIONS (dicts for speed)
     sqrt_betax = np.sqrt(tws["beta11"])
@@ -236,7 +215,7 @@ def make_noisy_track_data(
         0, data_n.columns.get_loc("py")
     ]
 
-    # 6. Print the differences and standard deviations for only the data_p
+    # 6. Print the differences and standard deviations
     if info:
         x_diff_p = data_p["x"] - orig_data["x"]
         px_diff_p = data_p["px"] - orig_data["px"]
@@ -247,4 +226,13 @@ def make_noisy_track_data(
         print("px_diff mean (prev w/ k)", px_diff_p.abs().mean(), "±", px_diff_p.std())
         print("py_diff mean (prev w/ k)", py_diff_p.abs().mean(), "±", py_diff_p.std())
 
-    return data_p[OUT_COLS], data_n[OUT_COLS]
+        x_diff_n = data_n["x"] - orig_data["x"]
+        px_diff_n = data_n["px"] - orig_data["px"]
+        y_diff_n = data_n["y"] - orig_data["y"]
+        py_diff_n = data_n["py"] - orig_data["py"]
+        print("x_diff mean (next w/ k)", x_diff_n.abs().mean(), "±", x_diff_n.std())
+        print("y_diff mean (next w/ k)", y_diff_n.abs().mean(), "±", y_diff_n.std())
+        print("px_diff mean (next w/ k)", px_diff_n.abs().mean(), "±", px_diff_n.std())
+        print("py_diff mean (next w/ k)", py_diff_n.abs().mean(), "±", py_diff_n.std())
+
+    return data_p[out_cols], data_n[out_cols]

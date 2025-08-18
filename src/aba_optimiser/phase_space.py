@@ -1,7 +1,11 @@
+from __future__ import annotations
+
+from pathlib import Path
+
 import numpy as np
 import tfs
 
-from aba_optimiser.config import BPM_RANGE, SEQUENCE_FILE, module_path
+from aba_optimiser.config import MAGNET_RANGE, SEQUENCE_FILE, module_path
 from aba_optimiser.mad_interface import MadInterface
 
 
@@ -14,14 +18,15 @@ class PhaseSpaceDiagnostics:
         y_data,
         py_data,
         tws: None | tfs.TfsDataFrame = None,
-        num_points=500,
+        num_points=50,
+        analysis_dir: Path | str = module_path / "analysis",
     ):
         self.bpm = bpm
         self.num_points = num_points
-        self.x0 = 0  # np.mean(x_data)
-        self.px0 = 0  # np.mean(px_data)
-        self.y0 = 0  # np.mean(y_data)
-        self.py0 = 0  # np.mean(py_data)
+        self.x0 = np.mean(x_data)
+        self.px0 = np.mean(px_data)
+        self.y0 = np.mean(y_data)
+        self.py0 = np.mean(py_data)
 
         self.dx = x_data - self.x0
         self.dpx = px_data - self.px0
@@ -30,7 +35,7 @@ class PhaseSpaceDiagnostics:
 
         # Get Twiss parameters
         if tws is None:
-            self._load_twiss()
+            self._load_twiss(Path(analysis_dir))
         else:
             self.betax = tws.loc[self.bpm, "beta11"]
             self.alfax = tws.loc[self.bpm, "alfa11"]
@@ -46,31 +51,49 @@ class PhaseSpaceDiagnostics:
 
         self.refine_optics_with_initial_guess()
 
-    def _load_twiss(self):
-        # analysis_dir = module_path / 'analysis'
-        # beta_phase_x = tfs.read(analysis_dir / "beta_phase_x.tfs", index="NAME")
-        # beta_phase_y = tfs.read(analysis_dir / "beta_phase_y.tfs", index="NAME")
-        # if False: #self.bpm in beta_phase_x.index and self.bpm in beta_phase_y.index:
-        #     self.betax = beta_phase_x.loc[self.bpm, "BETX"]
-        #     self.alfax = beta_phase_x.loc[self.bpm, "ALFX"]
-        #     self.betay = beta_phase_y.loc[self.bpm, "BETY"]
-        #     self.alfay = beta_phase_y.loc[self.bpm, "ALFY"]
-        # else:
-        mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
-        tws = mad_iface.run_twiss()
-        self.betax = tws.loc[self.bpm, "beta11"]
-        self.alfax = tws.loc[self.bpm, "alfa11"]
-        self.betay = tws.loc[self.bpm, "beta22"]
-        self.alfay = tws.loc[self.bpm, "alfa22"]
+    def _load_twiss(self, analysis_dir: Path) -> None:
+        try:
+            beta_phase_x = tfs.read(analysis_dir / "beta_phase_x.tfs", index="NAME")
+            beta_phase_y = tfs.read(analysis_dir / "beta_phase_y.tfs", index="NAME")
+            use_beta_phase = (
+                self.bpm in beta_phase_x.index and self.bpm in beta_phase_y.index
+            )
+        except FileNotFoundError:
+            use_beta_phase = False
+        if use_beta_phase:
+            self.betax = beta_phase_x.loc[self.bpm, "BETX"]
+            self.alfax = beta_phase_x.loc[self.bpm, "ALFX"]
+            self.betay = beta_phase_y.loc[self.bpm, "BETY"]
+            self.alfay = beta_phase_y.loc[self.bpm, "ALFY"]
+        else:
+            mad_iface = MadInterface(SEQUENCE_FILE, MAGNET_RANGE)
+            tws = mad_iface.run_twiss()
+            self.betax = tws.loc[self.bpm, "beta11"]
+            self.alfax = tws.loc[self.bpm, "alfa11"]
+            self.betay = tws.loc[self.bpm, "beta22"]
+            self.alfay = tws.loc[self.bpm, "alfa22"]
 
-    def _compute_emittances(self):
+    def _compute_emittances(self) -> None:
+        """Compute the emittances based on the provided data."""
         cov_x = np.cov(self.dx, self.dpx)
         self.emit_x = np.sqrt(cov_x[0, 0] * cov_x[1, 1] - cov_x[0, 1] ** 2)
 
         cov_y = np.cov(self.dy, self.dpy)
         self.emit_y = np.sqrt(cov_y[0, 0] * cov_y[1, 1] - cov_y[0, 1] ** 2)
 
-    def compute_residuals(self):
+    def compute_residuals(self) -> tuple[np.ndarray, np.ndarray, float, float]:
+        """Compute the residuals of the phase space ellipse fit.
+        Returns
+        -------
+        residuals_x: np.ndarray
+            Residuals for the x plane.
+        residuals_y: np.ndarray
+            Residuals for the y plane.
+        std_x: float
+            Standard deviation of the residuals for the x plane.
+        std_y: float
+            Standard deviation of the residuals for the y plane.
+        """
         jx2 = (
             self.gammax * self.dx**2
             + 2 * self.alfax * self.dx * self.dpx
@@ -90,7 +113,19 @@ class PhaseSpaceDiagnostics:
 
         return residuals_x, residuals_y, std_x, std_y
 
-    def ellipse_points(self):
+    def ellipse_points(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Generate points on the phase space ellipse for the current optics.
+        Returns
+        -------
+        x: np.ndarray
+            x-coordinates of the ellipse points.
+        px: np.ndarray
+            px-coordinates of the ellipse points.
+        y: np.ndarray
+            y-coordinates of the ellipse points.
+        py: np.ndarray
+            py-coordinates of the ellipse points.
+        """
         theta = np.linspace(0, 2 * np.pi, self.num_points)
 
         x = np.sqrt(2 * self.emit_x * self.betax) * np.cos(theta)
@@ -103,9 +138,16 @@ class PhaseSpaceDiagnostics:
             self.alfay * np.cos(theta) + np.sin(theta)
         )
 
-        return x, px, y, py
+        return (
+            x + self.x0,
+            px + self.px0,
+            y + self.y0,
+            py + self.py0,
+        )
 
-    def ellipse_sigma(self, sigma_level=1.0, with_offset=True):
+    def ellipse_sigma(
+        self, sigma_level: float = 1.0
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         _, _, std_x, std_y = self.compute_residuals()
 
         emit_x_scaled = self.emit_x * (1 + sigma_level * std_x)
@@ -122,14 +164,12 @@ class PhaseSpaceDiagnostics:
         py_upper = -np.sqrt(2 * emit_y_scaled / self.betay) * (
             self.alfay * np.cos(theta) + np.sin(theta)
         )
-        if with_offset:
-            return (
-                x_upper + self.x0,
-                px_upper + self.px0,
-                y_upper + self.y0,
-                py_upper + self.py0,
-            )
-        return x_upper, px_upper, y_upper, py_upper
+        return (
+            x_upper + self.x0,
+            px_upper + self.px0,
+            y_upper + self.y0,
+            py_upper + self.py0,
+        )
 
     def refine_optics_with_initial_guess(self, info=None):
         """
@@ -155,8 +195,8 @@ class PhaseSpaceDiagnostics:
             beta = np.exp(log_beta)  # guarantees β>0
             emit = np.exp(log_emit)  # guarantees ε>0
             gamma = (1 + alpha**2) / beta
-            Ji2 = gamma * dx**2 + 2 * alpha * dx * dpx + beta * dpx**2
-            return (Ji2 / 2 - emit) / emit  # fractional residual
+            ji2 = gamma * dx**2 + 2 * alpha * dx * dpx + beta * dpx**2
+            return (ji2 / 2 - emit) / emit  # fractional residual
 
         # current optics as starting point (log to keep positivity)
         x0 = [np.log(self.betax), self.alfax, np.log(self.emit_x)]

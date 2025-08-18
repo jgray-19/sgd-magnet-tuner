@@ -2,15 +2,15 @@ import numpy as np
 import tfs
 
 from aba_optimiser.config import (
-    BPM_RANGE,
+    MAGNET_RANGE,
     SEQUENCE_FILE,
     TRACK_DATA_FILE,
     TRUE_STRENGTHS,
 )
 from aba_optimiser.mad_interface import MadInterface
-from aba_optimiser.utils import select_marker, read_knobs
+from aba_optimiser.utils import read_knobs, select_markers
 
-mad_iface = MadInterface(SEQUENCE_FILE, BPM_RANGE)
+mad_iface = MadInterface(SEQUENCE_FILE, MAGNET_RANGE)
 knob_names = mad_iface.knob_names
 true_strengths = read_knobs(TRUE_STRENGTHS)
 for key, value in true_strengths.items():
@@ -27,15 +27,15 @@ mu_y = tws["mu2"].to_numpy()
 
 init_coords = tfs.read(TRACK_DATA_FILE, index="turn")
 # Remove all rows that are not the BPM s.ds.r3.b1
-start_bpm, end_bpm = BPM_RANGE.split("/")
-start_coords = select_marker(init_coords, start_bpm)
+start_bpm, end_bpm = MAGNET_RANGE.split("/")
+start_coords = select_markers(init_coords, start_bpm)
 
 nbpm_to_next_x = 2
 nbpm_to_next_y = 2
 next_bpm_x = tws.index[tws.index.get_loc(start_bpm) + nbpm_to_next_x]
 next_bpm_y = tws.index[tws.index.get_loc(start_bpm) + nbpm_to_next_y]
-next_coords_x = select_marker(init_coords, next_bpm_x)
-next_coords_y = select_marker(init_coords, next_bpm_y)
+next_coords_x = select_markers(init_coords, next_bpm_x)
+next_coords_y = select_markers(init_coords, next_bpm_y)
 
 start_bpm_idx = tws.index.get_loc(start_bpm)
 next_bpm_idx_x = start_bpm_idx + nbpm_to_next_x
@@ -53,27 +53,42 @@ print("Next coordinates:", next_x, next_y)
 alpha_next_x = tws["alfa11"].iloc[next_bpm_idx_x]
 alpha_next_y = tws["alfa22"].iloc[next_bpm_idx_y]
 
-mu_next_x  = mu_x[next_bpm_idx_x]
-mu_next_y  = mu_y[next_bpm_idx_y]
+mu_next_x = mu_x[next_bpm_idx_x]
+mu_next_y = mu_y[next_bpm_idx_y]
 mu_start_x = mu_x[start_bpm_idx]
 mu_start_y = mu_y[start_bpm_idx]
 delta_x = (mu_next_x - mu_start_x - 0.25) * 2 * np.pi
 delta_y = (mu_next_y - mu_start_y - 0.25) * 2 * np.pi
 
-px_next = -1 * (
-    start_x * (np.cos(delta_x) + np.sin(delta_x) * np.tan(delta_x))
-    + next_x * (np.tan(delta_x) + alpha_next_x)
-) / sqrt_beta_x[next_bpm_idx_x] 
+px_next = (
+    -1
+    * (
+        start_x * (np.cos(delta_x) + np.sin(delta_x) * np.tan(delta_x))
+        + next_x * (np.tan(delta_x) + alpha_next_x)
+    )
+    / sqrt_beta_x[next_bpm_idx_x]
+)
 
 
-py_next = -1 * (
-    start_y * (np.cos(delta_y) + np.sin(delta_y) * np.tan(delta_y))
-    + next_y * (np.tan(delta_y) + alpha_next_y)
-) / sqrt_beta_y[next_bpm_idx_y]
+py_next = (
+    -1
+    * (
+        start_y * (np.cos(delta_y) + np.sin(delta_y) * np.tan(delta_y))
+        + next_y * (np.tan(delta_y) + alpha_next_y)
+    )
+    / sqrt_beta_y[next_bpm_idx_y]
+)
 
 
 print("Difference in px calculation:", px_next - next_coords_x["px"][turn])
 print("Difference in py calculation:", py_next - next_coords_y["py"][turn])
-print("Relative difference in px calculation:", (px_next - next_coords_x["px"][turn]) / next_coords_x["px"][turn] * 100, " %")
-print("Relative difference in py calculation:", (py_next - next_coords_y["py"][turn]) / next_coords_y["py"][turn] * 100, " %")
-
+print(
+    "Relative difference in px calculation:",
+    (px_next - next_coords_x["px"][turn]) / next_coords_x["px"][turn] * 100,
+    " %",
+)
+print(
+    "Relative difference in py calculation:",
+    (py_next - next_coords_y["py"][turn]) / next_coords_y["py"][turn] * 100,
+    " %",
+)

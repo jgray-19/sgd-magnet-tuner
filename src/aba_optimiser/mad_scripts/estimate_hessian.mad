@@ -1,0 +1,59 @@
+! estimate_hessian.mad
+
+! Assumes the following variables are defined:
+! tracking_sequence: the sequence to be used for tracking
+! num_particles: a table with the number of particles for each starting bpm
+! nbpms: the number of BPMs to track
+! knob_names: a table with the names of the knobs
+! coord_names: a table with the names of the coordinates
+! da_x0_c: a table with the initial conditions for each starting bpm
+! range: the range of elements to track as a string
+! knob_monomials: a table with the monomial definitions for each knob
+! var_x: the variance for the x coordinate
+! var_y: the variance for the y coordinate
+! vector: a MAD vector object for creating vectors
+! matrix: a MAD matrix object for creating matrices
+! py: a Python interface object for sending data
+assert(
+    loaded_sequence and num_particles and nbpms and observe_from_turn and
+    knob_names and coord_names and da_x0_c and knob_monomials and
+    var_x and var_y and vector and matrix and py and n_run_turns and n_compare_turns,
+    "Missing required variables for tracking"
+)
+
+local matrix, vector in MAD
+
+local num_knobs = #knob_names
+local Htot = matrix(num_knobs, num_knobs):zeros()
+local W_x = vector(nbpms * n_compare_turns):fill(var_x):diag()
+local W_y = vector(nbpms * n_compare_turns):fill(var_y):diag()
+
+for i=1,num_particles do
+    x[i] = vector(nbpms * n_compare_turns)
+    y[i] = vector(nbpms * n_compare_turns)
+    dx_dk[i] = matrix(num_knobs, nbpms * n_compare_turns)
+    dy_dk[i] = matrix(num_knobs, nbpms * n_compare_turns)
+end
+observe_count = 1
+collectgarbage("collect")
+
+local _, mflw= track{
+    sequence = loaded_sequence,
+    X0 = da_x0_c,
+    nturn = n_run_turns,
+    save=false,
+    observe=observe_from_turn,
+    atexit=save_data,
+    range=tracking_range
+}
+
+for idx = 1, num_particles do
+    local jx = dx_dk[idx]
+    local jy = dy_dk[idx]
+    local Gx = jx * (W_x * jx:t())
+    local Gy = jy * (W_y * jy:t())
+    Htot = Htot + (Gx + Gy)
+end
+collectgarbage("collect")
+
+py:send(Htot, true)

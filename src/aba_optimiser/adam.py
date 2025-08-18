@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 
 
@@ -68,12 +70,14 @@ class AdamOptimiser:
 
         # Update biased first and second moment estimates
         self.m = self.beta1 * self.m + (1 - self.beta1) * grads
-        self.v = self.beta2 * self.v + (1 - self.beta2) * (grads ** 2)
+        self.v = self.beta2 * self.v + (1 - self.beta2) * (grads**2)
 
         # Compute bias-corrected moment estimates
-        m_hat = self.m / (1 - self.beta1 ** self.t)
-        v_hat = self.v / (1 - self.beta2 ** self.t)
+        m_hat = self.m / (1 - self.beta1**self.t)
+        v_hat = self.v / (1 - self.beta2**self.t)
 
         # Parameter update
-        update = lr * (m_hat / (np.sqrt(v_hat) + self.eps)) #/ (np.sqrt(diag_hessian) + self.eps)
+        update = lr * (
+            m_hat / (np.sqrt(v_hat) + self.eps)
+        )  # / (np.sqrt(diag_hessian) + self.eps)
         return params - update
