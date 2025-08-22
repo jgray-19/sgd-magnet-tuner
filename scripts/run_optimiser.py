@@ -3,7 +3,7 @@
 import logging
 import multiprocessing as mp
 
-from aba_optimiser.controller import Controller
+from aba_optimiser.training.controller import Controller
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

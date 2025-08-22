@@ -4,9 +4,6 @@ import pandas as pd
 import tfs
 from tqdm import tqdm
 
-# from aba_optimiser.ellipse_filtering import filter_noisy_data
-# from aba_optimiser.kalman_filtering import BPMKalmanFilter
-from aba_optimiser.calculate_pz import calculate_pz
 from aba_optimiser.config import (
     BPM_START_POINTS,
     FILTERED_FILE,
@@ -15,7 +12,11 @@ from aba_optimiser.config import (
     TRACK_DATA_FILE,
 )
 
-# from aba_optimiser.phase_space import PhaseSpaceDiagnostics
+# from aba_optimiser.ellipse_filtering import filter_noisy_data
+# from aba_optimiser.kalman_filtering import BPMKalmanFilter
+from aba_optimiser.physics.transverse_momentum import calculate_pz
+
+# from aba_optimiser.filtering.phase_space import PhaseSpaceDiagnostics
 
 if (
     not NOISE_FILE.exists()

@@ -404,7 +404,3 @@ def plot_strengths_vs_position(
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
     return fig, ax
-
-
-def show_plots():
-    plt.show()

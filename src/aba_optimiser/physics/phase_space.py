@@ -6,7 +6,7 @@ import numpy as np
 import tfs
 
 from aba_optimiser.config import MAGNET_RANGE, SEQUENCE_FILE, module_path
-from aba_optimiser.mad_interface import MadInterface
+from aba_optimiser.mad.mad_interface import MadInterface
 
 
 class PhaseSpaceDiagnostics:

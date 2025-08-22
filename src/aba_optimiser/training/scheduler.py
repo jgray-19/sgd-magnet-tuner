@@ -61,12 +61,10 @@ class LRScheduler:
             return self.start_lr + (self.max_lr - self.start_lr) * factor
 
         # Decay phase: Cosine decay from max_lr to min_lr over decay_epochs.
-        elif e <= self.warmup_epochs + self.decay_epochs:
+        if e <= self.warmup_epochs + self.decay_epochs:
             progress = (e - self.warmup_epochs) / self.decay_epochs
             cosine = 0.5 * (1 + math.cos(math.pi * progress))
             return self.min_lr + (self.max_lr - self.min_lr) * cosine
 
         # After decay phase: Learning rate stays at min_lr.
-        else:
-            return self.min_lr
-
+        return self.min_lr

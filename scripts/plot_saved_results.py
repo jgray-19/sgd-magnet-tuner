@@ -8,8 +8,8 @@ from aba_optimiser.config import (
     SEQUENCE_FILE,
     TRUE_STRENGTHS,
 )
-from aba_optimiser.mad_interface import MadInterface
-from aba_optimiser.utils import read_knobs, read_results
+from aba_optimiser.io.utils import read_knobs, read_results
+from aba_optimiser.mad.mad_interface import MadInterface
 
 knob_names, knob_strengths, uncertainties = read_results(OUTPUT_KNOBS)
 # Convert knob_strengths and uncertainties to numpy arrays

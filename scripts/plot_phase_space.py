@@ -2,7 +2,6 @@ import matplotlib.pyplot as plt
 
 # import numpy as np
 import pandas as pd
-import tfs
 
 from aba_optimiser.config import (
     ACD_ON,
@@ -14,8 +13,8 @@ from aba_optimiser.config import (
     RAMP_UP_TURNS,
     TRACK_DATA_FILE,
 )
-from aba_optimiser.phase_space import PhaseSpaceDiagnostics
-from aba_optimiser.utils import select_markers
+from aba_optimiser.dataframes.utils import select_markers
+from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 
 # Extract BPM names
 start_bpm = "BPM.12R4.B1"

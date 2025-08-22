@@ -8,7 +8,7 @@ from pathlib import Path
 
 # Simulation parameters
 MAX_EPOCHS = 600  # Total number of epochs for optimization
-TRACKS_PER_WORKER = 1000  # Number of tracks per worker
+TRACKS_PER_WORKER = 2000  # Number of tracks per worker
 NUM_WORKERS = 60  # Number of parallel worker processes
 TOTAL_TRACKS = TRACKS_PER_WORKER * NUM_WORKERS  # Total number of tracks
 
@@ -32,7 +32,7 @@ GRADIENT_CONVERGED_VALUE = 1e-7
 
 # Standard error of the noise
 POSITION_STD_DEV = 1e-4  # Standard deviation of the position noise
-MOMENTUM_STD_DEV = 3e-7  # Standard deviation of the momentum noise
+MOMENTUM_STD_DEV = 3e-6  # Standard deviation of the momentum noise
 REL_K1_STD_DEV = 1e-3  # Standard deviation of the K1 noise
 
 RUN_ARC_BY_ARC = True
@@ -53,7 +53,7 @@ N_COMPARE_TURNS = N_RUN_TURNS - OBSERVE_TURNS_FROM + 1  # Number of turns to com
 # Tracking parameters
 RAMP_UP_TURNS = 1_000  # Number of turns to ramp up the ACD
 # FLATTOP_TURNS = 6_600  # Number of turns on the flat top
-FLATTOP_TURNS = 3_000  # Number of turns on the flat top
+FLATTOP_TURNS = 3_00  # Number of turns on the flat top
 NUM_TRACKS = 30  # Number of tracks of FLATTOP_TURNS, so total number of turns is FLATTOP_TURNS * NUM_TRACKS (asssuming acd is off)
 ACD_ON = False  # Whether the ACD was used or not (Ignores the ramp up turns)
 
@@ -71,11 +71,10 @@ OUTPUT_KNOBS = module_path / "data/final_knobs.txt"  # Where to write final stre
 KNOB_TABLE = module_path / "data/knob_strengths_table.md"  # Markdown summary of results
 TUNE_KNOBS_FILE = module_path / "data/matched_tunes.txt"  # File with tune knobs
 MAD_SCRIPTS_DIR = (
-    module_path / "src" / "aba_optimiser" / "mad_scripts"
+    module_path / "src" / "aba_optimiser" / "mad" / "mad_scripts"
 )  # Directory for MAD-NG scripts
 
 # Simulation specifics
-# MAGNET_RANGE = "$start/$end"  # Magnet selection range for tracking
 MAGNET_RANGE = "BPM.11R4.B1/BPM.11L5.B1"
 BEAM_ENERGY = 6800  # Beam energy in GeV
 SEQ_NAME = "lhcb1"  # Sequence name in MAD-X (lowercase)

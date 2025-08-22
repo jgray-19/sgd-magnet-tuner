@@ -7,7 +7,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from pymadng import MAD
 
-from aba_optimiser.calculate_pz import calculate_pz
 from aba_optimiser.config import (
     BEAM_ENERGY,
     # FILTERED_FILE,
@@ -23,6 +22,7 @@ from aba_optimiser.config import (
     TRUE_STRENGTHS,
     TUNE_KNOBS_FILE,
 )
+from aba_optimiser.physics.transverse_momentum import calculate_pz
 
 if TYPE_CHECKING:
     import pandas as pd

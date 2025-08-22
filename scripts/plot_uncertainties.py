@@ -2,9 +2,11 @@
 Plot the average uncertainty of the model predictions, as the number of files increases.
 """
 
+from __future__ import annotations
+
 import multiprocessing as mp
 import time
-from multiprocessing.connection import Connection
+from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -20,13 +22,16 @@ from aba_optimiser.config import (
     TRACK_DATA_FILE,
     TRUE_STRENGTHS,
 )
-from aba_optimiser.mad_interface import MadInterface
-from aba_optimiser.utils import (
+from aba_optimiser.dataframes.utils import (
     filter_out_marker,
-    read_knobs,
     select_markers,
 )
-from aba_optimiser.worker import build_worker
+from aba_optimiser.io.utils import read_knobs
+from aba_optimiser.mad.mad_interface import MadInterface
+from aba_optimiser.workers.worker import build_worker
+
+if TYPE_CHECKING:
+    from multiprocessing.connection import Connection
 
 run_start = time.time()  # start total timing
 start_bpm, end_bpm = MAGNET_RANGE.split("/")

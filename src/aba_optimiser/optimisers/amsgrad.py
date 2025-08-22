@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from aba_optimiser.adam import AdamOptimiser
+from aba_optimiser.optimisers.adam import AdamOptimiser
 
 
 class AMSGradOptimiser(AdamOptimiser):

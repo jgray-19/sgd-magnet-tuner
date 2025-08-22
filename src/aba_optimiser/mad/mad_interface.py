@@ -7,7 +7,7 @@ import numpy as np
 from pymadng import MAD
 
 from aba_optimiser.config import BEAM_ENERGY, SEQ_NAME, TUNE_KNOBS_FILE
-from aba_optimiser.utils import read_knobs
+from aba_optimiser.io.utils import read_knobs
 
 if TYPE_CHECKING:
     import tfs

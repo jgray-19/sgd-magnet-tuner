@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -15,8 +14,8 @@ from aba_optimiser.config import (
     SEQ_NAME,
     SEQUENCE_FILE,
 )
-from aba_optimiser.mad_interface import MadInterface
-from aba_optimiser.phase_space import PhaseSpaceDiagnostics
+from aba_optimiser.mad.mad_interface import MadInterface
+from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 
 if TYPE_CHECKING:
     import tfs

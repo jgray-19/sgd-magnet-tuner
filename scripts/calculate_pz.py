@@ -7,8 +7,9 @@ from aba_optimiser.config import (
     TRACK_DATA_FILE,
     TRUE_STRENGTHS,
 )
-from aba_optimiser.mad_interface import MadInterface
-from aba_optimiser.utils import read_knobs, select_markers
+from aba_optimiser.dataframes.utils import select_markers
+from aba_optimiser.io.utils import read_knobs
+from aba_optimiser.mad.mad_interface import MadInterface
 
 mad_iface = MadInterface(SEQUENCE_FILE, MAGNET_RANGE, bpm_pattern="BPM")
 knob_names = mad_iface.knob_names

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from aba_optimiser.base_worker import BaseWorker
 from aba_optimiser.config import (
     N_COMPARE_TURNS,
     N_RUN_TURNS,
     OBSERVE_TURNS_FROM,
 )
+from aba_optimiser.workers.base import BaseWorker
 
 if TYPE_CHECKING:
     from pymadng import MAD

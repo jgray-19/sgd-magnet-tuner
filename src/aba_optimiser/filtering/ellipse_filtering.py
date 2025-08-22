@@ -8,8 +8,8 @@ from aba_optimiser.config import (
     MAGNET_RANGE,
     SEQUENCE_FILE,
 )
-from aba_optimiser.mad_interface import MadInterface
-from aba_optimiser.phase_space import PhaseSpaceDiagnostics
+from aba_optimiser.mad.mad_interface import MadInterface
+from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 
 regexpr = r"BPM\.([0-9]+)[RL][34]\.B1"
 

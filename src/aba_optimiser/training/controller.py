@@ -13,9 +13,6 @@ import numpy as np
 import pandas as pd
 from tensorboardX import SummaryWriter
 
-from aba_optimiser.adam import AdamOptimiser
-from aba_optimiser.amsgrad import AMSGradOptimiser
-from aba_optimiser.arc_by_arc_worker import ArcByArcWorker
 from aba_optimiser.config import (
     ACD_ON,
     BPM_START_POINTS,
@@ -47,20 +44,19 @@ from aba_optimiser.config import (
     WARMUP_EPOCHS,
     WARMUP_LR_START,
 )
-from aba_optimiser.mad_interface import MadInterface
+from aba_optimiser.dataframes.utils import select_markers
+from aba_optimiser.io.utils import read_knobs, save_results, scientific_notation
+from aba_optimiser.mad.mad_interface import MadInterface
+from aba_optimiser.optimisers.adam import AdamOptimiser
+from aba_optimiser.optimisers.amsgrad import AMSGradOptimiser
 from aba_optimiser.plotting import (
     plot_strengths_comparison,
     plot_strengths_vs_position,
     show_plots,
 )
-from aba_optimiser.ring_worker import RingWorker
-from aba_optimiser.scheduler import LRScheduler
-from aba_optimiser.utils import (
-    read_knobs,
-    save_results,
-    scientific_notation,
-    select_markers,
-)
+from aba_optimiser.training.scheduler import LRScheduler
+from aba_optimiser.workers.arc_by_arc import ArcByArcWorker
+from aba_optimiser.workers.ring import RingWorker
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection

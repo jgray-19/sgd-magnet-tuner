@@ -4,14 +4,14 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.arc_by_arc_worker import ArcByArcWorker
 from aba_optimiser.config import RUN_ARC_BY_ARC
-from aba_optimiser.ring_worker import RingWorker
+from aba_optimiser.workers.arc_by_arc import ArcByArcWorker
+from aba_optimiser.workers.ring import RingWorker
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
-    from aba_optimiser.base_worker import BaseWorker
+    from aba_optimiser.workers.base import BaseWorker
 
 
 # Utility functions from original worker

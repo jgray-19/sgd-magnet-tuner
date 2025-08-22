@@ -1,19 +1,19 @@
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 import tfs
 from omc3.model.constants import TWISS_AC_DAT
 from turn_by_turn import read_tbt
 
-# from lhcng.tfs_utils import convert_tfs_to_madx
-from aba_optimiser.calculate_pz import calculate_pz
-from aba_optimiser.config import BPM_START, Y_BPM_START, module_path
+from aba_optimiser.config import module_path
+from aba_optimiser.dataframes.utils import select_markers
 
 # from lhcng.model import model_to_ng
-from aba_optimiser.phase_space import PhaseSpaceDiagnostics
-from aba_optimiser.utils import select_markers
+from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
+
+# from lhcng.tfs_utils import convert_tfs_to_madx
+from aba_optimiser.physics.transverse_momentum import calculate_pz
 
 real_data_list = [
     "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Measurements/Beam1@BunchTurn@2025_04_09@18_35_18_583/Beam1@BunchTurn@2025_04_09@18_35_18_583.sdds",
@@ -23,6 +23,9 @@ real_data_list = [
     # '/nfs/cs-ccr-nfs4/lhc_data/OP_DATA/FILL_DATA/10533/BPM/Beam1@BunchTurn@2025_04_27@13_51_22_434.sdds',
     # '/nfs/cs-ccr-nfs4/lhc_data/OP_DATA/FILL_DATA/10533/BPM/Beam1@BunchTurn@2025_04_27@13_52_31_321.sdds',
 ]
+
+BPM_START = "BPM.12R4.B1"
+Y_BPM_START = "BPM.11R4.B1"
 num_files = len(real_data_list)
 
 raw_data = [read_tbt(file).matrices[0] for file in real_data_list]
@@ -31,7 +34,6 @@ y = [data.Y for data in raw_data]
 for i in range(num_files):
     assert BPM_START in x[i].index
     assert Y_BPM_START in y[i].index
-
 
 model_dir = Path(
     "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Models/b1_flat_60_18cm"

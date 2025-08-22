@@ -27,12 +27,12 @@ from plotting import (
 from pymadng import MAD
 from tqdm.contrib.concurrent import process_map
 
-from aba_optimiser.calculate_pz import calculate_pz
 from aba_optimiser.config import (
     REL_K1_STD_DEV,
     SEQ_NAME,
     SEQUENCE_FILE,
 )
+from aba_optimiser.physics.transverse_momentum import calculate_pz
 
 if TYPE_CHECKING:
     import tfs

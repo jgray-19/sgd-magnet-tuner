@@ -12,7 +12,7 @@ from aba_optimiser.config import (
     SEQ_NAME,
     SEQUENCE_FILE,
 )
-from aba_optimiser.mad_interface import MadInterface
+from aba_optimiser.mad.mad_interface import MadInterface
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
