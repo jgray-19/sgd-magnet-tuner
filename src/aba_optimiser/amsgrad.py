@@ -7,7 +7,7 @@ from aba_optimiser.adam import AdamOptimiser
 
 class AMSGradOptimiser(AdamOptimiser):
     """
-    AMSGrad optimizer: like Adam but keeps the max of all past v̂,
+    AMSGrad optimiser: like Adam but keeps the max of all past v̂,
     ensuring the denominator never decreases.
     """
 

@@ -7,7 +7,6 @@ import numpy as np
 from aba_optimiser.config import (
     MAGNET_RANGE,
     POSITION_STD_DEV,
-    SEQ_NAME,
     SEQUENCE_FILE,
 )
 from aba_optimiser.mad_interface import MadInterface
@@ -23,6 +22,7 @@ def calculate_pz(
     tws: None | tfs.TfsDataFrame = None,
     info: bool = True,
     rng: np.random.Generator | None = None,
+    low_noise_bpms: list[str] = [],
 ) -> tuple[tfs.TfsDataFrame, tfs.TfsDataFrame]:
     """
     Generates two noisy DataFrames (data_p, data_n) based on config values.
@@ -41,18 +41,53 @@ def calculate_pz(
         rng = np.random.default_rng()  # Use new Generator API
 
     if inject_noise:
-        data["x"] = orig_data["x"] + rng.normal(
-            0, POSITION_STD_DEV, size=len(orig_data)
-        )
-        data["y"] = orig_data["y"] + rng.normal(
-            0, POSITION_STD_DEV, size=len(orig_data)
-        )
+        # Generate per-row Gaussian noise and reduce it for low-error BPMs
+        n = len(orig_data)
+        noise_x = rng.normal(0, POSITION_STD_DEV, size=n)
+        noise_y = rng.normal(0, POSITION_STD_DEV, size=n)
+
+        if low_noise_bpms:
+            # mask of rows whose BPM name is in the low_error_bpms list
+            mask = orig_data["name"].isin(low_noise_bpms)
+            if mask.any():
+                low_n = int(mask.sum())
+                # Replace noise for these BPMs with 10x lower std dev
+                noise_x[mask.to_numpy()] = rng.normal(
+                    0, POSITION_STD_DEV / 10.0, size=low_n
+                )
+                noise_y[mask.to_numpy()] = rng.normal(
+                    0, POSITION_STD_DEV / 10.0, size=low_n
+                )
+
+        data["x"] = orig_data["x"] + noise_x
+        data["y"] = orig_data["y"] + noise_y
+
+    # Subtract mean coordinates at each BPM to center around closed orbit
+    # Explicitly pass observed=False to retain current behavior and silence pandas FutureWarning
+    bpm_means = data.groupby("name", observed=False)[["x", "y"]].mean()
+    # if info:
+    #     print("BPM means (x, y):")
+    #     print(bpm_means)
+    data = data.merge(bpm_means, on="name", suffixes=("", "_mean"))
+    data["x"] = data["x"] - data["x_mean"]
+    data["y"] = data["y"] - data["y_mean"]
+    data.drop(columns=["x_mean", "y_mean"], inplace=True)
+
+    # Add weight_x and weight_y = 1 for all rows
+    data["weight_x"] = 1.0
+    data["weight_y"] = 1.0
+
+    # Now the data needs to be discretised to simulate a real BPM measurement.
+    # The unit of discretisation is 2.333e-5. But discretise to these values: ..., -3.333e-5, -1e-5, 1.333e-5, 3.666e-5, ...
+    # data["x"] = np.round((data["x"] + 1e-5) / 2.333e-5) * 2.333e-5 - 1e-5
+    # data["y"] = np.round((data["y"] + 1e-5) / 2.333e-5) * 2.333e-5 - 1e-5
 
     # 2. INITIALISE MAD-X & GET TWISS (small, only once)
     if tws is None:
-        mad = MadInterface(SEQUENCE_FILE, MAGNET_RANGE)
-        mad.mad.send(f"tws = twiss{{sequence=MADX.{SEQ_NAME}, observe=1}}")
-        tws = mad.mad.tws.to_df().set_index("name")
+        mad = MadInterface(SEQUENCE_FILE, MAGNET_RANGE, bpm_pattern="BPM")
+        tws = mad.run_twiss()
+        if info:
+            print("Found tunes:", tws.q1, tws.q2)
 
     # 3. PRECOMPUTE LATTICE FUNCTIONS (dicts for speed)
     sqrt_betax = np.sqrt(tws["beta11"])
@@ -183,23 +218,49 @@ def calculate_pz(
     data_p["px"] = -(x1 * (c_x + s_x * t_x) + x2 * (t_x + alfax)) / sqrt_betax
     data_p["py"] = -(y1 * (c_y + s_y * t_y) + y2 * (t_y + alfay)) / sqrt_betay
 
-    # --- next (data_n) ---
-    x1 = data_n["x"].to_numpy() / data_n["sqrt_betax"].to_numpy()
-    x2 = data_n["next_x"].to_numpy() / data_n["sqrt_betax_n"].to_numpy()
-    y1 = data_n["y"].to_numpy() / data_n["sqrt_betay"].to_numpy()
-    y2 = data_n["next_y"].to_numpy() / data_n["sqrt_betay_n"].to_numpy()
+    # Use Δμ directly (no +π/2 shift).
+    # Derived formula:
+    #   sinφ₁ * √(2J) = ( - z₂/√β₂  - (z₁/√β₁) * sinΔμ ) / cosΔμ
+    #   p₁ = - (1/√β₁) * [ √(2J) sinφ₁ ] - α₁ * z₁/β₁
+    #
+    # where:
+    #   z₁ = position at BPM1 (this BPM)
+    #   z₂ = position at BPM2 (the next BPM, ~π/2 phase advance downstream)
+    #   β₁, β₂ = beta functions at BPM1 and BPM2
+    #   α₁ = alpha function at BPM1
+    #   Δμ = phase advance BPM1 → BPM2
 
-    phi_x = (data_n["delta_x"].to_numpy() + 0.25) * 2 * np.pi
-    phi_y = (data_n["delta_y"].to_numpy() + 0.25) * 2 * np.pi
-    c_x, s_x = np.cos(phi_x), np.sin(phi_x)
-    c_y, s_y = np.cos(phi_y), np.sin(phi_y)
+    # Normalised coordinates at BPM1 and BPM2
+    k1x = data_n["x"].to_numpy() / data_n["sqrt_betax"].to_numpy()
+    k2x = data_n["next_x"].to_numpy() / data_n["sqrt_betax_n"].to_numpy()
+    k1y = data_n["y"].to_numpy() / data_n["sqrt_betay"].to_numpy()
+    k2y = data_n["next_y"].to_numpy() / data_n["sqrt_betay_n"].to_numpy()
+
+    # Phase advance to the *next* BPM (no +0.25 offset)
+    phi_x = data_n["delta_x"].to_numpy() * 2 * np.pi
+    phi_y = data_n["delta_y"].to_numpy() * 2 * np.pi
+    cos_x, sin_x = np.cos(phi_x), np.sin(phi_x)
+    cos_y, sin_y = np.cos(phi_y), np.sin(phi_y)
+
+    # Compute √(2J) sinφ₁ from BPM1 & BPM2 positions
+    sin_term_x = (-k2x - k1x * sin_x) / cos_x
+    sin_term_y = (-k2y - k1y * sin_y) / cos_y
+
+    # Lattice functions at BPM1
     alfax = data_n["alfax"].to_numpy()
     alfay = data_n["alfay"].to_numpy()
     sqrt_betax = data_n["sqrt_betax"].to_numpy()
     sqrt_betay = data_n["sqrt_betay"].to_numpy()
+    beta_x = sqrt_betax**2
+    beta_y = sqrt_betay**2
 
-    data_n["px"] = ((x2 - x1 * c_x) / s_x - alfax * x1) / sqrt_betax
-    data_n["py"] = ((y2 - y1 * c_y) / s_y - alfay * y1) / sqrt_betay
+    # Final momentum estimates at BPM1
+    data_n["px"] = (-sin_term_x / sqrt_betax) - alfax * (
+        data_n["x"].to_numpy()
+    ) / beta_x
+    data_n["py"] = (-sin_term_y / sqrt_betay) - alfay * (
+        data_n["y"].to_numpy()
+    ) / beta_y
 
     # Final sync, as in original
     data_n.iloc[-1, data_n.columns.get_loc("px")] = data_p.iloc[
@@ -215,24 +276,81 @@ def calculate_pz(
         0, data_n.columns.get_loc("py")
     ]
 
+    # --- Average the two momentum estimates in a statistically sensible way ---
+    # Both branches (prev/next) become ill-conditioned near Δμ ≈ π/2+nπ because
+    # tanΔμ or 1/cosΔμ terms amplify noise. A simple mean can therefore bias the
+    # result when one side sits close to a singular geometry.
+    #
+    # Practical fix: weight each estimate by cos²(Δμ) of the corresponding link,
+    # which tracks the inverse variance of the estimator around those singular
+    # points (cosΔμ→0 ⇒ weight→0). This uses the same Δμ (no +π/2) you already
+    # used to compute p from each side.
+    data_avg = data_p.copy(deep=True)  # keep same index/columns as data_p
+
+    # Phase advances for the two links used to build px,py
+    phi_x_prev = (data_p["delta_x"].to_numpy()) * 2 * np.pi  # BPM(prev) → BPM(this)
+    phi_y_prev = (data_p["delta_y"].to_numpy()) * 2 * np.pi
+    phi_x_next = (data_n["delta_x"].to_numpy()) * 2 * np.pi  # BPM(this) → BPM(next)
+    phi_y_next = (data_n["delta_y"].to_numpy()) * 2 * np.pi
+
+    # Inverse-variance style weights ∝ cos²Δμ
+    wpx_prev = np.cos(phi_x_prev) ** 2
+    wpy_prev = np.cos(phi_y_prev) ** 2
+    wpx_next = np.cos(phi_x_next) ** 2
+    wpy_next = np.cos(phi_y_next) ** 2
+
+    # Small epsilon guards against (rare) cases where both weights ≈ 0
+    _eps = 0  # 1e-12
+
+    # Weighted averages
+    data_avg["px"] = (
+        wpx_prev * data_p["px"].to_numpy() + wpx_next * data_n["px"].to_numpy()
+    ) / (wpx_prev + wpx_next + _eps)
+    data_avg["py"] = (
+        wpy_prev * data_p["py"].to_numpy() + wpy_next * data_n["py"].to_numpy()
+    ) / (wpy_prev + wpy_next + _eps)
+
     # 6. Print the differences and standard deviations
     if info:
         x_diff_p = data_p["x"] - orig_data["x"]
         px_diff_p = data_p["px"] - orig_data["px"]
         y_diff_p = data_p["y"] - orig_data["y"]
         py_diff_p = data_p["py"] - orig_data["py"]
-        print("x_diff mean (prev w/ k)", x_diff_p.abs().mean(), "±", x_diff_p.std())
-        print("y_diff mean (prev w/ k)", y_diff_p.abs().mean(), "±", y_diff_p.std())
+        print("x_diff mean", x_diff_p.abs().mean(), "±", x_diff_p.std())
+        print("y_diff mean", y_diff_p.abs().mean(), "±", y_diff_p.std())
+
+        print("MOMENTUM DIFFERENCES ------")
         print("px_diff mean (prev w/ k)", px_diff_p.abs().mean(), "±", px_diff_p.std())
         print("py_diff mean (prev w/ k)", py_diff_p.abs().mean(), "±", py_diff_p.std())
 
-        x_diff_n = data_n["x"] - orig_data["x"]
         px_diff_n = data_n["px"] - orig_data["px"]
-        y_diff_n = data_n["y"] - orig_data["y"]
         py_diff_n = data_n["py"] - orig_data["py"]
-        print("x_diff mean (next w/ k)", x_diff_n.abs().mean(), "±", x_diff_n.std())
-        print("y_diff mean (next w/ k)", y_diff_n.abs().mean(), "±", y_diff_n.std())
         print("px_diff mean (next w/ k)", px_diff_n.abs().mean(), "±", px_diff_n.std())
         print("py_diff mean (next w/ k)", py_diff_n.abs().mean(), "±", py_diff_n.std())
 
-    return data_p[out_cols], data_n[out_cols]
+        px_diff_avg = data_avg["px"] - orig_data["px"]
+        py_diff_avg = data_avg["py"] - orig_data["py"]
+        print("px_diff mean (avg)", px_diff_avg.abs().mean(), "±", px_diff_avg.std())
+        print("py_diff mean (avg)", py_diff_avg.abs().mean(), "±", py_diff_avg.std())
+
+        # fmt: off
+        # Add a small epsilon to avoid division by zero
+        epsilon = 1e-10
+        # Or filter out small original values
+        mask_px = orig_data["px"].abs() > epsilon
+        mask_py = orig_data["py"].abs() > epsilon
+
+        if mask_px.any():
+            px_diff_rel_filtered = px_diff_avg[mask_px] / orig_data["px"][mask_px]
+            print("px_diff mean (avg rel)", px_diff_rel_filtered.abs().mean(), "±", px_diff_rel_filtered.std())
+        else:
+            print("px_diff mean (avg rel): No significant px values")
+
+        if mask_py.any():
+            py_diff_rel_filtered = py_diff_avg[mask_py] / orig_data["py"][mask_py]
+            print("py_diff mean (avg rel)", py_diff_rel_filtered.abs().mean(), "±", py_diff_rel_filtered.std())
+        else:
+            print("py_diff mean (avg rel): No significant py values")
+        # fmt: on
+
+    return data_p[out_cols], data_n[out_cols], data_avg[out_cols]

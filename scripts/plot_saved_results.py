@@ -2,16 +2,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from aba_optimiser.config import (
-    ELEM_NAMES_FILE,
     MAGNET_RANGE,
     OUTPUT_KNOBS,
+    RUN_ARC_BY_ARC,
     SEQUENCE_FILE,
     TRUE_STRENGTHS,
 )
 from aba_optimiser.mad_interface import MadInterface
-from aba_optimiser.utils import read_elem_names, read_knobs, read_results
+from aba_optimiser.utils import read_knobs, read_results
 
-elem_pos, _ = read_elem_names(ELEM_NAMES_FILE)
 knob_names, knob_strengths, uncertainties = read_results(OUTPUT_KNOBS)
 # Convert knob_strengths and uncertainties to numpy arrays
 knob_strengths = np.array(knob_strengths)
@@ -26,6 +25,9 @@ relative_uncertainties = np.abs(uncertainties) / np.abs(true_strengths)
 
 mad_iface = MadInterface(SEQUENCE_FILE, MAGNET_RANGE)
 initial_strengths = mad_iface.receive_knob_values()
+elem_pos = mad_iface.elem_spos
+if RUN_ARC_BY_ARC:
+    true_strengths = {knob: true_strengths[knob] for knob in mad_iface.knob_names}
 initial_rel_diff = (initial_strengths - true_strengths) / np.abs(true_strengths)
 
 x = np.arange(len(knob_names))

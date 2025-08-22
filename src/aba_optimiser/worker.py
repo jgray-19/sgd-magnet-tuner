@@ -11,8 +11,6 @@ from aba_optimiser.ring_worker import RingWorker
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
-    import tfs
-
     from aba_optimiser.base_worker import BaseWorker
 
 
@@ -38,8 +36,9 @@ def reorder_bpm_last(x: np.ndarray, perm: np.ndarray) -> np.ndarray:
 def build_worker(
     conn: Connection,
     worker_id: int,
-    indices: list[int],
-    comparison_data: tfs.TfsDataFrame,
+    x_comparisons: np.ndarray,
+    y_comparisons: np.ndarray,
+    init_coords: list[list[float]],
     start_bpm: str,
 ) -> BaseWorker:
     """
@@ -48,16 +47,21 @@ def build_worker(
     Args:
         conn: Connection for inter-process communication
         worker_id: Unique identifier for this worker
-        indices: List of turn indices to process
-        comparison_data: Reference data for comparison
+    x_comparisons: Array of shape (num_particles, n_data_points)
+    y_comparisons: Array of shape (num_particles, n_data_points)
+    init_coords: List of initial coordinates for each particle
         start_bpm: Starting BPM name
 
     Returns:
         Worker instance of appropriate type
     """
     if RUN_ARC_BY_ARC:
-        return ArcByArcWorker(conn, worker_id, indices, comparison_data, start_bpm)
-    return RingWorker(conn, worker_id, indices, comparison_data, start_bpm)
+        return ArcByArcWorker(
+            conn, worker_id, x_comparisons, y_comparisons, init_coords, start_bpm
+        )
+    return RingWorker(
+        conn, worker_id, x_comparisons, y_comparisons, init_coords, start_bpm
+    )
 
 
 # Export the individual worker classes and utility functions for explicit use

@@ -27,6 +27,7 @@ class MadInterface:
         magnet_range: str,
         bpm_range: str = None,
         discard_mad_output: bool = True,
+        bpm_pattern: str = BPM_PATTERN,
         **kwargs,
     ):
         """
@@ -43,6 +44,7 @@ class MadInterface:
         if bpm_range is None:
             bpm_range = magnet_range
         self.bpm_range = bpm_range
+        self.bpm_pattern = bpm_pattern
 
         if discard_mad_output:
             kwargs["stdout"] = "/dev/null"
@@ -61,7 +63,7 @@ class MadInterface:
         self.mad.send(f'MADX:load("{self.sequence_file}")')
         self.mad["magnet_range"] = self.magnet_range
         self.mad["bpm_range"] = self.bpm_range
-        self.mad["bpm_pattern"] = BPM_PATTERN
+        self.mad["bpm_pattern"] = self.bpm_pattern
 
         self.mad.send(f"loaded_sequence = MADX.{SEQ_NAME}")
         self.mad.send(

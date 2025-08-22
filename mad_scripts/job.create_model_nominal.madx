@@ -23,7 +23,7 @@ call, file = 'acc-models-lhc/lhc.seq';
 option, echo;  ! re-enable output to see the optics settings
 
 ! ---- Call optics and other modifiers ----
-call, file = 'acc-models-lhc/operation/optics/R2025aRP_A30cmC30cmA10mL200cm_Flat.madx'; !@modifier
+call, file = 'acc-models-lhc/operation/optics/R2025aRP_A200cmC200cmA10mL200cm_1.madx'; !@modifier
 
 ! ----- Remove IR symmetry definitions -----
 

@@ -4,16 +4,16 @@ import pandas as pd
 import tfs
 from tqdm import tqdm
 
+# from aba_optimiser.ellipse_filtering import filter_noisy_data
+# from aba_optimiser.kalman_filtering import BPMKalmanFilter
+from aba_optimiser.calculate_pz import calculate_pz
 from aba_optimiser.config import (
+    BPM_START_POINTS,
     FILTERED_FILE,
     KALMAN_FILE,
     NOISE_FILE,
     TRACK_DATA_FILE,
 )
-
-# from aba_optimiser.ellipse_filtering import filter_noisy_data
-# from aba_optimiser.kalman_filtering import BPMKalmanFilter
-from aba_optimiser.make_noisy_track_data import make_noisy_track_data
 
 # from aba_optimiser.phase_space import PhaseSpaceDiagnostics
 
@@ -22,21 +22,21 @@ if (
     or TRACK_DATA_FILE.stat().st_mtime > NOISE_FILE.stat().st_mtime
 ):
     print(f"Creating noisy TFS data file: {NOISE_FILE}")
-    orig_data = tfs.read(TRACK_DATA_FILE)
-    data_p, data_n = make_noisy_track_data(orig_data)
-    # data_p.to_feather(NOISE_FILE, compression="lz4")
+    orig_data = pd.read_parquet(TRACK_DATA_FILE)
+    _, _, data_avg = calculate_pz(orig_data, low_noise_bpms=BPM_START_POINTS)
+    data_avg.to_feather(NOISE_FILE, compression="lz4")
     import sys
 
     sys.exit(0)  # Exit early to avoid running the rest of the script
 else:
     print("Noisy data already exists and is up-to-date. Creating filtered data only.")
-    data_p = pd.read_feather(NOISE_FILE)
+    data_p = pd.read_parquet(NOISE_FILE)
 
 filtered_data = filter_noisy_data(data_p)
 filtered_data.to_feather(FILTERED_FILE, compression="lz4")
 print("→ Saved filtered data:", FILTERED_FILE)
 
-bpm_groups = dict(tuple(data_p.groupby("name")))
+bpm_groups = dict(tuple(data_p.groupby("name", observed=False)))
 BPMs = list(bpm_groups.keys())
 phase_spaces = []
 
@@ -64,7 +64,7 @@ kalman_data = kalman_filter.run(data_p)
 kalman_data.to_feather(KALMAN_FILE, compression="lz4")
 print("→ Saved Kalman-filtered data:", KALMAN_FILE)
 
-orig_data = tfs.read(TRACK_DATA_FILE)
+orig_data = pd.read_parquet(TRACK_DATA_FILE)
 diff_p = data_p[["x", "px", "y", "py"]].sub(orig_data[["x", "px", "y", "py"]])
 print("x_diff mean (prev w/ k)", diff_p["x"].abs().mean(), "±", diff_p["x"].std())
 print("y_diff mean (prev w/ k)", diff_p["y"].abs().mean(), "±", diff_p["y"].std())

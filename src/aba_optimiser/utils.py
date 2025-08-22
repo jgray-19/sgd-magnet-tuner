@@ -20,7 +20,6 @@ def filter_out_marker(tbl: tfs.TfsDataFrame, marker_name: str) -> tfs.TfsDataFra
     Returns:
         A TFS DataFrame without markers.
     """
-    tbl = tbl.copy()
     if tbl.index.name != "name":
         return tbl[tbl["name"] != marker_name]
     return tbl[tbl.index != marker_name]
@@ -39,15 +38,12 @@ def filter_out_markers(
     Returns:
         A TFS DataFrame without the specified markers.
     """
-    tbl = tbl.copy()
     if tbl.index.name != "name":
         return tbl[~tbl["name"].isin(marker_names)]
     return tbl[~tbl.index.isin(marker_names)]
 
 
-def select_markers(
-    tbl: tfs.TfsDataFrame, marker_name: str | list[str]
-) -> tfs.TfsDataFrame:
+def select_markers(tbl: pd.DataFrame, marker_name: str | list[str]) -> pd.DataFrame:
     """
     Select markers from a TFS DataFrame.
 
@@ -59,7 +55,6 @@ def select_markers(
     """
     if isinstance(marker_name, str):
         marker_name = [marker_name]
-    tbl = tbl.copy()
     if tbl.index.name != "name":
         return tbl[tbl["name"].isin(marker_name)]
     return tbl[tbl.index.isin(marker_name)]
@@ -151,7 +146,7 @@ def save_results(
         uncertainties: List of uncertainties for each knob.
         output_path: Path to the output file.
     """
-    with open(output_path, "w") as f:
+    with Path(output_path).open("w") as f:
         f.write("Knob Name\tStrength\tUncertainty\n")
         for idx, knob in enumerate(knob_names):
             strength = knob_strengths[knob]
@@ -176,7 +171,7 @@ def read_results(file_path: str) -> tuple[list[str], list[float], list[float]]:
     knob_strengths = []
     uncertainties = []
 
-    with open(file_path, "r") as f:
+    with Path(file_path).open("r") as f:
         for line in f:
             parts = line.strip().split("\t")
             if len(parts) != 3:

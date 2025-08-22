@@ -8,7 +8,7 @@ from multiprocessing.connection import Connection
 
 import matplotlib.pyplot as plt
 import numpy as np
-import tfs
+import pandas as pd
 
 from aba_optimiser.config import (
     ACD_ON,
@@ -31,7 +31,7 @@ from aba_optimiser.worker import build_worker
 run_start = time.time()  # start total timing
 start_bpm, end_bpm = MAGNET_RANGE.split("/")
 
-track_data = tfs.read(TRACK_DATA_FILE)
+track_data = pd.read_parquet(TRACK_DATA_FILE)
 start_data = select_markers(track_data, start_bpm)
 comparison_data = track_data.copy()
 if "BPM" not in start_bpm:

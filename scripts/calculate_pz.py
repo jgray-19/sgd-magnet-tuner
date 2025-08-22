@@ -1,5 +1,5 @@
 import numpy as np
-import tfs
+import pandas as pd
 
 from aba_optimiser.config import (
     MAGNET_RANGE,
@@ -10,7 +10,7 @@ from aba_optimiser.config import (
 from aba_optimiser.mad_interface import MadInterface
 from aba_optimiser.utils import read_knobs, select_markers
 
-mad_iface = MadInterface(SEQUENCE_FILE, MAGNET_RANGE)
+mad_iface = MadInterface(SEQUENCE_FILE, MAGNET_RANGE, bpm_pattern="BPM")
 knob_names = mad_iface.knob_names
 true_strengths = read_knobs(TRUE_STRENGTHS)
 for key, value in true_strengths.items():
@@ -25,7 +25,7 @@ sqrt_beta_y = np.sqrt(tws["beta22"].to_numpy())
 mu_x = tws["mu1"].to_numpy()
 mu_y = tws["mu2"].to_numpy()
 
-init_coords = tfs.read(TRACK_DATA_FILE, index="turn")
+init_coords = pd.read_parquet(TRACK_DATA_FILE).set_index("turn")
 # Remove all rows that are not the BPM s.ds.r3.b1
 start_bpm, end_bpm = MAGNET_RANGE.split("/")
 start_coords = select_markers(init_coords, start_bpm)

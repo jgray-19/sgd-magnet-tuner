@@ -66,7 +66,7 @@ class PhaseSpaceDiagnostics:
             self.betay = beta_phase_y.loc[self.bpm, "BETY"]
             self.alfay = beta_phase_y.loc[self.bpm, "ALFY"]
         else:
-            mad_iface = MadInterface(SEQUENCE_FILE, MAGNET_RANGE)
+            mad_iface = MadInterface(SEQUENCE_FILE, MAGNET_RANGE, bpm_pattern="BPM")
             tws = mad_iface.run_twiss()
             self.betax = tws.loc[self.bpm, "beta11"]
             self.alfax = tws.loc[self.bpm, "alfa11"]

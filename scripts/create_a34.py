@@ -1,11 +1,13 @@
-import concurrent.futures  # for parallel processing of track results
+import concurrent.futures
+import multiprocessing as mp
+from typing import TYPE_CHECKING
 
-# import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-import tfs
+import pyarrow as pa
+import pyarrow.parquet as pq
 from pymadng import MAD
 
+from aba_optimiser.calculate_pz import calculate_pz
 from aba_optimiser.config import (
     BEAM_ENERGY,
     # FILTERED_FILE,
@@ -22,33 +24,61 @@ from aba_optimiser.config import (
     TUNE_KNOBS_FILE,
 )
 
-# from aba_optimiser.ellipse_filtering import filter_noisy_data
-# from aba_optimiser.kalman_filtering import BPMKalmanFilter
-from aba_optimiser.make_noisy_track_data import make_noisy_track_data
+if TYPE_CHECKING:
+    import pandas as pd
 
 
-# Define a helper to process a single track result in parallel
-def process_track(ntrk, mad_trk):
+def single_writer_loop(queue: "mp.Queue", out_path: str) -> None:
+    """Dedicated writer: consumes Arrow Tables and writes row groups to one Parquet file."""
+    writer = None
+    try:
+        while True:
+            table = queue.get()
+            if table is None:  # STOP sentinel
+                break
+            if writer is None:
+                writer = pq.ParquetWriter(out_path, table.schema, compression="snappy")
+            writer.write_table(table)
+    finally:
+        if writer is not None:
+            writer.close()
+
+
+def process_track_with_queue(ntrk, mad_trk, track_q: "mp.Queue", noise_q: "mp.Queue"):
     """
-    Process a single MAD tracking result: extract DataFrame, apply noise, run Kalman filter, apply ellipse filtering.
-    Returns tuple of (df_track, noisy_df, kalman_df, filtered_df).
+    Process a single MAD tracking result and enqueue Arrow tables for a
+    dedicated writer process to persist. No file reads, no locks.
     """
     # Retrieve tracked data and convert to DataFrame
     trk = mad_trk["trk"]
-    df = trk.to_df(columns=["name", "turn", "x", "px", "y", "py"])
+    df: pd.DataFrame = trk.to_df(
+        columns=["name", "turn", "x", "px", "y", "py"], force_pandas=True
+    )
     # Adjust turn count
     df["turn"] += ntrk * FLATTOP_TURNS
     # Downcast for memory
-    df["name"] = df["name"].astype("category")
     df["turn"] = df["turn"].astype(np.int32)
-    # Add noise and run Kalman filter
-    noisy_df, _ = make_noisy_track_data(df)
-    # kalman_df = BPMKalmanFilter().run(noisy_df)
-    # Apply ellipse-based filtering
-    # filtered_df = filter_noisy_data(noisy_df)
-    # filtered_df["name"] = filtered_df["name"].astype("category")
-    # filtered_df["turn"] = filtered_df["turn"].astype(np.int32)
-    return df.copy(), noisy_df  # , kalman_df, filtered_df
+
+    # Enqueue tracking data as Arrow table
+    track_q.put(pa.Table.from_pandas(df, preserve_index=False))
+
+    # Add noise and enqueue noisy data
+    df["name"] = df["name"].astype("category")
+    _, _, noisy_df = calculate_pz(df)
+    noisy_df["name"] = noisy_df["name"].astype(str)
+    noise_q.put(pa.Table.from_pandas(noisy_df, preserve_index=False))
+
+    # Free memory immediately
+    del df, noisy_df
+
+
+def process_track(ntrk, mad_trk, track_q: "mp.Queue", noise_q: "mp.Queue"):
+    """
+    Process a single MAD tracking result.
+    Routes to the appropriate implementation based on configuration.
+    """
+    # Use the single-writer queue approach for better I/O efficiency
+    return process_track_with_queue(ntrk, mad_trk, track_q, noise_q)
 
 
 # Initialize MAD-NG interface
@@ -64,7 +94,7 @@ seq.beam = mad.beam(particle='"proton"', energy=BEAM_ENERGY)
 
 # Run an initial twiss
 ini_tws, _ = mad.twiss(sequence=seq)
-ini_tws: tfs.TfsDataFrame = ini_tws.to_df()
+ini_tws = ini_tws.to_df()
 
 rng = np.random.default_rng(42)  # reproducibility
 
@@ -78,16 +108,15 @@ main_quad_names = []
 start, end, _ = mad.MADX[SEQ_NAME].range_of("knob_range")
 
 for elm in seq:
-    if elm.kind == "quadrupole" and elm.k1 != 0 and "MQ." in elm.name:
+    if elm.kind == "quadrupole" and elm.k1 != 0 and elm.name[:3] == "MQ.":
+        elm.k1 = elm.k1 + rng.normal(0, abs(elm.k1 * REL_K1_STD_DEV))  # Add noise
         main_quad_names.append(elm.name)
-        noise = REL_K1_STD_DEV * rng.normal(0, 1)
-        elm.k1 = elm.k1 + noise  # Add noise
 
 print(f"Found {len(main_quad_names)} quadrupoles in the sequence.")
 
 # Run a twiss after changing the quad strengths.
 changed_tws, _ = mad.twiss(sequence=seq)
-changed_tws: tfs.TfsDataFrame = changed_tws.to_df()
+changed_tws = changed_tws.to_df()
 
 beta11_beating = (changed_tws["beta11"] - ini_tws["beta11"]) / ini_tws["beta11"]
 beta22_beating = (changed_tws["beta22"] - ini_tws["beta22"]) / ini_tws["beta22"]
@@ -109,8 +138,8 @@ mad["result"] = mad.match(
         {"var": "'MADX.dqy_b1_op'", "name": "'dQy.b1_op'"},
     ],
     equalities=[
-        {"expr": f"\\t -> math.abs(t.q1)-(62+{tunes[0]})", "name": "'q1'"},
-        {"expr": f"\\t -> math.abs(t.q2)-(60+{tunes[1]})", "name": "'q2'"},
+        {"expr": f"\\t -> t.q1%1-{tunes[0]}", "name": "'q1'"},
+        {"expr": f"\\t -> t.q2%1-{tunes[1]}", "name": "'q2'"},
     ],
     objective={"fmin": 1e-18},
     info=2,
@@ -131,14 +160,14 @@ with TRUE_STRENGTHS.open("w") as f:
         f.write(f"{name}_k1\t{val: .15e}\n")
 
 # Twiss before tracking
-tw = mad.twiss(sequence=seq)[0]
+tw, _ = mad.twiss(sequence=seq)
 df_twiss = tw.to_df()
-print(df_twiss.columns)
 del tw
 
 # Tracking using action-angle
-action_list = [8e-9]  # np.linspace(6e-9, 1.5e-8, num=5)
-angle_list = [0]  # np.linspace(0, 2 * np.pi, endpoint=False, num=2)
+# action_list = [10e-9, 12.5e-9, 15e-9]  # np.linspace(6e-9, 1.5e-8, num=5)
+action_list = np.linspace(8e-9, 12e-9, num=NUM_TRACKS)
+angle_list = [1.4]
 mad_processes = []
 num_tracks = len(action_list) * len(angle_list)
 assert num_tracks == NUM_TRACKS, f"Expected {NUM_TRACKS} tracks, got {num_tracks}."
@@ -198,39 +227,50 @@ for ntrk, mad_trk in enumerate(mad_processes):
     )
 
 # 5. After all tracks are launched, retrieve and process each result in parallel
-track_dfs = []
-noisy_dfs = []
-kalman_dfs = []
-filtered_dfs = []
+# Use lock-based approach for efficient I/O
 
-# Use a thread pool to leverage independent MAD-NG results
+# Start dedicated writer processes and bounded queues for backpressure
+track_queue: "mp.Queue" = mp.Queue(maxsize=32)
+noise_queue: "mp.Queue" = mp.Queue(maxsize=32)
+
+track_writer_proc = mp.Process(
+    target=single_writer_loop,
+    args=(track_queue, str(TRACK_DATA_FILE)),
+    daemon=True,
+)
+noise_writer_proc = mp.Process(
+    target=single_writer_loop,
+    args=(noise_queue, str(NOISE_FILE)),
+    daemon=True,
+)
+track_writer_proc.start()
+noise_writer_proc.start()
+
+# Use a thread pool to leverage independent MAD-NG results; enqueue to writers
 with concurrent.futures.ThreadPoolExecutor() as executor:
-    # Map each (index, process) pair to the helper
-    results = executor.map(lambda args: process_track(*args), enumerate(mad_processes))
-    # for df_t, n_df, k_df, f_df in results:
-    for df_t, n_df in results:
-        track_dfs.append(df_t)
-        noisy_dfs.append(n_df)
-        # kalman_dfs.append(k_df)
-        # filtered_dfs.append(f_df)
+    # Map each (index, process, queue) to the helper and ensure all tasks complete
+    list(
+        executor.map(
+            lambda args: process_track(*args),
+            ((i, p, track_queue, noise_queue) for i, p in enumerate(mad_processes)),
+        )
+    )
 
-# Concatenate all results once
-combined_df = pd.concat(track_dfs, ignore_index=True)
-combined_noisy = pd.concat(noisy_dfs, ignore_index=True)
-# combined_kalman = pd.concat(kalman_dfs, ignore_index=True)
-# combined_filtered = pd.concat(filtered_dfs, ignore_index=True)
-del track_dfs, noisy_dfs, kalman_dfs, filtered_dfs
+# Signal writers to stop and wait for them to finish
+track_queue.put(None)
+noise_queue.put(None)
+track_writer_proc.join()
+noise_writer_proc.join()
 
-# Save combined tracking data
-# Ensure TFS writer compatibility: convert any categorical 'name' to string
-combined_df["name"] = combined_df["name"].astype(str)
-tfs.write(TRACK_DATA_FILE, combined_df)
-print(f"→ Saved combined tracking data: {TRACK_DATA_FILE}")
-del combined_df
+# Report final status
+print(f"→ Saved tracking data (Parquet): {TRACK_DATA_FILE}")
+print(f"→ Saved noisy data (Parquet): {NOISE_FILE}")
 
-combined_noisy.to_feather(NOISE_FILE, compression="lz4")
-print(f"→ Saved combined noisy data: {NOISE_FILE}")
-del combined_noisy
+# Clean up
+del mad_processes
+
+# Final status
+print("→ All tracking and noisy data written to Parquet files.")
 
 # combined_kalman.to_feather(KALMAN_FILE, compression="lz4")
 # print(f"→ Saved combined Kalman-filtered data: {KALMAN_FILE}")

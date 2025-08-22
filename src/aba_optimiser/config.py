@@ -1,4 +1,4 @@
-# src/pymad_optimizer/config.py
+# src/aba_optimiser/config.py
 """
 Configuration constants for the knob optimisation pipeline.
 """
@@ -7,30 +7,43 @@ import logging
 from pathlib import Path
 
 # Simulation parameters
-MAX_EPOCHS = 3000  # Total number of epochs for optimization
-TRACKS_PER_WORKER = 1  # Number of tracks per worker
-NUM_WORKERS = 1  # Number of parallel worker processes
+MAX_EPOCHS = 600  # Total number of epochs for optimization
+TRACKS_PER_WORKER = 1000  # Number of tracks per worker
+NUM_WORKERS = 60  # Number of parallel worker processes
 TOTAL_TRACKS = TRACKS_PER_WORKER * NUM_WORKERS  # Total number of tracks
 
 # Learning-rate schedule
-WARMUP_EPOCHS = 200  # Epochs for cosine warmup
+WARMUP_EPOCHS = 100  # Epochs for cosine warmup
 DECAY_EPOCHS = MAX_EPOCHS - WARMUP_EPOCHS  # Epoch at which cosine decay ends
-WARMUP_LR_START = 1e-7  # Initial learning rate at epoch 1
-MAX_LR = 5e-8  # Peak learning rate after warmup
-MIN_LR = 5e-8
+
+## For ABA
+WARMUP_LR_START = 1e-8  # Initial learning rate at epoch 1
+MAX_LR = 4e-7  # Peak learning rate after warmup
+MIN_LR = 4e-7
+
+## For Ring
+# WARMUP_LR_START = 1e-8  # Initial learning rate at epoch 1
+# MAX_LR = 5e-8
+# MIN_LR = 5e-8  # Minimum learning rate after decay
+
 OPTIMISER_TYPE = "adam"  # or "adam" or "amsgrad" or "stoch_lbfgs_tr"
 GRAD_NORM_ALPHA = 0.7  # Gradient norm smoothing factor for smoothing loss
+GRADIENT_CONVERGED_VALUE = 1e-7
 
 # Standard error of the noise
-POSITION_STD_DEV = 1e-6  # Standard deviation of the position noise
-MOMENTUM_STD_DEV = 3e-6  # Standard deviation of the momentum noise
-REL_K1_STD_DEV = 1e-4  # Standard deviation of the K1 noise
+POSITION_STD_DEV = 1e-4  # Standard deviation of the position noise
+MOMENTUM_STD_DEV = 3e-7  # Standard deviation of the momentum noise
+REL_K1_STD_DEV = 1e-3  # Standard deviation of the K1 noise
 
-RUN_ARC_BY_ARC = False
+RUN_ARC_BY_ARC = True
 BPM_START_POINTS = [
-    "BPM.13R3.B1",
-    "BPM.14R3.B1",
-    "BPM.15R3.B1",
+    "BPM.10R4.B1",
+    "BPM.11R4.B1",
+    # "BPM.12R4.B1",
+    # "BPM.13R4.B1",
+    # "BPM.14R4.B1",
+    # "BPM.15R4.B1",
+    # "BPM.16R4.B1",
 ]
 
 N_RUN_TURNS = 1  # Number of turns to run the simulation for each track
@@ -39,8 +52,9 @@ N_COMPARE_TURNS = N_RUN_TURNS - OBSERVE_TURNS_FROM + 1  # Number of turns to com
 
 # Tracking parameters
 RAMP_UP_TURNS = 1_000  # Number of turns to ramp up the ACD
-FLATTOP_TURNS = 2_000  # Number of turns on the flat top
-NUM_TRACKS = 1  # Number of tracks of FLATTOP_TURNS, so total number of turns is FLATTOP_TURNS * NUM_TRACKS (asssuming acd is off)
+# FLATTOP_TURNS = 6_600  # Number of turns on the flat top
+FLATTOP_TURNS = 3_000  # Number of turns on the flat top
+NUM_TRACKS = 30  # Number of tracks of FLATTOP_TURNS, so total number of turns is FLATTOP_TURNS * NUM_TRACKS (asssuming acd is off)
 ACD_ON = False  # Whether the ACD was used or not (Ignores the ramp up turns)
 
 module_path = Path(__file__).absolute().parent.parent.parent
@@ -48,8 +62,8 @@ logger = logging.getLogger(__name__)
 logger.info(f"Current module path: {module_path}")
 # File paths
 SEQUENCE_FILE = module_path / "mad_scripts/lhcb1.seq"  # MAD-X sequence file
-TRACK_DATA_FILE = module_path / "data/track_data.tfs"  # Measurement TFS file
-NOISE_FILE = module_path / "data/noise_data.feather"  # Noise TFS file
+TRACK_DATA_FILE = module_path / "data/track_data.parquet"  # Measurement Parquet file
+NOISE_FILE = module_path / "data/noise_data.parquet"  # Noise Parquet file
 FILTERED_FILE = module_path / "data/filtered_data.feather"  # Filtered TFS file
 KALMAN_FILE = module_path / "data/kalman_data.feather"  # Kalman-filtered TFS file
 TRUE_STRENGTHS = module_path / "data/true_strengths.txt"  # Ground-truth knob strengths
@@ -61,12 +75,12 @@ MAD_SCRIPTS_DIR = (
 )  # Directory for MAD-NG scripts
 
 # Simulation specifics
-MAGNET_RANGE = "$start/$end"  # Magnet selection range for tracking
-# MAGNET_RANGE = "BPM.13R3.B1/BPM.12L4.B1"
+# MAGNET_RANGE = "$start/$end"  # Magnet selection range for tracking
+MAGNET_RANGE = "BPM.11R4.B1/BPM.11L5.B1"
 BEAM_ENERGY = 6800  # Beam energy in GeV
 SEQ_NAME = "lhcb1"  # Sequence name in MAD-X (lowercase)
 FILTER_DATA = False  # Whether to filter data with a Kalman filter
-USE_NOISY_DATA = False  # Whether to use noisy data for optimisation
+USE_NOISY_DATA = True  # Whether to use noisy data for optimisation
 
 """
 This has the current problem of no matter the number of files included in the simulation,

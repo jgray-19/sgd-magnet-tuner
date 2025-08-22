@@ -6,9 +6,9 @@ import tfs
 
 from aba_optimiser.config import (
     ACD_ON,
-    BPM_START,
+    # BPM_START,
     # BPM_RANGE,
-    FILTERED_FILE,
+    # FILTERED_FILE,
     KALMAN_FILE,
     NOISE_FILE,
     RAMP_UP_TURNS,
@@ -18,30 +18,30 @@ from aba_optimiser.phase_space import PhaseSpaceDiagnostics
 from aba_optimiser.utils import select_markers
 
 # Extract BPM names
-start_bpm = BPM_START
-other_bpm = BPM_START
+start_bpm = "BPM.12R4.B1"
+other_bpm = "BPM.11R4.B1"
 
 # Load non-noisy data
-init_coords = tfs.read(TRACK_DATA_FILE, index="turn")
+init_coords = pd.read_parquet(TRACK_DATA_FILE).set_index("turn")
 non_noisy_start = select_markers(init_coords, start_bpm)
 non_noisy_other = select_markers(init_coords, other_bpm)
 
 # Load noisy data
-noise_init = pd.read_feather(NOISE_FILE).set_index("turn")
+noise_init = pd.read_parquet(NOISE_FILE).set_index("turn")
 noisy_start = select_markers(noise_init, start_bpm)
 noise_other = select_markers(noise_init, other_bpm)
 
 # Load filtered data: both ellipse and Kalman
-filtered_ellipse_full = pd.read_feather(FILTERED_FILE).set_index("turn")
+# filtered_ellipse_full = pd.read_feather(FILTERED_FILE).set_index("turn")
 filtered_kalman_full = pd.read_feather(KALMAN_FILE).set_index("turn")
-print(
-    f"Ellipse-filtered data loaded with columns: {filtered_ellipse_full.columns.tolist()}"
-)
+# print(
+#     f"Ellipse-filtered data loaded with columns: {filtered_ellipse_full.columns.tolist()}"
+# )
 print(
     f"Kalman-filtered data loaded with columns: {filtered_kalman_full.columns.tolist()}"
 )
-filtered_start = select_markers(filtered_ellipse_full, start_bpm)
-filtered_other = select_markers(filtered_ellipse_full, other_bpm)
+# filtered_start = select_markers(filtered_ellipse_full, start_bpm)
+# filtered_other = select_markers(filtered_ellipse_full, other_bpm)
 kalman_start = select_markers(filtered_kalman_full, start_bpm)
 kalman_other = select_markers(filtered_kalman_full, other_bpm)
 
@@ -51,8 +51,8 @@ if ACD_ON:
     non_noisy_other = non_noisy_other[non_noisy_other.index > RAMP_UP_TURNS]
     noisy_start = noisy_start[noisy_start.index > RAMP_UP_TURNS]
     noise_other = noise_other[noise_other.index > RAMP_UP_TURNS]
-    filtered_start = filtered_start[filtered_start.index > RAMP_UP_TURNS]
-    filtered_other = filtered_other[filtered_other.index > RAMP_UP_TURNS]
+    # filtered_start = filtered_start[filtered_start.index > RAMP_UP_TURNS]
+    # filtered_other = filtered_other[filtered_other.index > RAMP_UP_TURNS]
     kalman_start = kalman_start[kalman_start.index > RAMP_UP_TURNS]
     kalman_other = kalman_other[kalman_other.index > RAMP_UP_TURNS]
 
@@ -86,10 +86,11 @@ x_lower, px_lower, y_lower, py_lower = ps_diag_start.ellipse_sigma(sigma_level=-
 
 
 def plot_phase_space(
+    *,
     ax,
     noisy,
     non_noisy,
-    filtered,
+    # filtered,
     kalman,
     coord1,
     coord2,
@@ -104,8 +105,8 @@ def plot_phase_space(
     ax.scatter(
         non_noisy[coord1], non_noisy[coord2], s=1, color="red", label="Non-noisy"
     )
-    ax.scatter(filtered[coord1], filtered[coord2], s=1, color="green", label="Filtered")
-    ax.scatter(kalman[coord1], kalman[coord2], s=1, color="magenta", label="Kalman")
+    # ax.scatter(filtered[coord1], filtered[coord2], s=1, color="green", label="Filtered")
+    ax.scatter(kalman[coord1], kalman[coord2], s=1, color="green", label="Kalman")
 
     if extra_mask is not None and extra_labels is not None:
         ax.scatter(
@@ -122,13 +123,13 @@ def plot_phase_space(
             color="orange",
             label=extra_labels[1],
         )
-        ax.scatter(
-            filtered[coord1][extra_mask],
-            filtered[coord2][extra_mask],
-            s=1,
-            color="purple",
-            label=extra_labels[2],
-        )
+        # ax.scatter(
+        #     filtered[coord1][extra_mask],
+        #     filtered[coord2][extra_mask],
+        #     s=1,
+        #     color="purple",
+        #     label=extra_labels[2],
+        # )
 
     if ellipse is not None:
         # ellipse: (center, upper, lower) tuples
@@ -158,7 +159,7 @@ plot_configs = [
         "ax": axs[0, 0],
         "noisy": noisy_start,
         "non_noisy": non_noisy_start,
-        "filtered": filtered_start,
+        # "filtered": filtered_start,
         "kalman": kalman_start,
         "coord1": "x",
         "coord2": "px",
@@ -169,7 +170,7 @@ plot_configs = [
         "ax": axs[0, 1],
         "noisy": noisy_start,
         "non_noisy": non_noisy_start,
-        "filtered": filtered_start,
+        # "filtered": filtered_start,
         "kalman": kalman_start,
         "coord1": "y",
         "coord2": "py",
@@ -180,7 +181,7 @@ plot_configs = [
         "ax": axs[1, 0],
         "noisy": noise_other,
         "non_noisy": non_noisy_other,
-        "filtered": filtered_other,
+        # "filtered": filtered_other,
         "kalman": kalman_other,
         "coord1": "x",
         "coord2": "px",
@@ -195,7 +196,7 @@ plot_configs = [
         "ax": axs[1, 1],
         "noisy": noise_other,
         "non_noisy": non_noisy_other,
-        "filtered": filtered_other,
+        # "filtered": filtered_other,
         "kalman": kalman_other,
         "coord1": "y",
         "coord2": "py",
@@ -207,6 +208,7 @@ plot_configs = [
         # ],
     },
 ]
+
 
 # Loop over subplots
 for cfg in plot_configs:
@@ -220,6 +222,9 @@ plt.suptitle("Phase Space Comparison", y=0.98)
 plt.tight_layout(rect=[0, 0, 1, 0.95])
 # plt.savefig("merged_phase_space_comparison.png", dpi=300)
 plt.show()
+import sys
+
+sys.exit(0)
 # === Second plot: absolute differences ===
 
 
@@ -265,8 +270,8 @@ difference_configs = [
     {
         "ax": axs[0, 0],
         "noisy": noisy_start,
-        "filtered": filtered_start,
-        "kalman": kalman_start,
+        # "filtered": filtered_start,
+        # "kalman": kalman_start,
         "non_noisy": non_noisy_start,
         "coord1": "x",
         "coord2": "px",
@@ -275,8 +280,8 @@ difference_configs = [
     {
         "ax": axs[0, 1],
         "noisy": noisy_start,
-        "filtered": filtered_start,
-        "kalman": kalman_start,
+        # "filtered": filtered_start,
+        # "kalman": kalman_start,
         "non_noisy": non_noisy_start,
         "coord1": "y",
         "coord2": "py",
