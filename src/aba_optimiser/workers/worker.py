@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -12,6 +13,8 @@ if TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
     from aba_optimiser.workers.base import BaseWorker
+
+LOGGER = logging.getLogger(__name__)
 
 
 # Utility functions from original worker

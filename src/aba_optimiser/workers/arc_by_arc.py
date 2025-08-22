@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from aba_optimiser.config import (
@@ -9,6 +10,8 @@ from aba_optimiser.workers.base import BaseWorker
 
 if TYPE_CHECKING:
     from pymadng import MAD
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ArcByArcWorker(BaseWorker):

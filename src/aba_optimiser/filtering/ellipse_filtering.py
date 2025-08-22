@@ -1,3 +1,4 @@
+import logging
 import re
 
 import numpy as np
@@ -11,6 +12,7 @@ from aba_optimiser.config import (
 from aba_optimiser.mad.mad_interface import MadInterface
 from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 
+LOGGER = logging.getLogger(__name__)
 regexpr = r"BPM\.([0-9]+)[RL][34]\.B1"
 
 
@@ -24,6 +26,7 @@ def is_x_bpm(name: str) -> bool:
 
 
 def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
+    LOGGER.info(f"Starting ellipse filtering on {len(data)} data points")
     data = data.copy()
     data.set_index(["turn", "name"], inplace=True)
     mad_iface = MadInterface(SEQUENCE_FILE, MAGNET_RANGE)

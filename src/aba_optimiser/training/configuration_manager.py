@@ -1,0 +1,124 @@
+"""Configuration and setup management for the optimisation controller."""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+import numpy as np
+
+from aba_optimiser.config import (
+    BPM_START_POINTS,
+    MAGNET_RANGE,
+    NUM_WORKERS,
+    RUN_ARC_BY_ARC,
+    SEQUENCE_FILE,
+)
+from aba_optimiser.mad.mad_interface import MadInterface
+from aba_optimiser.workers.arc_by_arc import ArcByArcWorker
+from aba_optimiser.workers.ring import RingWorker
+
+if TYPE_CHECKING:
+    from aba_optimiser.workers.base import BaseWorker
+
+LOGGER = logging.getLogger(__name__)
+
+
+def circular_far_samples(
+    arr: np.ndarray, k: int, start_offset: int = 0
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Pick k indices as far apart as possible on a circular array.
+    k must be <= len(arr). start_offset rotates the selection.
+    """
+    n = len(arr)
+    if k > n:
+        raise ValueError("k must be <= len(arr)")
+    step = n / k
+    # bin centers → unique indices even when step is non-integer
+    idx = (np.floor((np.arange(k) + 0.5) * step + start_offset) % n).astype(int)
+    return arr[idx], idx
+
+
+class ConfigurationManager:
+    """Manages configuration and setup for the optimisation process."""
+
+    def __init__(self):
+        self.mad_iface: MadInterface | None = None
+        self.knob_names: list[str] = []
+        self.elem_spos: np.ndarray = np.array([])
+        self.all_bpms: np.ndarray = np.array([])
+        self.bpm_start_points: list[str] = []
+        self.Worker: type[BaseWorker] | None = None
+        self.initial_strengths: np.ndarray = np.array([])
+
+    def setup_mad_interface(self) -> None:
+        """Initialise the MAD-NG interface and get basic model parameters."""
+        self.mad_iface = MadInterface(
+            SEQUENCE_FILE, MAGNET_RANGE, discard_mad_output=True
+        )
+        self.knob_names = self.mad_iface.knob_names
+        self.elem_spos = self.mad_iface.elem_spos
+        tws = self.mad_iface.run_twiss()
+        LOGGER.info(f"Found tunes: {tws['q1']}, {tws['q2']}")
+        self.all_bpms = tws.index.to_numpy()
+
+    def determine_worker_and_bpms(self) -> None:
+        """Determine the worker type and BPM start points based on the run mode."""
+        if RUN_ARC_BY_ARC:
+            LOGGER.warning(
+                "Arc by arc chosen, ignoring N_RUN_TURNS, OBSERVE_TURNS_FROM, N_COMPARE_TURNS"
+            )
+            for bpm in BPM_START_POINTS:
+                if bpm not in self.all_bpms:
+                    raise ValueError(f"BPM {bpm} not found in the sequence.")
+            self.bpm_start_points = BPM_START_POINTS
+            self.Worker = ArcByArcWorker
+        else:
+            LOGGER.warning(
+                "Whole ring chosen, BPM start points ignored, taking an even distribution based on NUM_WORKERS"
+            )
+            self.bpm_start_points, _ = circular_far_samples(
+                self.all_bpms, min(NUM_WORKERS, len(self.all_bpms))
+            )
+            self.Worker = RingWorker
+
+    def initialise_knob_strengths(
+        self, true_strengths: dict[str, float]
+    ) -> dict[str, float]:
+        """Initialise knob strengths from MAD and filter true strengths."""
+        if self.mad_iface is None:
+            raise ValueError("MAD interface must be setup first")
+
+        initial_strengths = self.mad_iface.receive_knob_values()
+        self.initial_strengths = initial_strengths
+        current_knobs = dict(zip(self.knob_names, initial_strengths))
+
+        # Restrict true strengths to knobs we actually have in model
+        if RUN_ARC_BY_ARC:
+            filtered_true_strengths = {
+                knob: true_strengths[knob] for knob in self.knob_names
+            }
+        else:
+            missing = set(self.knob_names) ^ set(true_strengths)
+            if missing:
+                raise ValueError(
+                    f"Mismatch between model knobs and true strengths: {missing}"
+                )
+            filtered_true_strengths = true_strengths
+
+        return current_knobs, filtered_true_strengths
+
+    def calculate_n_data_points(self) -> dict[str, int]:
+        """Calculate number of data points for each BPM start point."""
+        if self.Worker is None:
+            raise ValueError("Worker type must be determined first")
+
+        n_data_points = {}
+        for start_bpm in self.bpm_start_points:
+            bpm_range = self.Worker.get_bpm_range(start_bpm)
+            n_bpms = MadInterface(
+                SEQUENCE_FILE, magnet_range=MAGNET_RANGE, bpm_range=bpm_range
+            ).nbpms
+            n_data_points[start_bpm] = self.Worker.get_n_data_points(n_bpms)
+        return n_data_points

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from multiprocessing import Process
 from typing import TYPE_CHECKING
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
     from pymadng import MAD
+
+LOGGER = logging.getLogger(__name__)
 
 
 class BaseWorker(Process, ABC):
@@ -43,6 +46,10 @@ class BaseWorker(Process, ABC):
         super().__init__()
         self.worker_id = worker_id
         self.conn = conn
+
+        LOGGER.debug(
+            f"Initializing worker {worker_id} for BPM {start_bpm} with {len(init_coords)} particles"
+        )
 
         self.x_comparisons = x_comparisons
         self.y_comparisons = y_comparisons
@@ -110,8 +117,11 @@ class BaseWorker(Process, ABC):
             mad: The MAD object
             nbpms: Number of BPMs
         """
+        LOGGER.debug(f"Worker {self.worker_id}: Setting up MAD interface")
+
         # Get magnet range specific to worker type
         bpm_range = self.get_bpm_range(self.start_bpm)
+        LOGGER.debug(f"Worker {self.worker_id}: Using BPM range {bpm_range}")
 
         mad_iface = MadInterface(
             SEQUENCE_FILE,
@@ -203,6 +213,9 @@ end
 
         # Main tracking loop
         hessian_var_x, hessian_var_y = self.conn.recv()
+        LOGGER.debug(
+            f"Worker {self.worker_id}: Received Hessian vars x={hessian_var_x}, y={hessian_var_y}"
+        )
         knob_updates = self.conn.recv()  # shape (n_knobs,)
 
         while knob_updates is not None:

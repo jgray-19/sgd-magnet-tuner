@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from collections import deque
 from typing import Callable
 
 import numpy as np
+
+LOGGER = logging.getLogger(__name__)
 
 
 class StochasticLBFGSTROptimiser:

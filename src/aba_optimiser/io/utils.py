@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+LOGGER = logging.getLogger(__name__)
 
 
 def read_knobs(path: str) -> dict[str, float]:
@@ -13,6 +16,7 @@ def read_knobs(path: str) -> dict[str, float]:
     Returns:
         A dictionary mapping knob names to their true float strengths.
     """
+    LOGGER.info(f"Reading knobs from {path}")
     strengths: dict[str, float] = {}
     with Path(path).open("r") as f:
         for line in f:
@@ -21,6 +25,7 @@ def read_knobs(path: str) -> dict[str, float]:
                 continue
             knob, val = parts
             strengths[knob] = float(val)
+    LOGGER.debug(f"Read {len(strengths)} knobs from {path}")
     return strengths
 
 
@@ -45,6 +50,7 @@ def save_results(
             strength = knob_strengths[knob]
             uncertainty = uncertainties[idx]
             f.write(f"{knob}\t{strength:.15e}\t{uncertainty:.15e}\n")
+    LOGGER.info(f"Saved results for {len(knob_names)} knobs to {output_path}")
 
 
 def read_results(file_path: str) -> tuple[list[str], list[float], list[float]]:
@@ -64,6 +70,7 @@ def read_results(file_path: str) -> tuple[list[str], list[float], list[float]]:
     knob_strengths = []
     uncertainties = []
 
+    LOGGER.info(f"Reading results from {file_path}")
     with Path(file_path).open("r") as f:
         for line in f:
             parts = line.strip().split("\t")
@@ -77,6 +84,7 @@ def read_results(file_path: str) -> tuple[list[str], list[float], list[float]]:
             knob_names.append(knob)
             knob_strengths.append(float(strength))
             uncertainties.append(float(uncertainty))
+    LOGGER.debug(f"Read {len(knob_names)} knobs from {file_path}")
 
     return knob_names, knob_strengths, uncertainties
 

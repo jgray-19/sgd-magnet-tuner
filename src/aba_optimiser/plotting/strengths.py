@@ -4,12 +4,15 @@ Plotting utilities for the ABA optimiser results.
 
 from __future__ import annotations
 
+import logging
 import warnings
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _setup_scientific_formatting():

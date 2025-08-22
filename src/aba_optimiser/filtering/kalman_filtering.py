@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -19,6 +20,8 @@ from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 
 if TYPE_CHECKING:
     import tfs
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _compute_q_for_bpm(
@@ -226,12 +229,14 @@ py:send(jx); py:send(jpx); py:send(jy); py:send(jpy)
         meas_df should have at least ["name","turn","x","y"]. If px/py are present,
         they are ignored as observations and will be estimated by the filter.
         """
+        LOGGER.info(f"Running Kalman filter on {len(meas_df)} measurements")
         self.Q = self._compute_q(meas_df, REL_K1_STD_DEV)
 
         print("Running Kalman filter...")
         # Unique sorted turns
         turns = range(int(meas_df["turn"].min()), int(meas_df["turn"].max() + 1))
         n_turns = len(turns)
+        LOGGER.debug(f"Processing {n_turns} turns for {len(self.bpm_list)} BPMs")
 
         # Build pivot tables for x and y only
         pivot_x = (

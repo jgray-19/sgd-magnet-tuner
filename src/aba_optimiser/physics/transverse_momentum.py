@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -15,6 +16,8 @@ from aba_optimiser.physics.bpm_phases import next_bpm_to_pi_2, prev_bpm_to_pi_2
 if TYPE_CHECKING:
     import tfs
 
+LOGGER = logging.getLogger(__name__)
+
 
 def calculate_pz(
     orig_data: tfs.TfsDataFrame,
@@ -28,6 +31,8 @@ def calculate_pz(
     Generates two noisy DataFrames (data_p, data_n) based on config values.
     Prioritizes computation speed and avoids unnecessary RAM usage.
     """
+    LOGGER.info(f"Calculating transverse momentum - inject_noise={inject_noise}, low_noise_bpms={len(low_noise_bpms) if low_noise_bpms else 0} BPMs")
+
     out_cols = ["name", "turn", "x", "px", "y", "py"]
     # np.random.seed(seed)
 
@@ -41,6 +46,7 @@ def calculate_pz(
         rng = np.random.default_rng()  # Use new Generator API
 
     if inject_noise:
+        LOGGER.debug(f"Adding Gaussian noise with std={POSITION_STD_DEV}")
         # Generate per-row Gaussian noise and reduce it for low-error BPMs
         n = len(orig_data)
         noise_x = rng.normal(0, POSITION_STD_DEV, size=n)
@@ -51,6 +57,7 @@ def calculate_pz(
             mask = orig_data["name"].isin(low_noise_bpms)
             if mask.any():
                 low_n = int(mask.sum())
+                LOGGER.debug(f"Reducing noise for {low_n} measurements at {len(low_noise_bpms)} low-noise BPMs")
                 # Replace noise for these BPMs with 10x lower std dev
                 noise_x[mask.to_numpy()] = rng.normal(
                     0, POSITION_STD_DEV / 10.0, size=low_n

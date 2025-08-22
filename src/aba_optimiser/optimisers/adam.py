@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
+
+LOGGER = logging.getLogger(__name__)
 
 
 class AdamOptimiser:
@@ -39,6 +43,10 @@ class AdamOptimiser:
         self.eps = eps
         self.weight_decay = weight_decay
 
+        LOGGER.debug(
+            f"Initializing Adam optimizer with shape={shape}, beta1={beta1}, beta2={beta2}, eps={eps}, weight_decay={weight_decay}"
+        )
+
         # Initialise first and second moments and timestep
         self.m = np.zeros(shape, dtype=float)
         self.v = np.zeros(shape, dtype=float)
@@ -64,9 +72,12 @@ class AdamOptimiser:
         """
         self.t += 1
 
+        LOGGER.debug(f"Adam step {self.t}: lr={lr}, weight_decay={self.weight_decay}")
+
         # Apply weight decay directly to gradients if specified
         if self.weight_decay != 0:
             grads = grads + self.weight_decay * params
+            LOGGER.debug(f"Applied weight decay: {self.weight_decay}")
 
         # Update biased first and second moment estimates
         self.m = self.beta1 * self.m + (1 - self.beta1) * grads
@@ -80,4 +91,9 @@ class AdamOptimiser:
         update = lr * (
             m_hat / (np.sqrt(v_hat) + self.eps)
         )  # / (np.sqrt(diag_hessian) + self.eps)
-        return params - update
+
+        new_params = params - update
+        update_norm = np.linalg.norm(update)
+        LOGGER.debug(f"Update norm: {update_norm:.6e}")
+
+        return new_params

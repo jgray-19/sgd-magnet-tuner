@@ -37,7 +37,7 @@ REL_K1_STD_DEV = 1e-3  # Standard deviation of the K1 noise
 
 RUN_ARC_BY_ARC = True
 BPM_START_POINTS = [
-    "BPM.10R4.B1",
+    # "BPM.10R4.B1",
     "BPM.11R4.B1",
     # "BPM.12R4.B1",
     # "BPM.13R4.B1",
@@ -53,7 +53,7 @@ N_COMPARE_TURNS = N_RUN_TURNS - OBSERVE_TURNS_FROM + 1  # Number of turns to com
 # Tracking parameters
 RAMP_UP_TURNS = 1_000  # Number of turns to ramp up the ACD
 # FLATTOP_TURNS = 6_600  # Number of turns on the flat top
-FLATTOP_TURNS = 3_00  # Number of turns on the flat top
+FLATTOP_TURNS = 4_000  # Number of turns on the flat top
 NUM_TRACKS = 30  # Number of tracks of FLATTOP_TURNS, so total number of turns is FLATTOP_TURNS * NUM_TRACKS (asssuming acd is off)
 ACD_ON = False  # Whether the ACD was used or not (Ignores the ramp up turns)
 
@@ -81,6 +81,7 @@ SEQ_NAME = "lhcb1"  # Sequence name in MAD-X (lowercase)
 FILTER_DATA = False  # Whether to filter data with a Kalman filter
 USE_NOISY_DATA = True  # Whether to use noisy data for optimisation
 
+
 """
 This has the current problem of no matter the number of files included in the simulation,
 I cannot reduce the error on the final result significantly. I am still limited to 5e-4.
@@ -100,7 +101,7 @@ TODO:
 - Look at understanding the uncertainty - mathematically, where it arises, and
     which parameters reduce it and how.
 - Think about tracking a distribution of particles using MAD-NG with a single
-    coordinate system.???
+
 
 - think about how to pinpoint errors in the lattice, i.e. identify the largest
     errors in the lattice

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from aba_optimiser.optimisers.adam import AdamOptimiser
+
+LOGGER = logging.getLogger(__name__)
 
 
 class AMSGradOptimiser(AdamOptimiser):
@@ -22,6 +26,7 @@ class AMSGradOptimiser(AdamOptimiser):
         super().__init__(
             shape, beta1=beta1, beta2=beta2, eps=eps, weight_decay=weight_decay
         )
+        LOGGER.debug(f"Initializing AMSGrad optimizer with shape={shape}")
         # track the running maximum of the bias-corrected second moment
         self.v_hat_max = np.zeros(shape, dtype=float)
 
@@ -45,6 +50,8 @@ class AMSGradOptimiser(AdamOptimiser):
         # increment time step
         self.t += 1
 
+        LOGGER.debug(f"AMSGrad step {self.t}: lr={lr}")
+
         # apply weight decay if any
         if self.weight_decay != 0:
             grads = grads + self.weight_decay * params
@@ -63,4 +70,9 @@ class AMSGradOptimiser(AdamOptimiser):
         # parameter update
         # update = lr * (m_hat / (np.sqrt(self.v_hat_max) + self.eps)) / (np.sqrt(diag_hessian) + self.eps)
         update = lr * (m_hat / (np.sqrt(self.v_hat_max) + self.eps))
-        return params - update
+        new_params = params - update
+
+        update_norm = np.linalg.norm(update)
+        LOGGER.debug(f"AMSGrad update norm: {update_norm:.6e}")
+
+        return new_params

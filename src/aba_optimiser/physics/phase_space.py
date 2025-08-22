@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +8,8 @@ import tfs
 
 from aba_optimiser.config import MAGNET_RANGE, SEQUENCE_FILE, module_path
 from aba_optimiser.mad.mad_interface import MadInterface
+
+LOGGER = logging.getLogger(__name__)
 
 
 class PhaseSpaceDiagnostics:
@@ -21,6 +24,7 @@ class PhaseSpaceDiagnostics:
         num_points=50,
         analysis_dir: Path | str = module_path / "analysis",
     ):
+        LOGGER.debug(f"Initializing phase space diagnostics for BPM {bpm} with {len(x_data)} data points")
         self.bpm = bpm
         self.num_points = num_points
         self.x0 = np.mean(x_data)

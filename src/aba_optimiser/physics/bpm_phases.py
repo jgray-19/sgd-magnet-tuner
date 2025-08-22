@@ -1,5 +1,9 @@
+import logging
+
 import numpy as np
 import pandas as pd
+
+LOGGER = logging.getLogger(__name__)
 
 
 def prev_bpm_to_pi_2(mu: pd.Series, tune: float) -> pd.DataFrame:
