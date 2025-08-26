@@ -9,11 +9,11 @@ import numpy as np
 
 from aba_optimiser.config import KNOB_TABLE, OUTPUT_KNOBS
 from aba_optimiser.io.utils import save_results, scientific_notation
-from aba_optimiser.plotting import (
+from aba_optimiser.plotting.strengths import (
     plot_strengths_comparison,
     plot_strengths_vs_position,
-    show_plots,
 )
+from aba_optimiser.plotting.utils import show_plots
 
 LOGGER = logging.getLogger(__name__)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import random
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -91,7 +92,9 @@ class DataManager:
             )
             self.available_turns = self.available_turns[:-N_RUN_TURNS]
 
-        num_turns_needed = TRACKS_PER_WORKER * NUM_WORKERS // len(self.bpm_start_points)
+        num_turns_needed = (
+            TRACKS_PER_WORKER * NUM_WORKERS
+        )  # // len(self.bpm_start_points)
         LOGGER.debug(
             f"Need {num_turns_needed} turns for {NUM_WORKERS} workers with {TRACKS_PER_WORKER} tracks each"
         )
@@ -112,21 +115,26 @@ class DataManager:
             )
 
         # Determine how many turns each batch should contain
-        tracks_per_worker = min(
-            len(self.available_turns) // NUM_WORKERS, TRACKS_PER_WORKER
+        num_batches = NUM_WORKERS
+        self.tracks_per_worker = min(
+            len(self.available_turns) // num_batches, TRACKS_PER_WORKER
         )
-        num_batches = NUM_WORKERS // len(self.bpm_start_points)
+
+        # Randomly select turns for each batch
+        random.shuffle(self.available_turns)
+        LOGGER.info(f"Each worker will process {self.tracks_per_worker} turns")
         self.turn_batches = [
-            self.available_turns[i * tracks_per_worker : (i + 1) * tracks_per_worker]
+            self.available_turns[
+                i * self.tracks_per_worker : (i + 1) * self.tracks_per_worker
+            ]
             for i in range(num_batches)
         ]
 
     def get_total_turns(self) -> int:
         """Calculate total number of turns to process."""
         n_compare = N_COMPARE_TURNS if not RUN_ARC_BY_ARC else 1
-        tracks_per_worker = len(self.turn_batches[0]) if self.turn_batches else 0
 
-        return NUM_WORKERS * tracks_per_worker * n_compare
+        return NUM_WORKERS * self.tracks_per_worker * n_compare
 
     def get_indexed_comparison_data(self) -> pd.DataFrame:
         """Get comparison data with multi-index for efficient lookups."""

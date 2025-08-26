@@ -9,20 +9,11 @@ import warnings
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
 import numpy as np
 
+from aba_optimiser.plotting.utils import setup_scientific_formatting
+
 LOGGER = logging.getLogger(__name__)
-
-
-def _setup_scientific_formatting():
-    """Setup scientific notation formatting for both axes."""
-    formatter = mticker.ScalarFormatter(useMathText=True)
-    formatter.set_scientific(True)
-    formatter.set_powerlimits((0, 0))
-    ax = plt.gca()
-    ax.xaxis.set_major_formatter(formatter)
-    ax.yaxis.set_major_formatter(formatter)
 
 
 def plot_strengths_comparison(
@@ -201,10 +192,11 @@ def plot_strengths_comparison(
         ax.set_ylabel("Relative difference (fraction)")
     ax.grid(axis="y", alpha=0.3)
 
-    _setup_scientific_formatting()
+    setup_scientific_formatting(plane="y")
 
     ax.set_xticks(x)
     ax.set_xticklabels(magnet_names, rotation=45, ha="right")
+    ax.set_ylim(top=3.5e-4)
 
     if initial_vals is not None:
         ax.legend()
@@ -401,7 +393,7 @@ def plot_strengths_vs_position(
     plt.legend()
     plt.grid(alpha=0.3)
 
-    _setup_scientific_formatting()
+    setup_scientific_formatting(plane="y")
 
     plt.tight_layout()
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)

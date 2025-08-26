@@ -8,17 +8,18 @@ from aba_optimiser.config import (
     # BPM_START,
     # BPM_RANGE,
     # FILTERED_FILE,
-    KALMAN_FILE,
+    # KALMAN_FILE,
     NOISE_FILE,
     RAMP_UP_TURNS,
     TRACK_DATA_FILE,
 )
 from aba_optimiser.dataframes.utils import select_markers
 from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
+from aba_optimiser.plotting.utils import setup_scientific_formatting
 
 # Extract BPM names
-start_bpm = "BPM.12R4.B1"
-other_bpm = "BPM.11R4.B1"
+start_bpm = "BPM.11R4.B1"
+other_bpm = "BPM.12R4.B1"
 
 # Load non-noisy data
 init_coords = pd.read_parquet(TRACK_DATA_FILE).set_index("turn")
@@ -32,17 +33,17 @@ noise_other = select_markers(noise_init, other_bpm)
 
 # Load filtered data: both ellipse and Kalman
 # filtered_ellipse_full = pd.read_feather(FILTERED_FILE).set_index("turn")
-filtered_kalman_full = pd.read_feather(KALMAN_FILE).set_index("turn")
+# filtered_kalman_full = pd.read_feather(KALMAN_FILE).set_index("turn")
 # print(
 #     f"Ellipse-filtered data loaded with columns: {filtered_ellipse_full.columns.tolist()}"
 # )
-print(
-    f"Kalman-filtered data loaded with columns: {filtered_kalman_full.columns.tolist()}"
-)
+# print(
+#     f"Kalman-filtered data loaded with columns: {filtered_kalman_full.columns.tolist()}"
+# )
 # filtered_start = select_markers(filtered_ellipse_full, start_bpm)
 # filtered_other = select_markers(filtered_ellipse_full, other_bpm)
-kalman_start = select_markers(filtered_kalman_full, start_bpm)
-kalman_other = select_markers(filtered_kalman_full, other_bpm)
+# kalman_start = select_markers(filtered_kalman_full, start_bpm)
+# kalman_other = select_markers(filtered_kalman_full, other_bpm)
 
 # Apply ramp-up filter if ACD_ON
 if ACD_ON:
@@ -52,8 +53,8 @@ if ACD_ON:
     noise_other = noise_other[noise_other.index > RAMP_UP_TURNS]
     # filtered_start = filtered_start[filtered_start.index > RAMP_UP_TURNS]
     # filtered_other = filtered_other[filtered_other.index > RAMP_UP_TURNS]
-    kalman_start = kalman_start[kalman_start.index > RAMP_UP_TURNS]
-    kalman_other = kalman_other[kalman_other.index > RAMP_UP_TURNS]
+    # kalman_start = kalman_start[kalman_start.index > RAMP_UP_TURNS]
+    # kalman_other = kalman_other[kalman_other.index > RAMP_UP_TURNS]
 
 # Prepare analytical ellipses for start BPM
 ps_diag_start = PhaseSpaceDiagnostics(
@@ -86,14 +87,14 @@ x_lower, px_lower, y_lower, py_lower = ps_diag_start.ellipse_sigma(sigma_level=-
 
 def plot_phase_space(
     *,
-    ax,
+    ax: plt.Axes,
     noisy,
     non_noisy,
     # filtered,
-    kalman,
-    coord1,
-    coord2,
-    title,
+    # kalman,
+    coord1: str,
+    coord2: str,
+    title: str,
     ellipse=None,
     extra_mask=None,
     extra_labels=None,
@@ -105,7 +106,7 @@ def plot_phase_space(
         non_noisy[coord1], non_noisy[coord2], s=1, color="red", label="Non-noisy"
     )
     # ax.scatter(filtered[coord1], filtered[coord2], s=1, color="green", label="Filtered")
-    ax.scatter(kalman[coord1], kalman[coord2], s=1, color="green", label="Kalman")
+    # ax.scatter(kalman[coord1], kalman[coord2], s=1, color="green", label="Kalman")
 
     if extra_mask is not None and extra_labels is not None:
         ax.scatter(
@@ -143,45 +144,48 @@ def plot_phase_space(
             lower_x, lower_y, color="orange", linestyle="--", label="-1 Sigma Ellipse"
         )
 
-    ax.set_xlabel(coord1)
-    ax.set_ylabel(coord2)
-    ax.set_title(title)
+    coord1 = coord1.replace("p", "p_")
+    coord2 = coord2.replace("p", "p_")
+    ax.set_xlabel("$" + coord1 + "$")
+    ax.set_ylabel("$" + coord2 + "$")
+    # ax.set_title(title)
     ax.grid()
+    setup_scientific_formatting(ax, powerlimits=(-1, 1))
 
 
 # Create subplots
-fig, axs = plt.subplots(2, 2, figsize=(10, 8))
+fig, axs = plt.subplots(1, 2, figsize=(12, 4))
 
 # Settings for each subplot
 plot_configs = [
     {
-        "ax": axs[0, 0],
+        "ax": axs[0],
         "noisy": noisy_start,
         "non_noisy": non_noisy_start,
         # "filtered": filtered_start,
-        "kalman": kalman_start,
+        # "kalman": kalman_start,
         "coord1": "x",
         "coord2": "px",
         "title": f"x, px Phase Space ({start_bpm})",
-        "ellipse": [(x_ellipse, px_ellipse), (x_upper, px_upper), (x_lower, px_lower)],
+        # "ellipse": [(x_ellipse, px_ellipse), (x_upper,x    px_upper), (x_lower, px_lower)],
     },
     {
-        "ax": axs[0, 1],
+        "ax": axs[1],
         "noisy": noisy_start,
         "non_noisy": non_noisy_start,
         # "filtered": filtered_start,
-        "kalman": kalman_start,
+        # "kalman": kalman_start,
         "coord1": "y",
         "coord2": "py",
         "title": f"y, py Phase Space ({start_bpm})",
-        "ellipse": [(y_ellipse, py_ellipse), (y_upper, py_upper), (y_lower, py_lower)],
+        # "ellipse": [(y_ellipse, py_ellipse), (y_upper, py_upper), (y_lower, py_lower)],
     },
     {
-        "ax": axs[1, 0],
+        # "ax": axs[1, 0],
         "noisy": noise_other,
         "non_noisy": non_noisy_other,
         # "filtered": filtered_other,
-        "kalman": kalman_other,
+        # "kalman": kalman_other,
         "coord1": "x",
         "coord2": "px",
         "title": f"x, px Phase Space ({other_bpm})",
@@ -192,11 +196,11 @@ plot_configs = [
         # ],
     },
     {
-        "ax": axs[1, 1],
+        # "ax": axs[1, 1],
         "noisy": noise_other,
         "non_noisy": non_noisy_other,
         # "filtered": filtered_other,
-        "kalman": kalman_other,
+        # "kalman": kalman_other,
         "coord1": "y",
         "coord2": "py",
         "title": f"y, py Phase Space ({other_bpm})",
@@ -210,16 +214,16 @@ plot_configs = [
 
 
 # Loop over subplots
-for cfg in plot_configs:
+for cfg in plot_configs[:2]:
     plot_phase_space(**cfg)
 
 # Global legend
-handles, labels = axs[0, 0].get_legend_handles_labels()
+handles, labels = axs[0].get_legend_handles_labels()
 fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1, 1))
 
-plt.suptitle("Phase Space Comparison", y=0.98)
+# plt.suptitle("Phase Space Comparison", y=0.98)
 plt.tight_layout(rect=[0, 0, 1, 0.95])
-# plt.savefig("merged_phase_space_comparison.png", dpi=300)
+plt.savefig("phase_space_comparison.png", dpi=250)
 plt.show()
 import sys
 
@@ -272,9 +276,9 @@ difference_configs = [
         # "filtered": filtered_start,
         # "kalman": kalman_start,
         "non_noisy": non_noisy_start,
-        "coord1": "x",
-        "coord2": "px",
-        "title": f"Difference of x and px ({start_bpm})",
+        "coord1": "$x$",
+        "coord2": "$p_x$",
+        "title": f"Difference of $x$ and $p_x$ ({start_bpm})",
     },
     {
         "ax": axs[0, 1],
@@ -282,9 +286,9 @@ difference_configs = [
         # "filtered": filtered_start,
         # "kalman": kalman_start,
         "non_noisy": non_noisy_start,
-        "coord1": "y",
-        "coord2": "py",
-        "title": f"Difference of y and py ({start_bpm})",
+        "coord1": "$y$",
+        "coord2": "$p_y$",
+        "title": f"Difference of $y$ and $p_y$ ({start_bpm})",
     },
     {
         "ax": axs[1, 0],

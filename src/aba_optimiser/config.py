@@ -7,37 +7,40 @@ import logging
 from pathlib import Path
 
 # Simulation parameters
-MAX_EPOCHS = 600  # Total number of epochs for optimization
+MAX_EPOCHS = 200  # Total number of epochs for optimization
 TRACKS_PER_WORKER = 2000  # Number of tracks per worker
 NUM_WORKERS = 60  # Number of parallel worker processes
 TOTAL_TRACKS = TRACKS_PER_WORKER * NUM_WORKERS  # Total number of tracks
 
+# Mini-batch configuration
+NUM_BATCHES = 8  # Number of batches - creates NUM_BATCHES * NUM_WORKERS total workers, each with TRACKS_PER_WORKER/NUM_BATCHES tracks
+
 # Learning-rate schedule
-WARMUP_EPOCHS = 100  # Epochs for cosine warmup
+WARMUP_EPOCHS = 3  # Epochs for cosine warmup
 DECAY_EPOCHS = MAX_EPOCHS - WARMUP_EPOCHS  # Epoch at which cosine decay ends
 
 ## For ABA
-WARMUP_LR_START = 1e-8  # Initial learning rate at epoch 1
-MAX_LR = 4e-7  # Peak learning rate after warmup
-MIN_LR = 4e-7
+WARMUP_LR_START = 1e-3  # Initial learning rate at epoch 1
+MAX_LR = 3e-1  # Peak learning rate after warmup
+MIN_LR = 3e-1
 
 ## For Ring
 # WARMUP_LR_START = 1e-8  # Initial learning rate at epoch 1
 # MAX_LR = 5e-8
 # MIN_LR = 5e-8  # Minimum learning rate after decay
 
-OPTIMISER_TYPE = "adam"  # or "adam" or "amsgrad" or "stoch_lbfgs_tr"
+OPTIMISER_TYPE = "lbfgs"  # or "adam" or "amsgrad" or "lbfgs"
 GRAD_NORM_ALPHA = 0.7  # Gradient norm smoothing factor for smoothing loss
-GRADIENT_CONVERGED_VALUE = 1e-7
+GRADIENT_CONVERGED_VALUE = 1e-8
 
 # Standard error of the noise
-POSITION_STD_DEV = 1e-4  # Standard deviation of the position noise
+POSITION_STD_DEV = 1e-5  # Standard deviation of the position noise
 MOMENTUM_STD_DEV = 3e-6  # Standard deviation of the momentum noise
-REL_K1_STD_DEV = 1e-3  # Standard deviation of the K1 noise
+REL_K1_STD_DEV = 1e-4  # Standard deviation of the K1 noise
 
 RUN_ARC_BY_ARC = True
 BPM_START_POINTS = [
-    # "BPM.10R4.B1",
+    "BPM.10R4.B1",
     "BPM.11R4.B1",
     # "BPM.12R4.B1",
     # "BPM.13R4.B1",
@@ -62,8 +65,8 @@ logger = logging.getLogger(__name__)
 logger.info(f"Current module path: {module_path}")
 # File paths
 SEQUENCE_FILE = module_path / "mad_scripts/lhcb1.seq"  # MAD-X sequence file
-TRACK_DATA_FILE = module_path / "data/track_data.parquet"  # Measurement Parquet file
-NOISE_FILE = module_path / "data/noise_data.parquet"  # Noise Parquet file
+TRACK_DATA_FILE = module_path / "data/track_data.parquet_ln"  # Measurement Parquet file
+NOISE_FILE = module_path / "data/noise_data.parquet_ln"  # Noise Parquet file
 FILTERED_FILE = module_path / "data/filtered_data.feather"  # Filtered TFS file
 KALMAN_FILE = module_path / "data/kalman_data.feather"  # Kalman-filtered TFS file
 TRUE_STRENGTHS = module_path / "data/true_strengths.txt"  # Ground-truth knob strengths

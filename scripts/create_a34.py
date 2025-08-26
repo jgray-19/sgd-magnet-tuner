@@ -235,12 +235,12 @@ noise_queue: "mp.Queue" = mp.Queue(maxsize=32)
 
 track_writer_proc = mp.Process(
     target=single_writer_loop,
-    args=(track_queue, str(TRACK_DATA_FILE)),
+    args=(track_queue, str(TRACK_DATA_FILE) + "_ln"),
     daemon=True,
 )
 noise_writer_proc = mp.Process(
     target=single_writer_loop,
-    args=(noise_queue, str(NOISE_FILE)),
+    args=(noise_queue, str(NOISE_FILE) + "_ln"),
     daemon=True,
 )
 track_writer_proc.start()
@@ -263,8 +263,8 @@ track_writer_proc.join()
 noise_writer_proc.join()
 
 # Report final status
-print(f"→ Saved tracking data (Parquet): {TRACK_DATA_FILE}")
-print(f"→ Saved noisy data (Parquet): {NOISE_FILE}")
+print(f"→ Saved tracking data (Parquet): {TRACK_DATA_FILE}_ln")
+print(f"→ Saved noisy data (Parquet): {NOISE_FILE}_ln")
 
 # Clean up
 del mad_processes

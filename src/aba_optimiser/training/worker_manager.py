@@ -34,26 +34,24 @@ class WorkerManager:
     ) -> list[dict]:
         """Create payloads for all workers."""
         payloads = []
-        wid = 0
-        for start_bpm in bpm_start_points:
-            for batch_idx, turn_batch in enumerate(turn_batches):
-                assert turn_batch, (
-                    f"Turn batch {batch_idx} for BPM {start_bpm} is empty. "
-                    f"Check TRACKS_PER_WORKER and NUM_WORKERS."
-                )
-                x_comp, y_comp, init_coords = self._make_worker_payload(
-                    comp, turn_batch, start_bpm, self.n_data_points[start_bpm]
-                )
-                payloads.append(
-                    {
-                        "wid": wid,
-                        "x_comp": x_comp,
-                        "y_comp": y_comp,
-                        "init_coords": init_coords,
-                        "start_bpm": start_bpm,
-                    }
-                )
-                wid += 1
+        for batch_idx, turn_batch in enumerate(turn_batches):
+            start_bpm = bpm_start_points[batch_idx % len(bpm_start_points)]
+            assert turn_batch, (
+                f"Turn batch {batch_idx} for BPM {start_bpm} is empty. "
+                f"Check TRACKS_PER_WORKER and NUM_WORKERS."
+            )
+            x_comp, y_comp, init_coords = self._make_worker_payload(
+                comp, turn_batch, start_bpm, self.n_data_points[start_bpm]
+            )
+            payloads.append(
+                {
+                    "wid": batch_idx,
+                    "x_comp": x_comp,
+                    "y_comp": y_comp,
+                    "init_coords": init_coords,
+                    "start_bpm": start_bpm,
+                }
+            )
         return payloads
 
     def _make_worker_payload(

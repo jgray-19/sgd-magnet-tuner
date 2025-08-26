@@ -20,6 +20,7 @@ from aba_optimiser.config import (
 )
 from aba_optimiser.optimisers.adam import AdamOptimiser
 from aba_optimiser.optimisers.amsgrad import AMSGradOptimiser
+from aba_optimiser.optimisers.lbfgs import LBFGSOptimiser
 from aba_optimiser.training.scheduler import LRScheduler
 
 if TYPE_CHECKING:
@@ -67,8 +68,17 @@ class OptimisationLoop:
         }
         if optimiser_type == "amsgrad":
             self.optimiser = AMSGradOptimiser(**optimiser_kwargs)
-        else:
+        elif optimiser_type == "adam":
             self.optimiser = AdamOptimiser(**optimiser_kwargs)
+        elif optimiser_type == "lbfgs":
+            self.optimiser = LBFGSOptimiser(
+                history_size=20,
+                eps=1e-12,
+                weight_decay=optimiser_kwargs["weight_decay"],
+            )
+        else:
+            raise ValueError(f"Unknown optimiser type: {optimiser_type}")
+        LOGGER.info(f"Using optimiser: {self.optimiser.__class__.__name__}")
 
     def run_optimisation(
         self,
@@ -170,10 +180,24 @@ class OptimisationLoop:
         sum_true_diff = np.sum(true_diff)
         sum_rel_diff = np.sum(rel_diff)
 
+        true_middle_diff = [
+            abs(current_knobs[k] - self.true_strengths[k])
+            for k in self.knob_names[5:-5]
+        ]
+        rel_middle_diff = [
+            diff / abs(self.true_strengths[k]) if self.true_strengths[k] != 0 else 0
+            for k, diff in zip(self.knob_names[5:-5], true_middle_diff)
+        ]
+
+        sum_true_middle_diff = np.sum(true_middle_diff)
+        sum_rel_middle_diff = np.sum(rel_middle_diff)
+
         writer.add_scalar("loss", total_loss, epoch)
         writer.add_scalar("grad_norm", grad_norm, epoch)
         writer.add_scalar("true_diff", sum_true_diff, epoch)
         writer.add_scalar("rel_diff", sum_rel_diff, epoch)
+        writer.add_scalar("true_middle_diff", sum_true_middle_diff, epoch)
+        writer.add_scalar("rel_middle_diff", sum_rel_middle_diff, epoch)
         writer.add_scalar("learning_rate", lr, epoch)
         writer.flush()
 
@@ -186,6 +210,8 @@ class OptimisationLoop:
             f"grad_norm={grad_norm:.3e}, "
             f"true_diff={sum_true_diff:.3e}, "
             f"rel_diff={sum_rel_diff:.3e}, "
+            f"true_middle_diff={sum_true_middle_diff:.3e}, "
+            f"rel_middle_diff={sum_rel_middle_diff:.3e}, "
             f"lr={lr:.3e}, "
             f"epoch_time={epoch_time:.3f}s, "
             f"total_time={total_time:.3f}s",

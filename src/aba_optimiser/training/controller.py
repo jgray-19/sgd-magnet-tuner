@@ -140,6 +140,7 @@ class Controller:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     mp.set_start_method("spawn")
     ctrl = Controller()
     ctrl.run()
