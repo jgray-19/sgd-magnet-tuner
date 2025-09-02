@@ -25,6 +25,7 @@ class MadInterface:
         self,
         sequence_file: str,
         magnet_range: str,
+        optimise_sextupoles: bool = False,
         bpm_range: str = None,
         discard_mad_output: bool = True,
         bpm_pattern: str = BPM_PATTERN,
@@ -56,7 +57,7 @@ class MadInterface:
         self._observe_bpms()
 
         self._set_tune_knobs()
-        self._make_adj_knobs()
+        self._make_adj_knobs(optimise_sextupoles)
 
     def _load_sequence(self) -> None:
         """Load the sequence and count BPMs in the specified range."""
@@ -109,27 +110,42 @@ py:send(true)
 
         logging.info(f"Set tune knobs from {TUNE_KNOBS_FILE}: {tune_knobs}")
 
-    def _make_adj_knobs(self) -> None:
+    def _make_adj_knobs(self, optimise_sextupoles: bool) -> None:
         """
         Create deferred-strength knobs for each group in elem_groups.
         If a group contains more than one element, they will share the same knob.
         """
-        self.mad.send("""
-local knob_names = {}
-local spos_list = {}
+        element_condition = (
+            '(e.kind == "quadrupole" and e.k1 ~=0 and e.name:match("MQ%."))'
+        )
+        if optimise_sextupoles:
+            element_condition += (
+                ' or (e.kind == "sextupole" and e.k2 ~= 0 and e.name:match("MS%."))'
+            )
+        add_sext_knobs = ""
+        if optimise_sextupoles:
+            add_sext_knobs = """
+            loaded_sequence[k_str_name] = e.k2 ! Must not be 0.
+            e.k2 = \\->loaded_sequence[k_str_name]
+            """
+
+        self.mad.send(f"""
+local knob_names = {{}}
+local spos_list = {{}}
 for i, e, s, ds in loaded_sequence:siter(magnet_range) do
-    if e.kind == "quadrupole" and e.k1 ~=0 and e.name:match("MQ%.") then
-        local k1_str_name = e.name .. "_k1"
-        table.insert(knob_names, k1_str_name)
-        -- Add k1s here if necessary
-
-        loaded_sequence[k1_str_name] = e.k1 ! Must not be 0.
-        e.k1 = \\->loaded_sequence[k1_str_name]
-
+    if {element_condition} then
+        local k_str_name = e.name .. "_k"
+        if e.k1 and e.k1 ~= 0 then
+            loaded_sequence[k_str_name] = e.k1 ! Must not be 0.
+            e.k1 = \\->loaded_sequence[k_str_name]
+        elseif e.k2 and e.k2 ~= 0 then
+            {add_sext_knobs}
+        end
+        table.insert(knob_names, k_str_name)
         table.insert(spos_list, s)
     end
 end
-coord_names = { "x", "px", "y", "py", "t", "pt" }
+coord_names = {{"x", "px", "y", "py", "t", "pt"}}
 py:send(knob_names, true)
 py:send(spos_list, true)
 """)

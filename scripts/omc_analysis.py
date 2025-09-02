@@ -7,14 +7,14 @@ from omc3.model_creator import create_instance_and_model
 
 # from lhcng.model import create_model_dir
 from aba_optimiser.config import (
+    NO_NOISE_FILE,
     POSITION_STD_DEV,
-    TRACK_DATA_FILE,
     module_path,
 )
 
 out_cols = ["name", "turn", "id", "eidx", "x", "px", "y", "py"]
 numeric_cols = ["x", "px", "y", "py"]
-data = pd.read_parquet(TRACK_DATA_FILE)
+data = pd.read_parquet(NO_NOISE_FILE)
 data["x"] += np.random.normal(0, POSITION_STD_DEV, size=len(data))
 data["y"] += np.random.normal(0, POSITION_STD_DEV, size=len(data))
 DO_OMC_ANALYSIS = False
@@ -45,10 +45,10 @@ if DO_OMC_ANALYSIS:
 
     out_cols = data.columns.tolist()
     cols_for_analysis = [col for col in out_cols if col not in ["px", "py"]]
-    linfile_dir = TRACK_DATA_FILE.parent / "linfiles"
+    linfile_dir = NO_NOISE_FILE.parent / "linfiles"
     linfile_dir.mkdir(exist_ok=True)
 
-    tbt_file = TRACK_DATA_FILE.parent / "noisy_omc3.tfs.bz2"
+    tbt_file = NO_NOISE_FILE.parent / "noisy_omc3.tfs.bz2"
     tfs.write(tbt_file, data[cols_for_analysis])
     print("Running hole-in-one frequency analysis...")
     hole_in_one_entrypoint(

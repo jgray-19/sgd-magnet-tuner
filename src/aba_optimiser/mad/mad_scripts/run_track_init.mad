@@ -2,7 +2,7 @@
 
 ! Assumes the following variables are defined:
 ! loaded_sequence: the sequence to be used for tracking
-! num_particles: a table with the number of particles for each starting bpm
+! batch_size: a table with the number of particles for each starting bpm
 ! nbpms: the number of BPMs to track
 ! knob_names: a table with the names of the knobs
 ! vector: a MAD vector object for creating vectors
@@ -10,7 +10,7 @@
 ! py: a Python interface object for sending data
 
 assert(
-    num_particles and nbpms and
+    batch_size and nbpms and
     knob_names and vector and matrix and py and n_compare_turns,
     "Missing required variables for initialising"
 )
@@ -22,12 +22,12 @@ get_range = vector(num_knobs):seq(7)
 
 ! Create tables to hold the x, y, dx_dk, and dy_dk data for each particle.
 ! Specifying how many indexable slots we want in each table. (lujit)
-x = table.new(num_particles, 0)
-y = table.new(num_particles, 0)
-dx_dk = table.new(num_particles, 0)
-dy_dk = table.new(num_particles, 0)
+x = table.new(batch_size, 0)
+y = table.new(batch_size, 0)
+dx_dk = table.new(batch_size, 0)
+dy_dk = table.new(batch_size, 0)
 
-for i=1,num_particles do
+for i=1,batch_size do
     x[i] = vector(nbpms*n_compare_turns)
     y[i] = vector(nbpms*n_compare_turns)
     dx_dk[i] = matrix(num_knobs, nbpms*n_compare_turns)
@@ -44,7 +44,7 @@ function save_data(elm, mflw, _, slc)
     local turn in mflw
     -- Observe the BPMs at the specified intervals
     if slc == -2 and elm:is_observed() and turn >= mflw.observe then
-        for i=1,num_particles do
+        for i=1,batch_size do
             x[i]:seti(observe_count, mflw[i].x:get0()) ! get0 returns the scalar
             y[i]:seti(observe_count, mflw[i].y:get0()) ! get0 returns the scalar
             dx_dk[i]:setsub(set_range, observe_count, get_knob_vec(mflw[i].x))
@@ -52,5 +52,15 @@ function save_data(elm, mflw, _, slc)
         end
         -- Increment the index for the next bpm
         observe_count = observe_count + 1
+    end
+end
+
+function reset_before_tracking()
+    observe_count = 1
+    for i=1,batch_size do
+        x[i]:zeros()
+        y[i]:zeros()
+        dx_dk[i]:zeros()
+        dy_dk[i]:zeros()
     end
 end

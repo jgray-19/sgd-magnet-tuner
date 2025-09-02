@@ -21,9 +21,12 @@ LOGGER = logging.getLogger(__name__)
 class ResultManager:
     """Manages result processing and output generation."""
 
-    def __init__(self, knob_names: list[str], elem_spos: np.ndarray):
+    def __init__(
+        self, knob_names: list[str], elem_spos: np.ndarray, show_plots: bool = True
+    ):
         self.knob_names = knob_names
         self.elem_spos = elem_spos
+        self.show_plots = show_plots
 
     def save_results(
         self,
@@ -120,4 +123,5 @@ class ResultManager:
             plot_real=False,
             save_path=f"{save_prefix}relative_difference_vs_position_comparison.png",
         )
-        show_plots()
+        if self.show_plots:
+            show_plots()

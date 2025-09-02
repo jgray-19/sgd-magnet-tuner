@@ -16,10 +16,10 @@ from aba_optimiser.config import (
     ACD_ON,
     FLATTOP_TURNS,
     MAGNET_RANGE,
+    NO_NOISE_FILE,
     NUM_WORKERS,
     RAMP_UP_TURNS,
     SEQUENCE_FILE,
-    TRACK_DATA_FILE,
     TRUE_STRENGTHS,
 )
 from aba_optimiser.dataframes.utils import (
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 run_start = time.time()  # start total timing
 start_bpm, end_bpm = MAGNET_RANGE.split("/")
 
-track_data = pd.read_parquet(TRACK_DATA_FILE)
+track_data = pd.read_parquet(NO_NOISE_FILE)
 start_data = select_markers(track_data, start_bpm)
 comparison_data = track_data.copy()
 if "BPM" not in start_bpm:

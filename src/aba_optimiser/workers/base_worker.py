@@ -10,8 +10,10 @@ import numpy as np
 from aba_optimiser.config import (
     MAD_SCRIPTS_DIR,
     MAGNET_RANGE,
+    QUAD_OPT_SETTINGS,
     SEQ_NAME,
     SEQUENCE_FILE,
+    SEXT_OPT_SETTINGS,
 )
 from aba_optimiser.mad.mad_interface import MadInterface
 
@@ -36,8 +38,9 @@ class BaseWorker(Process, ABC):
         worker_id: int,
         x_comparisons: np.ndarray,
         y_comparisons: np.ndarray,
-        init_coords: list[list[float]],
+        init_coords: np.ndarray,
         start_bpm: str,
+        optimise_sextupoles: bool = False,
     ) -> None:
         """
         New constructor that accepts compact numpy payloads built by the parent
@@ -54,13 +57,23 @@ class BaseWorker(Process, ABC):
         self.x_comparisons = x_comparisons
         self.y_comparisons = y_comparisons
 
-        self.num_particles = len(init_coords)
-        self.init_coords = init_coords
+        num_batches = QUAD_OPT_SETTINGS.num_batches
+        if optimise_sextupoles:
+            num_batches = SEXT_OPT_SETTINGS.num_batches
+
+        init_coords = np.array_split(init_coords, num_batches)
+
+        # Convert init_coords from list of matrices into list of list of lists
+        self.init_coords = [ic.tolist() for ic in init_coords]
+        self.batch_size = len(self.init_coords[0])
+
         self.start_bpm = start_bpm
+        self.num_batches = num_batches
+        self.optimise_sextupoles = optimise_sextupoles
+
+        self._split_data_to_batches()
 
         # Load common MAD scripts
-        self.run_track_init = (MAD_SCRIPTS_DIR / "run_track_init.mad").read_text()
-        self.estimate_hessian = (MAD_SCRIPTS_DIR / "estimate_hessian.mad").read_text()
         self.run_track_script = (MAD_SCRIPTS_DIR / "run_track.mad").read_text()
 
     @staticmethod
@@ -92,21 +105,36 @@ class BaseWorker(Process, ABC):
             f"da_x0_base = damap{{nv=#coord_names, np=#knob_names, mo={knob_order}, po={knob_order}, vn=tblcat(coord_names, knob_names)}}"
         )
 
-    def send_initial_conditions(
-        self, mad: MAD, initial_conditions: list[list[float]]
-    ) -> None:
+    def _split_data_to_batches(self):
+        """
+        Split the comparison data, which will be of dimensions (n_tracks, n_data_points),
+        into self.num_batches batches, producing arrays of shape (batch_size, n_data_points).
+        Also split the initial conditions into N batches.
+        """
+        self.x_comparisons = np.array_split(
+            self.x_comparisons, self.num_batches, axis=0
+        )
+
+        self.y_comparisons = np.array_split(
+            self.y_comparisons, self.num_batches, axis=0
+        )
+
+    def send_initial_conditions(self, mad: MAD) -> None:
         """
         Sets the initial conditions for each track in MAD-NG.
         """
         mad.send("""
-    da_x0_c = table.new(num_particles, 0)
-    init_coords = py:recv()
-    for i=1,num_particles do
-        da_x0_c[i] = da_x0_base:copy()
-        da_x0_c[i]:set0(init_coords[i])
+da_x0_c = table.new(num_batches, 0)
+init_coords = py:recv()
+for i=1,num_batches do
+    da_x0_c[i] = table.new(batch_size, 0)
+    for j=1,batch_size do
+        da_x0_c[i][j] = da_x0_base:copy()
+        da_x0_c[i][j]:set0(init_coords[i][j])
     end
+end
             """)
-        mad.send(initial_conditions)
+        mad.send(self.init_coords)
 
     def setup_mad_interface(self) -> MAD:
         """
@@ -127,12 +155,13 @@ class BaseWorker(Process, ABC):
             SEQUENCE_FILE,
             magnet_range=MAGNET_RANGE,
             bpm_range=bpm_range,
-            # discard_mad_output=False,
+            optimise_sextupoles=self.optimise_sextupoles,
         )
 
         mad = mad_iface.mad
         mad["knob_names"] = mad_iface.knob_names
-        mad["num_particles"] = self.num_particles
+        mad["batch_size"] = self.batch_size
+        mad["num_batches"] = self.num_batches
 
         # Import required MAD-NG modules
         mad.load("MAD", "damap", "matrix", "vector")
@@ -154,9 +183,7 @@ end
         return mad
 
     def compute_gradients_and_loss(
-        self,
-        mad: MAD,
-        knob_updates: dict[str, float],
+        self, mad: MAD, knob_updates: dict[str, float], batch: int
     ) -> tuple[np.ndarray, float]:
         """
         Process tracking results and compute gradients and loss.
@@ -173,6 +200,7 @@ end
 
         # Run tracking
         mad.send("\n".join(update_string))
+        mad.send(f"batch = {batch + 1}")  # + 1 for python to lua list index
         mad.send(self.run_track_script)
 
         # Get results
@@ -182,13 +210,13 @@ end
         dy_dk = mad.recv()
 
         # Process results into arrays
-        x_stack = np.asarray(x_res).squeeze(-1)  # (num_particles, n_data_points)
-        y_stack = np.asarray(y_res).squeeze(-1)  # (num_particles, n_data_points)
+        x_stack = np.asarray(x_res).squeeze(-1)  # (batch_size, n_data_points)
+        y_stack = np.asarray(y_res).squeeze(-1)  # (batch_size, n_data_points)
         dx_stack = np.stack(dx_dk, axis=0)
         dy_stack = np.stack(dy_dk, axis=0)
 
-        x_diffs = x_stack - self.x_comparisons
-        y_diffs = y_stack - self.y_comparisons
+        x_diffs = x_stack - self.x_comparisons[batch]
+        y_diffs = y_stack - self.y_comparisons[batch]
 
         # Compute gradients using vector-Jacobian products
         gx = np.einsum("pkm,pm->k", dx_stack, x_diffs)  # (K,)
@@ -206,10 +234,10 @@ end
         mad = self.setup_mad_interface()
 
         # Send initial conditions
-        self.send_initial_conditions(mad, self.init_coords)
+        self.send_initial_conditions(mad)
 
         # Initialise the MAD environment ready for tracking
-        mad.send(self.run_track_init)
+        mad.send((MAD_SCRIPTS_DIR / "run_track_init.mad").read_text())
 
         # Main tracking loop
         hessian_var_x, hessian_var_y = self.conn.recv()
@@ -218,15 +246,18 @@ end
         )
         knob_updates = self.conn.recv()  # shape (n_knobs,)
 
+        batch = 0
         while knob_updates is not None:
             # Process tracking and compute gradients
-            grad, loss = self.compute_gradients_and_loss(mad, knob_updates)
+            grad, loss = self.compute_gradients_and_loss(mad, knob_updates, batch)
 
             # Send results back
             self.conn.send((self.worker_id, grad, loss))
 
             # Receive next knob updates
             knob_updates = self.conn.recv()
+
+            batch = (batch + 1) % self.num_batches
 
         # Final hessian estimation
         mad.send("""
@@ -235,6 +266,6 @@ var_y = py:recv()
 """)
         mad.send(1 / hessian_var_x)
         mad.send(1 / hessian_var_y)
-        mad.send(self.estimate_hessian)
+        mad.send((MAD_SCRIPTS_DIR / "estimate_hessian.mad").read_text())
         h_part = mad.recv()
         self.conn.send(h_part)  # shape (n_knobs, n_knobs)

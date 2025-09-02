@@ -31,7 +31,9 @@ def calculate_pz(
     Generates two noisy DataFrames (data_p, data_n) based on config values.
     Prioritizes computation speed and avoids unnecessary RAM usage.
     """
-    LOGGER.info(f"Calculating transverse momentum - inject_noise={inject_noise}, low_noise_bpms={len(low_noise_bpms) if low_noise_bpms else 0} BPMs")
+    LOGGER.info(
+        f"Calculating transverse momentum - inject_noise={inject_noise}, low_noise_bpms={len(low_noise_bpms) if low_noise_bpms else 0} BPMs"
+    )
 
     out_cols = ["name", "turn", "x", "px", "y", "py"]
     # np.random.seed(seed)
@@ -57,7 +59,9 @@ def calculate_pz(
             mask = orig_data["name"].isin(low_noise_bpms)
             if mask.any():
                 low_n = int(mask.sum())
-                LOGGER.debug(f"Reducing noise for {low_n} measurements at {len(low_noise_bpms)} low-noise BPMs")
+                LOGGER.debug(
+                    f"Reducing noise for {low_n} measurements at {len(low_noise_bpms)} low-noise BPMs"
+                )
                 # Replace noise for these BPMs with 10x lower std dev
                 noise_x[mask.to_numpy()] = rng.normal(
                     0, POSITION_STD_DEV / 10.0, size=low_n
@@ -70,15 +74,17 @@ def calculate_pz(
         data["y"] = orig_data["y"] + noise_y
 
     # Subtract mean coordinates at each BPM to center around closed orbit
-    # Explicitly pass observed=False to retain current behavior and silence pandas FutureWarning
-    bpm_means = data.groupby("name", observed=False)[["x", "y"]].mean()
+    LOGGER.warning(
+        "Not centering the BPMs - plus and minus deltap have different COs - Need to be discussed. "
+    )
+    # bpm_means = data.groupby("name", observed=False)[["x", "y"]].mean()
     # if info:
     #     print("BPM means (x, y):")
     #     print(bpm_means)
-    data = data.merge(bpm_means, on="name", suffixes=("", "_mean"))
-    data["x"] = data["x"] - data["x_mean"]
-    data["y"] = data["y"] - data["y_mean"]
-    data.drop(columns=["x_mean", "y_mean"], inplace=True)
+    # data = data.merge(bpm_means, on="name", suffixes=("", "_mean"))
+    # data["x"] = data["x"] - data["x_mean"]
+    # data["y"] = data["y"] - data["y_mean"]
+    # data.drop(columns=["x_mean", "y_mean"], inplace=True)
 
     # Add weight_x and weight_y = 1 for all rows
     data["weight_x"] = 1.0

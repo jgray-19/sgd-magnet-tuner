@@ -8,7 +8,7 @@ from aba_optimiser.config import (
     N_RUN_TURNS,
     OBSERVE_TURNS_FROM,
 )
-from aba_optimiser.workers.base import BaseWorker
+from aba_optimiser.workers.base_worker import BaseWorker
 
 if TYPE_CHECKING:
     from pymadng import MAD

@@ -10,10 +10,33 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 from aba_optimiser.plotting.utils import setup_scientific_formatting
 
 LOGGER = logging.getLogger(__name__)
+
+plt.rcParams.update({"font.size": 16})
+
+# Color palette for magnet families (color encodes MQ/MS; style encodes True/Final)
+MQ_COLOR = "#1f77b4"  # tab:blue (fallback)
+MS_COLOR = "#ff7f0e"  # tab:orange (fallback)
+# Distinct colors per (series × family)
+MQ_TRUE_COLOR = "#1f77b4"  # tab:blue
+MQ_FINAL_COLOR = "#17becf"  # tab:cyan
+MS_TRUE_COLOR = "#ff7f0e"  # tab:orange
+MS_FINAL_COLOR = "#d62728"  # tab:red
+
+
+def _family_labels_and_colors(
+    names: list[str],
+) -> tuple[list[str], list[str], dict[str, str]]:
+    """Return (families, colors, palette) for magnet names."""
+    families = ["MQ" if str(n).upper().startswith("MQ") else "MS" for n in names]
+    palette = {"MQ": MQ_COLOR, "MS": MS_COLOR}
+    colors = [palette[f] for f in families]
+    return families, colors, palette
 
 
 def plot_strengths_comparison(
@@ -26,7 +49,6 @@ def plot_strengths_comparison(
     plot_real: bool = False,
     save_path: str = "plots/relative_difference_comparison.png",
     *,
-    # title: Optional[str] = None,
     style: str | None = "seaborn-v0_8-colorblind",
     unit: str | None = None,
     dpi: int = 200,
@@ -34,16 +56,8 @@ def plot_strengths_comparison(
     """
     Plot strengths comparison (either raw strengths or relative differences).
 
-    Args:
-        magnet_names: List of knob names
-        final_vals: Final knob values
-        true_vals: True knob values
-        uncertainties: Uncertainty values
-        initial_vals: Initial knob values (optional)
-        show_errorbars: Whether to show error bars
-        save_path: Path to save the plot
+    Colors encode magnet family (MQ/MS). Style (hatch) encodes True vs Final.
     """
-
     if style:
         plt.style.use(style)
 
@@ -55,155 +69,137 @@ def plot_strengths_comparison(
     if initial_vals is not None:
         assert len(initial_vals) == n, "initial_vals must have same length as others"
 
+    # Family colors
+    families, family_colors, palette = _family_labels_and_colors(magnet_names)
+    true_colors = [MQ_TRUE_COLOR if f == "MQ" else MS_TRUE_COLOR for f in families]
+    final_colors = [MQ_FINAL_COLOR if f == "MQ" else MS_FINAL_COLOR for f in families]
+
     # Determine baseline: use initial_vals when provided so diffs are w.r.t initial
     baseline = initial_vals if initial_vals is not None else true_vals
 
     # Calculate differences (relative) OR prepare raw values for plotting
     baseline_abs = np.abs(baseline)
     zero_mask = baseline_abs == 0
+    if any(zero_mask) and not plot_real:
+        warnings.warn(
+            "Some baseline elements are zero: relative difference undefined for those indices."
+        )
 
     if plot_real:
         final_plot = np.asarray(final_vals)
         true_plot = np.asarray(true_vals)
         uncertainties_on_plot = np.abs(np.asarray(uncertainties))
     else:
-        # relative: fraction of baseline (guard divide-by-zero)
         with np.errstate(divide="ignore", invalid="ignore"):
             final_plot = np.abs(np.asarray(final_vals) - baseline) / baseline_abs
             uncertainties_on_plot = np.abs(np.asarray(uncertainties)) / baseline_abs
-
-        if np.any(zero_mask):
-            warnings.warn(
-                "Some baseline elements are zero: relative difference undefined for those indices. "
-                "Those points will be NaN in the plot."
-            )
-            final_plot = np.where(zero_mask, np.nan, final_plot)
-            uncertainties_on_plot = np.where(zero_mask, np.nan, uncertainties_on_plot)
+            final_plot *= 1e4
+            uncertainties_on_plot *= 1e4
 
     x = np.arange(n)
 
     if initial_vals is not None:
-        # Side-by-side comparison plot comparing TRUE vs FINAL relative to INITIAL
+        # Side-by-side bars: color=MQ/MS, hatch distinguishes True vs Final
         width = 0.35
         fig, ax = plt.subplots(figsize=(14, 8))
 
-        # Plot true (either raw true values or true differences)
+        # TRUE bars
         if plot_real:
-            ax.bar(
-                x - width / 2,
-                true_plot,
-                width,
-                color="lightcoral",
-                label="True Model Strengths",
-            )
+            y_true = true_plot
         else:
-            true_diff = np.abs(np.asarray(true_vals) - baseline) / baseline_abs
-            true_diff = np.where(zero_mask, np.nan, true_diff)
-            ax.bar(
-                x - width / 2,
-                true_diff,
-                width,
-                color="lightcoral",
-                label="True vs Initial Model Strengths",
-            )
+            with np.errstate(divide="ignore", invalid="ignore"):
+                y_true = np.abs(np.asarray(true_vals) - baseline) / baseline_abs
+                y_true *= 1e4
+        ax.bar(
+            x - width / 2,
+            y_true,
+            width,
+            color=true_colors,
+            edgecolor="black",
+            label="True",
+        )
 
-        # Plot final (either raw or differences) with optional error bars
-        error_bars = uncertainties_on_plot if show_errorbars else None
-        if error_bars is not None:
-            ax.bar(
-                x + width / 2,
-                final_plot,
-                width,
-                color="mediumpurple",
-                label=(
-                    "Final Model Strengths"
-                    if plot_real
-                    else "Final vs Initial Model Strengths"
-                ),
-                yerr=error_bars,
-                capsize=5,
-            )
-        else:
-            ax.bar(
-                x + width / 2,
-                final_plot,
-                width,
-                color="mediumpurple",
-                label=(
-                    "Final Model Strengths"
-                    if plot_real
-                    else "Final vs Initial Model Strengths"
-                ),
-            )
-
-        # ax.set_title(title or "Initial vs Final Relative Difference")
+        # FINAL bars (with optional error bars)
+        err = uncertainties_on_plot if show_errorbars else None
+        ax.bar(
+            x + width / 2,
+            final_plot,
+            width,
+            color=final_colors,
+            edgecolor="black",
+            label="Final",
+            yerr=err,
+            capsize=5 if show_errorbars else 0,
+        )
     else:
-        # Single plot for final (relative or raw) only
+        # Single series
         fig, ax = plt.subplots(figsize=(12, 6))
-
-        error_bars = uncertainties_on_plot if show_errorbars else None
+        err = uncertainties_on_plot if show_errorbars else None
         if plot_real:
             # show true and final side-by-side for reference
             ax.bar(
                 x - 0.25,
                 true_plot,
                 0.5,
-                color="lightcoral",
-                label="True Model Strengths",
+                color=true_colors,
+                edgecolor="black",
+                label="True",
             )
-            if error_bars is not None:
-                ax.bar(
-                    x + 0.25,
-                    final_plot,
-                    0.5,
-                    color="mediumpurple",
-                    label="Final Model Strengths",
-                    yerr=error_bars,
-                    capsize=5,
-                )
-            else:
-                ax.bar(
-                    x + 0.25,
-                    final_plot,
-                    0.5,
-                    color="mediumpurple",
-                    label="Final Model Strengths",
-                )
+            ax.bar(
+                x + 0.25,
+                final_plot,
+                0.5,
+                color=final_colors,
+                edgecolor="black",
+                label="Final",
+                yerr=err,
+                capsize=5 if show_errorbars else 0,
+            )
         else:
-            if error_bars is not None:
-                ax.bar(
-                    x,
-                    final_plot,
-                    0.5,
-                    color="mediumpurple",
-                    label="Final vs True",
-                    yerr=error_bars,
-                    capsize=5,
-                )
-            else:
-                ax.bar(x, final_plot, 0.5, color="mediumpurple", label="Final vs True")
+            ax.bar(
+                x,
+                final_plot,
+                0.5,
+                color=final_colors,
+                edgecolor="black",
+                label="Final vs True",
+                yerr=err,
+                capsize=5 if show_errorbars else 0,
+            )
 
-        # ax.set_title(title or "Relative Difference vs True")
-
-    ax.set_xlabel("Magnet Name")
+    # Labels, ticks, grid
     if plot_real:
         ax.set_ylabel("Strength" + (f" [{unit}]" if unit else ""))
     else:
-        ax.set_ylabel("Relative difference (fraction)")
+        ax.set_ylabel("Relative difference ($\\times10^{-4}$)")
     ax.grid(axis="y", alpha=0.3)
-
     setup_scientific_formatting(plane="y")
 
     ax.set_xticks(x)
     ax.set_xticklabels(magnet_names, rotation=45, ha="right")
-    ax.set_ylim(top=3.5e-4)
 
     if initial_vals is not None:
-        ax.legend()
+        # Y limit based on initial or true diff (keeps your original behavior)
+        if plot_real:
+            top = np.ceil(np.max(initial_vals)) + 0.5
+        else:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                true_diff = np.abs(np.asarray(true_vals) - baseline) / baseline_abs
+                true_diff *= 1e4
+            top = np.ceil(np.nanmax(true_diff)) + 0.5
+        ax.set_ylim(top=top, bottom=0)
 
-    # add acceptance band for relative plots if requested
+    # Legend: four distinct colors (series × family)
+    legend_handles = [
+        Patch(facecolor=MQ_TRUE_COLOR, edgecolor="black", label="MQ • True"),
+        Patch(facecolor=MQ_FINAL_COLOR, edgecolor="black", label="MQ • Final"),
+        Patch(facecolor=MS_TRUE_COLOR, edgecolor="black", label="MS • True"),
+        Patch(facecolor=MS_FINAL_COLOR, edgecolor="black", label="MS • Final"),
+    ]
+    ax.legend(handles=legend_handles, title="Series × Family", loc="upper right")
+
     ax.margins(x=0.01)
-    plt.xticks(fontsize=9)
+    ax.tick_params(axis="x", labelsize=12)
     plt.tight_layout()
 
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)
@@ -223,19 +219,14 @@ def plot_strengths_vs_position(
     *,
     style: str | None = "seaborn-v0_8-colorblind",
     unit: str | None = None,
-    dpi: int = 200,
+    dpi: int = 300,
+    magnet_names: list[str] | None = None,  # <— NEW: used to color MQ/MS
 ) -> tuple[plt.Figure, plt.Axes]:
     """
     Plot strengths vs element position (either raw strengths or relative differences).
 
-    Args:
-        elem_spos: Element positions
-        final_vals: Final knob values
-        true_vals: True knob values
-        uncertainties: Uncertainty values
-        initial_vals: Initial knob values (optional)
-        show_errorbars: Whether to show error bars
-        save_path: Path to save the plot
+    Colors encode magnet family (MQ/MS) if `magnet_names` is provided.
+    Series (True/Final) uses marker shape to differentiate.
     """
     if style:
         plt.style.use(style)
@@ -247,9 +238,21 @@ def plot_strengths_vs_position(
     )
     if initial_vals is not None:
         assert len(initial_vals) == n
+    # Ensure numpy arrays for boolean mask indexing (elem_spos may be a list)
+    elem_spos = np.asarray(elem_spos)
+    if magnet_names is not None:
+        assert len(magnet_names) == n, "magnet_names must match elem_spos length"
+
+    # Family colors (optional)
+    if magnet_names is not None:
+        families, family_colors, palette = _family_labels_and_colors(magnet_names)
+        is_mq = np.array([f == "MQ" for f in families], dtype=bool)
+        is_ms = ~is_mq
+    else:
+        families = None
+        is_mq = is_ms = None
 
     baseline = initial_vals if initial_vals is not None else true_vals
-
     baseline_abs = np.abs(baseline)
     zero_mask = baseline_abs == 0
 
@@ -257,10 +260,17 @@ def plot_strengths_vs_position(
         final_plot = np.asarray(final_vals)
         true_plot = np.asarray(true_vals)
         uncertainties_on_plot = np.abs(np.asarray(uncertainties))
+        # (Note: Keeping your original scaling behavior as-is)
+        final_plot *= 1e4
+        true_plot *= 1e4
+        uncertainties_on_plot *= 1e4
     else:
         with np.errstate(divide="ignore", invalid="ignore"):
             final_plot = np.abs(np.asarray(final_vals) - baseline) / baseline_abs
             uncertainties_on_plot = np.abs(np.asarray(uncertainties)) / baseline_abs
+            final_plot *= 1e4
+            uncertainties_on_plot *= 1e4
+
         if np.any(zero_mask):
             warnings.warn(
                 "Some baseline elements are zero: relative difference undefined for those indices and will be NaN in the plot."
@@ -270,129 +280,162 @@ def plot_strengths_vs_position(
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    if initial_vals is not None:
-        # Plot TRUE and FINAL (either raw or differences) relative to INITIAL baseline
-        if plot_real:
-            ax.plot(
-                elem_spos,
-                true_plot,
-                "o",
-                label="True Model Strengths",
-                markersize=7,
-                alpha=0.85,
+    # Helper to plot a subset with consistent style
+    def _plot_subset(mask: np.ndarray, color: str, label: str, series: str):
+        if not np.any(mask):
+            return
+        marker = "s" if series == "True" else "o"
+        if series == "True":
+            y = (
+                true_plot
+                if plot_real
+                else (np.abs(true_vals - baseline) / np.abs(baseline)) * 1e4
             )
+            if not plot_real:
+                y = np.where(zero_mask, np.nan, y)
+            ax.plot(
+                elem_spos[mask],
+                y[mask],
+                marker,
+                label=label,
+                markersize=7,
+                alpha=0.9,
+                linestyle="None",
+                color=color,
+            )
+        else:  # Final
             if show_errorbars:
                 ax.errorbar(
-                    elem_spos,
-                    final_plot,
-                    yerr=uncertainties_on_plot,
-                    fmt="o",
-                    label="Final Model Strengths",
-                    capsize=5,
-                    markersize=7,
-                    alpha=0.85,
-                )
-            else:
-                ax.plot(
-                    elem_spos,
-                    final_plot,
-                    "o",
-                    label="Final Model Strengths",
-                    markersize=7,
-                    alpha=0.85,
-                )
-        else:
-            true_diff = np.abs(true_vals - baseline) / np.abs(baseline)
-            true_diff = np.where(zero_mask, np.nan, true_diff)
-            ax.plot(
-                elem_spos,
-                true_diff,
-                "o",
-                label="True vs Initial Model Strengths",
-                markersize=7,
-                alpha=0.85,
-            )
-
-            if show_errorbars:
-                ax.errorbar(
-                    elem_spos,
-                    final_plot,
-                    yerr=uncertainties_on_plot,
-                    fmt="o",
-                    label="Final vs Initial Model Strengths",
-                    capsize=5,
-                    markersize=7,
-                    alpha=0.85,
-                )
-            else:
-                ax.plot(
-                    elem_spos,
-                    final_plot,
-                    "o",
-                    label="Final vs Initial Model Strengths",
-                    markersize=7,
-                    alpha=0.85,
-                )
-    else:
-        # Plot final only (or raw values with true as reference)
-        if plot_real:
-            ax.plot(
-                elem_spos,
-                true_plot,
-                "o",
-                label="True Model Strengths",
-                markersize=7,
-                alpha=0.85,
-            )
-            if show_errorbars:
-                ax.errorbar(
-                    elem_spos,
-                    final_plot,
-                    yerr=uncertainties_on_plot,
-                    fmt="o",
-                    label="Final Model Strengths",
-                    capsize=5,
-                    markersize=7,
-                    alpha=0.85,
-                )
-            else:
-                ax.plot(
-                    elem_spos,
-                    final_plot,
-                    "o",
-                    label="Final Model Strengths",
-                    markersize=7,
-                    alpha=0.85,
-                )
-        else:
-            label = "Relative Difference"
-            if show_errorbars:
-                plt.errorbar(
-                    elem_spos,
-                    final_plot,
-                    yerr=uncertainties_on_plot,
-                    fmt="o",
+                    elem_spos[mask],
+                    final_plot[mask],
+                    yerr=uncertainties_on_plot[mask],
+                    fmt=marker,
                     label=label,
                     capsize=5,
                     markersize=7,
-                    alpha=0.85,
+                    alpha=0.9,
+                    linestyle="None",
+                    color=color,
                 )
             else:
-                plt.plot(
-                    elem_spos, final_plot, "o", label=label, markersize=7, alpha=0.85
+                ax.plot(
+                    elem_spos[mask],
+                    final_plot[mask],
+                    marker,
+                    label=label,
+                    markersize=7,
+                    alpha=0.9,
+                    linestyle="None",
+                    color=color,
                 )
 
-        # plt.title("Relative Difference vs Element Position")
-
-    plt.xlabel("Element Position [m]")
-    if plot_real:
-        plt.ylabel("Strength" + (f" [{unit}]" if unit else ""))
+    if initial_vals is not None:
+        # TRUE and FINAL relative to INITIAL (or raw if plot_real)
+        if magnet_names is not None:
+            # Plot MQ, then MS to get per-family colors + series markers
+            _plot_subset(is_mq, MQ_TRUE_COLOR, "MQ • True", "True")
+            _plot_subset(is_ms, MS_TRUE_COLOR, "MS • True", "True")
+            _plot_subset(is_mq, MQ_FINAL_COLOR, "MQ • Final", "Final")
+            _plot_subset(is_ms, MS_FINAL_COLOR, "MS • Final", "Final")
+        else:
+            # Single color fallback
+            _plot_subset(np.ones(n, dtype=bool), MQ_TRUE_COLOR, "True", "True")
+            _plot_subset(np.ones(n, dtype=bool), MQ_FINAL_COLOR, "Final", "Final")
     else:
-        ax.set_ylabel("Relative difference (fraction)")
+        # Only FINAL (or TRUE+FINAL in raw-mode section above)
+        if plot_real:
+            # Show both True and Final also when no initial (as in your original)
+            if magnet_names is not None:
+                _plot_subset(is_mq, MQ_TRUE_COLOR, "MQ • True", "True")
+                _plot_subset(is_ms, MS_TRUE_COLOR, "MS • True", "True")
+                _plot_subset(is_mq, MQ_FINAL_COLOR, "MQ • Final", "Final")
+                _plot_subset(is_ms, MS_FINAL_COLOR, "MS • Final", "Final")
+            else:
+                _plot_subset(np.ones(n, dtype=bool), MQ_TRUE_COLOR, "True", "True")
+                _plot_subset(np.ones(n, dtype=bool), MQ_FINAL_COLOR, "Final", "Final")
+        else:
+            # Final only
+            if magnet_names is not None:
+                _plot_subset(is_mq, MQ_FINAL_COLOR, "MQ • Final", "Final")
+                _plot_subset(is_ms, MS_FINAL_COLOR, "MS • Final", "Final")
+            else:
+                _plot_subset(np.ones(n, dtype=bool), MQ_FINAL_COLOR, "Final", "Final")
 
-    plt.legend()
-    plt.grid(alpha=0.3)
+    # Y limit when initial provided (keeps original behavior)
+    if initial_vals is not None:
+        if plot_real:
+            top = np.ceil(np.max(initial_vals)) + 0.5
+        else:
+            true_diff = np.abs(true_vals - baseline) / np.abs(baseline)
+            true_diff = np.where(zero_mask, np.nan, true_diff)
+            true_diff *= 1e4
+            top = np.ceil(np.nanmax(true_diff)) + 0.5
+        ax.set_ylim(top=top, bottom=0)
 
+    ax.set_xlabel("Element Position [m]")
+    if plot_real:
+        ax.set_ylabel("Strength" + (f" [{unit}]" if unit else ""))
+    else:
+        ax.set_ylabel("Relative difference ($\\times10^{-4}$)")
+
+    if magnet_names is not None:
+        handles = [
+            Line2D(
+                [0],
+                [0],
+                marker="s",
+                linestyle="None",
+                color=MQ_TRUE_COLOR,
+                label="MQ • True",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="None",
+                color=MQ_FINAL_COLOR,
+                label="MQ • Final",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="s",
+                linestyle="None",
+                color=MS_TRUE_COLOR,
+                label="MS • True",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="None",
+                color=MS_FINAL_COLOR,
+                label="MS • Final",
+            ),
+        ]
+        ax.legend(handles=handles, title="Series × Family", loc="upper right")
+    else:
+        handles = [
+            Line2D(
+                [0],
+                [0],
+                marker="s",
+                linestyle="None",
+                color=MQ_TRUE_COLOR,
+                label="True",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="None",
+                color=MQ_FINAL_COLOR,
+                label="Final",
+            ),
+        ]
+        ax.legend(handles=handles, title="Series", loc="upper right")
+
+    ax.grid(alpha=0.3)
     setup_scientific_formatting(plane="y")
 
     plt.tight_layout()

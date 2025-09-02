@@ -9,18 +9,20 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from aba_optimiser.config import (
-    ACD_ON,
+    EMINUS_NOISY_FILE,
+    EMINUS_NONOISE_FILE,
+    EPLUS_NOISY_FILE,
+    EPLUS_NONOISE_FILE,
     FLATTOP_TURNS,
     N_COMPARE_TURNS,
     N_RUN_TURNS,
-    NOISE_FILE,
+    NO_NOISE_FILE,
+    NOISY_FILE,
     NUM_TRACKS,
-    NUM_WORKERS,
     POSITION_STD_DEV,
-    RAMP_UP_TURNS,
+    QUAD_OPT_SETTINGS,
     RUN_ARC_BY_ARC,
-    TRACK_DATA_FILE,
-    TRACKS_PER_WORKER,
+    SEXT_OPT_SETTINGS,
     USE_NOISY_DATA,
 )
 from aba_optimiser.dataframes.utils import select_markers
@@ -29,115 +31,185 @@ if TYPE_CHECKING:
     import numpy as np
 
 LOGGER = logging.getLogger(__name__)
+cols_to_read = ["turn", "name", "x", "px", "y", "py"]
 
 
 class DataManager:
     """Manages track data loading and processing for optimisation."""
 
-    def __init__(self, all_bpms: np.ndarray, bpm_start_points: list[str]):
+    def __init__(
+        self, all_bpms: np.ndarray, start_bpms: list[str], optimise_sextupoles: bool
+    ):
         self.all_bpms = all_bpms
-        self.bpm_start_points = bpm_start_points
-        self.available_turns: list[int] = list(range(1, FLATTOP_TURNS * NUM_TRACKS + 1))
+        self.start_bpms = start_bpms
+        self.optimise_sextupoles = optimise_sextupoles
 
-        # Will be set later
-        self.comparison_data: pd.DataFrame | None = None
+        # Available global "turn" ids (already include offsets if sextupoles are on)
+        total_files = 3 if optimise_sextupoles else 1
+        self.available_turns: list[int] = list(
+            range(1, FLATTOP_TURNS * NUM_TRACKS * total_files + 1)
+        )
+
         self.turn_batches: list[list[int]] = []
+        self.tracks_per_worker: int = 0  # set in prepare_turn_batches
 
-        # For the hessian
-        self.var_x = (POSITION_STD_DEV) ** 2
-        self.var_y = (POSITION_STD_DEV) ** 2
+        # For the Hessian
+        self.var_x = POSITION_STD_DEV**2
+        self.var_y = POSITION_STD_DEV**2
 
-    def load_track_data(self, needed_turns: set[int] | None = None) -> None:
-        """Load and pre-process track/comparison data.
+        # Only populated when sextupoles are optimised
+        self.track_data: dict[str, pd.DataFrame] | None = None
+        self.energy_map: dict[int, str] | None = None  # {turn -> "plus"|"minus"|"zero"}
 
-        If `needed_turns` is provided, read only those turns from the parquet to
-        minimise memory usage.
-        """
-        LOGGER.info("Loading track data (filtered=%s)...", needed_turns is not None)
+        self.global_config = (
+            SEXT_OPT_SETTINGS if optimise_sextupoles else QUAD_OPT_SETTINGS
+        )
 
-        source = NOISE_FILE if USE_NOISY_DATA else TRACK_DATA_FILE
+    # ---------- Internals ----------
 
-        # Only read required columns; if a turn filter is supplied use parquet filters
-        cols = ["turn", "name", "x", "px", "y", "py"]
+    def _reduce_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        df["turn"] = df["turn"].astype("int32", copy=False)
+        df["name"] = df["name"].astype("category", copy=False)
+        # Copy because we drop non-selected markers and convert from view.
+        return select_markers(df, self.all_bpms).copy()
+
+    def _read_parquet(
+        self, source: str, needed_turns: set[int] | None, offset: int
+    ) -> pd.DataFrame:
+        """Read a parquet with optional turn filtering and column validation."""
         if needed_turns:
-            # pandas accepts a list of tuples for filters; provide the in-list
-            filters = [("turn", "in", list(needed_turns))]
-            track_data = pd.read_parquet(source, columns=cols, filters=filters)
+            filtered_turns = [t - offset for t in needed_turns]
+            filters = [("turn", "in", filtered_turns)]
+            df = pd.read_parquet(source, columns=cols_to_read, filters=filters)
+            df["turn"] += offset  # Create global ids
         else:
-            track_data = pd.read_parquet(source, columns=cols)
+            df = pd.read_parquet(source, columns=cols_to_read)
 
-        missing = [c for c in cols if c not in track_data.columns]
+        missing = [c for c in cols_to_read if c not in df.columns]
         if missing:
             raise ValueError(f"Missing columns in track data: {missing}")
+        return df
 
-        # Downcast and optimise memory
-        track_data["turn"] = track_data["turn"].astype("int32", copy=False)
-        track_data["name"] = track_data["name"].astype("category", copy=False)
+    # ---------- Public API ----------
 
-        # Filter data to BPMs present in the sequence
-        self.comparison_data = select_markers(track_data, self.all_bpms)
-        del track_data
+    def load_track_data(
+        self, needed_turns: set[int] | None = None, optimise_sextupoles: bool = False
+    ) -> None:
+        """Load track data for optimisation and build energy map.
+
+        Note: When optimise_sextupoles=False, only the 'zero' file is loaded.
+        """
+        LOGGER.info(
+            "Loading energy track data (filtered=%s, sextupoles=%s)...",
+            needed_turns is not None,
+            optimise_sextupoles,
+        )
+
+        # Pick source files based on noise setting
+        sources = {
+            "plus": EPLUS_NOISY_FILE if USE_NOISY_DATA else EPLUS_NONOISE_FILE,
+            "minus": EMINUS_NOISY_FILE if USE_NOISY_DATA else EMINUS_NONOISE_FILE,
+            "zero": NOISY_FILE if USE_NOISY_DATA else NO_NOISE_FILE,
+        }
+
+        # Turn offsets per energy type (global turn space)
+        offsets = {
+            "zero": 0,
+            "minus": FLATTOP_TURNS * NUM_TRACKS,
+            "plus": 2 * FLATTOP_TURNS * NUM_TRACKS,
+        }
+
+        # Which energies to load
+        energies = ("plus", "minus", "zero") if optimise_sextupoles else ("zero",)
+
+        # Load and reduce
+        energy_tracks: dict[str, pd.DataFrame] = {}
+        for e in energies:
+            df = self._read_parquet(sources[e], needed_turns, offsets[e])
+            energy_tracks[e] = self._reduce_dataframe(df)
+
+        self.track_data = (
+            energy_tracks if optimise_sextupoles else {"zero": energy_tracks["zero"]}
+        )
+
+        # Build a fast energy map {turn -> energy}, using unique turn sets
+        zero_turns = set(self.track_data["zero"]["turn"].unique())
+        if optimise_sextupoles:
+            plus_turns = set(self.track_data["plus"]["turn"].unique())
+            minus_turns = set(self.track_data["minus"]["turn"].unique())
+        else:
+            plus_turns = set()
+            minus_turns = set()
+
+        for df in self.track_data.values():
+            df.set_index(["turn", "name"], inplace=True)
+
+        # Priority: plus > minus > zero (disjoint in practice if offsets are correct)
+        energy_map: dict[int, str] = {}
+        for t in plus_turns | minus_turns | zero_turns:
+            if t in plus_turns:
+                energy_map[t] = "plus"
+            elif t in minus_turns:
+                energy_map[t] = "minus"
+            else:
+                energy_map[t] = "zero"
+
+        self.energy_map = energy_map
+
+        LOGGER.info(
+            "Loaded track data: zero=%d, minus=%d, plus=%d unique turns",
+            len(zero_turns),
+            len(minus_turns),
+            len(plus_turns),
+        )
 
     def prepare_turn_batches(self) -> None:
         """Build the list of turns to be processed and validate availability."""
         LOGGER.info("Preparing turn batches for worker distribution")
 
-        if self.comparison_data is None and self.available_turns is None:
-            raise ValueError("Track data (or preview) must be loaded first")
-
         if not RUN_ARC_BY_ARC:
-            # Remove the last N_RUN_TURNS
+            # Drop the last N_RUN_TURNS in RING mode
             LOGGER.debug(
-                f"Removing last {N_RUN_TURNS} turns from available turns for RING mode"
+                "Removing last %d turns from available turns for RING mode",
+                N_RUN_TURNS,
             )
             self.available_turns = self.available_turns[:-N_RUN_TURNS]
 
-        num_turns_needed = (
-            TRACKS_PER_WORKER * NUM_WORKERS
-        )  # // len(self.bpm_start_points)
+        num_turns_needed = self.global_config.total_tracks
+        num_workers = self.global_config.num_workers
+        tracks_per_worker = self.global_config.tracks_per_worker
         LOGGER.debug(
-            f"Need {num_turns_needed} turns for {NUM_WORKERS} workers with {TRACKS_PER_WORKER} tracks each"
+            "Need %d turns for %d workers with %d tracks each",
+            num_turns_needed,
+            num_workers,
+            tracks_per_worker,
         )
 
-        if len(self.available_turns) < num_turns_needed:
+        # If sextupoles are optimised, we effectively have 3 files worth of turns
+        total_available_turns = len(self.available_turns)
+
+        if total_available_turns < num_turns_needed:
             raise ValueError(
                 f"Not enough available turns. Need {num_turns_needed}, "
-                f"but found {len(self.available_turns)} turns."
+                f"but found {total_available_turns}."
             )
 
-        if ACD_ON:
-            original_count = len(self.available_turns)
-            self.available_turns = [
-                turn for turn in self.available_turns if turn >= RAMP_UP_TURNS
-            ]
-            LOGGER.debug(
-                f"ACD filtering: {original_count} -> {len(self.available_turns)} turns"
-            )
-
-        # Determine how many turns each batch should contain
-        num_batches = NUM_WORKERS
+        # Cap tracks per worker at configured TRACKS_PER_WORKER
         self.tracks_per_worker = min(
-            len(self.available_turns) // num_batches, TRACKS_PER_WORKER
+            total_available_turns // num_workers, tracks_per_worker
         )
 
         # Randomly select turns for each batch
         random.shuffle(self.available_turns)
-        LOGGER.info(f"Each worker will process {self.tracks_per_worker} turns")
+        LOGGER.info("Each worker will process %d turns", self.tracks_per_worker)
         self.turn_batches = [
             self.available_turns[
                 i * self.tracks_per_worker : (i + 1) * self.tracks_per_worker
             ]
-            for i in range(num_batches)
+            for i in range(num_workers)
         ]
 
     def get_total_turns(self) -> int:
         """Calculate total number of turns to process."""
         n_compare = N_COMPARE_TURNS if not RUN_ARC_BY_ARC else 1
-
-        return NUM_WORKERS * self.tracks_per_worker * n_compare
-
-    def get_indexed_comparison_data(self) -> pd.DataFrame:
-        """Get comparison data with multi-index for efficient lookups."""
-        if self.comparison_data is None:
-            raise ValueError("Track data must be loaded first")
-        return self.comparison_data.set_index(["turn", "name"])
+        return self.global_config.num_workers * self.tracks_per_worker * n_compare

@@ -9,14 +9,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from aba_optimiser.config import (
-    DECAY_EPOCHS,
     GRAD_NORM_ALPHA,
-    GRADIENT_CONVERGED_VALUE,
-    MAX_EPOCHS,
-    MAX_LR,
-    MIN_LR,
-    WARMUP_EPOCHS,
-    WARMUP_LR_START,
+    QUAD_OPT_SETTINGS,
+    SEXT_OPT_SETTINGS,
 )
 from aba_optimiser.optimisers.adam import AdamOptimiser
 from aba_optimiser.optimisers.amsgrad import AMSGradOptimiser
@@ -40,10 +35,15 @@ class OptimisationLoop:
         knob_names: list[str],
         true_strengths: dict[str, float],
         optimiser_type: str = "adam",
+        optimise_sextupoles: bool = False,
     ):
         self.knob_names = knob_names
         self.true_strengths = true_strengths
         self.smoothed_grad_norm: float | None = None
+
+        config = SEXT_OPT_SETTINGS if optimise_sextupoles else QUAD_OPT_SETTINGS
+        self.max_epochs = config.max_epochs
+        self.gradient_converged_value = config.gradient_converged_value
 
         # Initialise optimiser
         self._init_optimiser(initial_strengths.shape, optimiser_type)
@@ -51,11 +51,11 @@ class OptimisationLoop:
         # Initialise scheduler
         # Build scheduler using config values (avoid calling LRScheduler without args)
         self.scheduler = LRScheduler(
-            warmup_epochs=WARMUP_EPOCHS,
-            decay_epochs=DECAY_EPOCHS,
-            start_lr=WARMUP_LR_START,
-            max_lr=MAX_LR,
-            min_lr=MIN_LR,
+            warmup_epochs=config.warmup_epochs,
+            decay_epochs=config.decay_epochs,
+            start_lr=config.warmup_lr_start,
+            max_lr=config.max_lr,
+            min_lr=config.min_lr,
         )
 
     def _init_optimiser(self, shape: tuple, optimiser_type: str) -> None:
@@ -89,7 +89,7 @@ class OptimisationLoop:
         total_turns: int,
     ) -> dict[str, float]:
         """Run the main optimisation loop."""
-        for epoch in range(MAX_EPOCHS):
+        for epoch in range(self.max_epochs):
             epoch_start = time.time()
 
             # Send knobs to workers
@@ -116,7 +116,7 @@ class OptimisationLoop:
                 current_knobs,
             )
 
-            if self.smoothed_grad_norm < GRADIENT_CONVERGED_VALUE:
+            if self.smoothed_grad_norm < self.gradient_converged_value:
                 LOGGER.info(
                     f"\nGradient norm below threshold: {self.smoothed_grad_norm:.3e}. "
                     f"Stopping early at epoch {epoch}."

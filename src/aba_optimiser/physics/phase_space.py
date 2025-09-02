@@ -24,7 +24,9 @@ class PhaseSpaceDiagnostics:
         num_points=50,
         analysis_dir: Path | str = module_path / "analysis",
     ):
-        LOGGER.debug(f"Initializing phase space diagnostics for BPM {bpm} with {len(x_data)} data points")
+        LOGGER.debug(
+            f"Initializing phase space diagnostics for BPM {bpm} with {len(x_data)} data points"
+        )
         self.bpm = bpm
         self.num_points = num_points
         self.x0 = np.mean(x_data)
@@ -70,7 +72,11 @@ class PhaseSpaceDiagnostics:
             self.betay = beta_phase_y.loc[self.bpm, "BETY"]
             self.alfay = beta_phase_y.loc[self.bpm, "ALFY"]
         else:
-            mad_iface = MadInterface(SEQUENCE_FILE, MAGNET_RANGE, bpm_pattern="BPM")
+            mad_iface = MadInterface(
+                SEQUENCE_FILE,
+                MAGNET_RANGE,
+                bpm_pattern="BPM",
+            )
             tws = mad_iface.run_twiss()
             self.betax = tws.loc[self.bpm, "beta11"]
             self.alfax = tws.loc[self.bpm, "alfa11"]

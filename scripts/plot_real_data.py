@@ -42,7 +42,7 @@ model_dir = Path(
 ng_model_dir = module_path / model_dir.name
 # model_to_ng(model_dir, beam=1, out_dir=ng_model_dir)
 
-tws = tfs.read(ng_model_dir / (TWISS_AC_DAT.replace(".dat", ".tfs.bz2")), index="NAME")
+tws = tfs.read(ng_model_dir / TWISS_AC_DAT, index="NAME")
 
 # Rename the columns BETX -> beta11,  BETY -> beta22, MUX -> mu1, MUY -> mu2, ALFX -> alfa11, ALFY -> alfa22
 tws.rename(
@@ -76,8 +76,8 @@ for i in range(num_files):
     # Merge x and y on BPM name and turn
     df = pd.merge(x_melt, y_melt, on=["index", "turn"], suffixes=("_x", "_y"))
     df.rename(columns={"index": "name"}, inplace=True)
-    df["x"] = df["x"] / 1000  # Convert to meters
-    df["y"] = df["y"] / 1000  # Convert to meters
+    df["x"] = df["x"]  # Convert to meters
+    df["y"] = df["y"]  # Convert to meters
 
     real_data.append(tfs.TfsDataFrame(df[["name", "turn", "x", "y"]]))
     print(real_data[i])
@@ -88,7 +88,7 @@ plt.suptitle("All Real Data - Phase Space Plots")
 data_p_list = []
 data_n_list = []
 for i in range(num_files):
-    data_p, data_n = calculate_pz(
+    data_p, data_n, _ = calculate_pz(
         orig_data=real_data[i],
         inject_noise=False,
         tws=tws.loc[matching_bpms_list[i]],

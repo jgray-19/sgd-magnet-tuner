@@ -2,7 +2,7 @@
 
 ! Assumes the following variables are defined:
 ! tracking_sequence: the sequence to be used for tracking
-! num_particles: a table with the number of particles for each starting bpm
+! batch_size: a table with the number of particles for each starting bpm
 ! nbpms: the number of BPMs to track
 ! knob_names: a table with the names of the knobs
 ! coord_names: a table with the names of the coordinates
@@ -15,8 +15,8 @@
 ! matrix: a MAD matrix object for creating matrices
 ! py: a Python interface object for sending data
 assert(
-    loaded_sequence and num_particles and nbpms and observe_from_turn and
-    knob_names and coord_names and da_x0_c and knob_monomials and
+    loaded_sequence and batch_size and nbpms and observe_from_turn and
+    knob_names and coord_names and da_x0_c and knob_monomials and reset_before_tracking and
     var_x and var_y and vector and matrix and py and n_run_turns and n_compare_turns,
     "Missing required variables for tracking"
 )
@@ -28,7 +28,7 @@ local Htot = matrix(num_knobs, num_knobs):zeros()
 local W_x = vector(nbpms * n_compare_turns):fill(var_x):diag()
 local W_y = vector(nbpms * n_compare_turns):fill(var_y):diag()
 
-for i=1,num_particles do
+for i=1,batch_size do
     x[i] = vector(nbpms * n_compare_turns)
     y[i] = vector(nbpms * n_compare_turns)
     dx_dk[i] = matrix(num_knobs, nbpms * n_compare_turns)
@@ -37,23 +37,24 @@ end
 observe_count = 1
 collectgarbage("collect")
 
-local _, mflw= track{
-    sequence = loaded_sequence,
-    X0 = da_x0_c,
-    nturn = n_run_turns,
-    save=false,
-    observe=observe_from_turn,
-    atexit=save_data,
-    range=tracking_range
-}
+for batch=1,num_batches do
+    reset_before_tracking()
+    local _, mflw= track{
+        sequence = loaded_sequence,
+        X0 = da_x0_c[batch],
+        nturn = n_run_turns,
+        save=false,
+        observe=observe_from_turn,
+        atexit=save_data,
+        range=tracking_range
+    }
 
-for idx = 1, num_particles do
-    local jx = dx_dk[idx]
-    local jy = dy_dk[idx]
-    local Gx = jx * (W_x * jx:t())
-    local Gy = jy * (W_y * jy:t())
-    Htot = Htot + (Gx + Gy)
+    for part = 1, batch_size do
+        local jx = dx_dk[part]
+        local jy = dy_dk[part]
+        local Gx = jx * (W_x * jx:t())
+        local Gy = jy * (W_y * jy:t())
+        Htot = Htot + (Gx + Gy)
+    end
 end
-collectgarbage("collect")
-
 py:send(Htot, true)

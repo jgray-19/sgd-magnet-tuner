@@ -8,8 +8,8 @@ from aba_optimiser.config import (
     BPM_START_POINTS,
     FILTERED_FILE,
     KALMAN_FILE,
-    NOISE_FILE,
-    TRACK_DATA_FILE,
+    NO_NOISE_FILE,
+    NOISY_FILE,
 )
 
 # from aba_optimiser.ellipse_filtering import filter_noisy_data
@@ -19,19 +19,19 @@ from aba_optimiser.physics.transverse_momentum import calculate_pz
 # from aba_optimiser.filtering.phase_space import PhaseSpaceDiagnostics
 
 if (
-    not NOISE_FILE.exists()
-    or TRACK_DATA_FILE.stat().st_mtime > NOISE_FILE.stat().st_mtime
+    not NOISY_FILE.exists()
+    or NO_NOISE_FILE.stat().st_mtime > NOISY_FILE.stat().st_mtime
 ):
-    print(f"Creating noisy TFS data file: {NOISE_FILE}")
-    orig_data = pd.read_parquet(TRACK_DATA_FILE)
+    print(f"Creating noisy TFS data file: {NOISY_FILE}")
+    orig_data = pd.read_parquet(NO_NOISE_FILE)
     _, _, data_avg = calculate_pz(orig_data, low_noise_bpms=BPM_START_POINTS)
-    data_avg.to_feather(NOISE_FILE, compression="lz4")
+    data_avg.to_feather(NOISY_FILE, compression="lz4")
     import sys
 
     sys.exit(0)  # Exit early to avoid running the rest of the script
 else:
     print("Noisy data already exists and is up-to-date. Creating filtered data only.")
-    data_p = pd.read_parquet(NOISE_FILE)
+    data_p = pd.read_parquet(NOISY_FILE)
 
 filtered_data = filter_noisy_data(data_p)
 filtered_data.to_feather(FILTERED_FILE, compression="lz4")
@@ -65,7 +65,7 @@ kalman_data = kalman_filter.run(data_p)
 kalman_data.to_feather(KALMAN_FILE, compression="lz4")
 print("→ Saved Kalman-filtered data:", KALMAN_FILE)
 
-orig_data = pd.read_parquet(TRACK_DATA_FILE)
+orig_data = pd.read_parquet(NO_NOISE_FILE)
 diff_p = data_p[["x", "px", "y", "py"]].sub(orig_data[["x", "px", "y", "py"]])
 print("x_diff mean (prev w/ k)", diff_p["x"].abs().mean(), "±", diff_p["x"].std())
 print("y_diff mean (prev w/ k)", diff_p["y"].abs().mean(), "±", diff_p["y"].std())

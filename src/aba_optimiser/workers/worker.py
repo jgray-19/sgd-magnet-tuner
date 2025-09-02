@@ -12,7 +12,7 @@ from aba_optimiser.workers.ring import RingWorker
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
-    from aba_optimiser.workers.base import BaseWorker
+    from aba_optimiser.workers.base_worker import BaseWorker
 
 LOGGER = logging.getLogger(__name__)
 
@@ -50,9 +50,9 @@ def build_worker(
     Args:
         conn: Connection for inter-process communication
         worker_id: Unique identifier for this worker
-    x_comparisons: Array of shape (num_particles, n_data_points)
-    y_comparisons: Array of shape (num_particles, n_data_points)
-    init_coords: List of initial coordinates for each particle
+        x_comparisons: Array of shape (batch_size, n_data_points)
+        y_comparisons: Array of shape (batch_size, n_data_points)
+        init_coords: List of initial coordinates for each particle
         start_bpm: Starting BPM name
 
     Returns:

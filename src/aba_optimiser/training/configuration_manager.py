@@ -10,16 +10,17 @@ import numpy as np
 from aba_optimiser.config import (
     BPM_START_POINTS,
     MAGNET_RANGE,
-    NUM_WORKERS,
+    QUAD_OPT_SETTINGS,
     RUN_ARC_BY_ARC,
     SEQUENCE_FILE,
+    SEXT_OPT_SETTINGS,
 )
 from aba_optimiser.mad.mad_interface import MadInterface
 from aba_optimiser.workers.arc_by_arc import ArcByArcWorker
 from aba_optimiser.workers.ring import RingWorker
 
 if TYPE_CHECKING:
-    from aba_optimiser.workers.base import BaseWorker
+    from aba_optimiser.workers.base_worker import BaseWorker
 
 LOGGER = logging.getLogger(__name__)
 
@@ -43,19 +44,26 @@ def circular_far_samples(
 class ConfigurationManager:
     """Manages configuration and setup for the optimisation process."""
 
-    def __init__(self):
+    def __init__(self, optimise_sextupoles: bool):
         self.mad_iface: MadInterface | None = None
         self.knob_names: list[str] = []
         self.elem_spos: np.ndarray = np.array([])
         self.all_bpms: np.ndarray = np.array([])
-        self.bpm_start_points: list[str] = []
+        self.start_bpms: list[str] = []
         self.Worker: type[BaseWorker] | None = None
         self.initial_strengths: np.ndarray = np.array([])
+
+        self.optimise_sextupoles = optimise_sextupoles
+        self.global_config = (
+            SEXT_OPT_SETTINGS if optimise_sextupoles else QUAD_OPT_SETTINGS
+        )
 
     def setup_mad_interface(self) -> None:
         """Initialise the MAD-NG interface and get basic model parameters."""
         self.mad_iface = MadInterface(
-            SEQUENCE_FILE, MAGNET_RANGE, discard_mad_output=True
+            SEQUENCE_FILE,
+            MAGNET_RANGE,
+            optimise_sextupoles=self.optimise_sextupoles,
         )
         self.knob_names = self.mad_iface.knob_names
         self.elem_spos = self.mad_iface.elem_spos
@@ -72,14 +80,14 @@ class ConfigurationManager:
             for bpm in BPM_START_POINTS:
                 if bpm not in self.all_bpms:
                     raise ValueError(f"BPM {bpm} not found in the sequence.")
-            self.bpm_start_points = BPM_START_POINTS
+            self.start_bpms = BPM_START_POINTS
             self.Worker = ArcByArcWorker
         else:
             LOGGER.warning(
                 "Whole ring chosen, BPM start points ignored, taking an even distribution based on NUM_WORKERS"
             )
-            self.bpm_start_points, _ = circular_far_samples(
-                self.all_bpms, min(NUM_WORKERS, len(self.all_bpms))
+            self.start_bpms, _ = circular_far_samples(
+                self.all_bpms, min(self.global_config.num_workers, len(self.all_bpms))
             )
             self.Worker = RingWorker
 
@@ -115,7 +123,7 @@ class ConfigurationManager:
             raise ValueError("Worker type must be determined first")
 
         n_data_points = {}
-        for start_bpm in self.bpm_start_points:
+        for start_bpm in self.start_bpms:
             bpm_range = self.Worker.get_bpm_range(start_bpm)
             n_bpms = MadInterface(
                 SEQUENCE_FILE, magnet_range=MAGNET_RANGE, bpm_range=bpm_range

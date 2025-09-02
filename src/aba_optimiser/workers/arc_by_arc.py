@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from aba_optimiser.config import (
     MAGNET_RANGE,
 )
-from aba_optimiser.workers.base import BaseWorker
+from aba_optimiser.workers.base_worker import BaseWorker
 
 if TYPE_CHECKING:
     from pymadng import MAD

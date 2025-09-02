@@ -12,7 +12,10 @@ import pandas as pd
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
-    from aba_optimiser.workers.base import BaseWorker
+    from aba_optimiser.workers.base_worker import BaseWorker
+
+from aba_optimiser.config import BEAM_ENERGY, DELTAP, PARTICLE_MASS
+from aba_optimiser.physics.deltap import dp2pt
 
 LOGGER = logging.getLogger(__name__)
 
@@ -28,8 +31,9 @@ class WorkerManager:
 
     def create_worker_payloads(
         self,
-        comp: pd.DataFrame,
+        track_data: dict[str, pd.DataFrame],
         turn_batches: list[list[int]],
+        energy_turn_map: dict[int, str],
         bpm_start_points: list[str],
     ) -> list[dict]:
         """Create payloads for all workers."""
@@ -41,8 +45,14 @@ class WorkerManager:
                 f"Check TRACKS_PER_WORKER and NUM_WORKERS."
             )
             x_comp, y_comp, init_coords = self._make_worker_payload(
-                comp, turn_batch, start_bpm, self.n_data_points[start_bpm]
+                track_data,
+                turn_batch,
+                energy_turn_map,
+                start_bpm,
+                self.n_data_points[start_bpm],
             )
+            x_comp.setflags(write=False)
+            y_comp.setflags(write=False)
             payloads.append(
                 {
                     "wid": batch_idx,
@@ -56,31 +66,41 @@ class WorkerManager:
 
     def _make_worker_payload(
         self,
-        comparison_dataframe: pd.DataFrame,
+        track_data: dict[str, pd.DataFrame],
         turn_batch: list[int],
+        energy_turn_map: dict[int, str],
         start_bpm: str,
         n_data_points: int,
-    ):
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Create x/y comparison arrays and init_coords for a worker."""
-        x_list, y_list, init_coords = [], [], []
+        x_list, y_list, init_coord_list = [], [], []
         for t in turn_batch:
-            starting_row = comparison_dataframe.loc[(t, start_bpm)]
-            init_coords.append(
-                [
-                    starting_row["x"],
-                    starting_row["px"],
-                    starting_row["y"],
-                    starting_row["py"],
-                    0.0,
-                    0.0,
-                ]
+            energy_type = energy_turn_map[t]
+            df = track_data[energy_type]
+            if energy_type == "plus":
+                pt = dp2pt(DELTAP, PARTICLE_MASS, BEAM_ENERGY)
+            elif energy_type == "minus":
+                pt = dp2pt(-DELTAP, PARTICLE_MASS, BEAM_ENERGY)
+            else:
+                pt = 0.0
+
+            starting_row = df.loc[(t, start_bpm)]
+
+            # Initial 4-element phase-space vector: x, px, y, py
+            init_coords = starting_row[["x", "px", "y", "py"]].to_numpy(
+                dtype="float64", copy=False
             )
+
+            # Extend initcoords to include t=0 and pt
+            init_coords = np.concatenate((init_coords, [0, pt]))
+            init_coord_list.append(init_coords)
+
             obs_turns = self.Worker.get_observation_turns(t)
 
             blocks = []
             for ot in obs_turns:
-                pos = comparison_dataframe.index.get_loc((ot, start_bpm))
-                blocks.append(comparison_dataframe.iloc[pos : pos + n_data_points])
+                pos = df.index.get_loc((ot, start_bpm))
+                blocks.append(df.iloc[pos : pos + n_data_points])
 
             filtered = pd.concat(blocks, axis=0)
             if filtered.shape[0] == 0:
@@ -91,40 +111,44 @@ class WorkerManager:
 
         x_comp = np.stack(x_list, axis=0)
         y_comp = np.stack(y_list, axis=0)
+        init_coords = np.stack(init_coord_list, axis=0)
         return x_comp, y_comp, init_coords
 
     def start_workers(
         self,
-        comp: pd.DataFrame,
+        track_data: dict[str, pd.DataFrame],
         turn_batches: list[list[int]],
+        energy_turn_map: dict[int, str],
         bpm_start_points: list[str],
         var_x: float,
         var_y: float,
-    ) -> list[Connection]:
+        optimise_sextupoles: bool,
+    ):
         """Start worker processes and return their parent connections.
 
         Note: process objects are stored internally on the manager and are
         joined/terminated in `terminate_workers()`; callers only need the
         connections to communicate with workers.
         """
-        payloads = self.create_worker_payloads(comp, turn_batches, bpm_start_points)
+        payloads = self.create_worker_payloads(
+            track_data, turn_batches, energy_turn_map, bpm_start_points
+        )
 
         for payload in payloads:
             parent, child = mp.Pipe()
             w = self.Worker(
                 child,
-                payload["wid"],
-                payload["x_comp"],
-                payload["y_comp"],
-                payload["init_coords"],
-                payload["start_bpm"],
+                worker_id=payload["wid"],
+                x_comparisons=payload["x_comp"],
+                y_comparisons=payload["y_comp"],
+                init_coords=payload["init_coords"],
+                start_bpm=payload["start_bpm"],
+                optimise_sextupoles=optimise_sextupoles,
             )
             w.start()
             self.parent_conns.append(parent)
             self.workers.append(w)
             parent.send((var_x, var_y))
-
-        return self.parent_conns
 
     def send_knobs_to_workers(self, current_knobs: dict[str, float]) -> None:
         """Send current knob values to all workers."""

@@ -5,13 +5,15 @@ import pandas as pd
 
 from aba_optimiser.config import (
     ACD_ON,
+    EPLUS_NOISY_FILE,
+    EPLUS_NONOISE_FILE,
+    NO_NOISE_FILE,
     # BPM_START,
     # BPM_RANGE,
     # FILTERED_FILE,
     # KALMAN_FILE,
-    NOISE_FILE,
+    NOISY_FILE,
     RAMP_UP_TURNS,
-    TRACK_DATA_FILE,
 )
 from aba_optimiser.dataframes.utils import select_markers
 from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
@@ -19,15 +21,15 @@ from aba_optimiser.plotting.utils import setup_scientific_formatting
 
 # Extract BPM names
 start_bpm = "BPM.11R4.B1"
-other_bpm = "BPM.12R4.B1"
+other_bpm = "BPM.10R4.B1"
 
 # Load non-noisy data
-init_coords = pd.read_parquet(TRACK_DATA_FILE).set_index("turn")
+init_coords = pd.read_parquet(EPLUS_NONOISE_FILE).set_index("turn")
 non_noisy_start = select_markers(init_coords, start_bpm)
 non_noisy_other = select_markers(init_coords, other_bpm)
 
 # Load noisy data
-noise_init = pd.read_parquet(NOISE_FILE).set_index("turn")
+noise_init = pd.read_parquet(EPLUS_NOISY_FILE).set_index("turn")
 noisy_start = select_markers(noise_init, start_bpm)
 noise_other = select_markers(noise_init, other_bpm)
 

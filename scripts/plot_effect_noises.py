@@ -19,11 +19,6 @@ from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 import pandas as pd
-from plotting import (
-    plot_error_bars_bpm_range,
-    plot_std_log_comparison,
-    show_plots,
-)
 from pymadng import MAD
 from tqdm.contrib.concurrent import process_map
 
@@ -33,6 +28,11 @@ from aba_optimiser.config import (
     SEQUENCE_FILE,
 )
 from aba_optimiser.physics.transverse_momentum import calculate_pz
+from scripts.plot_functions import (
+    plot_error_bars_bpm_range,
+    plot_std_log_comparison,
+    show_plots,
+)
 
 if TYPE_CHECKING:
     import tfs

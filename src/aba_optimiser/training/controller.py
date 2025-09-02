@@ -32,24 +32,28 @@ class Controller:
     managers for different aspects of the optimisation process.
     """
 
-    def __init__(self):
+    def __init__(self, optimise_sextupoles: bool, show_plots: bool = True):
         """Initialise the controller with all required managers."""
         # Load true strengths first
         self.true_strengths = read_knobs(TRUE_STRENGTHS)
 
         # Initialise managers
-        self.config_manager = ConfigurationManager()
+        self.config_manager = ConfigurationManager(optimise_sextupoles)
         self.config_manager.setup_mad_interface()
         self.config_manager.determine_worker_and_bpms()
 
         self.data_manager = DataManager(
-            self.config_manager.all_bpms, self.config_manager.bpm_start_points
+            self.config_manager.all_bpms,
+            self.config_manager.start_bpms,
+            optimise_sextupoles,
         )
         self.data_manager.prepare_turn_batches()
 
         # Determine the exact set of turns needed and load filtered data
         needed_turns = {t for batch in self.data_manager.turn_batches for t in batch}
-        self.data_manager.load_track_data(needed_turns=needed_turns)
+        self.data_manager.load_track_data(
+            needed_turns=needed_turns, optimise_sextupoles=optimise_sextupoles
+        )
 
         self.worker_manager = WorkerManager(
             self.config_manager.Worker, self.config_manager.calculate_n_data_points()
@@ -66,10 +70,13 @@ class Controller:
             self.config_manager.knob_names,
             self.filtered_true_strengths,
             OPTIMISER_TYPE,
+            optimise_sextupoles,
         )
 
         self.result_manager = ResultManager(
-            self.config_manager.knob_names, self.config_manager.elem_spos
+            self.config_manager.knob_names,
+            self.config_manager.elem_spos,
+            show_plots=show_plots,
         )
 
     def run(self) -> None:
@@ -79,19 +86,25 @@ class Controller:
         total_turns = self.data_manager.get_total_turns()
 
         try:
-            parent_conns = self.worker_manager.start_workers(
-                self.data_manager.get_indexed_comparison_data(),
+            self.worker_manager.start_workers(
+                self.data_manager.track_data,
                 self.data_manager.turn_batches,
-                self.config_manager.bpm_start_points,
+                self.data_manager.energy_map,
+                self.config_manager.start_bpms,
                 self.data_manager.var_x,
                 self.data_manager.var_y,
+                self.config_manager.optimise_sextupoles,
             )
 
             # Clean up memory after workers are started
             self._cleanup_memory()
 
             self.final_knobs = self.optimisation_loop.run_optimisation(
-                self.initial_knobs, parent_conns, writer, run_start, total_turns
+                self.initial_knobs,
+                self.worker_manager.parent_conns,
+                writer,
+                run_start,
+                total_turns,
             )
         except KeyboardInterrupt:
             LOGGER.warning(
@@ -109,8 +122,7 @@ class Controller:
 
     def _cleanup_memory(self) -> None:
         """Clean up memory after worker initialisation."""
-        del self.data_manager.comparison_data
-        del self.data_manager.turn_batches
+        del self.data_manager
         gc.collect()
 
     def _save_results(
@@ -141,6 +153,6 @@ class Controller:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    mp.set_start_method("spawn")
+    mp.set_start_method("fork")
     ctrl = Controller()
     ctrl.run()
