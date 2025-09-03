@@ -288,7 +288,7 @@ def _match_tunes() -> tuple[dict[str, float], pd.DataFrame]:
     # For LHC: Qx ≈ 62.28, Qy ≈ 60.31
     tunes = [0.28, 0.31]  # [horizontal_fractional_tune, vertical_fractional_tune]
 
-    # Perform tune matching using MAD-NG's optimization algorithm
+    # Perform tune matching using MAD-NG's optimisation algorithm
     mad["result"] = mad.match(
         command=r"\ -> twiss{sequence=MADX[SEQ_NAME]}",  # Command to execute for each iteration
         variables=[

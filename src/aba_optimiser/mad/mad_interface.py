@@ -39,7 +39,7 @@ class MadInterface:
             magnet_range (str): Range of magnets to include, e.g., "MARKER.1/MARKER.10".
             bpm_range (str): Range of BPMs to observe, e.g., "BPM.13R3.B1/BPM.12L4.B1".
             discard_mad_output (bool): Whether to discard MAD-NG output to stdout - will change the kwargs for pymadng.MAD.
-            **kwargs: Additional keyword arguments for pymadng.MAD initialization.
+            **kwargs: Additional keyword arguments for pymadng.MAD initialisation.
         """
         self.sequence_file = sequence_file
         self.magnet_range = magnet_range

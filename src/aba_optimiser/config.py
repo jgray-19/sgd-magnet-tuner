@@ -8,13 +8,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 # =============================================================================
-# OPTIMIZATION SETTINGS
+# OPTIMISATION SETTINGS
 # =============================================================================
 
 
 @dataclass
 class OptSettings:
-    """Settings for optimization simulations."""
+    """Settings for optimisation simulations."""
 
     max_epochs: int
     tracks_per_worker: int
@@ -33,7 +33,20 @@ class OptSettings:
         self.decay_epochs = self.max_epochs - self.warmup_epochs
 
 
-# Simulation parameters for quadrupole optimization
+# Simulation parameters for dp/p optimisation
+DPP_OPT_SETTINGS = OptSettings(
+    max_epochs=500,
+    tracks_per_worker=2000,
+    num_workers=50,
+    num_batches=50,
+    warmup_epochs=10,
+    warmup_lr_start=2e-9,
+    max_lr=4e-7,
+    min_lr=2e-7,
+    gradient_converged_value=1e-8,
+)
+
+# Simulation parameters for quadrupole optimisation
 QUAD_OPT_SETTINGS = OptSettings(
     max_epochs=10_000,
     tracks_per_worker=2000,
@@ -47,7 +60,7 @@ QUAD_OPT_SETTINGS = OptSettings(
     gradient_converged_value=1e-8,
 )
 
-# Simulation parameters for sextupole optimization
+# Simulation parameters for sextupole optimisation
 SEXT_OPT_SETTINGS = OptSettings(
     max_epochs=1000,
     tracks_per_worker=2000,

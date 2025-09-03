@@ -297,7 +297,7 @@ class WorkerManager:
             w = self.Worker(
                 child,  # Connection for communication
                 **payload,  # Unpack the payload dictionary into keyword arguments
-                optimise_sextupoles=optimise_sextupoles,  # Whether to include sextupoles in optimization
+                optimise_sextupoles=optimise_sextupoles,  # Whether to include sextupoles in optimisation
             )
             w.start()  # Start the worker process
 
@@ -323,7 +323,7 @@ class WorkerManager:
         """Collect results from all workers for an epoch.
 
         Args:
-            total_turns (int): Total number of turns across all workers for normalization
+            total_turns (int): Total number of turns across all workers for normalisation
 
         Returns:
             tuple[float, np.ndarray]: A tuple containing:

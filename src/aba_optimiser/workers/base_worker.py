@@ -199,7 +199,7 @@ end
         Compute gradients and loss for a given batch of particle tracking data.
 
         This method processes simulation results from MAD-NG (a particle accelerator
-        simulation tool) to calculate gradients with respect to optimization knobs
+        simulation tool) to calculate gradients with respect to optimisation knobs
         (including energy deviation 'deltap') and the associated loss function. It
         uses vectorised NumPy operations for efficiency, computing gradients via
         vector-Jacobian products and loss as the sum of squared differences.
@@ -224,8 +224,8 @@ end
         Notes:
             - Assumes MAD has been set up with initial conditions and scripts loaded.
             - Gradients are computed using the chain rule and Jacobian-vector products
-              for efficiency in optimization loops.
-            - Loss is minimised in optimization (e.g., via SGD), aiming to match
+              for efficiency in optimisation loops.
+            - Loss is minimised in optimisation (e.g., via SGD), aiming to match
               reference trajectories.
 
         Example:

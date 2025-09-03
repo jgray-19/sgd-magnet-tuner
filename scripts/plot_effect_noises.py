@@ -539,7 +539,7 @@ def main():
     matched_tunes = temp_simulator.matched_tunes
     df_twiss = temp_simulator.df_twiss
 
-    # Initialize analyzer with df_twiss for optimization
+    # Initialize analyzer with df_twiss for optimisation
     analyzer = NoiseAnalyser(config, matched_tunes, df_twiss)
 
     # Sample angles between 0 and 2π

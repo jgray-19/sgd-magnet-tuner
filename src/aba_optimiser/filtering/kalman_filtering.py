@@ -101,7 +101,7 @@ _, mflw = track{{sequence={SEQ_NAME}, X0=x0_da, nturn=1, range="{prev_b}/{bpm}"}
 class BPMKalmanFilter:
     """
     Self-contained Kalman filter for a 4D transverse state (x, px, y, py).
-    On initialization, it:
+    On initialisation, it:
       - Connects to MAD-X via MadInterface
       - Retrieves the BPM list from SEQ_NAME
       - Computes BPM-to-BPM 4x4 transfer matrices
@@ -395,7 +395,7 @@ def _rts_smooth_flat_jit(
     # allocate cross-covariances for N-1 transitions:
     P_cross_flat = np.empty((N - 1, 4, 4))
 
-    # small regularization constant
+    # small regularisation constant
     eps = 1e-16
 
     # initialize at last time step
@@ -476,7 +476,7 @@ def _filter_flat_jit(
         for i in range(4):
             P_up0[i, i] = R_stack[bpm_idx0, i, i]
         # Inflate unobserved momentum variances (px, py) to avoid
-        # over-confident initialization when R contains tiny values.
+        # over-confident initialisation when R contains tiny values.
         # Use a loose prior for slopes (optics-based priors could be used
         # instead if available).
         large_prior = 1e2
