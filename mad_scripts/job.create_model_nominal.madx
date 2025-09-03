@@ -13,6 +13,7 @@ title, "LHC Model created by omc3";
 call, file = 'macros/general.macros.madx';
 call, file = 'macros/lhc.macros.madx';
 omc3_beam_energy = 6800.0;
+omc3_beam_energy = 450.0;
 exec, define_nominal_beams();
 
 call, file = 'macros/lhc.macros.run3.madx';
@@ -23,7 +24,10 @@ call, file = 'acc-models-lhc/lhc.seq';
 option, echo;  ! re-enable output to see the optics settings
 
 ! ---- Call optics and other modifiers ----
-call, file = 'acc-models-lhc/operation/optics/R2025aRP_A200cmC200cmA10mL200cm_1.madx'; !@modifier
+call, file = 'acc-models-lhc/operation/optics/R2025aRP_A18cmC18cmA10mL200cm_Flat.madx'; !@modifier - 18cm optics
+! call, file = 'acc-models-lhc/operation/optics/R2025aRP_A11mC11mA10mL10m_PhaseKnob100ON.madx'; !@modifier - Injection optics
+! call, file = 'acc-models-lhc/operation/optics/R2025aRP_A200cmC200cmA10mL200cm_1.madx'; !@modifier - Before ATS antisqueeze
+! call, file = 'acc-models-lhc/operation/optics/R2025aRP_A200cmC200cmA10mL200cm_0-5.madx'; !@modifier
 
 ! ----- Remove IR symmetry definitions -----
 

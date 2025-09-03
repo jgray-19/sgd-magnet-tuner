@@ -10,6 +10,7 @@ import numpy as np
 from aba_optimiser.config import KNOB_TABLE, OUTPUT_KNOBS
 from aba_optimiser.io.utils import save_results, scientific_notation
 from aba_optimiser.plotting.strengths import (
+    plot_deltap_comparison,
     plot_strengths_comparison,
     plot_strengths_vs_position,
 )
@@ -90,12 +91,15 @@ class ResultManager:
     ) -> None:
         """Generate all plotting results using the plotting module."""
         LOGGER.info("Generating plots...")
-        magnet_names = [knob[:-3] for knob in self.knob_names]
+        knob_names_wo_dpp = self.knob_names[:-1]
+        quad_unc = uncertainties[:-1]
+
+        magnet_names = [knob[:-3] for knob in knob_names_wo_dpp]
         initial_vals = np.array(
-            [initial_strengths[i] for i in range(len(self.knob_names))]
+            [initial_strengths[i] for i in range(len(knob_names_wo_dpp))]
         )
-        final_vals = np.array([current_knobs[k] for k in self.knob_names])
-        true_vals = np.array([true_strengths[k] for k in self.knob_names])
+        final_vals = np.array([current_knobs[k] for k in knob_names_wo_dpp])
+        true_vals = np.array([true_strengths[k] for k in knob_names_wo_dpp])
 
         save_prefix = "plots/"
         show_errorbars = True
@@ -105,7 +109,7 @@ class ResultManager:
             magnet_names,
             final_vals,
             true_vals,
-            uncertainties,
+            quad_unc,
             initial_vals=initial_vals,
             show_errorbars=show_errorbars,
             plot_real=False,
@@ -117,11 +121,22 @@ class ResultManager:
             self.elem_spos,
             final_vals,
             true_vals,
-            uncertainties,
+            quad_unc,
             initial_vals=initial_vals,
             show_errorbars=show_errorbars,
             plot_real=False,
             save_path=f"{save_prefix}relative_difference_vs_position_comparison.png",
+            magnet_names=magnet_names,
         )
+
+        deltap_key = "deltap"  # self.knob_names[-1]
+        if current_knobs[deltap_key] != 0:
+            plot_deltap_comparison(
+                true_strengths[deltap_key],
+                current_knobs[deltap_key],
+                uncertainties[-1],
+            )
+        else:
+            LOGGER.info("Skipping delta-p plot as the final value is zero.")
         if self.show_plots:
             show_plots()

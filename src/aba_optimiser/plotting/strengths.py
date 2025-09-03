@@ -234,7 +234,7 @@ def plot_strengths_vs_position(
     # Validation
     n = len(elem_spos)
     assert len(final_vals) == n == len(true_vals) == len(uncertainties), (
-        "All inputs must have same length"
+        f"All inputs must have same length, final_vals: {len(final_vals)}, true_vals: {len(true_vals)}, uncertainties: {len(uncertainties)}"
     )
     if initial_vals is not None:
         assert len(initial_vals) == n
@@ -437,6 +437,61 @@ def plot_strengths_vs_position(
 
     ax.grid(alpha=0.3)
     setup_scientific_formatting(plane="y")
+
+    plt.tight_layout()
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+    return fig, ax
+
+
+def plot_deltap_comparison(
+    actual_deltap: float,
+    estimated_deltap: float,
+    uncertainty: float,
+    save_path: str = "plots/deltap_comparison.png",
+    *,
+    style: str | None = "seaborn-v0_8-colorblind",
+    dpi: int = 200,
+) -> tuple[plt.Figure, plt.Axes]:
+    """
+    Plot deltap comparison before and after optimisation as a single bar chart.
+
+    Axis in units of 10^-4.
+    """
+    if style:
+        plt.style.use(style)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    x = [0, 1]
+    labels = ["Actual", "Estimated"]
+    values = [actual_deltap * 1e4, estimated_deltap * 1e4]
+    colors = [MQ_TRUE_COLOR, MQ_FINAL_COLOR]
+
+    ax.bar(x, values, color=colors, edgecolor="black", width=0.6)
+
+    # Error bar on final
+    ax.errorbar(
+        1,
+        values[1],
+        yerr=uncertainty * 1e4,
+        capsize=5,
+        color="black",
+        fmt="none",
+    )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel(r"$\Delta p / p$ ($\times 10^{-4}$)")
+    ax.grid(axis="y", alpha=0.3)
+    setup_scientific_formatting(plane="y")
+
+    # Legend
+    legend_handles = [
+        Patch(facecolor=MQ_TRUE_COLOR, edgecolor="black", label="Initial"),
+        Patch(facecolor=MQ_FINAL_COLOR, edgecolor="black", label="Final"),
+    ]
+    ax.legend(handles=legend_handles, loc="upper right")
 
     plt.tight_layout()
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)

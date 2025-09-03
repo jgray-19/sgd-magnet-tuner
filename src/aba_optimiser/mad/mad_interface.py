@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 import numpy as np
+import tfs
 from pymadng import MAD
 
-from aba_optimiser.config import BEAM_ENERGY, SEQ_NAME, TUNE_KNOBS_FILE
+from aba_optimiser.config import (
+    BEAM_ENERGY,
+    CORRECTOR_STRENGTHS,
+    SEQ_NAME,
+    TUNE_KNOBS_FILE,
+)
 from aba_optimiser.io.utils import read_knobs
-
-if TYPE_CHECKING:
-    import tfs
 
 BPM_PATTERN = "^BPM%.%d-%d.*"
 LOGGER = logging.getLogger(__name__)
@@ -56,6 +58,7 @@ class MadInterface:
         self._count_bpms()
         self._observe_bpms()
 
+        self._set_correctors()
         self._set_tune_knobs()
         self._make_adj_knobs(optimise_sextupoles)
 
@@ -99,6 +102,22 @@ py:send(true)
         assert self.mad.recv(), "Failed to set up BPM observation"
         logging.info(f"Set up observation for BPMs matching pattern: {BPM_PATTERN}")
 
+    def _set_correctors(self) -> None:
+        if not CORRECTOR_STRENGTHS.exists():
+            LOGGER.warning(f"Corrector strengths file not found: {CORRECTOR_STRENGTHS}")
+            return
+        corrector_table = tfs.read(CORRECTOR_STRENGTHS)
+
+        # Remove all rows that have monitor in the column kind
+        corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
+
+        # Loop through every row in the table
+        for _, row in corrector_table.iterrows():
+            self.mad.send(f"loaded_sequence['{row['ename']}'].hkick = py:recv()")
+            self.mad.send(row["hkick"])
+            self.mad.send(f"loaded_sequence['{row['ename']}'].vkick = py:recv()")
+            self.mad.send(row["vkick"])
+
     def _set_tune_knobs(self) -> None:
         """Set up the MAD-NG session to include predefined tune knobs."""
         tune_knobs = read_knobs(TUNE_KNOBS_FILE)
@@ -125,8 +144,8 @@ py:send(true)
         add_sext_knobs = ""
         if optimise_sextupoles:
             add_sext_knobs = """
-            loaded_sequence[k_str_name] = e.k2 ! Must not be 0.
-            e.k2 = \\->loaded_sequence[k_str_name]
+            MADX[k_str_name] = e.k2 ! Must not be 0.
+            e.k2 = \\->MADX[k_str_name]
             """
 
         self.mad.send(f"""
@@ -136,8 +155,8 @@ for i, e, s, ds in loaded_sequence:siter(magnet_range) do
     if {element_condition} then
         local k_str_name = e.name .. "_k"
         if e.k1 and e.k1 ~= 0 then
-            loaded_sequence[k_str_name] = e.k1 ! Must not be 0.
-            e.k1 = \\->loaded_sequence[k_str_name]
+            MADX[k_str_name] = e.k1 ! Must not be 0.
+            e.k1 = \\->MADX[k_str_name]
         elseif e.k2 and e.k2 ~= 0 then
             {add_sext_knobs}
         end
@@ -145,6 +164,7 @@ for i, e, s, ds in loaded_sequence:siter(magnet_range) do
         table.insert(spos_list, s)
     end
 end
+table.insert(knob_names, "pt")
 coord_names = {{"x", "px", "y", "py", "t", "pt"}}
 py:send(knob_names, true)
 py:send(spos_list, true)
@@ -162,25 +182,25 @@ py:send(spos_list, true)
         Returns:
             np.ndarray: Array of knob values in the same order as knob_names.
         """
-        var_names = [f"loaded_sequence['{k}']" for k in self.knob_names]
+        var_names = [f"MADX['{k}']" for k in self.knob_names]
         values = self.mad.recv_vars(*var_names)
         return np.array(values, dtype=float)
-
-    def update_knobs(self, knob_updates: dict[str, float]) -> None:
-        """
-        Update the knob strengths in the MAD-NG session.
-
-        Args:
-            knob_updates (dict[str, float]): Mapping from knob name to new value.
-        """
-        for name, val in knob_updates.items():
-            self.mad.send(f"loaded_sequence['{name}']:set0({val})")
 
     def run_twiss(self) -> tfs.TfsDataFrame:
         self.mad.send("""
 tws = twiss{sequence=loaded_sequence, observe=1}
 """)
         return self.mad.tws.to_df().set_index("name")
+
+    def pt2dp(self, pt) -> float:
+        self.mad.send("py:send(MAD.gphys.pt2dp(py:recv(), loaded_sequence.beam.beta))")
+        self.mad.send(pt)
+        return self.mad.recv()
+
+    def dp2pt(self, dp) -> float:
+        self.mad.send("py:send(MAD.gphys.dp2pt(py:recv(), loaded_sequence.beam.beta))")
+        self.mad.send(dp)
+        return self.mad.recv()
 
     def __del__(self):
         """Clean up the MAD-NG session."""

@@ -23,7 +23,7 @@ assert(
 
 local matrix, vector in MAD
 
-local num_knobs = #knob_names
+local num_knobs = #knob_names + 1 ! Include dpt
 local Htot = matrix(num_knobs, num_knobs):zeros()
 local W_x = vector(nbpms * n_compare_turns):fill(var_x):diag()
 local W_y = vector(nbpms * n_compare_turns):fill(var_y):diag()

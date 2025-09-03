@@ -74,9 +74,6 @@ def calculate_pz(
         data["y"] = orig_data["y"] + noise_y
 
     # Subtract mean coordinates at each BPM to center around closed orbit
-    LOGGER.warning(
-        "Not centering the BPMs - plus and minus deltap have different COs - Need to be discussed. "
-    )
     # bpm_means = data.groupby("name", observed=False)[["x", "y"]].mean()
     # if info:
     #     print("BPM means (x, y):")
@@ -84,7 +81,6 @@ def calculate_pz(
     # data = data.merge(bpm_means, on="name", suffixes=("", "_mean"))
     # data["x"] = data["x"] - data["x_mean"]
     # data["y"] = data["y"] - data["y_mean"]
-    # data.drop(columns=["x_mean", "y_mean"], inplace=True)
 
     # Add weight_x and weight_y = 1 for all rows
     data["weight_x"] = 1.0
@@ -322,6 +318,20 @@ def calculate_pz(
     data_avg["py"] = (
         wpy_prev * data_p["py"].to_numpy() + wpy_next * data_n["py"].to_numpy()
     ) / (wpy_prev + wpy_next + _eps)
+
+    # Move the coordinates back to the closed orbit using the mean calculated earlier
+    # data_p["x"] = data_p["x"] + data_p["x_mean"]
+    # data_p["y"] = data_p["y"] + data_p["y_mean"]
+
+    # data_n["x"] = data_n["x"] + data_n["x_mean"]
+    # data_n["y"] = data_n["y"] + data_n["y_mean"]
+
+    # data_avg["x"] = data_avg["x"] + data_avg["x_mean"]
+    # data_avg["y"] = data_avg["y"] + data_avg["y_mean"]
+
+    # data_p.drop(columns=["x_mean", "y_mean"], inplace=True)
+    # data_n.drop(columns=["x_mean", "y_mean"], inplace=True)
+    # data_avg.drop(columns=["x_mean", "y_mean"], inplace=True)
 
     # 6. Print the differences and standard deviations
     if info:

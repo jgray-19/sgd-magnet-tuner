@@ -69,7 +69,7 @@ for i in range(num_files):
     x[i] = x[i].loc[matching_bpms]
     y[i] = y[i].loc[matching_bpms]
 
-    # Vectorized melt for x and y
+    # Vectorised melt for x and y
     x_melt = x[i].reset_index().melt(id_vars="index", var_name="turn", value_name="x")
     y_melt = y[i].reset_index().melt(id_vars="index", var_name="turn", value_name="y")
 

@@ -35,12 +35,13 @@ class OptSettings:
 
 # Simulation parameters for quadrupole optimization
 QUAD_OPT_SETTINGS = OptSettings(
-    max_epochs=1000,
-    tracks_per_worker=1000,
-    num_workers=60,
-    num_batches=20,
+    max_epochs=10_000,
+    tracks_per_worker=2000,
+    num_workers=50,
+    # num_workers=1,
+    num_batches=50,
     warmup_epochs=10,
-    warmup_lr_start=2e-7,
+    warmup_lr_start=2e-9,
     max_lr=4e-7,
     min_lr=2e-7,
     gradient_converged_value=1e-8,
@@ -48,9 +49,9 @@ QUAD_OPT_SETTINGS = OptSettings(
 
 # Simulation parameters for sextupole optimization
 SEXT_OPT_SETTINGS = OptSettings(
-    max_epochs=3000,
-    tracks_per_worker=3000,
-    num_workers=60,
+    max_epochs=1000,
+    tracks_per_worker=2000,
+    num_workers=50,
     num_batches=20,
     warmup_epochs=10,
     warmup_lr_start=2e-7,
@@ -71,6 +72,7 @@ GRAD_NORM_ALPHA = 0.7  # Gradient norm smoothing factor for smoothing loss
 POSITION_STD_DEV = 1e-4  # Standard deviation of the position noise
 MOMENTUM_STD_DEV = 3e-6  # Standard deviation of the momentum noise
 REL_K1_STD_DEV = 1e-3  # Standard deviation of the K1 noise
+MACHINE_DELTAP = 2.2e-4  # The energy deviation of the machine from expected.
 
 # =============================================================================
 # BPM AND TRACKING SETTINGS
@@ -135,7 +137,8 @@ SEQUENCE_FILE = module_path / "mad_scripts/lhcb1.seq"  # MAD-X sequence file
 TRUE_STRENGTHS = module_path / "data/true_strengths.txt"  # Ground-truth knob strengths
 OUTPUT_KNOBS = module_path / "data/final_knobs.txt"  # Where to write final strengths
 KNOB_TABLE = module_path / "data/knob_strengths_table.md"  # Markdown summary of results
-TUNE_KNOBS_FILE = module_path / "data/matched_tunes.txt"  # File with tune knobs
+TUNE_KNOBS_FILE = module_path / "data/matched_tunes.txt"
+CORRECTOR_STRENGTHS = module_path / "data/corrector_strengths.tfs"
 MAD_SCRIPTS_DIR = (
     module_path / "src" / "aba_optimiser" / "mad" / "mad_scripts"
 )  # Directory for MAD-NG scripts

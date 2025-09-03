@@ -54,5 +54,5 @@ results.generate_plots(
     current_knobs=knobs_from_file,
     initial_strengths=mad_iface.receive_knob_values(),
     true_strengths=true_strengths,
-    uncertainties=uncertainties,
+    quad_unc=uncertainties,
 )

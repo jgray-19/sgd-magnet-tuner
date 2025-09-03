@@ -15,10 +15,10 @@ assert(
     "Missing required variables for initialising"
 )
 
-num_knobs = #knob_names
-set_range = vector(num_knobs):seq() ! I want to set 1 to num_knobs
+num_knobs = #knob_names ! Includes dpp
+local set_range = vector(num_knobs):seq() ! I want to set 1 to num_knobs (without dpp)
 ! I want to get 7 to 7 + num_knobs. idx 1 is the scalar. idx 2 - 7 is dx/dx, dx/px, dx/dy, dx/dpy, dx/dt, dx/dpt
-get_range = vector(num_knobs):seq(7)
+local get_range = vector(num_knobs):seq(7)
 
 ! Create tables to hold the x, y, dx_dk, and dy_dk data for each particle.
 ! Specifying how many indexable slots we want in each table. (lujit)
@@ -30,13 +30,13 @@ dy_dk = table.new(batch_size, 0)
 for i=1,batch_size do
     x[i] = vector(nbpms*n_compare_turns)
     y[i] = vector(nbpms*n_compare_turns)
-    dx_dk[i] = matrix(num_knobs, nbpms*n_compare_turns)
-    dy_dk[i] = matrix(num_knobs, nbpms*n_compare_turns)
+    dx_dk[i] = matrix(num_knobs+1, nbpms*n_compare_turns)
+    dy_dk[i] = matrix(num_knobs+1, nbpms*n_compare_turns)
 end
 
-function get_knob_vec(xy_damap)
-    local all_first_deriv = xy_damap:getvec(1, num_knobs+7)
-    return all_first_deriv:getvec(get_range) ! Remove x, px, y, py, t, pt
+local function get_knob_vec(xy_damap)
+    local all_first_deriv = xy_damap:getvec(1, num_knobs + 7)
+    return all_first_deriv:getvec(get_range) ! Remove 0, dx, dpx, dy, dpy, dt, dpt
 end
 
 observe_count = 1
@@ -44,11 +44,14 @@ function save_data(elm, mflw, _, slc)
     local turn in mflw
     -- Observe the BPMs at the specified intervals
     if slc == -2 and elm:is_observed() and turn >= mflw.observe then
+         -- Loop over each particle in the batch
         for i=1,batch_size do
             x[i]:seti(observe_count, mflw[i].x:get0()) ! get0 returns the scalar
             y[i]:seti(observe_count, mflw[i].y:get0()) ! get0 returns the scalar
             dx_dk[i]:setsub(set_range, observe_count, get_knob_vec(mflw[i].x))
             dy_dk[i]:setsub(set_range, observe_count, get_knob_vec(mflw[i].y))
+            dx_dk[i]:setsub(num_knobs+1, observe_count, mflw[i].x:get(7)) ! Set dx_dpt
+            dy_dk[i]:setsub(num_knobs+1, observe_count, mflw[i].y:get(7)) ! Set dy_dpt
         end
         -- Increment the index for the next bpm
         observe_count = observe_count + 1

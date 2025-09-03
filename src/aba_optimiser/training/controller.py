@@ -12,7 +12,7 @@ import time
 import numpy as np
 from tensorboardX import SummaryWriter
 
-from aba_optimiser.config import OPTIMISER_TYPE, TRUE_STRENGTHS
+from aba_optimiser.config import MACHINE_DELTAP, OPTIMISER_TYPE, TRUE_STRENGTHS
 from aba_optimiser.io.utils import read_knobs
 from aba_optimiser.training.configuration_manager import ConfigurationManager
 from aba_optimiser.training.data_manager import DataManager
@@ -34,9 +34,6 @@ class Controller:
 
     def __init__(self, optimise_sextupoles: bool, show_plots: bool = True):
         """Initialise the controller with all required managers."""
-        # Load true strengths first
-        self.true_strengths = read_knobs(TRUE_STRENGTHS)
-
         # Initialise managers
         self.config_manager = ConfigurationManager(optimise_sextupoles)
         self.config_manager.setup_mad_interface()
@@ -59,9 +56,12 @@ class Controller:
             self.config_manager.Worker, self.config_manager.calculate_n_data_points()
         )
 
+        true_strengths = read_knobs(TRUE_STRENGTHS)
+        true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(MACHINE_DELTAP)
+
         # Initialise knobs
         self.initial_knobs, self.filtered_true_strengths = (
-            self.config_manager.initialise_knob_strengths(self.true_strengths)
+            self.config_manager.initialise_knob_strengths(true_strengths)
         )
 
         # Setup optimisation and result managers
@@ -73,8 +73,9 @@ class Controller:
             optimise_sextupoles,
         )
 
+        deltap_knob_names = self.config_manager.knob_names[:-1] + ["deltap"]
         self.result_manager = ResultManager(
-            self.config_manager.knob_names,
+            deltap_knob_names,
             self.config_manager.elem_spos,
             show_plots=show_plots,
         )
@@ -125,6 +126,16 @@ class Controller:
         del self.data_manager
         gc.collect()
 
+    def _convert_pt2dp(self, uncertainties: np.ndarray):
+        self.final_knobs["deltap"] = self.config_manager.mad_iface.pt2dp(
+            self.final_knobs.pop("pt")
+        )
+        self.filtered_true_strengths["deltap"] = self.config_manager.mad_iface.pt2dp(
+            self.filtered_true_strengths.pop("pt")
+        )
+
+        uncertainties[-1] = self.config_manager.mad_iface.pt2dp(uncertainties[-1])
+
     def _save_results(
         self,
         total_hessian: np.ndarray,
@@ -137,6 +148,10 @@ class Controller:
 
         # Close logging and save results
         writer.close()
+
+        # Convert the knobs back from pt to dp.
+        self._convert_pt2dp(uncertainties)
+
         # Save and plot using the final knobs (not the initial ones)
         self.result_manager.save_results(
             self.final_knobs, uncertainties, self.filtered_true_strengths

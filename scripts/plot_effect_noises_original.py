@@ -92,7 +92,7 @@ def build_track_command(
     alfa22 = df_twiss.loc[start_bpm, "alfa22"]  # Vertical alpha function [-]
 
     # Convert action-angle coordinates to physical coordinates
-    # This transformation maps from normalized phase space to real coordinates
+    # This transformation maps from normalised phase space to real coordinates
     cos0 = np.cos(angle)
     sin0 = np.sin(angle)
 
@@ -433,7 +433,7 @@ def main():
     3. Computing trajectories with quadrupole errors
     4. Computing trajectories with initial condition errors
     5. Computing trajectories with combined errors
-    6. Analyzing the statistical differences and generating plots
+    6. Analysing the statistical differences and generating plots
     """
 
     # ===== COMMAND LINE ARGUMENT PARSING =====
@@ -575,7 +575,7 @@ def main():
         results_combined[angle].append(res)
 
     # ===== STATISTICAL ANALYSIS AND PLOTTING =====
-    logger.info("Analyzing statistical differences and generating plots...")
+    logger.info("Analysing statistical differences and generating plots...")
 
     # Get BPM positions ordered by their location along the accelerator
     s_positions = df_twiss.loc[bpm_names, "s"].to_numpy()  # Position along beamline [m]

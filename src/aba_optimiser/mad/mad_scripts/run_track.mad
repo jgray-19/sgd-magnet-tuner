@@ -14,12 +14,6 @@
 ! matrix: a MAD matrix object for creating matrices
 ! py: a Python interface object for sending data
 
--- assert(
---     loaded_sequence and batch_size and x and y and dx_dk and dy_dk and
---     n_run_turns and da_x0_c and observe_from_turn and save_data and
---     observe_count and batch,
---     "Missing required variables for tracking"
--- )
 
 reset_before_tracking()
 local _, mflw= track{

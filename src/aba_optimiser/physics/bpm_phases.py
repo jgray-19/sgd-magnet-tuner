@@ -48,7 +48,7 @@ def _bpm_to_pi_2(mu: pd.Series, tune: float, forward: bool, name: str) -> pd.Dat
 
     np.fill_diagonal(diff, np.nan)
 
-    # pick j minimizing |Δ_ij - target|. target = 0.25 (*2pi) -> pi/2
+    # pick j minimising |Δ_ij - target|. target = 0.25 (*2pi) -> pi/2
     idx = np.nanargmin(np.abs(diff - 0.25), axis=1)
     delta = diff[np.arange(n), idx] - 0.25
     names = mu.index[idx]

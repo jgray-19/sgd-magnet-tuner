@@ -11,7 +11,6 @@ from aba_optimiser.config import (
     MAD_SCRIPTS_DIR,
     MAGNET_RANGE,
     QUAD_OPT_SETTINGS,
-    SEQ_NAME,
     SEQUENCE_FILE,
     SEXT_OPT_SETTINGS,
 )
@@ -40,6 +39,7 @@ class BaseWorker(Process, ABC):
         y_comparisons: np.ndarray,
         init_coords: np.ndarray,
         start_bpm: str,
+        init_pts: np.ndarray,
         optimise_sextupoles: bool = False,
     ) -> None:
         """
@@ -51,7 +51,7 @@ class BaseWorker(Process, ABC):
         self.conn = conn
 
         LOGGER.debug(
-            f"Initializing worker {worker_id} for BPM {start_bpm} with {len(init_coords)} particles"
+            f"Initialising worker {worker_id} for BPM {start_bpm} with {len(init_coords)} particles"
         )
 
         self.x_comparisons = x_comparisons
@@ -71,6 +71,7 @@ class BaseWorker(Process, ABC):
         self.num_batches = num_batches
         self.optimise_sextupoles = optimise_sextupoles
 
+        self.init_pts = init_pts
         self._split_data_to_batches()
 
         # Load common MAD scripts
@@ -118,14 +119,23 @@ class BaseWorker(Process, ABC):
         self.y_comparisons = np.array_split(
             self.y_comparisons, self.num_batches, axis=0
         )
+        self.init_pts = [
+            arr.tolist()
+            for arr in np.array_split(self.init_pts, self.num_batches, axis=0)
+        ]
 
     def send_initial_conditions(self, mad: MAD) -> None:
         """
         Sets the initial conditions for each track in MAD-NG.
         """
         mad.send("""
-da_x0_c = table.new(num_batches, 0)
 init_coords = py:recv()
+init_pts = py:recv()
+""")
+        mad.send(self.init_coords).send(self.init_pts)
+
+        mad.send("""
+da_x0_c = table.new(num_batches, 0)
 for i=1,num_batches do
     da_x0_c[i] = table.new(batch_size, 0)
     for j=1,batch_size do
@@ -134,9 +144,8 @@ for i=1,num_batches do
     end
 end
             """)
-        mad.send(self.init_coords)
 
-    def setup_mad_interface(self) -> MAD:
+    def setup_mad_interface(self) -> tuple[MAD, int]:
         """
         Initialize MAD interface and setup common MAD configuration.
 
@@ -156,10 +165,11 @@ end
             magnet_range=MAGNET_RANGE,
             bpm_range=bpm_range,
             optimise_sextupoles=self.optimise_sextupoles,
+            discard_mad_output=False,
         )
 
         mad = mad_iface.mad
-        mad["knob_names"] = mad_iface.knob_names
+        mad["knob_names"] = mad_iface.knob_names[:-1]  # ignore pt
         mad["batch_size"] = self.batch_size
         mad["num_batches"] = self.num_batches
 
@@ -172,7 +182,7 @@ end
         mad.send("""
 knob_monomials = {}
 for i,param in ipairs(knob_names) do
-    loaded_sequence[param] = loaded_sequence[param] + da_x0_base[param]
+    MADX[param] = MADX[param] + da_x0_base[param]
     knob_monomials[param] = string.rep("0", 6 + i - 1) .. "1"
 end
 """)
@@ -180,58 +190,103 @@ end
         # Setup sequence specific to worker type
         self.setup_mad_sequence(mad)
 
-        return mad
+        return mad, mad_iface.nbpms
 
     def compute_gradients_and_loss(
         self, mad: MAD, knob_updates: dict[str, float], batch: int
     ) -> tuple[np.ndarray, float]:
         """
-        Process tracking results and compute gradients and loss.
+        Compute gradients and loss for a given batch of particle tracking data.
+
+        This method processes simulation results from MAD-NG (a particle accelerator
+        simulation tool) to calculate gradients with respect to optimization knobs
+        (including energy deviation 'deltap') and the associated loss function. It
+        uses vectorised NumPy operations for efficiency, computing gradients via
+        vector-Jacobian products and loss as the sum of squared differences.
+
+        Parameters:
+            mad (MAD): The MAD-NG interface object for sending commands and receiving
+                simulation results.
+            knob_updates (dict[str, float]): Dictionary of knob names (e.g., magnet
+                strengths) to their updated values. The 'deltap' key (energy deviation)
+                is handled separately and removed from this dict.
+            batch (int): The current batch index (used to select comparison data and
+                adjust for 1-based Lua indexing in MAD).
 
         Returns:
-            grad: Gradient array
-            loss: Loss value
+            tuple[np.ndarray, float]:
+                - grad (np.ndarray): Gradient array of shape (n_knobs + 1,), where
+                  n_knobs is the number of knobs (excluding 'deltap'). Includes
+                  derivatives w.r.t. knobs and 'deltap'.
+                - loss (float): Scalar loss value, computed as the sum of squared
+                  differences between simulated and reference positions in x and y.
+
+        Notes:
+            - Assumes MAD has been set up with initial conditions and scripts loaded.
+            - Gradients are computed using the chain rule and Jacobian-vector products
+              for efficiency in optimization loops.
+            - Loss is minimised in optimization (e.g., via SGD), aiming to match
+              reference trajectories.
+
+        Example:
+            >>> grad, loss = worker.compute_gradients_and_loss(mad, {"k1": 0.01, "deltap": 1e-3}, 0)
+            >>> print(grad.shape)  # (n_knobs + 1,)
+            >>> print(loss)  # e.g., 0.123
         """
-        # Update knob values
-        update_string = [
-            f"MADX.{SEQ_NAME}['{name}']:set0({val:.15e})"
-            for name, val in knob_updates.items()
+        # Extract energy deviation ('pt') from knob updates
+        machine_pt = knob_updates.pop("pt")
+
+        # Prepare MAD commands to update knob values in the sequence
+        update_commands = [
+            f"MADX['{name}']:set0({val:.15e})" for name, val in knob_updates.items()
         ]
 
-        # Run tracking
-        mad.send("\n".join(update_string))
-        mad.send(f"batch = {batch + 1}")  # + 1 for python to lua list index
+        # Send updates, batch index (adjusted for Lua's 1-based indexing), and energy deviation to MAD
+        mad.send("\n".join(update_commands))
+        mad.send(f"batch = {batch + 1}")  # Lua uses 1-based indexing
+        mad.send(f"""
+for i = 1, batch_size do
+    da_x0_c[batch][i].pt:set0({machine_pt:.15e} + init_pts[batch][i])
+end
+""")
         mad.send(self.run_track_script)
 
-        # Get results
-        x_res = mad.recv()
-        y_res = mad.recv()
-        dx_dk = mad.recv()
-        dy_dk = mad.recv()
+        # Receive simulation results from MAD: positions and derivatives
+        x_results = mad.recv()  # Simulated x-positions: list of arrays
+        y_results = mad.recv()  # Simulated y-positions: list of arrays
+        dx_dk_results = mad.recv()  # Derivatives of x w.r.t. knobs: list of arrays
+        dy_dk_results = mad.recv()  # Derivatives of y w.r.t. knobs: list of arrays
 
-        # Process results into arrays
-        x_stack = np.asarray(x_res).squeeze(-1)  # (batch_size, n_data_points)
-        y_stack = np.asarray(y_res).squeeze(-1)  # (batch_size, n_data_points)
-        dx_stack = np.stack(dx_dk, axis=0)
-        dy_stack = np.stack(dy_dk, axis=0)
+        # Convert results to NumPy arrays for efficient vectorised processing
+        # Squeeze to remove singleton dimensions (e.g., from MAD's output format)
+        # Shape: (n_particles, n_data_points)
+        particle_positions_x = np.asarray(x_results).squeeze(-1)
+        particle_positions_y = np.asarray(y_results).squeeze(-1)
 
-        x_diffs = x_stack - self.x_comparisons[batch]
-        y_diffs = y_stack - self.y_comparisons[batch]
+        # Shape: (n_particles, n_knobs + 1, n_data_points)
+        dx_dk = np.stack(dx_dk_results, axis=0)
+        dy_dk = np.stack(dy_dk_results, axis=0)
 
-        # Compute gradients using vector-Jacobian products
-        gx = np.einsum("pkm,pm->k", dx_stack, x_diffs)  # (K,)
-        gy = np.einsum("pkm,pm->k", dy_stack, y_diffs)  # (K,)
+        # Compute differences between simulated and reference positions for loss and gradients
+        # Shape: (n_particles, n_data_points)
+        position_diffs_x = particle_positions_x - self.x_comparisons[batch]
+        position_diffs_y = particle_positions_y - self.y_comparisons[batch]
 
-        # Build gradient and loss
-        grad = 2.0 * (gx + gy)  # (K,)
-        loss = (x_diffs**2).sum() + (y_diffs**2).sum()  # scalar
+        # Compute gradients using vector-Jacobian products (efficient via einsum)
+        # gx: Sum over particles and data points of (derivatives * diffs). Shape: (n_knobs + 1,)
+        gx = np.einsum("pkm,pm->k", dx_dk, position_diffs_x)
+        gy = np.einsum("pkm,pm->k", dy_dk, position_diffs_y)
+
+        # Combine gradients and compute loss (factor of 2 for derivative of squared error)
+        grad = 2.0 * (gx + gy)  # Shape: (n_knobs + 1,)
+        loss = np.sum(position_diffs_x**2) + np.sum(position_diffs_y**2)  # Scalar
 
         return grad, loss
 
     def run(self) -> None:
         """Main worker run loop."""
         # Setup MAD interface
-        mad = self.setup_mad_interface()
+        mad, nbpms = self.setup_mad_interface()
 
         # Send initial conditions
         self.send_initial_conditions(mad)
@@ -245,18 +300,20 @@ end
             f"Worker {self.worker_id}: Received Hessian vars x={hessian_var_x}, y={hessian_var_y}"
         )
         knob_updates = self.conn.recv()  # shape (n_knobs,)
+        knob_updates["pt"] = 1e-5  # Initialize pt to non-zero
 
         batch = 0
         while knob_updates is not None:
             # Process tracking and compute gradients
             grad, loss = self.compute_gradients_and_loss(mad, knob_updates, batch)
 
-            # Send results back
-            self.conn.send((self.worker_id, grad, loss))
+            # Send results back - normalised with nbpms
+            self.conn.send((self.worker_id, grad, loss / nbpms))
 
             # Receive next knob updates
             knob_updates = self.conn.recv()
 
+            # Move to the next batch
             batch = (batch + 1) % self.num_batches
 
         # Final hessian estimation

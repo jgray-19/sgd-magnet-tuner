@@ -31,13 +31,13 @@ def setup_scientific_formatting(
         if "x" in plane:
             fmt_x = mticker.ScalarFormatter(useMathText=use_math_text)
             fmt_x.set_scientific(True)
-            fmt_x.set_powerlimits(powerlimits)
+            # fmt_x.set_powerlimits(powerlimits)
             axis.xaxis.set_major_formatter(fmt_x)
 
         if "y" in plane:
             fmt_y = mticker.ScalarFormatter(useMathText=use_math_text)
             fmt_y.set_scientific(True)
-            fmt_y.set_powerlimits(powerlimits)
+            # fmt_y.set_powerlimits(powerlimits)
             axis.yaxis.set_major_formatter(fmt_y)
 
 

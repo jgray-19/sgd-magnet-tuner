@@ -52,12 +52,12 @@ def _compute_q_for_bpm(
     mad_iface.mad["knob_names"] = knob_names
     mad_iface.mad["num_coords"] = num_coords_to_track
     mad_iface.mad.send(
-        f"""
-local coords = {{"x","px","y","py","t","pt"}}
+        """
+local coords = {"x","px","y","py","t","pt"}
 num_quads = #knob_names
-x0_da_base = damap{{nv=#coords, np=num_quads, mo=1, po=1, vn=tblcat(coords, knob_names)}}
+x0_da_base = damap{nv=#coords, np=num_quads, mo=1, po=1, vn=tblcat(coords, knob_names)}
 for i, knob in ipairs(knob_names) do
-    {SEQ_NAME}[knob] = {SEQ_NAME}[knob] + x0_da_base[knob]
+    MADX[knob] = MADX[knob] + x0_da_base[knob]
 end
 x0_da = table.new(num_coords, 0)
 for i=1,num_coords do
@@ -263,7 +263,7 @@ py:send(jx); py:send(jpx); py:send(jy); py:send(jpy)
             meas, do_smoothing=False, return_cross=True
         )
 
-        # Build output DataFrame vectorized
+        # Build output DataFrame vectorised
         n_turns, n_bpm = x_hat.shape[0], len(self.bpm_list)
         turn_arr = np.repeat(np.array(list(turns)), n_bpm)
         name_arr = np.tile(np.array(self.bpm_list), n_turns)

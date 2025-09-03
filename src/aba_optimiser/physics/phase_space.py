@@ -25,7 +25,7 @@ class PhaseSpaceDiagnostics:
         analysis_dir: Path | str = module_path / "analysis",
     ):
         LOGGER.debug(
-            f"Initializing phase space diagnostics for BPM {bpm} with {len(x_data)} data points"
+            f"Initialising phase space diagnostics for BPM {bpm} with {len(x_data)} data points"
         )
         self.bpm = bpm
         self.num_points = num_points

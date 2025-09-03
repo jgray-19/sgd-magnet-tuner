@@ -5,10 +5,12 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import tfs
 from pymadng import MAD
 
 from aba_optimiser.config import (
     BEAM_ENERGY,
+    CORRECTOR_STRENGTHS,
     DELTAP,
     EMINUS_NOISY_FILE,
     EMINUS_NONOISE_FILE,
@@ -17,6 +19,7 @@ from aba_optimiser.config import (
     # BPM_START_POINTS,
     # FILTERED_FILE,
     FLATTOP_TURNS,
+    MACHINE_DELTAP,
     # KALMAN_FILE,
     MAGNET_RANGE,
     NO_NOISE_FILE,
@@ -71,7 +74,7 @@ def process_track_with_queue(ntrk, mad_trk, track_q: "mp.Queue", noise_q: "mp.Qu
     # Add noise and enqueue noisy data
     df["name"] = df["name"].astype("category")
     tws, _ = mad_trk.twiss(
-        sequence=mad_trk.MADX[SEQ_NAME], deltap=mad_trk.deltap, observe=1
+        sequence=mad_trk.MADX[SEQ_NAME], deltap=mad_trk.input_deltap, observe=1
     )
     _, _, noisy_df = calculate_pz(df, tws=tws.to_df().set_index("name"))
     del tws
@@ -97,14 +100,14 @@ mad = MAD(debug=False)
 
 # Load the sequence
 mad.MADX.load(f"'{SEQUENCE_FILE.absolute()}'")
-seq = mad.MADX[SEQ_NAME]
+mad["seq"] = mad.MADX[SEQ_NAME]
 mad["SEQ_NAME"] = SEQ_NAME
 
 # Set beam
-seq.beam = mad.beam(particle='"proton"', energy=BEAM_ENERGY)
+mad.seq.beam = mad.beam(particle='"proton"', energy=BEAM_ENERGY)
 
 # Run an initial twiss
-ini_tws, _ = mad.twiss(sequence=seq)
+ini_tws, _ = mad.twiss(sequence=mad.seq)
 ini_tws = ini_tws.to_df()
 
 rng = np.random.default_rng(42)  # reproducibility
@@ -120,7 +123,7 @@ main_sext_names = []
 start, end, _ = mad.MADX[SEQ_NAME].range_of("knob_range")
 
 true_strengths = {}
-for elm in seq:
+for elm in mad.seq:
     if elm.kind == "quadrupole" and elm.k1 != 0 and elm.name[:3] == "MQ.":
         # before = elm.k1
         elm.k1 = elm.k1 + rng.normal(0, abs(elm.k1 * REL_K1_STD_DEV))  # Add noise
@@ -139,7 +142,7 @@ for elm in seq:
 print(f"Found {len(main_quad_names)} quadrupoles in the sequence.")
 
 # Run a twiss after changing the quad strengths.
-changed_tws, _ = mad.twiss(sequence=seq)
+changed_tws, _ = mad.twiss(sequence=mad.seq)
 changed_tws = changed_tws.to_df()
 
 # Select the dataframe that matches name = r"^BPM\.\d\d.*" and then calculate beta beating
@@ -157,7 +160,7 @@ print(
     f"Old tunes: {ini_tws.q1}, {ini_tws.q2}. New tunes: {changed_tws.q1}, {changed_tws.q2}"
 )
 
-# Match tunes
+# Match tunes before adding deltap
 mad["result"] = mad.match(
     command=r"\ -> twiss{sequence=MADX[SEQ_NAME]}",
     variables=[
@@ -165,12 +168,43 @@ mad["result"] = mad.match(
         {"var": "'MADX.dqy_b1_op'", "name": "'dQy.b1_op'"},
     ],
     equalities=[
-        {"expr": f"\\t -> t.q1%1-{tunes[0]}", "name": "'q1'"},
-        {"expr": f"\\t -> t.q2%1-{tunes[1]}", "name": "'q2'"},
+        {"expr": f"\\t -> t.q1-62-{tunes[0]}", "name": "'q1'"},
+        {"expr": f"\\t -> t.q2-60-{tunes[1]}", "name": "'q2'"},
     ],
     objective={"fmin": 1e-18},
     info=2,
 )
+
+# Now add a deltap to correct and match
+mad["machine_deltap"] = MACHINE_DELTAP
+mad["qx"] = tunes[0]
+mad["qy"] = tunes[1]
+mad["correct_file"] = str(CORRECTOR_STRENGTHS.absolute())
+mad.send(r"""
+local correct, option in MAD
+
+io.write("*** orbit correction using off momentum twiss\n")
+local tbl = twiss { sequence=seq, deltap=machine_deltap }
+
+! Increase file numerical formatting
+local fmt = option.numfmt ; option.numfmt = "% -.16e"
+correct { sequence=seq, model=tbl, method="micado", info=1 } :write(correct_file)
+option.numfmt = fmt ! restore formatting
+
+io.write("*** rematching tunes for off-momentum twiss\n")
+match {
+  command := twiss {sequence=seq, observe=1, deltap=machine_deltap},
+  variables = { rtol=1e-6, -- 1 ppm
+    { var = 'MADX.dqx_b1_op', name='dQx.b1_op' },
+    { var = 'MADX.dqy_b1_op', name='dQy.b1_op' },
+  },
+  equalities = { tol = 1e-6,
+    { expr = \t -> t.q1-62-qx, name='q1' },
+    { expr = \t -> t.q2-60-qy, name='q2' },
+  },
+  info=2
+}
+""")
 
 # Store matched tunes in Python variables
 matched_tunes = {key: mad[f"MADX['{key}']"] for key in ("dqx_b1_op", "dqy_b1_op")}
@@ -183,7 +217,7 @@ with TUNE_KNOBS_FILE.open("w") as f:
 # Save final strengths to Python
 with TRUE_STRENGTHS.open("w") as f:
     for name, val in true_strengths.items():
-        f.write(f"{name}_k1\t{val: .15e}\n")
+        f.write(f"{name}_k\t{val: .15e}\n")
 
 # Tracking using action-angle
 # action_list = [10e-9, 12.5e-9, 15e-9]  # np.linspace(6e-9, 1.5e-8, num=5)
@@ -197,19 +231,30 @@ no_noise_files = {
     0: NO_NOISE_FILE,
     DELTAP: EPLUS_NONOISE_FILE,
 }
-noise_files = {-DELTAP: EMINUS_NOISY_FILE, 0: NOISY_FILE, DELTAP: EPLUS_NOISY_FILE}
+noise_files = {
+    -DELTAP: EMINUS_NOISY_FILE,
+    0: NOISY_FILE,
+    DELTAP: EPLUS_NOISY_FILE,
+}
+corrector_table = tfs.read(CORRECTOR_STRENGTHS)
 
-for deltap in [-DELTAP, 0, DELTAP]:
+# Remove all rows that have monitor in the column kind
+corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
+
+# for deltap in [-DELTAP, 0, DELTAP]:
+for input_deltap in [0]:
     mad_processes = []
     # Twiss before tracking
-    tw, _ = mad.twiss(sequence=seq, deltap=deltap)
+    true_deltap = input_deltap + MACHINE_DELTAP
+    tw, _ = mad.twiss(sequence=mad.seq, deltap=true_deltap)
     df_twiss = tw.to_df()
     del tw
     for ntrk in range(NUM_TRACKS):
         # 1. New MAD process
         mad_trk = MAD(debug=False, redirect_stderr=True)
         mad_trk.MADX.load(f"'{SEQUENCE_FILE.absolute()}'")
-        mad_trk["deltap"] = deltap
+        mad_trk["deltap"] = true_deltap
+        mad_trk["input_deltap"] = input_deltap
         this_seq = mad_trk.MADX[SEQ_NAME]
         this_seq.beam = mad_trk.beam(particle='"proton"', energy=BEAM_ENERGY)
         this_seq.deselect(mad_trk.element.flags.observed)
@@ -227,6 +272,13 @@ for deltap in [-DELTAP, 0, DELTAP]:
         for name in main_sext_names:
             mad_trk[f"MADX['{name}'].k2"] = mad[f"MADX['{name}'].k2"]
 
+        # Loop through every corrector in the table and set the h and v kicks
+        for _, row in corrector_table.iterrows():
+            mad_trk.send(f"MADX.{SEQ_NAME}['{row['ename']}'].hkick = py:recv()")
+            mad_trk.send(row["hkick"])
+            mad_trk.send(f"MADX.{SEQ_NAME}['{row['ename']}'].vkick = py:recv()")
+            mad_trk.send(row["vkick"])
+
         mad_processes.append(mad_trk)
 
     # 4. Start tracking in each process (no data retrieved yet)
@@ -242,7 +294,7 @@ for deltap in [-DELTAP, 0, DELTAP]:
         alfa11 = df_twiss.loc[0, "alfa11"]
         alfa22 = df_twiss.loc[0, "alfa22"]
 
-        # Compute normalized coordinates from action and angle
+        # Compute normalised coordinates from action and angle
         cos_ang = np.cos(angle)
         sin_ang = np.sin(angle)
         # Convert to real space coordinates
@@ -281,12 +333,12 @@ trk, mflw = track{{
 
     track_writer_proc = mp.Process(
         target=single_writer_loop,
-        args=(track_queue, str(no_noise_files[deltap])),
+        args=(track_queue, str(no_noise_files[input_deltap])),
         daemon=True,
     )
     noise_writer_proc = mp.Process(
         target=single_writer_loop,
-        args=(noise_queue, str(noise_files[deltap])),
+        args=(noise_queue, str(noise_files[input_deltap])),
         daemon=True,
     )
     track_writer_proc.start()
@@ -313,8 +365,8 @@ trk, mflw = track{{
     noise_queue.join_thread()
 
     # Report final status
-    print(f"→ Saved tracking data: {no_noise_files[deltap]}")
-    print(f"→ Saved noisy data: {noise_files[deltap]}")
+    print(f"→ Saved tracking data: {no_noise_files[input_deltap]}")
+    print(f"→ Saved noisy data: {noise_files[input_deltap]}")
 
     # Clean up
     del mad_processes

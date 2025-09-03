@@ -66,6 +66,7 @@ class ConfigurationManager:
             optimise_sextupoles=self.optimise_sextupoles,
         )
         self.knob_names = self.mad_iface.knob_names
+
         self.elem_spos = self.mad_iface.elem_spos
         tws = self.mad_iface.run_twiss()
         LOGGER.info(f"Found tunes: {tws['q1']}, {tws['q2']}")
@@ -93,7 +94,7 @@ class ConfigurationManager:
 
     def initialise_knob_strengths(
         self, true_strengths: dict[str, float]
-    ) -> dict[str, float]:
+    ) -> tuple[dict[str, float], dict[str, float]]:
         """Initialise knob strengths from MAD and filter true strengths."""
         if self.mad_iface is None:
             raise ValueError("MAD interface must be setup first")
