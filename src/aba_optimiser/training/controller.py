@@ -8,17 +8,24 @@ import logging
 import multiprocessing as mp
 import random
 import time
+from typing import TYPE_CHECKING
 
 import numpy as np
 from tensorboardX import SummaryWriter
 
-from aba_optimiser.config import MACHINE_DELTAP, OPTIMISER_TYPE, TRUE_STRENGTHS
+from aba_optimiser.config import (
+    MACHINE_DELTAP,
+    TRUE_STRENGTHS,
+)
 from aba_optimiser.io.utils import read_knobs
 from aba_optimiser.training.configuration_manager import ConfigurationManager
 from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.optimisation_loop import OptimisationLoop
 from aba_optimiser.training.result_manager import ResultManager
 from aba_optimiser.training.worker_manager import WorkerManager
+
+if TYPE_CHECKING:
+    from aba_optimiser.config import OptSettings
 
 LOGGER = logging.getLogger(__name__)
 random.seed(42)  # For reproducibility
@@ -32,24 +39,38 @@ class Controller:
     managers for different aspects of the optimisation process.
     """
 
-    def __init__(self, optimise_sextupoles: bool, show_plots: bool = True):
+    def __init__(
+        self,
+        opt_settings: OptSettings,
+        show_plots: bool = True,
+        initial_knob_strengths: dict[str, float] | None = None,
+    ):
         """Initialise the controller with all required managers."""
+
+        LOGGER.info("Optimising energy")
+        if opt_settings.optimise_quadrupoles:
+            LOGGER.info("Optimising quadrupoles")
+        if opt_settings.optimise_sextupoles:
+            LOGGER.info("Optimising sextupoles")
+        self.opt_settings = opt_settings
+
         # Initialise managers
-        self.config_manager = ConfigurationManager(optimise_sextupoles)
+        self.config_manager = ConfigurationManager(opt_settings)
         self.config_manager.setup_mad_interface()
         self.config_manager.determine_worker_and_bpms()
 
         self.data_manager = DataManager(
             self.config_manager.all_bpms,
             self.config_manager.start_bpms,
-            optimise_sextupoles,
+            opt_settings,
         )
         self.data_manager.prepare_turn_batches()
 
         # Determine the exact set of turns needed and load filtered data
         needed_turns = {t for batch in self.data_manager.turn_batches for t in batch}
         self.data_manager.load_track_data(
-            needed_turns=needed_turns, optimise_sextupoles=optimise_sextupoles
+            needed_turns=needed_turns,
+            optimise_sextupoles=opt_settings.optimise_sextupoles,
         )
 
         self.worker_manager = WorkerManager(
@@ -60,8 +81,14 @@ class Controller:
         true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(MACHINE_DELTAP)
 
         # Initialise knobs
+        if initial_knob_strengths is not None and "deltap" in initial_knob_strengths:
+            initial_knob_strengths["pt"] = self.config_manager.mad_iface.dp2pt(
+                initial_knob_strengths.pop("deltap")
+            )
         self.initial_knobs, self.filtered_true_strengths = (
-            self.config_manager.initialise_knob_strengths(true_strengths)
+            self.config_manager.initialise_knob_strengths(
+                true_strengths, initial_knob_strengths
+            )
         )
 
         # Setup optimisation and result managers
@@ -69,8 +96,8 @@ class Controller:
             self.config_manager.initial_strengths,
             self.config_manager.knob_names,
             self.filtered_true_strengths,
-            OPTIMISER_TYPE,
-            optimise_sextupoles,
+            opt_settings,
+            optimiser_type=opt_settings.optimiser_type,
         )
 
         deltap_knob_names = self.config_manager.knob_names[:-1] + ["deltap"]
@@ -78,9 +105,10 @@ class Controller:
             deltap_knob_names,
             self.config_manager.elem_spos,
             show_plots=show_plots,
+            opt_settings=opt_settings,
         )
 
-    def run(self) -> None:
+    def run(self) -> dict[str, float]:
         """Execute the optimisation process."""
         run_start = time.time()
         writer = self._setup_logging()
@@ -94,7 +122,7 @@ class Controller:
                 self.config_manager.start_bpms,
                 self.data_manager.var_x,
                 self.data_manager.var_y,
-                self.config_manager.optimise_sextupoles,
+                self.opt_settings,
             )
 
             # Clean up memory after workers are started
@@ -115,6 +143,8 @@ class Controller:
         finally:
             total_hessian = self.worker_manager.terminate_workers()
         self._save_results(total_hessian, writer)
+
+        return self.final_knobs
 
     def _setup_logging(self) -> SummaryWriter:
         """Sets up TensorBoard logging."""
@@ -164,10 +194,3 @@ class Controller:
         )
 
         LOGGER.info("Optimisation complete.")
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    mp.set_start_method("fork")
-    ctrl = Controller()
-    ctrl.run()

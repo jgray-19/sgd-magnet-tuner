@@ -6,7 +6,11 @@ from pathlib import Path
 import numpy as np
 import tfs
 
-from aba_optimiser.config import MAGNET_RANGE, SEQUENCE_FILE, module_path
+from aba_optimiser.config import (
+    MAGNET_RANGE,
+    SEQUENCE_FILE,
+    module_path,
+)
 from aba_optimiser.mad.mad_interface import MadInterface
 
 LOGGER = logging.getLogger(__name__)
@@ -20,15 +24,14 @@ class PhaseSpaceDiagnostics:
         px_data,
         y_data,
         py_data,
+        info=None,
         tws: None | tfs.TfsDataFrame = None,
-        num_points=50,
         analysis_dir: Path | str = module_path / "analysis",
     ):
         LOGGER.debug(
             f"Initialising phase space diagnostics for BPM {bpm} with {len(x_data)} data points"
         )
         self.bpm = bpm
-        self.num_points = num_points
         self.x0 = np.mean(x_data)
         self.px0 = np.mean(px_data)
         self.y0 = np.mean(y_data)
@@ -55,7 +58,7 @@ class PhaseSpaceDiagnostics:
         self.gammax = (1 + self.alfax**2) / self.betax
         self.gammay = (1 + self.alfay**2) / self.betay
 
-        self.refine_optics_with_initial_guess()
+        # self.refine_optics_with_initial_guess(info)
 
     def _load_twiss(self, analysis_dir: Path) -> None:
         try:
@@ -76,6 +79,7 @@ class PhaseSpaceDiagnostics:
                 SEQUENCE_FILE,
                 MAGNET_RANGE,
                 bpm_pattern="BPM",
+                use_real_strengths=False,
             )
             tws = mad_iface.run_twiss()
             self.betax = tws.loc[self.bpm, "beta11"]
@@ -123,7 +127,9 @@ class PhaseSpaceDiagnostics:
 
         return residuals_x, residuals_y, std_x, std_y
 
-    def ellipse_points(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def ellipse_points(
+        self, num_points: int = 50
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Generate points on the phase space ellipse for the current optics.
         Returns
         -------
@@ -136,7 +142,7 @@ class PhaseSpaceDiagnostics:
         py: np.ndarray
             py-coordinates of the ellipse points.
         """
-        theta = np.linspace(0, 2 * np.pi, self.num_points)
+        theta = np.linspace(0, 2 * np.pi, num_points)
 
         x = np.sqrt(2 * self.emit_x * self.betax) * np.cos(theta)
         px = -np.sqrt(2 * self.emit_x / self.betax) * (
@@ -156,14 +162,14 @@ class PhaseSpaceDiagnostics:
         )
 
     def ellipse_sigma(
-        self, sigma_level: float = 1.0
+        self, num_points: int = 50, sigma_level: float = 1.0
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         _, _, std_x, std_y = self.compute_residuals()
 
         emit_x_scaled = self.emit_x * (1 + sigma_level * std_x)
         emit_y_scaled = self.emit_y * (1 + sigma_level * std_y)
 
-        theta = np.linspace(0, 2 * np.pi, self.num_points)
+        theta = np.linspace(0, 2 * np.pi, num_points)
 
         x_upper = np.sqrt(2 * emit_x_scaled * self.betax) * np.cos(theta)
         px_upper = -np.sqrt(2 * emit_x_scaled / self.betax) * (

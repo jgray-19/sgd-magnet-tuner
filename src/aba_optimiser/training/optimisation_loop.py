@@ -8,11 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.config import (
-    GRAD_NORM_ALPHA,
-    QUAD_OPT_SETTINGS,
-    SEXT_OPT_SETTINGS,
-)
+from aba_optimiser.config import GRAD_NORM_ALPHA
 from aba_optimiser.optimisers.adam import AdamOptimiser
 from aba_optimiser.optimisers.amsgrad import AMSGradOptimiser
 from aba_optimiser.optimisers.lbfgs import LBFGSOptimiser
@@ -22,6 +18,8 @@ if TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
     from tensorboardX import SummaryWriter
+
+    from aba_optimiser.config import OptSettings
 
 LOGGER = logging.getLogger(__name__)
 
@@ -34,29 +32,30 @@ class OptimisationLoop:
         initial_strengths: np.ndarray,
         knob_names: list[str],
         true_strengths: dict[str, float],
+        opt_settings: OptSettings,
         optimiser_type: str = "adam",
-        optimise_sextupoles: bool = False,
     ):
         self.knob_names = knob_names
         self.true_strengths = true_strengths
         self.smoothed_grad_norm: float | None = None
 
-        config = SEXT_OPT_SETTINGS if optimise_sextupoles else QUAD_OPT_SETTINGS
-        self.max_epochs = config.max_epochs
-        self.gradient_converged_value = config.gradient_converged_value
+        self.max_epochs = opt_settings.max_epochs
+        self.gradient_converged_value = opt_settings.gradient_converged_value
 
         # Initialise optimiser
         self._init_optimiser(initial_strengths.shape, optimiser_type)
 
         # Initialise scheduler
-        # Build scheduler using config values (avoid calling LRScheduler without args)
+        # Build scheduler using opt_settings values (avoid calling LRScheduler without args)
         self.scheduler = LRScheduler(
-            warmup_epochs=config.warmup_epochs,
-            decay_epochs=config.decay_epochs,
-            start_lr=config.warmup_lr_start,
-            max_lr=config.max_lr,
-            min_lr=config.min_lr,
+            warmup_epochs=opt_settings.warmup_epochs,
+            decay_epochs=opt_settings.decay_epochs,
+            start_lr=opt_settings.warmup_lr_start,
+            max_lr=opt_settings.max_lr,
+            min_lr=opt_settings.min_lr,
         )
+
+        self.some_magnets = not opt_settings.only_energy
 
     def _init_optimiser(self, shape: tuple, optimiser_type: str) -> None:
         """Initialise the optimiser based on type."""
@@ -89,6 +88,9 @@ class OptimisationLoop:
         total_turns: int,
     ) -> dict[str, float]:
         """Run the main optimisation loop."""
+        if current_knobs["pt"] == 0 and not self.some_magnets:
+            current_knobs["pt"] = 1e-6  # Initialize pt to non-zero
+
         for epoch in range(self.max_epochs):
             epoch_start = time.time()
 
@@ -180,39 +182,47 @@ class OptimisationLoop:
         sum_true_diff = np.sum(true_diff)
         sum_rel_diff = np.sum(rel_diff)
 
-        true_middle_diff = [
-            abs(current_knobs[k] - self.true_strengths[k])
-            for k in self.knob_names[5:-5]
-        ]
-        rel_middle_diff = [
-            diff / abs(self.true_strengths[k]) if self.true_strengths[k] != 0 else 0
-            for k, diff in zip(self.knob_names[5:-5], true_middle_diff)
-        ]
-
-        sum_true_middle_diff = np.sum(true_middle_diff)
-        sum_rel_middle_diff = np.sum(rel_middle_diff)
-
         writer.add_scalar("loss", total_loss, epoch)
         writer.add_scalar("grad_norm", grad_norm, epoch)
         writer.add_scalar("true_diff", sum_true_diff, epoch)
         writer.add_scalar("rel_diff", sum_rel_diff, epoch)
-        writer.add_scalar("true_middle_diff", sum_true_middle_diff, epoch)
-        writer.add_scalar("rel_middle_diff", sum_rel_middle_diff, epoch)
+
+        if self.some_magnets:
+            true_middle_diff = [
+                abs(current_knobs[k] - self.true_strengths[k])
+                for k in self.knob_names[5:-5]
+            ]
+            rel_middle_diff = [
+                diff / abs(self.true_strengths[k]) if self.true_strengths[k] != 0 else 0
+                for k, diff in zip(self.knob_names[5:-5], true_middle_diff)
+            ]
+
+            sum_true_middle_diff = np.sum(true_middle_diff)
+            sum_rel_middle_diff = np.sum(rel_middle_diff)
+
+            writer.add_scalar("true_middle_diff", sum_true_middle_diff, epoch)
+            writer.add_scalar("rel_middle_diff", sum_rel_middle_diff, epoch)
+
         writer.add_scalar("learning_rate", lr, epoch)
         writer.flush()
 
         epoch_time = time.time() - epoch_start
         total_time = time.time() - run_start
 
-        LOGGER.info(
+        middle = (
+            f"true_middle_diff={sum_true_middle_diff:.3e}, rel_middle_diff={sum_rel_middle_diff:.3e}, "
+            if self.some_magnets
+            else ""
+        )
+        message = (
             f"\rEpoch {epoch}: "
             f"loss={total_loss:.3e}, "
             f"grad_norm={grad_norm:.3e}, "
             f"true_diff={sum_true_diff:.3e}, "
             f"rel_diff={sum_rel_diff:.3e}, "
-            f"true_middle_diff={sum_true_middle_diff:.3e}, "
-            f"rel_middle_diff={sum_rel_middle_diff:.3e}, "
+            f"{middle}"
             f"lr={lr:.3e}, "
             f"epoch_time={epoch_time:.3f}s, "
-            f"total_time={total_time:.3f}s",
+            f"total_time={total_time:.3f}s"
         )
+        LOGGER.info(message)

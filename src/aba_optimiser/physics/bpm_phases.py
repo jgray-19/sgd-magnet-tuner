@@ -6,6 +6,29 @@ import pandas as pd
 LOGGER = logging.getLogger(__name__)
 
 
+def _find_bpm_phase(
+    mu: pd.Series, tune: float, target: float, forward: bool, name: str
+) -> pd.DataFrame:
+    """
+    Shared implementation for finding BPM with phase advance closest to target.
+    """
+    v = mu.to_numpy(float)
+    n = len(v)
+
+    if forward:
+        diff = (v.reshape(1, n) - v.reshape(n, 1) + tune) % tune
+    else:
+        diff = (v.reshape(n, 1) - v.reshape(1, n) + tune) % tune
+
+    np.fill_diagonal(diff, np.nan)
+
+    idx = np.nanargmin(np.abs(diff - target), axis=1)
+    delta = diff[np.arange(n), idx] - target
+    names = mu.index[idx]
+
+    return pd.DataFrame({name: names, "delta": delta}, index=mu.index)
+
+
 def prev_bpm_to_pi_2(mu: pd.Series, tune: float) -> pd.DataFrame:
     """
     For each BPM_i find the previous BPM_j whose backward phase advance
@@ -14,43 +37,31 @@ def prev_bpm_to_pi_2(mu: pd.Series, tune: float) -> pd.DataFrame:
       - prev_bpm : name of BPM_j
       - delta    : (mu_i - mu_j - 0.25) signed error in turns
     """
-    # keep for public API; implementation is delegated to `_bpm_to_pi_2`
-    return _bpm_to_pi_2(mu, tune, forward=False, name="prev_bpm")
+    return _find_bpm_phase(mu, tune, 0.25, forward=False, name="prev_bpm")
 
 
-# 1) define your new forward-phase helper
 def next_bpm_to_pi_2(mu: pd.Series, tune: float) -> pd.DataFrame:
     """
     For each BPM_i find the *next* BPM_j whose forward phase advance
     (mu_j - mu_i) mod Q is closest to pi/2 phase advance.
     """
-    # keep for public API; implementation is delegated to `_bpm_to_pi_2`
-    return _bpm_to_pi_2(mu, tune, forward=True, name="next_bpm")
+    return _find_bpm_phase(mu, tune, 0.25, forward=True, name="next_bpm")
 
 
-# internal helper to avoid duplicating forward/backward matrix logic
-def _bpm_to_pi_2(mu: pd.Series, tune: float, forward: bool, name: str) -> pd.DataFrame:
+def prev_bpm_to_pi(mu: pd.Series, tune: float) -> pd.DataFrame:
     """
-    Shared implementation. If `forward` is True computes (mu_j - mu_i) mod Q,
-    otherwise computes (mu_i - mu_j) mod Q and finds, for each i, the j whose
-    phase difference is closest to 0.25 turns (pi/2).
-    Returns a DataFrame indexed by `mu.index` with columns [name, 'delta'].
+    For each BPM_i find the previous BPM_j whose backward phase advance
+    (mu_i - mu_j) is closest to pi phase advance.
+    Returns a DataFrame indexed by BPM_i with columns:
+      - prev_bpm : name of BPM_j
+      - delta    : (mu_i - mu_j - 0.5) signed error in turns
     """
-    v = mu.to_numpy(float)
-    n = len(v)
+    return _find_bpm_phase(mu, tune, 0.5, forward=False, name="prev_bpm")
 
-    if forward:
-        # forward differences mod Q: (mu_j - mu_i) ∈ [0, 1)
-        diff = (v.reshape(1, n) - v.reshape(n, 1) + tune) % tune
-    else:
-        # backward differences mod Q: (mu_i - mu_j) ∈ [0, 1)
-        diff = (v.reshape(n, 1) - v.reshape(1, n) + tune) % tune
 
-    np.fill_diagonal(diff, np.nan)
-
-    # pick j minimising |Δ_ij - target|. target = 0.25 (*2pi) -> pi/2
-    idx = np.nanargmin(np.abs(diff - 0.25), axis=1)
-    delta = diff[np.arange(n), idx] - 0.25
-    names = mu.index[idx]
-
-    return pd.DataFrame({name: names, "delta": delta}, index=mu.index)
+def next_bpm_to_pi(mu: pd.Series, tune: float) -> pd.DataFrame:
+    """
+    For each BPM_i find the *next* BPM_j whose forward phase advance
+    (mu_j - mu_i) mod Q is closest to pi phase advance.
+    """
+    return _find_bpm_phase(mu, tune, 0.5, forward=True, name="next_bpm")

@@ -33,15 +33,14 @@ from aba_optimiser.config import (
 )
 from aba_optimiser.mad.mad_interface import MadInterface
 from aba_optimiser.physics.bpm_phases import next_bpm_to_pi_2, prev_bpm_to_pi_2
-
-if TYPE_CHECKING:
-    import tfs  # type: ignore[import-not-found]
+from aba_optimiser.physics.dpp_calculation import get_mean_dpp
 
 LOGGER = logging.getLogger(__name__)
 OUT_COLS = list(FILE_COLUMNS)
 
 if TYPE_CHECKING:
     import pandas as pd
+    import tfs
 
 
 # ---------- Small data containers ----------
@@ -69,6 +68,10 @@ class LatticeMaps:
     betay: dict
     alfax: dict
     alfay: dict
+    dx: dict
+    # No dy as we assume vertical dispersion is zero
+    dpx: dict
+    # No dpy as we assume vertical dispersion is zero
 
 
 # ---------- Helpers: generic ----------
@@ -140,44 +143,6 @@ def _inject_noise_xy(
     df["y"] = orig_df["y"] + noise_y
 
 
-def _subtract_bpm_means(df: tfs.TfsDataFrame, info: bool) -> bool:
-    """
-    Subtract per-BPM mean positions from x/y measurements.
-
-    This removes systematic offsets at each BPM. Modifies DataFrame in-place.
-
-    Args:
-        df: DataFrame to modify
-        info: Whether to print BPM means for debugging
-
-    Returns:
-        True if mean columns were added (for cleanup tracking)
-    """
-    bpm_means = df.groupby("name", observed=False)[["x", "y"]].mean()
-    if info:
-        print("BPM means (x, y):")
-        print(bpm_means)
-    df_ = df.merge(bpm_means, on="name", suffixes=("", "_mean"))
-    df_["x"] = df_["x"] - df_["x_mean"]
-    df_["y"] = df_["y"] - df_["y_mean"]
-    df.drop(df.index, inplace=True)  # keep original object id
-    for col in df_.columns:
-        df[col] = df_[col]
-
-
-def _cleanup_mean_cols(*dfs: tfs.TfsDataFrame) -> None:
-    """
-    Remove temporary mean columns from DataFrames.
-
-    Args:
-        *dfs: Variable number of DataFrames to clean
-    """
-    for d in dfs:
-        for c in ("x_mean", "y_mean"):
-            if c in d.columns:
-                d.drop(columns=[c], inplace=True)
-
-
 # ---------- Helpers: twiss / lattice ----------
 def _ensure_twiss(tws: tfs.TfsDataFrame | None, info: bool) -> tfs.TfsDataFrame:
     """
@@ -220,6 +185,8 @@ def _lattice_maps(tws: tfs.TfsDataFrame) -> LatticeMaps:
         betay=tws["beta22"].to_dict(),
         alfax=tws["alfa11"].to_dict(),
         alfay=tws["alfa22"].to_dict(),
+        dx=tws["dx"].to_dict(),
+        dpx=tws["dpx"].to_dict(),
     )
 
 
@@ -264,6 +231,8 @@ def _attach_lattice_columns(df: tfs.TfsDataFrame, maps: LatticeMaps) -> None:
     df["betay"] = df["name"].map(maps.betay)
     df["alfax"] = df["name"].map(maps.alfax)
     df["alfay"] = df["name"].map(maps.alfay)
+    df["dx"] = df["name"].map(maps.dx)
+    df["dpx"] = df["name"].map(maps.dpx)
 
 
 # ---------- Helpers: neighbor coordinates ----------
@@ -363,90 +332,184 @@ def _merge_neighbor_coords(
     return data_p, data_n
 
 
-# ---------- Helpers: momentum from prev/next BPM ----------
-def _momenta_from_prev(data_p: tfs.TfsDataFrame) -> tfs.TfsDataFrame:
+# ---------- Helpers: momentum from next BPM ----------
+def _momenta_from_next(data_n: tfs.TfsDataFrame, dpp_est: float) -> tfs.TfsDataFrame:
     """
-    Calculate transverse momenta using previous BPM at π/2 phase difference.
+    Calculate transverse momenta using the NEXT BPM at approximately +π/2 phase difference.
 
-    Uses the phase-space transfer matrix between BPM pairs to solve for momenta.
-    The calculation involves normalization by beta functions and trigonometric
-    relationships from the phase advance.
+    This function solves for the transverse momenta at the current BPM using measurements
+    from the next BPM in the ring. The calculation accounts for dispersion effects and
+    uses the phase-space transfer matrix relationship between the two BPMs.
+
+    The formula derives from the transfer matrix elements:
+    - Position transfer: x2 = cos(φ) x1 + sin(φ) (px1 β1 + α1 x1)
+    - Momentum transfer: px2 = -sin(φ)/β2 x1 + cos(φ) px1 - α2 sin(φ)/β2 x1
+
+    Rearranging for px1 gives the implemented formula.
 
     Args:
-        data_p: DataFrame with previous BPM data and lattice optics
+        data_n: DataFrame containing current and next BPM data with lattice optics
+        dpp_est: Estimated relative momentum deviation (dp/p) for dispersion correction
 
     Returns:
-        Modified DataFrame with px/py columns added
+        Modified DataFrame with added 'px' and 'py' momentum columns
     """
-    # upstream √β for normalization at neighbors
-    # Correct mapping using separate dicts (we stored them in columns already? compute properly):
-    # we keep separate columns to avoid recomputation
-    if "sqrt_betax_p" not in data_p.columns or "sqrt_betay_p" not in data_p.columns:
-        # fallback if caller didn't add them (should be added beforehand)
-        raise RuntimeError("sqrt_betax_p / sqrt_betay_p missing")
+    # Validate required columns for next BPM optics
+    required_cols = ["sqrt_betax_n", "sqrt_betay_n", "dx_next"]
+    missing = [col for col in required_cols if col not in data_n.columns]
+    if missing:
+        raise RuntimeError(
+            f"Missing required columns for next BPM calculation: {missing}"
+        )
 
-    x1 = data_p["prev_x"].to_numpy() / data_p["sqrt_betax_p"].to_numpy()
-    x2 = data_p["x"].to_numpy() / data_p["sqrt_betax"].to_numpy()
-    y1 = data_p["prev_y"].to_numpy() / data_p["sqrt_betay_p"].to_numpy()
-    y2 = data_p["y"].to_numpy() / data_p["sqrt_betay"].to_numpy()
+    # Extract arrays for vectorized calculations
+    x_current = data_n["x"].to_numpy()
+    y_current = data_n["y"].to_numpy()
+    x_next = data_n["next_x"].to_numpy()
+    y_next = data_n["next_y"].to_numpy()
 
-    phi_x = data_p["delta_x"].to_numpy() * 2 * np.pi
-    phi_y = data_p["delta_y"].to_numpy() * 2 * np.pi
-    c_x, s_x, t_x = np.cos(phi_x), np.sin(phi_x), np.tan(phi_x)
-    c_y, s_y, t_y = np.cos(phi_y), np.sin(phi_y), np.tan(phi_y)
+    # Lattice optics at current BPM
+    sqrt_beta_x = data_n["sqrt_betax"].to_numpy()
+    sqrt_beta_y = data_n["sqrt_betay"].to_numpy()
+    alpha_x = data_n["alfax"].to_numpy()
+    alpha_y = data_n["alfay"].to_numpy()
 
-    alfax = data_p["alfax"].to_numpy()
-    alfay = data_p["alfay"].to_numpy()
-    sqrt_bx = data_p["sqrt_betax"].to_numpy()
-    sqrt_by = data_p["sqrt_betay"].to_numpy()
+    # Lattice optics at next BPM
+    sqrt_beta_x_next = data_n["sqrt_betax_n"].to_numpy()
+    sqrt_beta_y_next = data_n["sqrt_betay_n"].to_numpy()
 
-    # Rearranged to solve for px2
-    data_p["px"] = -(x1 * (c_x + s_x * t_x) + x2 * (t_x + alfax)) / sqrt_bx
-    data_p["py"] = -(y1 * (c_y + s_y * t_y) + y2 * (t_y + alfay)) / sqrt_by
-    return data_p
+    # Dispersion corrections
+    dx_current = data_n["dx"].to_numpy()
+    dx_next = data_n["dx_next"].to_numpy()
+    dpx_current = data_n["dpx"].to_numpy()
 
-
-def _momenta_from_next(data_n: tfs.TfsDataFrame) -> tfs.TfsDataFrame:
-    """
-    Calculate transverse momenta using next BPM at π/2 phase difference.
-
-    Similar to _momenta_from_prev but uses downstream BPM for the calculation.
-    Handles the inverse transfer matrix relationship.
-
-    Args:
-        data_n: DataFrame with next BPM data and lattice optics
-
-    Returns:
-        Modified DataFrame with px/py columns added
-    """
-    if "sqrt_betax_n" not in data_n.columns or "sqrt_betay_n" not in data_n.columns:
-        raise RuntimeError("sqrt_betax_n / sqrt_betay_n missing")
-
-    k1x = data_n["x"].to_numpy() / data_n["sqrt_betax"].to_numpy()
-    k2x = data_n["next_x"].to_numpy() / data_n["sqrt_betax_n"].to_numpy()
-    k1y = data_n["y"].to_numpy() / data_n["sqrt_betay"].to_numpy()
-    k2y = data_n["next_y"].to_numpy() / data_n["sqrt_betay_n"].to_numpy()
-
+    # Phase advances in radians (delta is in turns)
     phi_x = data_n["delta_x"].to_numpy() * 2 * np.pi
     phi_y = data_n["delta_y"].to_numpy() * 2 * np.pi
-    cos_x, sin_x = np.cos(phi_x), np.sin(phi_x)
-    cos_y, sin_y = np.cos(phi_y), np.sin(phi_y)
 
-    # For downstream BPM: solve for sin term in transfer matrix
-    sin_term_x = (-k2x - k1x * sin_x) / cos_x
-    sin_term_y = (-k2y - k1y * sin_y) / cos_y
+    # Normalized positions (remove dispersion contribution)
+    x_current_norm = (x_current - dpp_est * dx_current) / sqrt_beta_x
+    x_next_norm = (x_next - dpp_est * dx_next) / sqrt_beta_x_next
+    y_current_norm = y_current / sqrt_beta_y
+    y_next_norm = y_next / sqrt_beta_y_next
 
-    alfax = data_n["alfax"].to_numpy()
-    alfay = data_n["alfay"].to_numpy()
-    sqrt_bx = data_n["sqrt_betax"].to_numpy()
-    sqrt_by = data_n["sqrt_betay"].to_numpy()
-    beta_x = data_n["betax"].to_numpy()
-    beta_y = data_n["betay"].to_numpy()
+    # Trigonometric functions for transfer matrix
+    cos_phi_x = np.cos(phi_x)
+    cos_phi_y = np.cos(phi_y)
+    tan_phi_x = np.tan(phi_x)
+    tan_phi_y = np.tan(phi_y)
 
-    # Convert sin term back to momentum with dispersion correction
-    data_n["px"] = (-sin_term_x / sqrt_bx) - alfax * (data_n["x"].to_numpy()) / beta_x
-    data_n["py"] = (-sin_term_y / sqrt_by) - alfay * (data_n["y"].to_numpy()) / beta_y
+    # Secant (1/cos) with numerical stability
+    sec_phi_x = np.divide(1.0, cos_phi_x, where=cos_phi_x != 0.0)
+    sec_phi_y = np.divide(1.0, cos_phi_y, where=cos_phi_y != 0.0)
+
+    # Calculate momenta using transfer matrix inversion
+    # px = [x_next_norm * sec_phi_x + x_current_norm * (tan_phi_x - alpha_x)] / sqrt_beta_x + dpx_current * dpp_est
+    px = (
+        x_next_norm * sec_phi_x + x_current_norm * (tan_phi_x - alpha_x)
+    ) / sqrt_beta_x + dpx_current * dpp_est
+    py = (
+        y_next_norm * sec_phi_y + y_current_norm * (tan_phi_y - alpha_y)
+    ) / sqrt_beta_y
+
+    # Store results
+    data_n["px"] = px
+    data_n["py"] = py
+
     return data_n
+
+
+def _momenta_from_prev(data_p: tfs.TfsDataFrame, dpp_est: float) -> tfs.TfsDataFrame:
+    """
+    Calculate transverse momenta using the PREVIOUS BPM at approximately -π/2 phase difference.
+
+    This function solves for the transverse momenta at the current BPM using measurements
+    from the previous BPM in the ring. The calculation accounts for dispersion effects and
+    uses the phase-space transfer matrix relationship between the two BPMs.
+
+    The formula derives from the transfer matrix elements for the reverse direction:
+    - Position transfer: x1 = cos(φ) x2 - sin(φ) (px2 β2 + α2 x2)
+    - Momentum transfer: px1 = sin(φ)/β1 x2 + cos(φ) px2 + α1 sin(φ)/β1 x2
+
+    Rearranging for px2 gives the implemented formula.
+
+    Args:
+        data_p: DataFrame containing current and previous BPM data with lattice optics
+        dpp_est: Estimated relative momentum deviation (dp/p) for dispersion correction
+
+    Returns:
+        Modified DataFrame with added 'px' and 'py' momentum columns
+    """
+    # Validate required columns for previous BPM optics
+    required_cols = ["sqrt_betax_p", "sqrt_betay_p", "dx_prev"]
+    missing = [col for col in required_cols if col not in data_p.columns]
+    if missing:
+        raise RuntimeError(
+            f"Missing required columns for previous BPM calculation: {missing}"
+        )
+
+    # Extract arrays for vectorized calculations
+    x_current = data_p["x"].to_numpy()
+    y_current = data_p["y"].to_numpy()
+    x_prev = data_p["prev_x"].to_numpy()
+    y_prev = data_p["prev_y"].to_numpy()
+
+    # Lattice optics at current BPM
+    sqrt_beta_x = data_p["sqrt_betax"].to_numpy()
+    sqrt_beta_y = data_p["sqrt_betay"].to_numpy()
+    alpha_x = data_p["alfax"].to_numpy()
+    alpha_y = data_p["alfay"].to_numpy()
+
+    # Lattice optics at previous BPM
+    sqrt_beta_x_prev = data_p["sqrt_betax_p"].to_numpy()
+    sqrt_beta_y_prev = data_p["sqrt_betay_p"].to_numpy()
+
+    # Dispersion corrections
+    dx_current = data_p["dx"].to_numpy()
+    dx_prev = data_p["dx_prev"].to_numpy()
+    dpx_current = data_p["dpx"].to_numpy()
+
+    # Phase advances in radians (delta is in turns)
+    phi_x = data_p["delta_x"].to_numpy() * 2 * np.pi
+    phi_y = data_p["delta_y"].to_numpy() * 2 * np.pi
+
+    # Normalized positions (remove dispersion contribution)
+    x_current_norm = (x_current - dpp_est * dx_current) / sqrt_beta_x
+    x_prev_norm = (x_prev - dpp_est * dx_prev) / sqrt_beta_x_prev
+    y_current_norm = y_current / sqrt_beta_y
+    y_prev_norm = y_prev / sqrt_beta_y_prev
+
+    # Trigonometric functions for transfer matrix
+    cos_phi_x = np.cos(phi_x)
+    sin_phi_x = np.sin(phi_x)
+    tan_phi_x = np.tan(phi_x)
+    cos_phi_y = np.cos(phi_y)
+    sin_phi_y = np.sin(phi_y)
+    tan_phi_y = np.tan(phi_y)
+
+    # Calculate momenta using transfer matrix inversion
+    # px = -[x_prev_norm * (cos_phi_x + sin_phi_x * tan_phi_x) + x_current_norm * (tan_phi_x + alpha_x)] / sqrt_beta_x + dpx_current * dpp_est
+    px = (
+        -(
+            x_prev_norm * (cos_phi_x + sin_phi_x * tan_phi_x)
+            + x_current_norm * (tan_phi_x + alpha_x)
+        )
+        / sqrt_beta_x
+        + dpx_current * dpp_est
+    )
+    py = (
+        -(
+            y_prev_norm * (cos_phi_y + sin_phi_y * tan_phi_y)
+            + y_current_norm * (tan_phi_y + alpha_y)
+        )
+        / sqrt_beta_y
+    )
+
+    # Store results
+    data_p["px"] = px
+    data_p["py"] = py
+
+    return data_p
 
 
 def _sync_endpoints(data_p: tfs.TfsDataFrame, data_n: tfs.TfsDataFrame) -> None:
@@ -625,7 +688,6 @@ def calculate_pz(
     info: bool = True,
     rng: np.random.Generator | None = None,
     low_noise_bpms: Sequence[str] | None = None,
-    subtract_mean: bool = False,
 ) -> tuple[tfs.TfsDataFrame, tfs.TfsDataFrame, tfs.TfsDataFrame]:
     """
     Estimate transverse momenta px/py using BPM pairs ~π/2 apart (prev/next).
@@ -653,7 +715,6 @@ def calculate_pz(
         info: Whether to print diagnostic information and statistics
         rng: Random number generator for noise injection. Auto-created if None.
         low_noise_bpms: List of BPM names with reduced noise (10x lower std dev)
-        subtract_mean: Whether to subtract per-BPM mean positions before calculation
 
     Returns:
         Tuple of three TfsDataFrames:
@@ -683,11 +744,9 @@ def calculate_pz(
     if inject_noise:
         _inject_noise_xy(data, orig_data, rng, low_noise_bpms)
 
-    if subtract_mean:
-        _subtract_bpm_means(data, info)
-
     # Twiss & maps
     tws = _ensure_twiss(tws, info)
+    dpp_est = get_mean_dpp(data, tws, info)
     maps = _lattice_maps(tws)
     prev_x_df, prev_y_df, next_x_df, next_y_df = _neighbour_tables(tws)
 
@@ -710,6 +769,10 @@ def calculate_pz(
     data_n["sqrt_betax_n"] = data_n["next_bpm_x"].map(maps.sqrt_betax)
     data_n["sqrt_betay_n"] = data_n["next_bpm_y"].map(maps.sqrt_betay)
 
+    # Beta and dispersions for prev/next BPMs
+    data_p["dx_prev"] = data_p["prev_bpm_x"].map(maps.dx)
+    data_n["dx_next"] = data_n["next_bpm_x"].map(maps.dx)
+
     # Turn wrap handling + merge neighbor coordinates
     turn_x_p, turn_y_p, turn_x_n, turn_y_n = _compute_turn_wraps(
         data_p, data_n, bpm_index
@@ -719,8 +782,8 @@ def calculate_pz(
     )
 
     # Momenta from prev/next BPMs
-    data_p = _momenta_from_prev(data_p)
-    data_n = _momenta_from_next(data_n)
+    data_p = _momenta_from_prev(data_p, dpp_est)
+    data_n = _momenta_from_next(data_n, dpp_est)
 
     # Synchronise endpoints (as in original)
     _sync_endpoints(data_p, data_n)
@@ -728,12 +791,16 @@ def calculate_pz(
     # Weighted average
     data_avg = _weighted_average(data_p, data_n, maps.betax, maps.betay)
 
-    # Clean helper columns if means were subtracted
-    if subtract_mean:
-        _cleanup_mean_cols(data_p, data_n, data_avg)
-
     # Diagnostics
-    _diagnostics(orig_data, data_p, data_n, data_avg, info, has_px, has_py)
+    _diagnostics(
+        orig_data=orig_data,
+        data_p=data_p,
+        data_n=data_n,
+        data_avg=data_avg,
+        info=info,
+        has_px=has_px,
+        has_py=has_py,
+    )
 
     # Return filtered columns
     # return data_p[OUT_COLS], data_n[OUT_COLS], data_avg[OUT_COLS]

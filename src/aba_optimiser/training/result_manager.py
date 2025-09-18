@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -16,6 +17,10 @@ from aba_optimiser.plotting.strengths import (
 )
 from aba_optimiser.plotting.utils import show_plots
 
+if TYPE_CHECKING:
+    from aba_optimiser.config import OptSettings
+
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -23,11 +28,16 @@ class ResultManager:
     """Manages result processing and output generation."""
 
     def __init__(
-        self, knob_names: list[str], elem_spos: np.ndarray, show_plots: bool = True
+        self,
+        knob_names: list[str],
+        elem_spos: np.ndarray,
+        opt_settings: OptSettings,
+        show_plots: bool = True,
     ):
         self.knob_names = knob_names
         self.elem_spos = elem_spos
         self.show_plots = show_plots
+        self.opt_settings = opt_settings
 
     def save_results(
         self,
@@ -104,30 +114,30 @@ class ResultManager:
         save_prefix = "plots/"
         show_errorbars = True
 
-        # Relative difference comparison
-        plot_strengths_comparison(
-            magnet_names,
-            final_vals,
-            true_vals,
-            quad_unc,
-            initial_vals=initial_vals,
-            show_errorbars=show_errorbars,
-            plot_real=False,
-            save_path=f"{save_prefix}relative_difference_comparison.png",
-            unit="$m^{-1}$",
-        )
+        if not self.opt_settings.only_energy:  # Relative difference comparison
+            plot_strengths_comparison(
+                magnet_names,
+                final_vals,
+                true_vals,
+                quad_unc,
+                initial_vals=initial_vals,
+                show_errorbars=show_errorbars,
+                plot_real=False,
+                save_path=f"{save_prefix}relative_difference_comparison.png",
+                unit="$m^{-1}$",
+            )
 
-        plot_strengths_vs_position(
-            self.elem_spos,
-            final_vals,
-            true_vals,
-            quad_unc,
-            initial_vals=initial_vals,
-            show_errorbars=show_errorbars,
-            plot_real=False,
-            save_path=f"{save_prefix}relative_difference_vs_position_comparison.png",
-            magnet_names=magnet_names,
-        )
+            plot_strengths_vs_position(
+                self.elem_spos,
+                final_vals,
+                true_vals,
+                quad_unc,
+                initial_vals=initial_vals,
+                show_errorbars=show_errorbars,
+                plot_real=False,
+                save_path=f"{save_prefix}relative_difference_vs_position_comparison.png",
+                magnet_names=magnet_names,
+            )
 
         deltap_key = "deltap"  # self.knob_names[-1]
         if current_knobs[deltap_key] != 0:

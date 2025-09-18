@@ -9,10 +9,14 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from aba_optimiser.config import (
+    CLEAN_DATA,
+    CLEANED_FILE,
+    DIFFERENT_TURNS_FOR_START_BPM,
     EMINUS_NOISY_FILE,
     EMINUS_NONOISE_FILE,
     EPLUS_NOISY_FILE,
     EPLUS_NONOISE_FILE,
+    FILE_COLUMNS,
     FLATTOP_TURNS,
     N_COMPARE_TURNS,
     N_RUN_TURNS,
@@ -20,9 +24,7 @@ from aba_optimiser.config import (
     NOISY_FILE,
     NUM_TRACKS,
     POSITION_STD_DEV,
-    QUAD_OPT_SETTINGS,
     RUN_ARC_BY_ARC,
-    SEXT_OPT_SETTINGS,
     USE_NOISY_DATA,
 )
 from aba_optimiser.dataframes.utils import select_markers
@@ -30,22 +32,27 @@ from aba_optimiser.dataframes.utils import select_markers
 if TYPE_CHECKING:
     import numpy as np
 
+    from aba_optimiser.config import OptSettings
+
 LOGGER = logging.getLogger(__name__)
-cols_to_read = ["turn", "name", "x", "px", "y", "py"]
+cols_to_read = FILE_COLUMNS
 
 
 class DataManager:
     """Manages track data loading and processing for optimisation."""
 
     def __init__(
-        self, all_bpms: np.ndarray, start_bpms: list[str], optimise_sextupoles: bool
+        self,
+        all_bpms: np.ndarray,
+        start_bpms: list[str],
+        opt_settings: OptSettings,
     ):
         self.all_bpms = all_bpms
         self.start_bpms = start_bpms
-        self.optimise_sextupoles = optimise_sextupoles
+        self.opt_settings = opt_settings
 
         # Available global "turn" ids (already include offsets if sextupoles are on)
-        total_files = 3 if optimise_sextupoles else 1
+        total_files = 3 if opt_settings.optimise_sextupoles else 1
         self.available_turns: list[int] = list(
             range(1, FLATTOP_TURNS * NUM_TRACKS * total_files + 1)
         )
@@ -61,15 +68,12 @@ class DataManager:
         self.track_data: dict[str, pd.DataFrame] | None = None
         self.energy_map: dict[int, str] | None = None  # {turn -> "plus"|"minus"|"zero"}
 
-        self.global_config = (
-            SEXT_OPT_SETTINGS if optimise_sextupoles else QUAD_OPT_SETTINGS
-        )
-
     # ---------- Internals ----------
 
     def _reduce_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         df["turn"] = df["turn"].astype("int32", copy=False)
         df["name"] = df["name"].astype("category", copy=False)
+        df["kick_plane"] = df["kick_plane"].astype("category", copy=False)
         # Copy because we drop non-selected markers and convert from view.
         return select_markers(df, self.all_bpms).copy()
 
@@ -90,6 +94,19 @@ class DataManager:
             raise ValueError(f"Missing columns in track data: {missing}")
         return df
 
+    def _select_file_0e(self) -> str:
+        """Select the appropriate zero-energy file based on noise and filtering settings."""
+        if USE_NOISY_DATA:
+            if CLEAN_DATA:
+                LOGGER.debug("Using filtered data for zero-energy tracks")
+                return CLEANED_FILE
+
+            LOGGER.debug("Using noisy data for zero-energy tracks")
+            return NOISY_FILE
+
+        LOGGER.debug("Using non-noisy data for zero-energy tracks")
+        return NO_NOISE_FILE
+
     # ---------- Public API ----------
 
     def load_track_data(
@@ -100,7 +117,7 @@ class DataManager:
         Note: When optimise_sextupoles=False, only the 'zero' file is loaded.
         """
         LOGGER.info(
-            "Loading energy track data (filtered=%s, sextupoles=%s)...",
+            "Loading energy track data (custom turns=%s, sextupoles=%s)...",
             needed_turns is not None,
             optimise_sextupoles,
         )
@@ -109,7 +126,7 @@ class DataManager:
         sources = {
             "plus": EPLUS_NOISY_FILE if USE_NOISY_DATA else EPLUS_NONOISE_FILE,
             "minus": EMINUS_NOISY_FILE if USE_NOISY_DATA else EMINUS_NONOISE_FILE,
-            "zero": NOISY_FILE if USE_NOISY_DATA else NO_NOISE_FILE,
+            "zero": self._select_file_0e(),
         }
 
         # Turn offsets per energy type (global turn space)
@@ -175,9 +192,9 @@ class DataManager:
             )
             self.available_turns = self.available_turns[:-N_RUN_TURNS]
 
-        num_turns_needed = self.global_config.total_tracks
-        num_workers = self.global_config.num_workers
-        tracks_per_worker = self.global_config.tracks_per_worker
+        num_turns_needed = self.opt_settings.total_tracks
+        num_workers = self.opt_settings.num_workers
+        tracks_per_worker = self.opt_settings.tracks_per_worker
         LOGGER.debug(
             "Need %d turns for %d workers with %d tracks each",
             num_turns_needed,
@@ -196,8 +213,13 @@ class DataManager:
 
         # Cap tracks per worker at configured TRACKS_PER_WORKER
         self.tracks_per_worker = min(
-            total_available_turns // num_workers, tracks_per_worker
+            total_available_turns // num_workers,
+            tracks_per_worker,
         )
+
+        if not DIFFERENT_TURNS_FOR_START_BPM:
+            self.tracks_per_worker *= len(self.start_bpms)
+            num_workers = num_workers // len(self.start_bpms)
 
         # Randomly select turns for each batch
         random.shuffle(self.available_turns)
@@ -212,4 +234,4 @@ class DataManager:
     def get_total_turns(self) -> int:
         """Calculate total number of turns to process."""
         n_compare = N_COMPARE_TURNS if not RUN_ARC_BY_ARC else 1
-        return self.global_config.num_workers * self.tracks_per_worker * n_compare
+        return self.opt_settings.num_workers * self.tracks_per_worker * n_compare

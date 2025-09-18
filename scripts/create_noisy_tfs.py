@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from aba_optimiser.config import (
     BPM_START_POINTS,
-    FILTERED_FILE,
+    CLEANED_FILE,
     KALMAN_FILE,
     NO_NOISE_FILE,
     NOISY_FILE,
@@ -34,8 +34,8 @@ else:
     data_p = pd.read_parquet(NOISY_FILE)
 
 filtered_data = filter_noisy_data(data_p)
-filtered_data.to_feather(FILTERED_FILE, compression="lz4")
-print("→ Saved filtered data:", FILTERED_FILE)
+filtered_data.to_feather(CLEANED_FILE, compression="lz4")
+print("→ Saved filtered data:", CLEANED_FILE)
 
 bpm_groups = dict(tuple(data_p.groupby("name", observed=False)))
 BPMs = list(bpm_groups.keys())

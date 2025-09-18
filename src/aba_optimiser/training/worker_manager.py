@@ -18,9 +18,16 @@ import pandas as pd
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
+    from aba_optimiser.config import OptSettings
     from aba_optimiser.workers.base_worker import BaseWorker
 
-from aba_optimiser.config import BEAM_ENERGY, DELTAP, PARTICLE_MASS
+from aba_optimiser.config import (
+    BEAM_ENERGY,
+    DELTAP,
+    DIFFERENT_TURNS_FOR_START_BPM,
+    MAGNET_RANGE,
+    PARTICLE_MASS,
+)
 from aba_optimiser.physics.deltap import dp2pt
 
 LOGGER = logging.getLogger(__name__)
@@ -154,40 +161,50 @@ class WorkerManager:
             AssertionError: If a turn batch is empty
         """
         payloads = []
-        for batch_idx, turn_batch in enumerate(turn_batches):
-            # Cycle through BPM start points using modulo to distribute work evenly
-            start_bpm = bpm_start_points[batch_idx % len(bpm_start_points)]
+        num_start_points = len(bpm_start_points)
+        for bpm_i, start_bpm in enumerate(bpm_start_points):
+            for batch_idx, turn_batch in enumerate(turn_batches):
+                # Cycle through BPM start points using modulo to distribute work evenly, if required
+                if (
+                    DIFFERENT_TURNS_FOR_START_BPM
+                    and batch_idx % num_start_points != bpm_i
+                ):
+                    continue
 
-            # Ensure the turn batch is not empty
-            assert turn_batch, (
-                f"Turn batch {batch_idx} for BPM {start_bpm} is empty. "
-                f"Check TRACKS_PER_WORKER and NUM_WORKERS."
-            )
+                # Ensure the turn batch is not empty
+                assert turn_batch, (
+                    f"Turn batch {batch_idx} for BPM {start_bpm} is empty. "
+                    f"Check TRACKS_PER_WORKER and NUM_WORKERS."
+                )
 
-            # Create the payload data for this worker (x/y comparisons, initial coords, etc.)
-            x_comp, y_comp, init_coords, pt_array = self._make_worker_payload(
-                track_data,
-                turn_batch,
-                energy_turn_map,
-                start_bpm,
-                self.n_data_points[start_bpm],
-            )
+                # Create the payload data for this worker (x/y comparisons, initial coords, etc.)
+                x_comp, y_comp, x_weights, y_weights, init_coords, pt_array = (
+                    self._make_worker_payload(
+                        track_data,
+                        turn_batch,
+                        energy_turn_map,
+                        start_bpm,
+                        self.n_data_points[start_bpm],
+                    )
+                )
 
-            # Make arrays read-only to prevent accidental modification in worker processes
-            x_comp.setflags(write=False)
-            y_comp.setflags(write=False)
+                # Make arrays read-only to prevent accidental modification in worker processes
+                x_comp.setflags(write=False)
+                y_comp.setflags(write=False)
 
-            # Package all data needed by the worker into a payload dictionary
-            payloads.append(
-                {
-                    "worker_id": batch_idx,  # Worker ID
-                    "x_comparisons": x_comp,  # Expected x coordinates for loss calculation
-                    "y_comparisons": y_comp,  # Expected y coordinates for loss calculation
-                    "init_coords": init_coords,  # Initial particle coordinates
-                    "start_bpm": start_bpm,  # Starting BPM for this worker
-                    "init_pts": pt_array,
-                }
-            )
+                # Package all data needed by the worker into a payload dictionary
+                payloads.append(
+                    {
+                        "worker_id": batch_idx,  # Worker ID
+                        "x_comparisons": x_comp,  # Expected x coordinates for loss calculation
+                        "y_comparisons": y_comp,  # Expected y coordinates for loss calculation
+                        "x_weights": x_weights,  # Weights for x-coordinate differences
+                        "y_weights": y_weights,  # Weights for y-coordinate differences
+                        "init_coords": init_coords,  # Initial particle coordinates
+                        "start_bpm": start_bpm,  # Starting BPM for this worker
+                        "init_pts": pt_array,
+                    }
+                )
         return payloads
 
     def _make_worker_payload(
@@ -217,9 +234,13 @@ class WorkerManager:
         # Initialize lists to collect data for each turn in the batch
         x_arrays = []
         y_arrays = []
+        x_weight_arrays = []
+        y_weight_arrays = []
         init_coord_arrays = []
         pt_values = []
 
+        y_bpm = MAGNET_RANGE.split("/")[0]  # Get the second BPM in the
+        bpm_kick_plane = "y" if start_bpm == y_bpm else "x"
         # Process each turn in the batch
         for turn in turn_batch:
             # Get the energy type for this turn (determines which DataFrame to use)
@@ -228,12 +249,23 @@ class WorkerManager:
 
             # Calculate transverse momentum and momentum deviation for this energy type
             pt = self._compute_pt(energy_type)
-            pt_values.append(pt)
 
             # Extract the starting coordinates for this turn and starting BPM
             starting_row = df.loc[(turn, start_bpm)]
+            kicking_plane = starting_row["kick_plane"]
+            if bpm_kick_plane not in kicking_plane:
+                continue  # Skip if the kick plane does not match
+
             init_coords = self._create_init_coords(starting_row, pt)
+
+            # Set the other plane coordinates to zero if not xy kick
+            if kicking_plane == "x":
+                init_coords[2:4] = 0.0
+            elif kicking_plane == "y":
+                init_coords[0:2] = 0.0
+
             init_coord_arrays.append(init_coords)
+            pt_values.append(pt)
 
             # Get the observation turns for this turn (turns where we collect data)
             obs_turns = self.Worker.get_observation_turns(turn)
@@ -246,14 +278,22 @@ class WorkerManager:
             # Extract x and y coordinate arrays from the filtered data
             x_arrays.append(filtered_data["x"].to_numpy(dtype="float64", copy=False))
             y_arrays.append(filtered_data["y"].to_numpy(dtype="float64", copy=False))
+            x_weight_arrays.append(
+                filtered_data["x_weight"].to_numpy(dtype="float64", copy=False)
+            )
+            y_weight_arrays.append(
+                filtered_data["y_weight"].to_numpy(dtype="float64", copy=False)
+            )
 
         # Stack all arrays into 3D arrays (turn, observation_turn, data_point)
         x_comp = np.stack(x_arrays, axis=0)
         y_comp = np.stack(y_arrays, axis=0)
+        x_weights = np.stack(x_weight_arrays, axis=0)
+        y_weights = np.stack(y_weight_arrays, axis=0)
         init_coords_array = np.stack(init_coord_arrays, axis=0)
         pt_array = np.array(pt_values, dtype="float64")
 
-        return x_comp, y_comp, init_coords_array, pt_array
+        return x_comp, y_comp, x_weights, y_weights, init_coords_array, pt_array
 
     def start_workers(
         self,
@@ -263,7 +303,7 @@ class WorkerManager:
         bpm_start_points: list[str],
         var_x: float,
         var_y: float,
-        optimise_sextupoles: bool,
+        opt_settings: OptSettings,
     ):
         """Start worker processes and return their parent connections.
 
@@ -274,7 +314,7 @@ class WorkerManager:
             bpm_start_points (list[str]): List of starting BPM names
             var_x (float): Variance for x-coordinate measurements
             var_y (float): Variance for y-coordinate measurements
-            optimise_sextupoles (bool): Whether to optimize sextupole magnets
+            opt_settings (OptSettings): Optimisation settings
 
         Note:
             Process objects are stored internally on the manager and are
@@ -297,7 +337,7 @@ class WorkerManager:
             w = self.Worker(
                 child,  # Connection for communication
                 **payload,  # Unpack the payload dictionary into keyword arguments
-                optimise_sextupoles=optimise_sextupoles,  # Whether to include sextupoles in optimisation
+                opt_settings=opt_settings,  # Pass the optimisation settings
             )
             w.start()  # Start the worker process
 

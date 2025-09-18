@@ -5,10 +5,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from aba_optimiser.config import (
-    MAGNET_RANGE,
-    SEQUENCE_FILE,
-)
+from aba_optimiser.config import BPM_START_POINTS, MAGNET_RANGE, SEQUENCE_FILE
 from aba_optimiser.mad.mad_interface import MadInterface
 from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 
@@ -29,18 +26,13 @@ def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
     LOGGER.info(f"Starting ellipse filtering on {len(data)} data points")
     data = data.copy()
     data.set_index(["turn", "name"], inplace=True)
-    mad_iface = MadInterface(SEQUENCE_FILE, MAGNET_RANGE)
+    mad_iface = MadInterface(
+        SEQUENCE_FILE,
+        "$start/$end",
+        use_real_strengths=False,
+        bpm_pattern="BPM",
+    )
     tws = mad_iface.run_twiss()
-
-    # Get Twiss data
-    # bpm_names = [BPM_START, Y_BPM_START]
-
-    # Pre-split dataframe for efficiency
-    # bpm_groups = {
-    #     bpm: data.xs(bpm, level="name")
-    #     for bpm in bpm_names
-    #     if bpm in data.index.get_level_values("name")
-    # }
     data = data.reset_index()
     data.set_index("turn", inplace=True)
 
@@ -78,22 +70,26 @@ def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
         ~data["turn"].isin(failed_turns)
     ].copy()  # Ensure filtered is a copy
 
-    # Run through all the BPMs between the start and end, and set the weight_x and weight_y according to residuals
+    all_bpms = filtered["name"].unique()
+    # BPMs in the range MAGNET_RANGE + start BPMs
     start_bpm, end_bpm = MAGNET_RANGE.split("/")
-    start_bpm_idx = tws.index.get_loc(start_bpm)
-    end_bpm_idx = tws.index.get_loc(end_bpm)
-    tws = tws.iloc[start_bpm_idx : end_bpm_idx + 1]
+    start_bpm_idx = np.where(all_bpms == start_bpm)[0][0]
+    end_bpm_idx = np.where(all_bpms == end_bpm)[0][0] + 1
+    if start_bpm_idx < end_bpm_idx:
+        reduced_bpms = all_bpms[start_bpm_idx:end_bpm_idx].tolist()
+    else:
+        reduced_bpms = (
+            all_bpms[start_bpm_idx:].tolist() + all_bpms[:end_bpm_idx].tolist()
+        )
+    reduced_bpms = set(reduced_bpms) | set(BPM_START_POINTS)
 
-    all_bpms = tws.index.tolist()
-
-    # Compute and set weight_x and weight_y for each BPM in range
-    filtered.loc[:, "weight_x"] = np.nan
-    filtered.loc[:, "weight_y"] = np.nan
-    weight_x_dict = {}
-    weight_y_dict = {}
-    for bpm in tqdm(all_bpms, desc="Retrieving weight_x/weight_y"):
-        bpm_mask = filtered["name"] == bpm
-        bpm_data = filtered[bpm_mask]
+    # Compute and set x_weight and y_weight for each BPM in range
+    filtered.loc[:, "x_weight"] = np.nan
+    filtered.loc[:, "y_weight"] = np.nan
+    x_weight_dict = {}
+    y_weight_dict = {}
+    for bpm in tqdm(reduced_bpms, desc="Retrieving x_weight/y_weight"):
+        bpm_data = filtered[filtered["name"] == bpm]
         if bpm_data.empty:
             continue
         x, px, y, py = (
@@ -104,7 +100,6 @@ def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
         )
         ps_diag = PhaseSpaceDiagnostics(bpm, x, px, y, py, tws=tws)
         residual_x, residual_y, std_x, std_y = ps_diag.compute_residuals()
-        full_idx = bpm_data.index
 
         # Calculate weights as max(1/(10**(std/abs(residual))), 1)
         # Avoid division by zero and clamp exponent to avoid overflow
@@ -114,20 +109,20 @@ def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
             # Clamp exponent to max 10 to avoid overflow
             exp_x = np.clip(abs_residual_x / std_x, 1, 100)
             exp_y = np.clip(abs_residual_y / std_y, 1, 100)
-            weight_x = 1 / (10 ** (exp_x - 1))
-            weight_y = 1 / (10 ** (exp_y - 1))
-            assert np.all(weight_x >= 0) and np.all(weight_y >= 0), (
+            x_weights = 1 / (10 ** (exp_x - 1))
+            y_weights = 1 / (10 ** (exp_y - 1))
+            assert np.all(x_weights >= 0) and np.all(y_weights >= 0), (
                 "Weights must be non-negative"
             )
-            assert np.all(weight_x <= 1) and np.all(weight_y <= 1), (
+            assert np.all(x_weights <= 1) and np.all(y_weights <= 1), (
                 "Weights must be less than or equal to 1"
             )
 
-        weight_x_dict.update(dict(zip(full_idx, weight_x)))
-        weight_y_dict.update(dict(zip(full_idx, weight_y)))
+        x_weight_dict.update(dict(zip(bpm_data.index, x_weights)))
+        y_weight_dict.update(dict(zip(bpm_data.index, y_weights)))
 
-    filtered.loc[:, "weight_x"] = filtered.index.map(weight_x_dict)
-    filtered.loc[:, "weight_y"] = filtered.index.map(weight_y_dict)
+    filtered.loc[:, "x_weight"] = filtered.index.map(x_weight_dict)
+    filtered.loc[:, "y_weight"] = filtered.index.map(y_weight_dict)
 
     print(f"Total failed turns: {len(failed_turns)}")
     return filtered
