@@ -14,7 +14,7 @@ from aba_optimiser.config import (
     SEQUENCE_FILE,
     USE_NOISY_DATA,
 )
-from aba_optimiser.mad.mad_interface import MadInterface
+from aba_optimiser.mad.mad_interface import OptimizationMadInterface
 from aba_optimiser.workers.arc_by_arc import ArcByArcWorker
 from aba_optimiser.workers.ring import RingWorker
 
@@ -46,7 +46,7 @@ class ConfigurationManager:
     """Manages configuration and setup for the optimisation process."""
 
     def __init__(self, opt_settings: OptSettings):
-        self.mad_iface: MadInterface | None = None
+        self.mad_iface: OptimizationMadInterface | None = None
         self.knob_names: list[str] = []
         self.elem_spos: np.ndarray = np.array([])
         self.all_bpms: np.ndarray = np.array([])
@@ -58,7 +58,7 @@ class ConfigurationManager:
 
     def setup_mad_interface(self) -> None:
         """Initialise the MAD-NG interface and get basic model parameters."""
-        self.mad_iface = MadInterface(
+        self.mad_iface = OptimizationMadInterface(
             SEQUENCE_FILE,
             MAGNET_RANGE,
             opt_settings=self.global_config,

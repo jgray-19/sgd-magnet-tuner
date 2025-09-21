@@ -31,7 +31,7 @@ from aba_optimiser.config import (
     POSITION_STD_DEV,
     SEQUENCE_FILE,
 )
-from aba_optimiser.mad.mad_interface import MadInterface
+from aba_optimiser.mad.mad_interface import OptimizationMadInterface
 from aba_optimiser.physics.bpm_phases import next_bpm_to_pi_2, prev_bpm_to_pi_2
 
 if TYPE_CHECKING:
@@ -105,7 +105,7 @@ def _get_rng(rng: np.random.Generator | None) -> np.random.Generator:
     return rng or np.random.default_rng()
 
 
-def _inject_noise_xy(
+def inject_noise_xy(
     df: tfs.TfsDataFrame,
     orig_df: tfs.TfsDataFrame,
     rng: np.random.Generator,
@@ -192,7 +192,7 @@ def _ensure_twiss(tws: tfs.TfsDataFrame | None, info: bool) -> tfs.TfsDataFrame:
     """
     if tws is not None:
         return tws
-    mad = MadInterface(
+    mad = OptimizationMadInterface(
         SEQUENCE_FILE, MAGNET_RANGE, bpm_pattern="BPM", use_real_strengths=False
     )
     tws = mad.run_twiss()
@@ -681,7 +681,7 @@ def calculate_pz(
     rng = _get_rng(rng)
 
     if inject_noise:
-        _inject_noise_xy(data, orig_data, rng, low_noise_bpms)
+        inject_noise_xy(data, orig_data, rng, low_noise_bpms)
 
     if subtract_mean:
         _subtract_bpm_means(data, info)

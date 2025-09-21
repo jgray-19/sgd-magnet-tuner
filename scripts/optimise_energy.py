@@ -16,15 +16,16 @@ if __name__ == "__main__":
 
     # Step 1: Optimise energy (dp/p) first
     logging.info("Starting energy optimisation...")
-    energy_controller = Controller(DPP_OPT_SETTINGS, show_plots=True)
-    energy_knobs = energy_controller.run()
-    del energy_controller
+    # energy_controller = Controller(DPP_OPT_SETTINGS, show_plots=False)
+    # energy_knobs = energy_controller.run()
+    # del energy_controller
 
     logging.info("Energy optimisation completed!")
 
     logging.info("Starting quadrupole optimization with energy results...")
     quad_controller = Controller(
-        QUAD_OPT_SETTINGS, show_plots=True, initial_knob_strengths=energy_knobs
+        QUAD_OPT_SETTINGS,
+        show_plots=True,  # initial_knob_strengths=energy_knobs
     )
     quad_knobs = quad_controller.run()
     del quad_controller

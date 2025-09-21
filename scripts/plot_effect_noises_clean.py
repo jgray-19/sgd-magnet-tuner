@@ -20,7 +20,6 @@ from itertools import product
 from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
-from pymadng import MAD
 from tqdm.contrib.concurrent import process_map
 
 from aba_optimiser.config import (
@@ -30,6 +29,7 @@ from aba_optimiser.config import (
     SEQ_NAME,
     SEQUENCE_FILE,
 )
+from aba_optimiser.mad.mad_interface import create_tracking_interface
 from scripts.plot_functions import (
     plot_error_bars_bpm_range,
     plot_std_log_comparison,
@@ -138,45 +138,24 @@ def build_track_command(
 
 
 class MADSimulator:
-    """Handles MAD-NG simulation setup and operations."""
+    """Handles MAD-NG simulation setup and operations using consolidated interface."""
 
     def __init__(self):
         self._matched_tunes: dict[str, float] | None = None
         self._df_twiss: pd.DataFrame | None = None
+        self._mad_interface = None
 
-    def setup_mad(self) -> MAD:
-        """
-        Initialize a MAD-NG process with sequence loaded, beam set, and BPMs selected.
-
-        Returns:
-            Configured MAD instance
-        """
-        mad = MAD(stdout="mad_stdout.log", redirect_stderr=True, debug=True)
-        mad.MADX.load(f"'{SEQUENCE_FILE.absolute()}'")
-        seq = mad.MADX[SEQ_NAME]
-        seq.beam = mad.beam(particle='"proton"', energy=BEAM_ENERGY)
-
-        # Select only BPM elements for tracking
-        seq.deselect(mad.element.flags.observed)
-        seq.select(mad.element.flags.observed, {"pattern": "'BPM'"})
-
-        # Install marker at start BPM and cycle sequence
-        monitor_name = MAGNET_RANGE.split("/")[0]
-        marker_name = mad.quote_strings(f"{monitor_name}_marker")
-        seq.install(
-            [
-                mad.element.marker(
-                    **{"at": 0, "from": f'"{monitor_name}"', "name": marker_name}
-                )
-            ]
-        )
-        seq.cycle(marker_name)
-
-        return mad
+    def _get_interface(self):
+        """Get or create the MAD interface."""
+        if self._mad_interface is None:
+            self._mad_interface = create_tracking_interface(
+                SEQUENCE_FILE, SEQ_NAME, BEAM_ENERGY, MAGNET_RANGE, enable_logging=True
+            )
+        return self._mad_interface
 
     def match_tunes(self) -> tuple[dict[str, float], pd.DataFrame]:
         """
-        Match the working point tunes and return the matched knob values and Twiss at start.
+        Match the working point tunes and return the matched knob values and Twiss data.
 
         Returns:
             Tuple of (matched tune parameters, Twiss dataframe)
@@ -184,59 +163,13 @@ class MADSimulator:
         if self._matched_tunes is not None and self._df_twiss is not None:
             return self._matched_tunes, self._df_twiss
 
-        mad = self.setup_mad()
-        mad["SEQ_NAME"] = SEQ_NAME
-        mad["knob_range"] = MAGNET_RANGE
-
-        # Desired fractional tunes
-        tunes = [0.28, 0.31]
-        mad["result"] = mad.match(
-            command=r"\ -> twiss{sequence=MADX[SEQ_NAME]}",
-            variables=[
-                {"var": "'MADX.dqx_b1_op'", "name": "'dqx_b1_op'"},
-                {"var": "'MADX.dqy_b1_op'", "name": "'dqy_b1_op'"},
-            ],
-            equalities=[
-                {"expr": f"\\t -> math.abs(t.q1)-(62+{tunes[0]})", "name": "'q1'"},
-                {"expr": f"\\t -> math.abs(t.q2)-(60+{tunes[1]})", "name": "'q2'"},
-            ],
-            objective={"fmin": 1e-18},
-            info=2,
-        )
-
-        self._matched_tunes = {
-            key: mad[f"MADX['{key}']"] for key in ("dqx_b1_op", "dqy_b1_op")
-        }
-
-        # Get Twiss at start of sequence
-        tw = mad.twiss(sequence=mad.MADX[SEQ_NAME])[0]
-        self._df_twiss = tw.to_df()
-        self._df_twiss.set_index("name", inplace=True)
+        interface = self._get_interface()
+        self._matched_tunes, self._df_twiss = interface.match_tunes()
 
         return self._matched_tunes, self._df_twiss
 
-    def get_last_turn_data(self, mad: MAD) -> pd.DataFrame:
-        """
-        Retrieve the last-turn data from a MAD-NG tracking result.
-
-        Args:
-            mad: MAD instance with tracking results
-
-        Returns:
-            DataFrame with last turn BPM data
-        """
-        trk = mad["trk"]
-        df = trk.to_df(columns=["name", "turn", "x", "y"])
-        return (
-            df[df["turn"] == df["turn"].max()]
-            .set_index("name")
-            .loc[MAGNET_RANGE.split("/")[0] : MAGNET_RANGE.split("/")[1]]
-            .sort_index()
-        )
-
     def get_track_end_positions(
         self,
-        mad: MAD,
         matched_tunes: dict[str, float],
         df_twiss: pd.DataFrame,
         config: SimulationConfig,
@@ -245,10 +178,9 @@ class MADSimulator:
         start_err: bool = False,
     ) -> TrackingResult:
         """
-        Run a single-turn track for the given range and return x and y at the final turn for each BPM.
+        Run tracking and return final positions at BPMs.
 
         Args:
-            mad: MAD instance
             matched_tunes: Dictionary of matched tune parameters
             df_twiss: Twiss dataframe
             config: Simulation configuration
@@ -262,19 +194,18 @@ class MADSimulator:
         if action is None:
             action = config.action0
 
-        # Apply matched tunes
-        for key, val in matched_tunes.items():
-            mad[f"MADX['{key}']"] = val
-
-        # Launch tracking
-        trk_command = build_track_command(
-            df_twiss, action, angle, config.nturns, config, start_err=start_err
+        interface = self._get_interface()
+        x_pos, y_pos = interface.run_tracking(
+            matched_tunes=matched_tunes,
+            df_twiss=df_twiss,
+            nturns=config.nturns,
+            action=action,
+            angle=angle,
+            start_err=start_err,
+            ic_xy_std=config.ic_xy_std,
+            ic_pxpy_std=config.ic_pxpy_std,
         )
-        mad.send(trk_command)
-
-        # Retrieve only the last-turn data
-        df_last = self.get_last_turn_data(mad)
-        return TrackingResult(df_last["x"], df_last["y"])
+        return TrackingResult(x_pos, y_pos)
 
 
 class NoiseAnalyzer:
@@ -298,11 +229,77 @@ class NoiseAnalyzer:
         Returns:
             Tuple of (angle, x_positions, y_positions)
         """
-        mad = self.simulator.setup_mad()
         result = self.simulator.get_track_end_positions(
-            mad, matched_tunes, df_twiss, self.config, angle=angle
+            matched_tunes, df_twiss, self.config, angle=angle
         )
         return angle, result.x_positions, result.y_positions
+
+    def compute_error_sample(
+        self,
+        sample_idx: int,
+        matched_tunes: dict[str, float],
+        df_twiss: pd.DataFrame,
+        angle: float,
+        start_err: bool = False,
+    ) -> TrackingResult:
+        """
+        Run tracking with random quadrupole errors and return positions.
+
+        Args:
+            sample_idx: Sample index (for reproducibility)
+            matched_tunes: Matched tune parameters
+            df_twiss: Twiss dataframe
+            angle: Initial angle
+            start_err: Whether to apply initial condition errors
+
+        Returns:
+            TrackingResult with x and y positions
+        """
+        # Create a new interface for this sample to avoid interference
+        interface = create_tracking_interface(
+            SEQUENCE_FILE, SEQ_NAME, BEAM_ENERGY, MAGNET_RANGE, enable_logging=False
+        )
+
+        # Get quadrupole names and apply errors
+        quad_names = interface.get_quadrupole_names()
+        interface.apply_magnet_errors(quad_names, REL_K1_STD_DEV, seed=sample_idx)
+
+        # Run tracking
+        x_pos, y_pos = interface.run_tracking(
+            matched_tunes=matched_tunes,
+            df_twiss=df_twiss,
+            nturns=self.config.nturns,
+            action=self.config.action0,
+            angle=angle,
+            start_err=start_err,
+            ic_xy_std=self.config.ic_xy_std,
+            ic_pxpy_std=self.config.ic_pxpy_std,
+            seed=sample_idx,
+        )
+        return TrackingResult(x_pos, y_pos)
+
+    def compute_ic_sample(
+        self,
+        sample_idx: int,
+        matched_tunes: dict[str, float],
+        df_twiss: pd.DataFrame,
+        angle: float,
+    ) -> TrackingResult:
+        """
+        Run tracking with initial condition perturbations and return positions.
+
+        Args:
+            sample_idx: Sample index
+            matched_tunes: Matched tune parameters
+            df_twiss: Twiss dataframe
+            angle: Initial angle
+
+        Returns:
+            TrackingResult with x and y positions
+        """
+        return self.simulator.get_track_end_positions(
+            matched_tunes, df_twiss, self.config, angle=angle, start_err=True
+        )
 
     def compute_error_sample(
         self,
@@ -358,34 +355,6 @@ class NoiseAnalyzer:
             for name in aliases:
                 k1 = mad[f"MADX['{name}'].k1"]
                 mad[f"MADX['{name}'].k1"] = k1 + noise * abs(k1)
-
-        return self.simulator.get_track_end_positions(
-            mad, matched_tunes, df_twiss, self.config, angle=angle, start_err=start_err
-        )
-
-    def compute_ic_sample(
-        self,
-        sample_idx: int,
-        matched_tunes: dict[str, float],
-        df_twiss: pd.DataFrame,
-        angle: float,
-    ) -> TrackingResult:
-        """
-        Run a single-turn track with IC perturbations and return positions.
-
-        Args:
-            sample_idx: Sample index
-            matched_tunes: Matched tune parameters
-            df_twiss: Twiss dataframe
-            angle: Initial angle
-
-        Returns:
-            TrackingResult with x and y positions
-        """
-        mad = self.simulator.setup_mad()
-        return self.simulator.get_track_end_positions(
-            mad, matched_tunes, df_twiss, self.config, angle=angle, start_err=True
-        )
 
     def compute_standard_deviations(
         self,

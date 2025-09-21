@@ -1,9 +1,9 @@
 from matplotlib import pyplot as plt
 
 from aba_optimiser.config import SEQUENCE_FILE
-from aba_optimiser.mad.mad_interface import MadInterface
+from aba_optimiser.mad.mad_interface import OptimizationMadInterface
 
-mad = MadInterface(
+mad = OptimizationMadInterface(
     sequence_file=SEQUENCE_FILE, magnet_range="$start/$end", bpm_pattern="BPM"
 )
 tws = mad.run_twiss()

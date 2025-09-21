@@ -61,7 +61,7 @@ class OptSettings:
 DPP_OPT_SETTINGS = OptSettings(
     # max_epochs=400,
     max_epochs=750,
-    tracks_per_worker=75,
+    tracks_per_worker=1000,
     num_workers=60,
     num_batches=20,
     warmup_epochs=10,
@@ -75,7 +75,7 @@ DPP_OPT_SETTINGS = OptSettings(
     # warmup_lr_start=5e-2,
     # max_lr=1e-1,
     # min_lr=1e-1,
-    gradient_converged_value=5e-8,
+    gradient_converged_value=5e-9,
     optimiser_type="adam",
     # optimiser_type="lbfgs",
 )
@@ -83,7 +83,7 @@ DPP_OPT_SETTINGS = OptSettings(
 # Simulation parameters for quadrupole optimisation
 QUAD_OPT_SETTINGS = OptSettings(
     max_epochs=1000,
-    tracks_per_worker=3000,
+    tracks_per_worker=8000,
     num_workers=60,
     # num_workers=1,
     # num_batches=1,
@@ -91,7 +91,7 @@ QUAD_OPT_SETTINGS = OptSettings(
     # Adam settings
     warmup_epochs=100,
     warmup_lr_start=2e-8,
-    max_lr=3e-6,
+    max_lr=1e-6,
     min_lr=5e-7,
     # LBFGS settings
     # warmup_epochs=20,
@@ -133,8 +133,8 @@ GRAD_NORM_ALPHA = 0.7  # Gradient norm smoothing factor for smoothing loss
 # Standard error of the noise
 POSITION_STD_DEV = 1e-4  # Standard deviation of the position noise
 MOMENTUM_STD_DEV = 3e-6  # Standard deviation of the momentum noise
-REL_K1_STD_DEV = 1e-3  # Standard deviation of the K1 noise
-MACHINE_DELTAP = -11e-5  # The energy deviation of the machine from expected.
+REL_K1_STD_DEV = 10e-4  # Standard deviation of the K1 noise
+MACHINE_DELTAP = 2e-4  # -11e-5  # The energy deviation of the machine from expected.
 DELTAP = 1e-3
 
 # =============================================================================
@@ -154,7 +154,7 @@ BPM_START_POINTS = [
 ]
 
 # Whether to use different turns for each start BPM
-DIFFERENT_TURNS_FOR_START_BPM = False
+DIFFERENT_TURNS_FOR_START_BPM = True
 
 N_RUN_TURNS = 1  # Number of turns to run the simulation for each track
 OBSERVE_TURNS_FROM = 1  # Record from N turns
@@ -162,8 +162,9 @@ N_COMPARE_TURNS = N_RUN_TURNS - OBSERVE_TURNS_FROM + 1  # Number of turns to com
 
 # Tracking parameters
 RAMP_UP_TURNS = 1_000  # Number of turns to ramp up the ACD
-FLATTOP_TURNS = 4_000  # Number of turns on the flat top
-NUM_TRACKS = 45  # Number of tracks of FLATTOP_TURNS, so total number of turns is FLATTOP_TURNS * NUM_TRACKS (assuming acd is off)
+FLATTOP_TURNS = 40_000  # Number of turns on the flat top
+NUM_TRACKS = 12  # Number of tracks of FLATTOP_TURNS, so total number of turns is FLATTOP_TURNS * NUM_TRACKS (assuming acd is off)
+TRACK_BATCH_SIZE = 4  # Number of tracks to process in each batch to save RAM
 ACD_ON = False  # Whether the ACD was used or not (Ignores the ramp up turns)
 KICK_BOTH_PLANES = True  # Whether to kick in both planes or separately
 
@@ -177,6 +178,13 @@ PARTICLE_MASS = 938.27208816 * 1e-3  # [GeV] Proton energy-mass
 SEQ_NAME = "lhcb1"  # Sequence name in MAD-X (lowercase)
 CLEAN_DATA = True  # Whether to take the filtered data for optimisation (just weights as of 16/09)
 USE_NOISY_DATA = True  # Whether to use noisy data for optimisation
+
+# =============================================================================
+# TRACKING BACKEND SELECTION
+# =============================================================================
+
+USE_XSUITE = False  # Whether to use xsuite for tracking instead of MAD-NG
+BEAM_NUMBER = 1  # LHC beam number (1 or 2) for xsuite tracking
 
 FILE_COLUMNS: tuple[str, ...] = (
     "name",
@@ -221,6 +229,7 @@ HESSIAN_SCRIPT = MAD_SCRIPTS_DIR / "estimate_hessian.mad"
 
 # Other files
 SEQUENCE_FILE = module_path / "mad_scripts/lhcb1.seq"  # MAD-X sequence file
+XSUITE_JSON = module_path / "src" / "aba_optimiser" / "xsuite" / "lhcb1.json"
 TRUE_STRENGTHS = module_path / "data/true_strengths.txt"  # Ground-truth knob strengths
 OUTPUT_KNOBS = module_path / "data/final_knobs.txt"  # Where to write final strengths
 KNOB_TABLE = module_path / "data/knob_strengths_table.md"  # Markdown summary of results

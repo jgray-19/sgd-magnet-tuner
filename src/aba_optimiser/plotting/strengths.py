@@ -171,7 +171,7 @@ def plot_strengths_comparison(
     if plot_real:
         ax.set_ylabel("Strength" + (f" [{unit}]" if unit else ""))
     else:
-        ax.set_ylabel("Relative difference ($\\times10^{-4}$)")
+        ax.set_ylabel("Relative difference (units)")
     ax.grid(axis="y", alpha=0.3)
     setup_scientific_formatting(plane="y")
 
@@ -247,10 +247,10 @@ def plot_strengths_vs_position(
     if magnet_names is not None:
         families, family_colors, palette = _family_labels_and_colors(magnet_names)
         is_mq = np.array([f == "MQ" for f in families], dtype=bool)
-        is_ms = ~is_mq
+        # is_ms = ~is_mq
     else:
         families = None
-        is_mq = is_ms = None
+        # is_mq = is_ms = None
 
     baseline = initial_vals if initial_vals is not None else true_vals
     baseline_abs = np.abs(baseline)
@@ -334,9 +334,9 @@ def plot_strengths_vs_position(
         if magnet_names is not None:
             # Plot MQ, then MS to get per-family colors + series markers
             _plot_subset(is_mq, MQ_TRUE_COLOR, "MQ • True", "True")
-            _plot_subset(is_ms, MS_TRUE_COLOR, "MS • True", "True")
+            # _plot_subset(is_ms, MS_TRUE_COLOR, "MS • True", "True")
             _plot_subset(is_mq, MQ_FINAL_COLOR, "MQ • Final", "Final")
-            _plot_subset(is_ms, MS_FINAL_COLOR, "MS • Final", "Final")
+            # _plot_subset(is_ms, MS_FINAL_COLOR, "MS • Final", "Final")
         else:
             # Single color fallback
             _plot_subset(np.ones(n, dtype=bool), MQ_TRUE_COLOR, "True", "True")
@@ -347,9 +347,9 @@ def plot_strengths_vs_position(
             # Show both True and Final also when no initial (as in your original)
             if magnet_names is not None:
                 _plot_subset(is_mq, MQ_TRUE_COLOR, "MQ • True", "True")
-                _plot_subset(is_ms, MS_TRUE_COLOR, "MS • True", "True")
+                # _plot_subset(is_ms, MS_TRUE_COLOR, "MS • True", "True")
                 _plot_subset(is_mq, MQ_FINAL_COLOR, "MQ • Final", "Final")
-                _plot_subset(is_ms, MS_FINAL_COLOR, "MS • Final", "Final")
+                # _plot_subset(is_ms, MS_FINAL_COLOR, "MS • Final", "Final")
             else:
                 _plot_subset(np.ones(n, dtype=bool), MQ_TRUE_COLOR, "True", "True")
                 _plot_subset(np.ones(n, dtype=bool), MQ_FINAL_COLOR, "Final", "Final")
@@ -357,7 +357,7 @@ def plot_strengths_vs_position(
             # Final only
             if magnet_names is not None:
                 _plot_subset(is_mq, MQ_FINAL_COLOR, "MQ • Final", "Final")
-                _plot_subset(is_ms, MS_FINAL_COLOR, "MS • Final", "Final")
+                # _plot_subset(is_ms, MS_FINAL_COLOR, "MS • Final", "Final")
             else:
                 _plot_subset(np.ones(n, dtype=bool), MQ_FINAL_COLOR, "Final", "Final")
 
@@ -396,24 +396,24 @@ def plot_strengths_vs_position(
                 color=MQ_FINAL_COLOR,
                 label="MQ • Final",
             ),
-            Line2D(
-                [0],
-                [0],
-                marker="s",
-                linestyle="None",
-                color=MS_TRUE_COLOR,
-                label="MS • True",
-            ),
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                linestyle="None",
-                color=MS_FINAL_COLOR,
-                label="MS • Final",
-            ),
+            # Line2D(
+            #     [0],
+            #     [0],
+            #     marker="s",
+            #     linestyle="None",
+            #     color=MS_TRUE_COLOR,
+            #     label="MS • True",
+            # ),
+            # Line2D(
+            #     [0],
+            #     [0],
+            #     marker="o",
+            #     linestyle="None",
+            #     color=MS_FINAL_COLOR,
+            #     label="MS • Final",
+            # ),
         ]
-        ax.legend(handles=handles, title="Series × Family", loc="upper right")
+        ax.legend(handles=handles, title="Legend", loc="upper right")
     else:
         handles = [
             Line2D(

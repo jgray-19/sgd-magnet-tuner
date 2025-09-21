@@ -16,7 +16,7 @@ from aba_optimiser.config import (
     TRACK_SCRIPT,
     USE_NOISY_DATA,
 )
-from aba_optimiser.mad.mad_interface import MadInterface
+from aba_optimiser.mad.mad_interface import OptimizationMadInterface
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -176,7 +176,7 @@ end
         bpm_range = self.get_bpm_range(self.start_bpm)
         LOGGER.debug(f"Worker {self.worker_id}: Using BPM range {bpm_range}")
 
-        mad_iface = MadInterface(
+        mad_iface = OptimizationMadInterface(
             SEQUENCE_FILE,
             magnet_range=MAGNET_RANGE,
             bpm_range=bpm_range,

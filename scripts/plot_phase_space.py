@@ -29,7 +29,7 @@ non_noisy_start = select_markers(init_coords, start_bpm)
 non_noisy_other = select_markers(init_coords, other_bpm)
 
 # Load noisy data
-noise_init = pd.read_parquet(NOISY_FILE).set_index("turn")
+noise_init = pd.read_parquet(CLEANED_FILE).set_index("turn")
 noisy_start = select_markers(noise_init, start_bpm)
 noise_other = select_markers(noise_init, other_bpm)
 

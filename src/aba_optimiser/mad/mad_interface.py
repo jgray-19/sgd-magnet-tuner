@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import tfs
-from pymadng import MAD
 
 from aba_optimiser.config import (
     BEAM_ENERGY,
@@ -14,6 +13,8 @@ from aba_optimiser.config import (
     TUNE_KNOBS_FILE,
 )
 from aba_optimiser.io.utils import read_knobs
+
+from .base_mad_interface import BaseMadInterface
 
 if TYPE_CHECKING:
     from aba_optimiser.config import OptSettings
@@ -31,13 +32,6 @@ for _, elm in loaded_sequence:iter("{bpm_range}") do
     end
 end
 py:send(nbpms)
-"""
-
-OBSERVE_BPMS_MAD = """
-local observed in MAD.element.flags
-loaded_sequence:deselect(observed)
-loaded_sequence:select(observed, {pattern=bpm_pattern})
-py:send(true)
 """
 
 MAKE_KNOBS_INIT_MAD = """
@@ -70,7 +64,7 @@ py:send(spos_list, true)
 """
 
 
-class MadInterface:
+class OptimizationMadInterface(BaseMadInterface):
     """
     Encapsulates communication with MAD-NG via pymadng.MAD.
     """
@@ -87,36 +81,51 @@ class MadInterface:
         **kwargs,
     ):
         """
+        Initialize optimization MAD interface with automatic setup.
+
         Args:
-            sequence_file (str): Path to the MAD-X sequence file.
-            magnet_range (str): Range of magnets to include, e.g., "MARKER.1/MARKER.10".
-            bpm_range (str): Range of BPMs to observe, e.g., "BPM.13R3.B1/BPM.12L4.B1".
-            discard_mad_output (bool): Whether to discard MAD-NG output to stdout - will change the kwargs for pymadng.MAD.
-            **kwargs: Additional keyword arguments for pymadng.MAD initialisation.
+            sequence_file: Path to the MAD-X sequence file
+            magnet_range: Range of magnets to include, e.g., "MARKER.1/MARKER.10"
+            bpm_range: Range of BPMs to observe, e.g., "BPM.13R3.B1/BPM.12L4.B1"
+            discard_mad_output: Whether to discard MAD-NG output to stdout
+            bpm_pattern: Pattern for BPM matching
+            use_real_strengths: Whether to use real corrector/knob strengths
+            opt_settings: Optimization settings for adjustment knobs
+            **kwargs: Additional keyword arguments for MAD initialization
         """
+        # Configure MAD output
+        if discard_mad_output:
+            kwargs.setdefault("stdout", "/dev/null")
+            kwargs.setdefault("redirect_stderr", True)
+
+        # Initialize base class
+        super().__init__(**kwargs)
+
+        # Store optimization-specific attributes
         self.sequence_file = sequence_file
         self.magnet_range = magnet_range
-
-        if bpm_range is None:
-            bpm_range = magnet_range
-        self.bpm_range = bpm_range
+        self.bpm_range = bpm_range if bpm_range is not None else magnet_range
         self.bpm_pattern = bpm_pattern
 
-        if discard_mad_output:
-            kwargs["stdout"] = "/dev/null"
-            kwargs["redirect_stderr"] = True
-        self.mad = MAD(**kwargs)
-
-        # Type hints for attributes
+        # Type hints for attributes set during initialization
         self.nbpms: int
         self.knob_names: list[str]
         self.elem_spos: list[float]
 
-        self._load_sequence()
+        # Perform automatic setup using base class methods
+        self.load_sequence(sequence_file, SEQ_NAME)
+        self.setup_beam(BEAM_ENERGY)
 
+        # Set MAD variables for ranges and patterns
+        self.mad["magnet_range"] = self.magnet_range
+        self.mad["bpm_range"] = self.bpm_range
+        self.mad["bpm_pattern"] = self.bpm_pattern
+
+        # Setup optimization-specific functionality
         self.nbpms = self.count_bpms(self.bpm_range)
         self._observe_bpms()
-        self._set_correctors(use_real_strengths)
+        if opt_settings.only_energy:
+            self._set_correctors(use_real_strengths)
         self._set_tune_knobs(use_real_strengths)
 
         if opt_settings is not None:
@@ -130,19 +139,6 @@ class MadInterface:
             return value
         return value + rng.normal(0, 1e-4 * abs(value))
 
-    def _load_sequence(self) -> None:
-        """Load the sequence and count BPMs in the specified range."""
-        self.mad.send(f'MADX:load("{self.sequence_file}")')
-        self.mad["magnet_range"] = self.magnet_range
-        self.mad["bpm_range"] = self.bpm_range
-        self.mad["bpm_pattern"] = self.bpm_pattern
-
-        self.mad.send(f"loaded_sequence = MADX.{SEQ_NAME}")
-        self.mad.send(
-            f"loaded_sequence.beam = beam {{ particle = 'proton', energy = {BEAM_ENERGY} }}"
-        )
-        LOGGER.info(f"Loaded sequence: {self.sequence_file}")
-
     def count_bpms(self, bpm_range) -> None:
         """Count the number of BPM elements in the specified range."""
         self.mad.send(COUNT_BPMS_MAD.format(bpm_range=bpm_range))
@@ -152,8 +148,7 @@ class MadInterface:
 
     def _observe_bpms(self) -> None:
         """Set up the MAD-NG session to observe BPMs."""
-        self.mad.send(OBSERVE_BPMS_MAD)
-        assert self.mad.recv(), "Failed to set up BPM observation"
+        self.observe_elements(self.bpm_pattern)
         LOGGER.info(f"Set up observation for BPMs matching pattern: {self.bpm_pattern}")
 
     def _set_correctors(self, use_real_strengths: bool | str) -> None:
@@ -164,13 +159,13 @@ class MadInterface:
         if use_real_strengths is False:
             LOGGER.info("Skipping setting correctors as use_real_strengths is False")
             return
-        if use_real_strengths == "noisy":
-            LOGGER.info(
-                "Adding noise to corrector strengths as use_real_strengths is 'noisy'"
-            )
-            rng = np.random.default_rng(seed=43)
-        else:
-            rng = None
+        # if use_real_strengths == "noisy":
+        #     LOGGER.info(
+        #         "Adding noise to corrector strengths as use_real_strengths is 'noisy'"
+        #     )
+        #     rng = np.random.default_rng(seed=43)
+        # else:
+        #     rng = None
         corrector_table = tfs.read(CORRECTOR_STRENGTHS)
 
         # Filter out monitor elements from the corrector table
@@ -183,13 +178,7 @@ class MadInterface:
         )
 
         # Apply corrector strengths for non-zero correctors only
-        for _, row in corrector_table[nonzero].iterrows():
-            hkick_with_noise = self._apply_noise(row["hkick"], rng)
-            vkick_with_noise = self._apply_noise(row["vkick"], rng)
-            self.mad.send(f"loaded_sequence['{row['ename']}'].hkick = py:recv()")
-            self.mad.send(hkick_with_noise)
-            self.mad.send(f"loaded_sequence['{row['ename']}'].vkick = py:recv()")
-            self.mad.send(vkick_with_noise)
+        self.apply_corrector_strengths(corrector_table[nonzero])
 
     def _set_tune_knobs(self, use_real_strengths: bool | str) -> None:
         """Load and set predefined tune knobs from file."""
@@ -268,27 +257,3 @@ class MadInterface:
                 self.mad.send(f"MADX['{name}'] = {value}")
             else:
                 LOGGER.warning(f"Unknown knob '{name}' ignored")
-
-    def run_twiss(self) -> tfs.TfsDataFrame:
-        """Run TWISS calculation on the loaded sequence and return the results."""
-        self.mad.send("""
-tws = twiss{sequence=loaded_sequence, observe=1}
-""")
-        return self.mad.tws.to_df().set_index("name")
-
-    def pt2dp(self, pt: float) -> float:
-        """Convert transverse momentum to delta p/p."""
-        self.mad.send("py:send(MAD.gphys.pt2dp(py:recv(), loaded_sequence.beam.beta))")
-        self.mad.send(pt)
-        return self.mad.recv()
-
-    def dp2pt(self, dp: float) -> float:
-        """Convert delta p/p to transverse momentum."""
-        self.mad.send("py:send(MAD.gphys.dp2pt(py:recv(), loaded_sequence.beam.beta))")
-        self.mad.send(dp)
-        return self.mad.recv()
-
-    def __del__(self) -> None:
-        """Clean up the MAD-NG session on object destruction."""
-        if hasattr(self, "mad"):
-            del self.mad

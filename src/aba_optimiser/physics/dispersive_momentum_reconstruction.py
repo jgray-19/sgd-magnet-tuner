@@ -31,7 +31,7 @@ from aba_optimiser.config import (
     POSITION_STD_DEV,
     SEQUENCE_FILE,
 )
-from aba_optimiser.mad.mad_interface import MadInterface
+from aba_optimiser.mad.mad_interface import OptimizationMadInterface
 from aba_optimiser.physics.bpm_phases import next_bpm_to_pi_2, prev_bpm_to_pi_2
 from aba_optimiser.physics.dpp_calculation import get_mean_dpp
 
@@ -157,7 +157,7 @@ def _ensure_twiss(tws: tfs.TfsDataFrame | None, info: bool) -> tfs.TfsDataFrame:
     """
     if tws is not None:
         return tws
-    mad = MadInterface(
+    mad = OptimizationMadInterface(
         SEQUENCE_FILE, MAGNET_RANGE, bpm_pattern="BPM", use_real_strengths=False
     )
     tws = mad.run_twiss()

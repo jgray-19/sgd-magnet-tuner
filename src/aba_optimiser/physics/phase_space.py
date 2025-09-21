@@ -11,7 +11,7 @@ from aba_optimiser.config import (
     SEQUENCE_FILE,
     module_path,
 )
-from aba_optimiser.mad.mad_interface import MadInterface
+from aba_optimiser.mad.mad_interface import OptimizationMadInterface
 
 LOGGER = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class PhaseSpaceDiagnostics:
             self.betay = beta_phase_y.loc[self.bpm, "BETY"]
             self.alfay = beta_phase_y.loc[self.bpm, "ALFY"]
         else:
-            mad_iface = MadInterface(
+            mad_iface = OptimizationMadInterface(
                 SEQUENCE_FILE,
                 MAGNET_RANGE,
                 bpm_pattern="BPM",
