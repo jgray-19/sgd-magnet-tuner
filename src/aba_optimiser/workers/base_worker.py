@@ -9,7 +9,6 @@ import numpy as np
 
 from aba_optimiser.config import (
     HESSIAN_SCRIPT,
-    MAGNET_RANGE,
     SEQUENCE_FILE,
     TRACK_INIT,
     TRACK_NO_KNOBS_INIT,
@@ -45,6 +44,7 @@ class BaseWorker(Process, ABC):
         y_weights: np.ndarray,
         init_coords: np.ndarray,
         start_bpm: str,
+        magnet_range: str,
         init_pts: np.ndarray,
         opt_settings: OptSettings,
     ) -> None:
@@ -78,6 +78,7 @@ class BaseWorker(Process, ABC):
         self.batch_size = len(self.init_coords[0])
 
         self.start_bpm = start_bpm
+        self.magnet_range = magnet_range
         self.num_batches = num_batches
         self.opt_settings = opt_settings
 
@@ -92,11 +93,13 @@ class BaseWorker(Process, ABC):
 
     @staticmethod
     @abstractmethod
-    def get_bpm_range(start_bpm) -> str:
+    def get_bpm_range(start_bpm: str, end_bpm: str) -> str:
         """Get the magnet range specific to the worker type."""
         pass
 
-    def get_n_data_points(self, nbpms: int) -> int:
+    @staticmethod
+    @abstractmethod
+    def get_n_data_points(nbpms: int) -> int:
         """Get the number of data points for comparison."""
         pass
 
@@ -173,12 +176,12 @@ end
         LOGGER.debug(f"Worker {self.worker_id}: Setting up MAD interface")
 
         # Get magnet range specific to worker type
-        bpm_range = self.get_bpm_range(self.start_bpm)
+        bpm_range = self.get_bpm_range(self.start_bpm, self.magnet_range)
         LOGGER.debug(f"Worker {self.worker_id}: Using BPM range {bpm_range}")
 
         mad_iface = OptimizationMadInterface(
             SEQUENCE_FILE,
-            magnet_range=MAGNET_RANGE,
+            magnet_range=self.magnet_range,
             bpm_range=bpm_range,
             opt_settings=self.opt_settings,
             use_real_strengths="noisy" if USE_NOISY_DATA else True,
@@ -298,6 +301,9 @@ end
         # gx: Sum over particles and data points of (derivatives * diffs). Shape: (n_knobs + 1,)
         gx = np.einsum("pkm,pm->k", dx_dk, position_diffs_x)
         gy = np.einsum("pkm,pm->k", dy_dk, position_diffs_y)
+
+        # gx[-1] = 0
+        # gy[-1] = 0
 
         # Combine gradients and compute loss (factor of 2 for derivative of squared error)
         grad = 2.0 * (gx + gy)  # Shape: (n_knobs + 1,)

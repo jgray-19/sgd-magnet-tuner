@@ -21,7 +21,8 @@ class RingWorker(BaseWorker):
     Worker that runs full ring tracking simulations.
     """
 
-    def get_n_data_points(self, nbpms: int) -> int:
+    @staticmethod
+    def get_n_data_points(nbpms: int) -> int:
         """Get the number of data points for ring mode."""
         return nbpms * N_COMPARE_TURNS
 
@@ -60,6 +61,6 @@ MAD.element.marker '{marker_name}' {{ at=-1e-10, from="{bpm_name}" }} ! 1e-12 is
         ]
 
     @staticmethod
-    def get_bpm_range(start_bpm) -> str:
+    def get_bpm_range(start_bpm: str, end_bpm: str) -> str:
         """Get the magnet range for ring mode."""
         return "$start/$end"

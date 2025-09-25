@@ -14,8 +14,10 @@ import numpy as np
 from tensorboardX import SummaryWriter
 
 from aba_optimiser.config import (
+    BPM_START_POINTS,
     MACHINE_DELTAP,
-    TRUE_STRENGTHS,
+    MAGNET_RANGE,
+    TRUE_STRENGTHS_FILE,
 )
 from aba_optimiser.io.utils import read_knobs
 from aba_optimiser.training.configuration_manager import ConfigurationManager
@@ -44,6 +46,9 @@ class Controller:
         opt_settings: OptSettings,
         show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
+        machine_deltap: float = MACHINE_DELTAP,
+        magnet_range: str = MAGNET_RANGE,
+        bpm_start_points: list[str] = BPM_START_POINTS,
     ):
         """Initialise the controller with all required managers."""
 
@@ -55,7 +60,9 @@ class Controller:
         self.opt_settings = opt_settings
 
         # Initialise managers
-        self.config_manager = ConfigurationManager(opt_settings)
+        self.config_manager = ConfigurationManager(
+            opt_settings, magnet_range, bpm_start_points
+        )
         self.config_manager.setup_mad_interface()
         self.config_manager.determine_worker_and_bpms()
 
@@ -68,17 +75,22 @@ class Controller:
 
         # Determine the exact set of turns needed and load filtered data
         needed_turns = {t for batch in self.data_manager.turn_batches for t in batch}
+        needed_turns.add(max(needed_turns) + 1)  # In case we go over the last turn
         self.data_manager.load_track_data(
             needed_turns=needed_turns,
             optimise_sextupoles=opt_settings.optimise_sextupoles,
         )
 
         self.worker_manager = WorkerManager(
-            self.config_manager.Worker, self.config_manager.calculate_n_data_points()
+            self.config_manager.Worker,
+            self.config_manager.calculate_n_data_points(),
+            magnet_range=magnet_range,
+            # Assume the start bpm has is largest vertical kick
+            ybpm=magnet_range.split("/")[0],
         )
 
-        true_strengths = read_knobs(TRUE_STRENGTHS)
-        true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(MACHINE_DELTAP)
+        true_strengths = read_knobs(TRUE_STRENGTHS_FILE)
+        true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(machine_deltap)
 
         # Initialise knobs
         if initial_knob_strengths is not None and "deltap" in initial_knob_strengths:
@@ -108,7 +120,7 @@ class Controller:
             opt_settings=opt_settings,
         )
 
-    def run(self) -> dict[str, float]:
+    def run(self) -> tuple[dict[str, float], dict[str, float]]:
         """Execute the optimisation process."""
         run_start = time.time()
         writer = self._setup_logging()
@@ -142,9 +154,10 @@ class Controller:
             self.final_knobs = self.initial_knobs
         finally:
             total_hessian = self.worker_manager.terminate_workers()
-        self._save_results(total_hessian, writer)
+        uncertainties = self._save_results(total_hessian, writer)
+        uncertainties = dict(zip(self.final_knobs.keys(), uncertainties))
 
-        return self.final_knobs
+        return self.final_knobs, uncertainties
 
     def _setup_logging(self) -> SummaryWriter:
         """Sets up TensorBoard logging."""
@@ -173,7 +186,7 @@ class Controller:
     ) -> None:
         """Clean up resources and save final results."""
         # Calculate uncertainties
-        cov = np.linalg.inv(total_hessian)
+        cov = np.linalg.inv(total_hessian + 1e-12 * np.eye(total_hessian.shape[0]))
         uncertainties = np.sqrt(np.diag(cov))
 
         # Close logging and save results
@@ -194,3 +207,4 @@ class Controller:
         )
 
         LOGGER.info("Optimisation complete.")
+        return uncertainties

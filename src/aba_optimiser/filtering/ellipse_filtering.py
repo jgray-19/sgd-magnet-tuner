@@ -28,7 +28,6 @@ def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
     data.set_index(["turn", "name"], inplace=True)
     mad_iface = OptimizationMadInterface(
         SEQUENCE_FILE,
-        "$start/$end",
         use_real_strengths=False,
         bpm_pattern="BPM",
     )

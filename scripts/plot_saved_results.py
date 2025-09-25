@@ -4,7 +4,7 @@ from aba_optimiser.config import (
     MAGNET_RANGE,
     OUTPUT_KNOBS,
     SEQUENCE_FILE,
-    TRUE_STRENGTHS,
+    TRUE_STRENGTHS_FILE,
 )
 from aba_optimiser.io.utils import read_knobs, read_results
 from aba_optimiser.mad.mad_interface import OptimizationMadInterface
@@ -22,7 +22,7 @@ results = ResultManager(knob_names, mad_iface.elem_spos)
 knobs_from_file = dict(zip(knob_names, final_vals))
 
 
-true_strengths = read_knobs(TRUE_STRENGTHS)
+true_strengths = read_knobs(TRUE_STRENGTHS_FILE)
 true_vals = np.array([true_strengths[k] for k in knob_names])
 
 

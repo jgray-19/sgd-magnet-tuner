@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 def generate_action_angle_coordinates(
-    num_tracks: int, action_range: tuple[float, float], num_actions: int = None
+    num_tracks: int,
+    action_range: tuple[float, float],
 ) -> tuple[list[float], list[float]]:
     """
     Generate action-angle coordinate pairs for tracking.
@@ -30,29 +31,17 @@ def generate_action_angle_coordinates(
         num_actions: Number of action values (optional, calculated if not provided)
 
     Returns:
-        Tuple of (action_list, angle_list)
+        Tuple of (action_list, angle_list) where both lists have length num_tracks
     """
-    if num_actions is None:
-        num_actions = max(1, num_tracks // 5)
-
-    num_angles = max(1, num_tracks // num_actions)
-
     # Ensure we get exactly the requested number of tracks
-    actual_tracks = num_actions * num_angles
-    if actual_tracks != num_tracks:
-        logger.warning(
-            f"Requested {num_tracks} tracks, but action-angle grid gives {actual_tracks} tracks"
-        )
-
-    action_list = np.linspace(action_range[0], action_range[1], num=num_actions)
-    angle_list = np.linspace(0, 2 * np.pi, num=num_angles, endpoint=False)
+    action_values = np.linspace(action_range[0], action_range[1], num=num_tracks)
+    angle_values = np.linspace(0.1, 2 * np.pi, num=num_tracks, endpoint=False)
 
     logger.info(
-        f"Generated {len(action_list)} action values and {len(angle_list)} angle values"
+        f"Generated {len(action_values)} action-angle pairs for {num_tracks} tracks"
     )
-    logger.info(f"Total tracks to process: {len(action_list) * len(angle_list)}")
 
-    return action_list.tolist(), angle_list.tolist()
+    return action_values.tolist(), angle_values.tolist()
 
 
 def create_initial_conditions(
@@ -68,19 +57,17 @@ def create_initial_conditions(
 
     Args:
         ntrk: Track number
-        action_list: List of action values
-        angle_list: List of angle values
+        action_list: List of action values (same length as angle_list)
+        angle_list: List of angle values (same length as action_list)
         twiss_data: Twiss parameters at starting point
         kick_both_planes: Whether to kick both x and y planes
 
     Returns:
         Dictionary with initial coordinates (x, px, y, py, t, pt)
     """
-    # Determine action and angle indices
-    idx_action = ntrk // len(angle_list)
-    idx_angle = ntrk % len(angle_list)
-    action = action_list[idx_action]
-    angle = angle_list[idx_angle]
+    # Direct indexing since action_list and angle_list have the same length
+    action = action_list[ntrk]
+    angle = angle_list[ntrk]
 
     # Get beta and alpha functions at starting point (first BPM)
     first_bpm = starting_bpm
@@ -158,8 +145,13 @@ def validate_coordinate_generation(
     Raises:
         AssertionError: If validation fails
     """
-    actual_tracks = len(action_list) * len(angle_list)
-    assert actual_tracks == num_tracks, (
-        f"Expected {num_tracks} tracks, got {actual_tracks}."
+    assert len(action_list) == num_tracks, (
+        f"Expected {num_tracks} action values, got {len(action_list)}."
+    )
+    assert len(angle_list) == num_tracks, (
+        f"Expected {num_tracks} angle values, got {len(angle_list)}."
+    )
+    assert len(action_list) == len(angle_list), (
+        f"Action and angle lists must have the same length, got {len(action_list)} and {len(angle_list)}."
     )
     return True

@@ -154,7 +154,7 @@ def initialise_mad_batch(
     for _ in range(batch_start, batch_end):
         # Initialize new tracking interface
         interface = TrackingMadInterface(
-            # debug=False, stdout="/dev/null", redirect_stderr=True
+            debug=False, stdout="/dev/null", redirect_stderr=True
         )
 
         # Load sequence and setup beam
@@ -234,8 +234,8 @@ def start_tracking_batch(
             nturns=flattop_turns,
         )
 
-        action = action_list[ntrk // len(angle_list)]
-        angle = angle_list[ntrk % len(angle_list)]
+        action = action_list[ntrk]
+        angle = angle_list[ntrk]
         logger.debug(
             f"Track {ntrk}: Started with action={action:.2e}, angle={angle:.3f}"
         )

@@ -72,9 +72,9 @@ class OptimizationMadInterface(BaseMadInterface):
     def __init__(
         self,
         sequence_file: str,
-        magnet_range: str,
+        magnet_range: str = "$start/$end",
         opt_settings: OptSettings = None,
-        bpm_range: str = None,
+        bpm_range: str | None = None,
         discard_mad_output: bool = True,
         bpm_pattern: str = BPM_PATTERN,
         use_real_strengths: bool = True,
@@ -124,8 +124,8 @@ class OptimizationMadInterface(BaseMadInterface):
         # Setup optimization-specific functionality
         self.nbpms = self.count_bpms(self.bpm_range)
         self._observe_bpms()
-        if opt_settings.only_energy:
-            self._set_correctors(use_real_strengths)
+        # if opt_settings.only_energy:
+        self._set_correctors(use_real_strengths)
         self._set_tune_knobs(use_real_strengths)
 
         if opt_settings is not None:
@@ -206,6 +206,7 @@ class OptimizationMadInterface(BaseMadInterface):
         if not opt_settings.only_energy:
             conditions = []
             for kind, attr, pattern, flag in [
+                # ("sbend", "k0", "MB%.", opt_settings.only_energy),
                 ("quadrupole", "k1", "MQ%.", opt_settings.optimise_quadrupoles),
                 ("sextupole", "k2", "MS%.", opt_settings.optimise_sextupoles),
             ]:

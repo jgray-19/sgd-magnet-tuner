@@ -17,8 +17,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from aba_optimiser.filtering.svd import svd_clean_measurements
-from aba_optimiser.physics.dispersive_momentum_reconstruction import calculate_pz
-from aba_optimiser.physics.transverse_momentum import inject_noise_xy
+
+# from aba_optimiser.physics.dispersive_momentum_reconstruction import calculate_pz
+from aba_optimiser.physics.transverse_momentum import calculate_pz, inject_noise_xy
 
 from .coordinates import get_kick_plane_category
 
@@ -119,7 +120,7 @@ def process_track_with_queue(
         # del noise_table
 
         noisy_df = true_df.copy()
-        inject_noise_xy(noisy_df, true_df, np.random.default_rng(ntrk), [])
+        inject_noise_xy(noisy_df, true_df, np.random.default_rng(), [])
 
         # Filter the noisy data and enqueue cleaned data
         cleaned_df = svd_clean_measurements(noisy_df)

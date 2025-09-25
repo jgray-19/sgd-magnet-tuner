@@ -40,7 +40,6 @@ def _compute_q_for_bpm(
     # Each parallel process needs its own MAD-X interface
     mad_iface = OptimizationMadInterface(
         SEQUENCE_FILE,
-        "$start/$end",
         bpm_pattern="BPM",
         discard_mad_output=True,
     )
@@ -116,7 +115,6 @@ class BPMKalmanFilter:
         # Initialize MAD-X interface
         self.mad_iface = OptimizationMadInterface(
             SEQUENCE_FILE,
-            "$start/$end",
             bpm_pattern="BPM",
             # discard_mad_output=False,
             # debug=True,

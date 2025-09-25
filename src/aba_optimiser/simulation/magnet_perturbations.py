@@ -38,15 +38,17 @@ def apply_magnet_perturbations(
     logger.info("Scanning sequence for quadrupoles and sextupoles")
     magnet_strengths = {}
     true_strengths = {}
+    num_bends = 0
     num_quads = 0
     num_sexts = 0
 
     for elm in mad.loaded_sequence:
         # Dipoles (currently commented out in original)
-        # if elm.kind == "sbend" and elm.k0 != 0 and elm.name[:3] == "MB.":
-        #     elm.k0 = elm.k0 + rng.normal(0, abs(elm.k0 * 1e-4))
-        #     magnet_strengths[elm.name + ".k0"] = elm.k0
-        #     true_strengths[elm.name] = elm.k0
+        if elm.kind == "sbend" and elm.k0 != 0 and elm.name[:3] == "MB.":
+            elm.k0 = elm.k0 + rng.normal(0, abs(elm.k0 * 1e-4))
+            magnet_strengths[elm.name + ".k0"] = elm.k0
+            true_strengths[elm.name] = elm.k0
+            num_bends += 1
 
         # Quadrupoles
         if elm.kind == "quadrupole" and elm.k1 != 0 and elm.name[:3] == "MQ.":
@@ -62,7 +64,13 @@ def apply_magnet_perturbations(
             true_strengths[elm.name] = elm.k2
             num_sexts += 1
 
-    logger.info(f"Found {num_quads} quadrupoles and {num_sexts} sextupoles")
+    logger.info(
+        f"Found {num_bends} dipoles, {num_quads} quadrupoles, {num_sexts} sextupoles"
+    )
+    if num_bends > 0:
+        logger.info(
+            f"Applied relative K0 noise with std dev: 1e-4 to {num_bends} dipoles"
+        )
 
     if num_quads > 0:
         logger.info(

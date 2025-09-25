@@ -20,8 +20,8 @@ from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 from aba_optimiser.plotting.utils import setup_scientific_formatting
 
 # Extract BPM names
-start_bpm = "BPM.10R4.B1"
-other_bpm = "BPM.11R4.B1"
+start_bpm = "BPM.10R1.B1"
+other_bpm = "BPM.11R1.B1"
 
 # Load non-noisy data
 init_coords = pd.read_parquet(NO_NOISE_FILE).set_index("turn")

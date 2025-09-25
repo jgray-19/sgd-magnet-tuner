@@ -20,7 +20,7 @@ from aba_optimiser.config import (
     NUM_WORKERS,
     RAMP_UP_TURNS,
     SEQUENCE_FILE,
-    TRUE_STRENGTHS,
+    TRUE_STRENGTHS_FILE,
 )
 from aba_optimiser.dataframes.utils import (
     filter_out_marker,
@@ -57,7 +57,7 @@ uncertainty_list = []
 num_files_list = [10, 40, 1e2, 3e2, 1e3, 3e3, 1e4, 3e4, 6e4]
 num_files_list = [int(num_files) for num_files in num_files_list]
 
-true_strengths = read_knobs(TRUE_STRENGTHS)
+true_strengths = read_knobs(TRUE_STRENGTHS_FILE)
 
 for num_files in num_files_list:
     assert num_files <= FLATTOP_TURNS, (

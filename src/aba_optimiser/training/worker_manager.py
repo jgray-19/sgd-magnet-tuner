@@ -25,7 +25,6 @@ from aba_optimiser.config import (
     BEAM_ENERGY,
     DELTAP,
     DIFFERENT_TURNS_FOR_START_BPM,
-    MAGNET_RANGE,
     PARTICLE_MASS,
 )
 from aba_optimiser.physics.deltap import dp2pt
@@ -54,7 +53,13 @@ class WorkerManager:
     # Used to convert energy type strings ("plus", "minus", "zero") to numerical dpp values
     ENERGY_DPP_MAP = {"plus": DELTAP, "minus": -DELTAP, "zero": 0.0}
 
-    def __init__(self, worker_class: type[BaseWorker], n_data_points: dict[str, int]):
+    def __init__(
+        self,
+        worker_class: type[BaseWorker],
+        n_data_points: dict[str, int],
+        ybpm: str,
+        magnet_range: str,
+    ):
         """Initialize the WorkerManager.
 
         Args:
@@ -65,6 +70,10 @@ class WorkerManager:
         self.n_data_points = n_data_points
         self.parent_conns: list[Connection] = []
         self.workers: list[mp.Process] = []
+        self.y_bpm = (
+            ybpm  # Name at which the vertical kick is highest for the start points
+        )
+        self.magnet_range = magnet_range
 
     def _compute_pt(self, energy_type: str) -> float:
         """Compute transverse momentum based on energy type.
@@ -238,9 +247,7 @@ class WorkerManager:
         y_weight_arrays = []
         init_coord_arrays = []
         pt_values = []
-
-        y_bpm = MAGNET_RANGE.split("/")[0]  # Get the second BPM in the
-        bpm_kick_plane = "y" if start_bpm == y_bpm else "x"
+        bpm_kick_plane = "y" if start_bpm == self.y_bpm else "x"
         # Process each turn in the batch
         for turn in turn_batch:
             # Get the energy type for this turn (determines which DataFrame to use)
@@ -286,6 +293,11 @@ class WorkerManager:
             )
 
         # Stack all arrays into 3D arrays (turn, observation_turn, data_point)
+        shape = x_arrays[0].shape
+        for i, array in enumerate(x_arrays):
+            if array.shape != shape:
+                print(i, shape, array.shape, turn_batch[i])
+        # raise ValueError("Inconsistent data shapes in worker payload creation")
         x_comp = np.stack(x_arrays, axis=0)
         y_comp = np.stack(y_arrays, axis=0)
         x_weights = np.stack(x_weight_arrays, axis=0)
@@ -338,6 +350,7 @@ class WorkerManager:
                 child,  # Connection for communication
                 **payload,  # Unpack the payload dictionary into keyword arguments
                 opt_settings=opt_settings,  # Pass the optimisation settings
+                magnet_range=self.magnet_range,
             )
             w.start()  # Start the worker process
 

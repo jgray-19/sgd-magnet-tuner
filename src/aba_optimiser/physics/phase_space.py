@@ -7,7 +7,6 @@ import numpy as np
 import tfs
 
 from aba_optimiser.config import (
-    MAGNET_RANGE,
     SEQUENCE_FILE,
     module_path,
 )
@@ -77,7 +76,6 @@ class PhaseSpaceDiagnostics:
         else:
             mad_iface = OptimizationMadInterface(
                 SEQUENCE_FILE,
-                MAGNET_RANGE,
                 bpm_pattern="BPM",
                 use_real_strengths=False,
             )

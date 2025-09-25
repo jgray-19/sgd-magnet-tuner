@@ -28,8 +28,8 @@ if __name__ == "__main__":
         show_plots=True,
         # initial_knob_strengths=energy_knobs
     )
-    quad_knobs = quad_controller.run()
-    del quad_controller
+    quad_knobs, _ = quad_controller.run()
+    del quad_controller, _
 
     # quad_opts_with_sextupole_data = dataclasses.replace(
     #     QUAD_OPT_SETTINGS, use_sextupole_data=True

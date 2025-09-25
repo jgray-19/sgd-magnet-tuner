@@ -8,8 +8,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from aba_optimiser.config import (
-    BPM_START_POINTS,
-    MAGNET_RANGE,
     RUN_ARC_BY_ARC,
     SEQUENCE_FILE,
     USE_NOISY_DATA,
@@ -45,24 +43,28 @@ def circular_far_samples(
 class ConfigurationManager:
     """Manages configuration and setup for the optimisation process."""
 
-    def __init__(self, opt_settings: OptSettings):
+    def __init__(
+        self, opt_settings: OptSettings, magnet_range: str, bpm_start_points: list[str]
+    ):
         self.mad_iface: OptimizationMadInterface | None = None
         self.knob_names: list[str] = []
         self.elem_spos: np.ndarray = np.array([])
         self.all_bpms: np.ndarray = np.array([])
-        self.start_bpms: list[str] = []
         self.Worker: type[BaseWorker] | None = None
         self.initial_strengths: np.ndarray = np.array([])
 
+        self.start_bpms: list[str] = bpm_start_points
+        self.magnet_range = magnet_range
         self.global_config = opt_settings
 
     def setup_mad_interface(self) -> None:
         """Initialise the MAD-NG interface and get basic model parameters."""
         self.mad_iface = OptimizationMadInterface(
             SEQUENCE_FILE,
-            MAGNET_RANGE,
+            self.magnet_range,
             opt_settings=self.global_config,
             use_real_strengths="noisy" if USE_NOISY_DATA else True,
+            # discard_mad_output=False,
         )
         self.knob_names = self.mad_iface.knob_names
 
@@ -77,10 +79,9 @@ class ConfigurationManager:
             LOGGER.warning(
                 "Arc by arc chosen, ignoring N_RUN_TURNS, OBSERVE_TURNS_FROM, N_COMPARE_TURNS"
             )
-            for bpm in BPM_START_POINTS:
+            for bpm in self.start_bpms:
                 if bpm not in self.all_bpms:
                     raise ValueError(f"BPM {bpm} not found in the sequence.")
-            self.start_bpms = BPM_START_POINTS
             self.Worker = ArcByArcWorker
         else:
             LOGGER.warning(
@@ -112,17 +113,18 @@ class ConfigurationManager:
         self.initial_strengths = initial_strengths
         current_knobs = dict(zip(self.knob_names, initial_strengths))
         # Restrict true strengths to knobs we actually have in model
-        if RUN_ARC_BY_ARC:
-            filtered_true_strengths = {
-                knob: true_strengths[knob] for knob in self.knob_names
-            }
-        else:
-            missing = set(self.knob_names) ^ set(true_strengths)
-            if missing:
-                raise ValueError(
-                    f"Mismatch between model knobs and true strengths: {missing}"
-                )
-            filtered_true_strengths = true_strengths
+        # if RUN_ARC_BY_ARC:
+        filtered_true_strengths = {
+            knob: true_strengths[knob] for knob in self.knob_names
+        }
+        print(self.knob_names)
+        # else:
+        #     missing = set(self.knob_names) ^ set(true_strengths)
+        #     if missing:
+        #         raise ValueError(
+        #             f"Mismatch between model knobs and true strengths: {missing}"
+        #         )
+        #     filtered_true_strengths = true_strengths
 
         return current_knobs, filtered_true_strengths
 
@@ -133,7 +135,7 @@ class ConfigurationManager:
 
         n_data_points = {}
         for start_bpm in self.start_bpms:
-            bpm_range = self.Worker.get_bpm_range(start_bpm)
+            bpm_range = self.Worker.get_bpm_range(start_bpm, self.magnet_range)
             n_bpms = self.mad_iface.count_bpms(bpm_range)
             n_data_points[start_bpm] = self.Worker.get_n_data_points(n_bpms)
         return n_data_points

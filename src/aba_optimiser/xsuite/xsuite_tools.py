@@ -24,6 +24,7 @@ from xtrack.mad_parser.loader import load_madx_lattice
 from aba_optimiser.config import (
     BEAM_ENERGY,
     BEAM_NUMBER,
+    SEQ_NAME,
     SEQUENCE_FILE,
     XSUITE_JSON,
 )
@@ -42,10 +43,6 @@ def create_xsuite_environment(rerun_madx: bool = False) -> xt.Environment:
     Run MADX to create a saved sequence then load this into xsuite.
 
     Args:
-        model_dir: Directory containing the model files
-        sequence: Sequence name (e.g., "LHCB1")
-        beam: Beam number (1 or 2)
-        energy: Beam energy in GeV
         rerun_madx: Whether to force re-running MADX
 
     Returns:
@@ -62,7 +59,7 @@ def create_xsuite_environment(rerun_madx: bool = False) -> xt.Environment:
         logging.info(f"Loading existing xsuite environment from {XSUITE_JSON}")
         env = xt.Environment.from_json(XSUITE_JSON)
 
-    env[f"lhcb{BEAM_NUMBER}"].particle_ref = xt.Particles(
+    env[SEQ_NAME].particle_ref = xt.Particles(
         mass=xp.PROTON_MASS_EV,
         energy0=BEAM_ENERGY * 1e9,
     )
@@ -402,7 +399,7 @@ def start_tracking_xsuite_batch(
             angle_list,
             twiss_data,
             kick_both_planes,
-            starting_bpm=env[f"lhcb{BEAM_NUMBER}"].element_names[0].upper(),
+            starting_bpm=env[SEQ_NAME].element_names[0].upper(),
         )
         x_list.append(x0_data["x"])
         px_list.append(x0_data["px"])
@@ -412,7 +409,7 @@ def start_tracking_xsuite_batch(
 
     ctx = Context(32)
 
-    particles = env[f"lhcb{BEAM_NUMBER}"].build_particles(
+    particles = env[SEQ_NAME].build_particles(
         _context=ctx,
         x=x_list,
         px=px_list,
@@ -422,7 +419,7 @@ def start_tracking_xsuite_batch(
     )
 
     insert_particle_monitors_at_pattern(
-        env[f"lhcb{BEAM_NUMBER}"],
+        env[SEQ_NAME],
         pattern="bpm.*[^k]",
         num_turns=flattop_turns,
         num_particles=len(deltas),
@@ -431,11 +428,11 @@ def start_tracking_xsuite_batch(
 
     # Run tracking using interface
     run_tracking(
-        line=env[f"lhcb{BEAM_NUMBER}"],
+        line=env[SEQ_NAME],
         particles=particles,
         nturns=flattop_turns,
     )
-    return env[f"lhcb{BEAM_NUMBER}"]
+    return env[SEQ_NAME]
 
 
 def line_to_dataframes(tracked_line: xt.Line) -> list[pd.DataFrame]:
@@ -516,3 +513,102 @@ def line_to_dataframes(tracked_line: xt.Line) -> list[pd.DataFrame]:
         # breakpoint()
         tracking_dataframes.append(tracking_data)
     return tracking_dataframes
+
+
+def random_zero_mean_unit_std_np(n, rng, desired_std=1e-3, max_abs=None):
+    """
+    Generate n random numbers with zero mean and desired standard deviation.
+    Optionally clip the values to [-max_abs, max_abs] if max_abs is not None.
+    """
+    if max_abs is None:
+        x = rng.standard_normal(n)  # noqa: NPY002
+        x -= x.mean()  # mean → 0
+        x *= desired_std / x.std()  # std → desired_std
+        return x.tolist()
+
+    # Ensure all returned values are within [-max_abs, max_abs] after mean subtraction and scaling
+    max_attempts = 100
+    for _ in range(max_attempts):
+        x = rng.standard_normal(n)
+        x -= x.mean()
+        x *= desired_std / x.std()
+        if np.all(np.abs(x) <= max_abs):
+            return x.tolist()
+    raise RuntimeError(
+        f"Could not generate {n} values with zero mean, std={desired_std}, and all |x| <= {max_abs} after {max_attempts} attempts."
+    )
+
+
+def add_phase_errors(line: xt.Line, dpp: float, rng=None):
+    if rng is None:
+        rng = np.random.default_rng()
+    dmux = random_zero_mean_unit_std_np(8, rng, desired_std=3e-2, max_abs=2e-1)
+    dmuy = random_zero_mean_unit_std_np(8, rng, desired_std=3e-2, max_abs=2e-1)
+
+    assert sum(dmux) < 1e-16, "dmux should sum to zero"
+    assert sum(dmuy) < 1e-16, "dmuy should sum to zero"
+
+    pre_shift_tws = line.twiss(method="4d", delta0=dpp)
+    muxs = pre_shift_tws.rows["ip[0-9]*"]["mux"]
+    muys = pre_shift_tws.rows["ip[0-9]*"]["muy"]
+    muxs = np.roll(muxs, -1)
+    muys = np.roll(muys, -1)
+    muxs[-1] += pre_shift_tws.qx
+    muys[-1] += pre_shift_tws.qy
+    starts = [2, 3, 4, 5, 6, 7, 8, 1]
+    ends = [3, 4, 5, 6, 7, 8, 1, 2]
+    for i, arc_start, arc_end in zip(range(8), starts, ends):
+        start_elm = f"ip{arc_start}"
+        end_elm = f"ip{arc_end}"
+
+        a_str = f"a{arc_start}{(arc_end)}"
+        defoc = f"kqd.{a_str}"
+        foc = f"kqf.{a_str}"
+
+        start_defoc = line.env[defoc]
+        start_foc = line.env[foc]
+
+        logging.warning(
+            f"Matching {defoc} and {foc} for beam {BEAM_NUMBER} at {start_elm} to {end_elm}"
+        )
+        logging.warning(f"Starting values, {defoc}: {start_defoc}, {foc}: {start_foc}")
+
+        line.match(
+            start=start_elm,
+            end=end_elm,
+            vary=[
+                xt.Vary(defoc),
+                xt.Vary(foc),
+            ],
+            targets=[
+                xt.TargetSet(mux=muxs[i] + dmux[i], at=end_elm, tol=1e-8),
+                xt.TargetSet(muy=muys[i] + dmuy[i], at=end_elm, tol=1e-8),
+            ],
+            init_at=start_elm,
+            init=pre_shift_tws,
+            method="4d",
+            solve=True,
+            n_steps_max=200,
+        )
+        logging.warning(
+            f"After matching, {defoc}: {line.env[defoc]}, {foc}: {line.env[foc]}"
+        )
+        logging.warning(
+            f"The difference for {defoc}: {line.env[defoc] - start_defoc}, {foc}: {line.env[foc] - start_foc}"
+        )
+        logging.warning(
+            f"The relative difference for {defoc}: {(line.env[defoc] - start_defoc) / start_defoc}, {foc}: {(line.env[foc] - start_foc) / start_foc}"
+        )
+    line.match(
+        vary=[
+            xt.Vary(f"dqx.b{BEAM_NUMBER}_op"),
+            xt.Vary(f"dqy.b{BEAM_NUMBER}_op"),
+        ],
+        targets=[
+            xt.Target("qx", 62.28, tol=1e-8),
+            xt.Target("qy", 60.31, tol=1e-8),
+        ],
+        method="4d",
+        delta0=dpp,
+        n_steps_max=300,
+    )

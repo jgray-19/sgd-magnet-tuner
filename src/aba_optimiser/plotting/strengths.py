@@ -103,26 +103,28 @@ def plot_strengths_comparison(
         width = 0.35
         fig, ax = plt.subplots(figsize=(14, 8))
 
-        # TRUE bars
+        # TRUE as red dotted line
         if plot_real:
             y_true = true_plot
         else:
             with np.errstate(divide="ignore", invalid="ignore"):
                 y_true = np.abs(np.asarray(true_vals) - baseline) / baseline_abs
                 y_true *= 1e4
-        ax.bar(
-            x - width / 2,
+        ax.plot(
+            x,
             y_true,
-            width,
-            color=true_colors,
-            edgecolor="black",
+            color="red",
+            linestyle="--",
+            linewidth=2,
+            marker="o",
+            markersize=5,
             label="True",
         )
 
         # FINAL bars (with optional error bars)
         err = uncertainties_on_plot if show_errorbars else None
         ax.bar(
-            x + width / 2,
+            x,
             final_plot,
             width,
             color=final_colors,
@@ -189,12 +191,20 @@ def plot_strengths_comparison(
             top = np.ceil(np.nanmax(true_diff)) + 0.5
         ax.set_ylim(top=top, bottom=0)
 
-    # Legend: four distinct colors (series × family)
+    # Legend: True as line, Finals as bars
     legend_handles = [
-        Patch(facecolor=MQ_TRUE_COLOR, edgecolor="black", label="MQ • True"),
+        Line2D(
+            [0],
+            [0],
+            color="red",
+            linestyle="--",
+            linewidth=2,
+            marker="o",
+            markersize=5,
+            label="True",
+        ),
         Patch(facecolor=MQ_FINAL_COLOR, edgecolor="black", label="MQ • Final"),
-        Patch(facecolor=MS_TRUE_COLOR, edgecolor="black", label="MS • True"),
-        Patch(facecolor=MS_FINAL_COLOR, edgecolor="black", label="MS • Final"),
+        # Patch(facecolor=MS_FINAL_COLOR, edgecolor="black", label="MS • Final"),
     ]
     ax.legend(handles=legend_handles, title="Series × Family", loc="upper right")
 
@@ -460,39 +470,73 @@ def plot_deltap_comparison(
     """
     if style:
         plt.style.use(style)
+    # Make a wider figure so legend can sit above the bar without overlapping
+    fig, ax = plt.subplots(figsize=(5.5, 6))
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    x = [0]
+    labels = ["Estimated"]
+    values = [estimated_deltap * 1e4]
+    colors = [MQ_FINAL_COLOR]
 
-    x = [0, 1]
-    labels = ["Actual", "Estimated"]
-    values = [actual_deltap * 1e4, estimated_deltap * 1e4]
-    colors = [MQ_TRUE_COLOR, MQ_FINAL_COLOR]
-
-    ax.bar(x, values, color=colors, edgecolor="black", width=0.6)
-
-    # Error bar on final
+    # Bar (estimated) with edge and errorbar
+    ax.bar(x, values, color=colors, edgecolor="black", width=0.55)
     ax.errorbar(
-        1,
-        values[1],
+        0,
+        values[0],
         yerr=uncertainty * 1e4,
-        capsize=5,
+        capsize=6,
         color="black",
         fmt="none",
+        zorder=5,
     )
 
+    # Red dotted line for actual value
+    actual_y = actual_deltap * 1e4
+    ax.axhline(
+        actual_y,
+        color="red",
+        linestyle="--",
+        linewidth=2,
+        label="Actual",
+        zorder=6,
+    )
+
+    # Annotate numeric values above the bar and near the line
+    # Bar annotation
+    bar_top = values[0]
+
+    # X ticks and labels
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
+
     ax.set_ylabel(r"$\Delta p / p$ ($\times 10^{-4}$)")
     ax.grid(axis="y", alpha=0.3)
     setup_scientific_formatting(plane="y")
 
-    # Legend
-    legend_handles = [
-        Patch(facecolor=MQ_TRUE_COLOR, edgecolor="black", label="Initial"),
-        Patch(facecolor=MQ_FINAL_COLOR, edgecolor="black", label="Final"),
-    ]
-    ax.legend(handles=legend_handles, loc="upper right")
+    # Y-limits: include both estimated and actual with a small margin
+    top = max(bar_top, actual_y)
+    margin = max(0.05 * abs(top), 0.002)
+    bottom = min(0, min(bar_top, actual_y) - margin)
+    top = max(0, top + margin)
+    ax.set_ylim(bottom=bottom, top=top)
 
+    # Legend above the plot, centered, with transparent box to avoid hiding bar
+    legend_handles = [
+        Patch(facecolor=MQ_FINAL_COLOR, edgecolor="black", label="Estimated"),
+        Line2D([0], [0], color="red", linestyle="--", linewidth=2, label="Actual"),
+    ]
+    leg = ax.legend(
+        handles=legend_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.12),
+        ncol=2,
+        frameon=True,
+        fancybox=True,
+        shadow=False,
+    )
+    leg.get_frame().set_alpha(0.95)
+
+    # Improve layout and save
     plt.tight_layout()
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
