@@ -13,11 +13,11 @@
 ! var_y: the variance for the y coordinate
 ! vector: a MAD vector object for creating vectors
 ! matrix: a MAD matrix object for creating matrices
-! py: a Python interface object for sending data
+! python: a Python interface object for sending data
 assert(
     loaded_sequence and batch_size and nbpms and observe_from_turn and
     knob_names and coord_names and da_x0_c and knob_monomials and reset_before_tracking and
-    var_x and var_y and vector and matrix and py and n_run_turns and n_compare_turns,
+    var_x and var_y and vector and matrix and python and n_run_turns and n_compare_turns,
     "Missing required variables for tracking"
 )
 
@@ -46,7 +46,8 @@ for batch=1,num_batches do
         save=false,
         observe=observe_from_turn,
         atexit=save_data,
-        range=tracking_range
+        range=tracking_range,
+        dir=sdir,
     }
 
     for part = 1, batch_size do
@@ -57,4 +58,4 @@ for batch=1,num_batches do
         Htot = Htot + (Gx + Gy)
     end
 end
-py:send(Htot, true)
+python:send(Htot, true)

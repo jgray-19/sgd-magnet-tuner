@@ -11,8 +11,10 @@ from aba_optimiser.config import (
     CLEANED_FILE,
     CORRECTOR_STRENGTHS,
     DELTAP,
+    EMINUS_CLEANED_FILE,
     EMINUS_NOISY_FILE,
     EMINUS_NONOISE_FILE,
+    EPLUS_CLEANED_FILE,
     EPLUS_NOISY_FILE,
     EPLUS_NONOISE_FILE,
     NO_NOISE_FILE,
@@ -91,46 +93,59 @@ def create_a34(
     ini_tws = mad_interface.run_twiss()
     ini_tws = select_bpms(ini_tws)
     logger.info(f"Initial twiss completed. Found {len(ini_tws.index)} BPMs")
+    logger.info(f"Initial tunes: Qx={ini_tws.q1}, Qy={ini_tws.q2}")
 
     # Apply magnet perturbations
+    tunes = [0.28, 0.31]
     magnet_strengths, true_strengths = apply_magnet_perturbations(
         mad,
         rel_k1_std_dev,
-        seed=2,
+        seed=43,
         # seed=time.time_ns(),
+    )
+
+    # Perform orbit correction and tune rematching
+    matched_tunes = perform_orbit_correction(
+        mad, 0, tunes[0], tunes[1], CORRECTOR_STRENGTHS
     )
 
     # Run twiss after magnet perturbations and analyze
     changed_tws = run_initial_twiss_analysis(mad_interface.run_twiss(), ini_tws)
 
     # Define parameters
-    tunes = [0.28, 0.31]
     logger.info(f"Target tunes: Qx={62 + tunes[0]}, Qy={60 + tunes[1]}")
 
     # Match tunes before adding deltap
-    matched_tunes = match_tunes(mad, tunes[0], tunes[1])
+    match_tunes(mad, tunes[0], tunes[1], deltap=0)
+
+    # Perform orbit correction and tune rematching
+    matched_tunes = perform_orbit_correction(
+        mad, machine_deltap, tunes[0], tunes[1], CORRECTOR_STRENGTHS
+    )
 
     # Save matched tunes to file
     save_matched_tunes(matched_tunes, TUNE_KNOBS_FILE)
 
-    # Perform orbit correction and tune rematching
-    perform_orbit_correction(
-        mad, machine_deltap, tunes[0], tunes[1], CORRECTOR_STRENGTHS
-    )
-
     # Run final twiss calculation after orbit correction
     logger.info("Running final twiss calculation after orbit correction")
-    changed_tws = mad_interface.run_twiss()
+    changed_tws = mad_interface.run_twiss(deltap=machine_deltap)
     changed_tws = select_bpms(changed_tws)
+    logger.info(f"Final twiss completed. Qx={changed_tws.q1}, Qy={changed_tws.q2}")
 
     # Save true magnet strengths
     save_true_strengths(true_strengths, TRUE_STRENGTHS_FILE)
 
     # Generate action-angle coordinates for tracking
     logger.info("Setting up action-angle tracking parameters")
-    action_range = (4e-9, 8e-9)
+    action_range = (1e-8, 1e-8)
     action_list, angle_list = generate_action_angle_coordinates(
         num_tracks, action_range
+    )
+    logging.info(
+        f"Generated {action_list[0]:.2e} to {action_list[-1]:.2e} m action values"
+    )
+    logging.info(
+        f"Generated {angle_list[0]:.2f} to {angle_list[-1]:.2f} rad angle values"
     )
     validate_coordinate_generation(num_tracks, action_list, angle_list)
 
@@ -145,6 +160,12 @@ def create_a34(
         DELTAP: EPLUS_NOISY_FILE,
     }
 
+    cleaned_files = {
+        -DELTAP: EMINUS_CLEANED_FILE,
+        0: CLEANED_FILE,
+        DELTAP: EPLUS_CLEANED_FILE,
+    }
+
     logger.info("Loading corrector strengths table")
     corrector_table = tfs.read(CORRECTOR_STRENGTHS)
     # Remove all rows that have monitor in the column kind
@@ -152,19 +173,22 @@ def create_a34(
     logger.info(f"Loaded {len(corrector_table)} corrector elements")
 
     # Tracking loop for different deltap values
-    # for input_deltap in [-deltap, 0, deltap]:
-    for input_deltap in [0]:
+    # for input_deltap in [-DELTAP, 0, DELTAP]:
+    for input_deltap in [0.0]:
         logger.info(f"Starting tracking for input_deltap = {input_deltap}")
 
         # Calculate twiss before tracking
         true_deltap = input_deltap + machine_deltap
         logger.info(f"True deltap for this iteration: {true_deltap}")
         df_twiss = mad_interface.run_twiss(deltap=true_deltap, observe=0)
+        logger.info(df_twiss.headers)
         logger.info(f"Pre-tracking twiss completed with {len(df_twiss)} elements")
 
         # Set up writer processes and queues
         writers_and_queues = setup_writer_processes(
-            no_noise_files[input_deltap], noise_files[input_deltap], CLEANED_FILE
+            no_noise_files[input_deltap],
+            noise_files[input_deltap],
+            cleaned_files[input_deltap],
         )
 
         # Progress tracking

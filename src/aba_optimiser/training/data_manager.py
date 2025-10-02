@@ -11,7 +11,7 @@ import pandas as pd
 from aba_optimiser.config import (
     CLEAN_DATA,
     CLEANED_FILE,
-    DIFFERENT_TURNS_FOR_START_BPM,
+    DIFFERENT_TURNS_PER_RANGE,
     EMINUS_NOISY_FILE,
     EMINUS_NONOISE_FILE,
     EPLUS_NOISY_FILE,
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     import numpy as np
 
     from aba_optimiser.config import OptSettings
+    from aba_optimiser.training.configuration_manager import ConfigurationManager
 
 LOGGER = logging.getLogger(__name__)
 cols_to_read = FILE_COLUMNS
@@ -44,15 +45,13 @@ class DataManager:
     def __init__(
         self,
         all_bpms: np.ndarray,
-        start_bpms: list[str],
         opt_settings: OptSettings,
     ):
         self.all_bpms = all_bpms
-        self.start_bpms = start_bpms
         self.opt_settings = opt_settings
 
         # Available global "turn" ids (already include offsets if sextupoles are on)
-        total_files = 3 if opt_settings.optimise_sextupoles else 1
+        total_files = 3 if opt_settings.use_off_energy_data else 1
         self.available_turns: list[int] = list(
             range(1, FLATTOP_TURNS * NUM_TRACKS * total_files + 1)
         )
@@ -110,16 +109,16 @@ class DataManager:
     # ---------- Public API ----------
 
     def load_track_data(
-        self, needed_turns: set[int] | None = None, optimise_sextupoles: bool = False
+        self, needed_turns: set[int] | None = None, use_off_energy_data: bool = False
     ) -> None:
         """Load track data for optimisation and build energy map.
 
-        Note: When optimise_sextupoles=False, only the 'zero' file is loaded.
+        Note: When use_off_energy_data=False, only the 'zero' file is loaded.
         """
         LOGGER.info(
-            "Loading energy track data (custom turns=%s, sextupoles=%s)...",
+            "Loading energy track data (custom turns=%s, use_off_energy_data=%s)...",
             needed_turns is not None,
-            optimise_sextupoles,
+            use_off_energy_data,
         )
 
         # Pick source files based on noise setting
@@ -137,7 +136,7 @@ class DataManager:
         }
 
         # Which energies to load
-        energies = ("plus", "minus", "zero") if optimise_sextupoles else ("zero",)
+        energies = ("plus", "minus", "zero") if use_off_energy_data else ("zero",)
 
         # Load and reduce
         energy_tracks: dict[str, pd.DataFrame] = {}
@@ -146,12 +145,12 @@ class DataManager:
             energy_tracks[e] = self._reduce_dataframe(df)
 
         self.track_data = (
-            energy_tracks if optimise_sextupoles else {"zero": energy_tracks["zero"]}
+            energy_tracks if use_off_energy_data else {"zero": energy_tracks["zero"]}
         )
 
         # Build a fast energy map {turn -> energy}, using unique turn sets
         zero_turns = set(self.track_data["zero"]["turn"].unique())
-        if optimise_sextupoles:
+        if use_off_energy_data:
             plus_turns = set(self.track_data["plus"]["turn"].unique())
             minus_turns = set(self.track_data["minus"]["turn"].unique())
         else:
@@ -180,7 +179,7 @@ class DataManager:
             len(plus_turns),
         )
 
-    def prepare_turn_batches(self) -> None:
+    def prepare_turn_batches(self, config_manager: ConfigurationManager) -> None:
         """Build the list of turns to be processed and validate availability."""
         LOGGER.info("Preparing turn batches for worker distribution")
 
@@ -188,9 +187,14 @@ class DataManager:
             # Drop the last N_RUN_TURNS in RING mode
             LOGGER.debug(
                 "Removing last %d turns from available turns for RING mode",
-                N_RUN_TURNS,
+                N_RUN_TURNS + 1,
             )
-            self.available_turns = self.available_turns[:-N_RUN_TURNS]
+            self.available_turns = self.available_turns[: -(N_RUN_TURNS + 2)]
+        else:
+            to_remove = [(i + 1) * FLATTOP_TURNS for i in range(NUM_TRACKS)]
+            self.available_turns = [
+                t for t in self.available_turns if t not in to_remove
+            ]
 
         num_turns_needed = self.opt_settings.total_tracks
         num_workers = self.opt_settings.num_workers
@@ -217,9 +221,10 @@ class DataManager:
             tracks_per_worker,
         )
 
-        if not DIFFERENT_TURNS_FOR_START_BPM:
-            self.tracks_per_worker *= len(self.start_bpms)
-            num_workers = num_workers // len(self.start_bpms)
+        if not DIFFERENT_TURNS_PER_RANGE:
+            num_ranges = len(config_manager.bpm_ranges)
+            self.tracks_per_worker *= num_ranges
+            num_workers = num_workers // num_ranges
 
         # Randomly select turns for each batch
         random.shuffle(self.available_turns)

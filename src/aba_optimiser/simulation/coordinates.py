@@ -68,6 +68,7 @@ def create_initial_conditions(
     # Direct indexing since action_list and angle_list have the same length
     action = action_list[ntrk]
     angle = angle_list[ntrk]
+    logging.info(f"Track {ntrk}: Using action={action:.2e}, angle={angle:.3f}")
 
     # Get beta and alpha functions at starting point (first BPM)
     first_bpm = starting_bpm
@@ -78,25 +79,36 @@ def create_initial_conditions(
     beta22 = twiss_data.loc[first_bpm, "beta22"]
     alfa11 = twiss_data.loc[first_bpm, "alfa11"]
     alfa22 = twiss_data.loc[first_bpm, "alfa22"]
+    cox = twiss_data.loc[first_bpm, "x"]
+    copx = twiss_data.loc[first_bpm, "px"]
+    coy = twiss_data.loc[first_bpm, "y"]
+    copy = twiss_data.loc[first_bpm, "py"]
+
+    logging.info(
+        f"Track {ntrk}: Starting at {first_bpm} with beta11={beta11:.2f}, beta22={beta22:.2f}"
+    )
+    logging.info(
+        f"Track {ntrk}: Closed orbit x={cox:.2e}, px={copx:.2e}, y={coy:.2e}, py={copy:.2e}"
+    )
 
     # Compute normalized coordinates from action and angle
     cos_ang = np.cos(angle)
     sin_ang = np.sin(angle)
 
     # Convert to real space coordinates
-    x = np.sqrt(action * beta11) * cos_ang
-    px = -np.sqrt(action / beta11) * (sin_ang + alfa11 * cos_ang)
-    y = np.sqrt(action * beta22) * cos_ang
-    py = -np.sqrt(action / beta22) * (sin_ang + alfa22 * cos_ang)
+    x = np.sqrt(action * beta11) * cos_ang + cox
+    px = -np.sqrt(action / beta11) * (sin_ang + alfa11 * cos_ang) + copx
+    y = np.sqrt(action * beta22) * cos_ang + coy
+    py = -np.sqrt(action / beta22) * (sin_ang + alfa22 * cos_ang) + copy
 
-    # Set coordinates to zero depending on kick plane strategy
-    if not kick_both_planes:
+    # Set coordinates to the closed orbit in the plane not being kicked
+    if kick_both_planes is False:
         if ntrk % 2 == 0:
-            y = 0.0
-            py = 0.0
+            y = coy
+            py = copy
         else:
-            x = 0.0
-            px = 0.0
+            x = cox
+            px = copx
 
     logger.debug(
         f"Track {ntrk}: Created initial conditions with action={action:.2e}, angle={angle:.3f}"

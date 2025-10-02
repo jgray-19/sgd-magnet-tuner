@@ -341,7 +341,7 @@ def initialise_env(
 
     for str_name, strength in magnet_strengths.items():
         magnet_name, var = str_name.rsplit(".", 1)
-        logger.info(f"Setting {magnet_name.lower()} {var} to {strength}")
+        logger.debug(f"Setting {magnet_name.lower()} {var} to {strength}")
         base_env.set(magnet_name.lower(), **{var: strength})
 
     _set_corrector_strengths(base_env, corrector_table)

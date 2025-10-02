@@ -103,6 +103,7 @@ class OptimisationLoop:
                 parent_conns, total_turns
             )
 
+            prev_knobs = current_knobs.copy()
             current_knobs = self._update_knobs(current_knobs, agg_grad, lr)
             grad_norm = np.linalg.norm(agg_grad)
             self._update_smoothed_grad_norm(grad_norm)
@@ -122,6 +123,15 @@ class OptimisationLoop:
                 LOGGER.info(
                     f"\nGradient norm below threshold: {self.smoothed_grad_norm:.3e}. "
                     f"Stopping early at epoch {epoch}."
+                )
+                break
+            if (
+                sum(abs(current_knobs[k] - prev_knobs[k]) for k in self.knob_names)
+                < 1e-10
+                and epoch > 10
+            ):
+                LOGGER.info(
+                    f"\nKnob updates below threshold. Stopping early at epoch {epoch}."
                 )
                 break
 

@@ -369,11 +369,6 @@ def run_parallel_tracking(
 
         true_dfs = line_to_dataframes(tracked_line)
 
-    # Remove all rows from twiss_data that are not BPMs
-    twiss_data = twiss_data[twiss_data.index.str.contains("BPM")]
-    # xsuite_twiss = tracked_line.twiss4d()
-    # xsuite_twiss = xsuite_twiss.rows["bpm.*"]
-
     # Process data in parallel
     logger.info("Starting parallel data processing with thread pool for batch")
     with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -384,7 +379,7 @@ def run_parallel_tracking(
                     (
                         batch_start + i,
                         true_dfs[i],
-                        twiss_data,
+                        # twiss_data,
                         track_queue,
                         noise_queue,
                         cleaned_queue,

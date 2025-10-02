@@ -263,7 +263,7 @@ for i, elm, s, ds in {iter_command} do
         table.insert(quad_names, elm.name)
     end
 end
-py:send(quad_names, true)
+{self.py_name}:send(quad_names, true)
 """)
         return self.mad.recv()
 

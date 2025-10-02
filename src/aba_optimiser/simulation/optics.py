@@ -50,7 +50,9 @@ def calculate_beta_beating(
     return beta11_beating, beta22_beating
 
 
-def match_tunes(mad: MAD, target_qx: float, target_qy: float) -> dict[str, float]:
+def match_tunes(
+    mad: MAD, target_qx: float, target_qy: float, deltap: float
+) -> dict[str, float]:
     """
     Match tunes to target values using MAD.
 
@@ -65,7 +67,7 @@ def match_tunes(mad: MAD, target_qx: float, target_qy: float) -> dict[str, float
     logger.info("Starting tune matching for initial conditions")
 
     mad["result"] = mad.match(
-        command=r"\ -> twiss{sequence=MADX[SEQ_NAME]}",
+        command=rf"\ -> twiss{{sequence=MADX[SEQ_NAME], deltap={deltap:.16e}}}",
         variables=[
             {"var": "'MADX.dqx_b1_op'", "name": "'dQx.b1_op'"},
             {"var": "'MADX.dqy_b1_op'", "name": "'dQy.b1_op'"},
@@ -74,7 +76,7 @@ def match_tunes(mad: MAD, target_qx: float, target_qy: float) -> dict[str, float
             {"expr": f"\\t -> t.q1-(62+{target_qx})", "name": "'q1'"},
             {"expr": f"\\t -> t.q2-(60+{target_qy})", "name": "'q2'"},
         ],
-        objective={"fmin": 1e-18},
+        objective={"fmin": 1e-8},
         info=2,
     )
 
@@ -141,7 +143,7 @@ match {
     { var = 'MADX.dqx_b1_op', name='dQx.b1_op' },
     { var = 'MADX.dqy_b1_op', name='dQy.b1_op' },
   },
-  equalities = { tol = 1e-6,
+  equalities = { tol = 1e-10,
     { expr = \t -> t.q1-62-qx, name='q1' },
     { expr = \t -> t.q2-60-qy, name='q2' },
   },
@@ -149,6 +151,12 @@ match {
 }
 """)
     logger.info("Orbit correction and tune rematching completed")
+
+    # Store matched tunes in Python variables
+    matched_tunes = {key: mad[f"MADX['{key}']"] for key in ("dqx_b1_op", "dqy_b1_op")}
+    logger.info(f"Matched tune knobs: {matched_tunes}")
+
+    return matched_tunes
 
 
 def run_initial_twiss_analysis(

@@ -19,6 +19,7 @@ Key functions:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
@@ -30,7 +31,7 @@ from aba_optimiser.config import (
     POSITION_STD_DEV,
     SEQUENCE_FILE,
 )
-from aba_optimiser.mad.mad_interface import OptimizationMadInterface
+from aba_optimiser.mad.mad_interface import OptimisationMadInterface
 from aba_optimiser.physics.bpm_phases import next_bpm_to_pi_2, prev_bpm_to_pi_2
 
 if TYPE_CHECKING:
@@ -68,6 +69,10 @@ class LatticeMaps:
     betay: dict
     alfax: dict
     alfay: dict
+    cox: dict
+    coy: dict
+    copx: dict
+    copy: dict
 
 
 # ---------- Helpers: generic ----------
@@ -164,6 +169,30 @@ def _subtract_bpm_means(df: tfs.TfsDataFrame, info: bool) -> bool:
         df[col] = df_[col]
 
 
+def _add_bpm_means(
+    df_p: tfs.TfsDataFrame,
+    df_n: tfs.TfsDataFrame,
+    df_avg: tfs.TfsDataFrame,
+) -> None:
+    """
+    Add back per-BPM mean positions to x/y/px/py measurements.
+
+    This restores the original offsets at each BPM. Modifies DataFrames in-place.
+
+    Args:
+        df_p: DataFrame with previous BPM calculations
+        df_n: DataFrame with next BPM calculations
+        df_avg: DataFrame with averaged calculations
+    """
+    for df in (df_p, df_n, df_avg):
+        if "x_mean" in df.columns and "y_mean" in df.columns:
+            df["x"] += df["x_mean"]
+            df["y"] += df["y_mean"]
+        if "px_mean" in df.columns and "py_mean" in df.columns:
+            df["px"] += df["px_mean"]
+            df["py"] += df["py_mean"]
+
+
 def _cleanup_mean_cols(*dfs: tfs.TfsDataFrame) -> None:
     """
     Remove temporary mean columns from DataFrames.
@@ -172,7 +201,7 @@ def _cleanup_mean_cols(*dfs: tfs.TfsDataFrame) -> None:
         *dfs: Variable number of DataFrames to clean
     """
     for d in dfs:
-        for c in ("x_mean", "y_mean"):
+        for c in ("x_mean", "y_mean", "px_mean", "py_mean"):
             if c in d.columns:
                 d.drop(columns=[c], inplace=True)
 
@@ -191,7 +220,7 @@ def _ensure_twiss(tws: tfs.TfsDataFrame | None, info: bool) -> tfs.TfsDataFrame:
     """
     if tws is not None:
         return tws
-    mad = OptimizationMadInterface(
+    mad = OptimisationMadInterface(
         SEQUENCE_FILE, bpm_pattern="BPM", use_real_strengths=False
     )
     tws = mad.run_twiss()
@@ -219,6 +248,10 @@ def _lattice_maps(tws: tfs.TfsDataFrame) -> LatticeMaps:
         betay=tws["beta22"].to_dict(),
         alfax=tws["alfa11"].to_dict(),
         alfay=tws["alfa22"].to_dict(),
+        cox=tws["x"].to_dict(),
+        coy=tws["y"].to_dict(),
+        copx=tws["px"].to_dict(),
+        copy=tws["py"].to_dict(),
     )
 
 
@@ -677,6 +710,15 @@ def calculate_pz(
 
     has_px, has_py = _validate_input(orig_data)
     data = orig_data.copy(deep=True)
+    # Reduce memory pressure: make BPM names categorical (many repeats)
+    # and downcast position columns to float32 for working memory.
+    # Convert name to categorical if possible (saves memory for repeated names)
+    with contextlib.suppress(AttributeError, TypeError, ValueError):
+        data["name"] = data["name"].astype("category")
+    for col in ("x", "y"):
+        if col in data.columns:
+            with contextlib.suppress(AttributeError, TypeError, ValueError):
+                data[col] = data[col].astype(np.float32)
     rng = _get_rng(rng)
 
     if inject_noise:
@@ -729,6 +771,7 @@ def calculate_pz(
 
     # Clean helper columns if means were subtracted
     if subtract_mean:
+        _add_bpm_means(data_p, data_n, data_avg)
         _cleanup_mean_cols(data_p, data_n, data_avg)
 
     # Diagnostics

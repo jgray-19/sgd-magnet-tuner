@@ -15,7 +15,7 @@ from aba_optimiser.config import (
     SEQ_NAME,
     SEQUENCE_FILE,
 )
-from aba_optimiser.mad.mad_interface import OptimizationMadInterface
+from aba_optimiser.mad.mad_interface import OptimisationMadInterface
 from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 
 if TYPE_CHECKING:
@@ -38,7 +38,7 @@ def _compute_q_for_bpm(
 ) -> np.ndarray:
     """Helper function to compute Q for a single BPM, suitable for parallel execution."""
     # Each parallel process needs its own MAD-X interface
-    mad_iface = OptimizationMadInterface(
+    mad_iface = OptimisationMadInterface(
         SEQUENCE_FILE,
         bpm_pattern="BPM",
         discard_mad_output=True,
@@ -113,7 +113,7 @@ class BPMKalmanFilter:
         self,
     ):
         # Initialize MAD-X interface
-        self.mad_iface = OptimizationMadInterface(
+        self.mad_iface = OptimisationMadInterface(
             SEQUENCE_FILE,
             bpm_pattern="BPM",
             # discard_mad_output=False,

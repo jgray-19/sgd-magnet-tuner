@@ -67,7 +67,7 @@ def single_writer_loop(queue: mp.Queue, out_path: str) -> None:
 def process_track_with_queue(
     ntrk: int,
     true_df: pd.DataFrame,
-    tws: tfs.TfsDataFrame,
+    # tws: tfs.TfsDataFrame,
     track_q: mp.Queue,
     noise_q: mp.Queue,
     cleaned_q: mp.Queue,
@@ -124,7 +124,9 @@ def process_track_with_queue(
 
         # Filter the noisy data and enqueue cleaned data
         cleaned_df = svd_clean_measurements(noisy_df)
-        cleaned_df = calculate_pz(cleaned_df, inject_noise=False, tws=tws, info=False)
+        cleaned_df = calculate_pz(
+            cleaned_df, inject_noise=False, info=False, subtract_mean=True
+        )
         del noisy_df  # Clean up noisy_df after its last use
 
         cleaned_df["name"] = cleaned_df["name"].astype(str)
@@ -168,7 +170,7 @@ def process_track_with_queue(
 def process_track(
     ntrk: int,
     true_df: pd.DataFrame,
-    tws: tfs.TfsDataFrame,
+    # tws: tfs.TfsDataFrame,
     track_q: mp.Queue,
     noise_q: mp.Queue,
     cleaned_q: mp.Queue,
@@ -190,7 +192,7 @@ def process_track(
 
     # Use the single-writer queue approach for better I/O efficiency
     return process_track_with_queue(
-        ntrk, true_df, tws, track_q, noise_q, cleaned_q, FLATTOP_TURNS, KICK_BOTH_PLANES
+        ntrk, true_df, track_q, noise_q, cleaned_q, FLATTOP_TURNS, KICK_BOTH_PLANES
     )
 
 

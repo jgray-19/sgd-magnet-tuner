@@ -11,6 +11,9 @@ import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
+import tfs
+
+from aba_optimiser.config import BEND_ERROR_FILE
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -35,6 +38,8 @@ def apply_magnet_perturbations(
         Tuple of (bend_names, quad_names, sext_names, true_strengths)
     """
     rng = np.random.default_rng(seed)
+    bend_errors_table = tfs.read(BEND_ERROR_FILE)
+    bend_errors_dict = bend_errors_table["K0L"].to_dict()
     logger.info("Scanning sequence for quadrupoles and sextupoles")
     magnet_strengths = {}
     true_strengths = {}
@@ -43,19 +48,35 @@ def apply_magnet_perturbations(
     num_sexts = 0
 
     for elm in mad.loaded_sequence:
-        # Dipoles (currently commented out in original)
+        # Dipoles
         if elm.kind == "sbend" and elm.k0 != 0 and elm.name[:3] == "MB.":
-            elm.k0 = elm.k0 + rng.normal(0, abs(elm.k0 * 1e-4))
+            if elm.name not in bend_errors_dict:
+                raise ValueError(
+                    f"Bend error for {elm.name} not found in {BEND_ERROR_FILE}"
+                )
+            k0l_error = bend_errors_dict[elm.name]
+            elm.k0 += k0l_error / elm.l
             magnet_strengths[elm.name + ".k0"] = elm.k0
             true_strengths[elm.name] = elm.k0
             num_bends += 1
+            # if elm.kind == "rbend" and elm.k0 != 0:
+            # elm.k0 = elm.k0 + rng.normal(0, abs(elm.k0 * 1e-4))
+            # magnet_strengths[elm.name + ".k0"] = elm.k0
+            # true_strengths[elm.name] = elm.k0
+            # num_bends += 1
 
         # Quadrupoles
-        if elm.kind == "quadrupole" and elm.k1 != 0 and elm.name[:3] == "MQ.":
-            elm.k1 = elm.k1 + rng.normal(0, abs(elm.k1 * rel_k1_std_dev))
-            magnet_strengths[elm.name + ".k1"] = elm.k1
-            true_strengths[elm.name] = elm.k1
-            num_quads += 1
+        if elm.kind == "quadrupole" and elm.k1 != 0:
+            if elm.name[:3] == "MQ.":
+                elm.k1 = elm.k1 + rng.normal(0, abs(elm.k1 * rel_k1_std_dev))
+                magnet_strengths[elm.name + ".k1"] = elm.k1
+                true_strengths[elm.name] = elm.k1
+                num_quads += 1
+            elif elm.name[:3] != "MQT":
+                elm.k1 = elm.k1 + rng.normal(0, abs(elm.k1 * 1e-4))
+                magnet_strengths[elm.name + ".k1"] = elm.k1
+                true_strengths[elm.name] = elm.k1
+                num_quads += 1
 
         # Sextupoles
         elif elm.kind == "sextupole" and elm.k2 != 0 and elm.name[:3] == "MS.":
@@ -68,9 +89,7 @@ def apply_magnet_perturbations(
         f"Found {num_bends} dipoles, {num_quads} quadrupoles, {num_sexts} sextupoles"
     )
     if num_bends > 0:
-        logger.info(
-            f"Applied relative K0 noise with std dev: 1e-4 to {num_bends} dipoles"
-        )
+        logger.info(f"Applied bend errors from file to {num_bends} dipoles")
 
     if num_quads > 0:
         logger.info(

@@ -15,7 +15,7 @@ from aba_optimiser.config import (
     TRACK_SCRIPT,
     USE_NOISY_DATA,
 )
-from aba_optimiser.mad.mad_interface import OptimizationMadInterface
+from aba_optimiser.mad.mad_interface import OptimisationMadInterface
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -40,13 +40,15 @@ class BaseWorker(Process, ABC):
         worker_id: int,
         x_comparisons: np.ndarray,
         y_comparisons: np.ndarray,
-        x_weights: np.ndarray,
-        y_weights: np.ndarray,
+        px_comparisons: np.ndarray,
+        py_comparisons: np.ndarray,
         init_coords: np.ndarray,
         start_bpm: str,
+        end_bpm: str,
         magnet_range: str,
         init_pts: np.ndarray,
         opt_settings: OptSettings,
+        sdir=1,
     ) -> None:
         """
         New constructor that accepts compact numpy payloads built by the parent
@@ -67,8 +69,9 @@ class BaseWorker(Process, ABC):
         init_coords = init_coords[:n_init]
         self.x_comparisons = x_comparisons[:n_init]
         self.y_comparisons = y_comparisons[:n_init]
-        self.x_weights = x_weights[:n_init]
-        self.y_weights = y_weights[:n_init]
+        self.px_comparisons = px_comparisons[:n_init]
+        self.py_comparisons = py_comparisons[:n_init]
+        # del px_comparisons, py_comparisons  # Unused for now
 
         # Split init_coords into num_batches batches
         init_coords = np.array_split(init_coords, num_batches)
@@ -78,9 +81,11 @@ class BaseWorker(Process, ABC):
         self.batch_size = len(self.init_coords[0])
 
         self.start_bpm = start_bpm
+        self.end_bpm = end_bpm
         self.magnet_range = magnet_range
         self.num_batches = num_batches
         self.opt_settings = opt_settings
+        self.sdir = sdir
 
         self.init_pts = init_pts
         self._split_data_to_batches()
@@ -91,9 +96,8 @@ class BaseWorker(Process, ABC):
             TRACK_NO_KNOBS_INIT if opt_settings.only_energy else TRACK_INIT
         )
 
-    @staticmethod
     @abstractmethod
-    def get_bpm_range(start_bpm: str, end_bpm: str) -> str:
+    def get_bpm_range(self, sdir: int) -> str:
         """Get the magnet range specific to the worker type."""
         pass
 
@@ -135,8 +139,12 @@ class BaseWorker(Process, ABC):
         self.y_comparisons = np.array_split(
             self.y_comparisons, self.num_batches, axis=0
         )
-        self.x_weights = np.array_split(self.x_weights, self.num_batches, axis=0)
-        self.y_weights = np.array_split(self.y_weights, self.num_batches, axis=0)
+        self.px_comparisons = np.array_split(
+            self.px_comparisons, self.num_batches, axis=0
+        )
+        self.py_comparisons = np.array_split(
+            self.py_comparisons, self.num_batches, axis=0
+        )
 
         self.init_pts = [
             arr.tolist()
@@ -148,8 +156,8 @@ class BaseWorker(Process, ABC):
         Sets the initial conditions for each track in MAD-NG.
         """
         mad.send("""
-init_coords = py:recv()
-init_pts = py:recv()
+init_coords = python:recv()
+init_pts = python:recv()
 """)
         mad.send(self.init_coords).send(self.init_pts)
 
@@ -176,16 +184,18 @@ end
         LOGGER.debug(f"Worker {self.worker_id}: Setting up MAD interface")
 
         # Get magnet range specific to worker type
-        bpm_range = self.get_bpm_range(self.start_bpm, self.magnet_range)
+        bpm_range = self.get_bpm_range(sdir=1)
         LOGGER.debug(f"Worker {self.worker_id}: Using BPM range {bpm_range}")
 
-        mad_iface = OptimizationMadInterface(
+        mad_iface = OptimisationMadInterface(
             SEQUENCE_FILE,
             magnet_range=self.magnet_range,
             bpm_range=bpm_range,
             opt_settings=self.opt_settings,
             use_real_strengths="noisy" if USE_NOISY_DATA else True,
+            py_name="python",
             # discard_mad_output=False,
+            # debug=True,
         )
 
         mad = mad_iface.mad
@@ -193,6 +203,7 @@ end
         mad["batch_size"] = self.batch_size
         mad["num_batches"] = self.num_batches
         mad["nbpms"] = mad_iface.nbpms
+        mad["sdir"] = self.sdir
 
         # Import required MAD-NG modules
         mad.load("MAD", "damap", "matrix", "vector")
@@ -275,18 +286,28 @@ end
         # Receive simulation results from MAD: positions and derivatives
         x_results = mad.recv()  # Simulated x-positions: list of arrays
         y_results = mad.recv()  # Simulated y-positions: list of arrays
+        px_results = mad.recv()  # Simulated px-momenta: list of arrays
+        py_results = mad.recv()  # Simulated py-momenta: list of arrays
+
         dx_dk_results = mad.recv()  # Derivatives of x w.r.t. knobs: list of arrays
         dy_dk_results = mad.recv()  # Derivatives of y w.r.t. knobs: list of arrays
+        dpx_dk_results = mad.recv()  # Derivatives of px w.r.t. knobs: list of arrays
+        dpy_dk_results = mad.recv()  # Derivatives of py w.r.t. knobs: list of arrays
+        # del px_results, py_results, dpx_dk_results, dpy_dk_results  # Unused for now
 
         # Convert results to NumPy arrays for efficient vectorised processing
         # Squeeze to remove singleton dimensions (e.g., from MAD's output format)
         # Shape: (n_particles, n_data_points)
         particle_positions_x = np.asarray(x_results).squeeze(-1)
         particle_positions_y = np.asarray(y_results).squeeze(-1)
+        particle_momenta_px = np.asarray(px_results).squeeze(-1)
+        particle_momenta_py = np.asarray(py_results).squeeze(-1)
 
         # Shape: (n_particles, n_knobs + 1, n_data_points)
         dx_dk = np.stack(dx_dk_results, axis=0)
         dy_dk = np.stack(dy_dk_results, axis=0)
+        dpx_dk = np.stack(dpx_dk_results, axis=0)
+        dpy_dk = np.stack(dpy_dk_results, axis=0)
 
         # Compute differences between simulated and reference positions for loss and gradients
         # Shape: (n_particles, n_data_points)
@@ -297,16 +318,24 @@ end
             particle_positions_y - self.y_comparisons[batch]
         )  # * self.y_weights[batch]
 
+        momentum_diffs_px = (
+            particle_momenta_px - self.px_comparisons[batch]
+        )  # * self.x_weights[batch]
+        momentum_diffs_py = (
+            particle_momenta_py - self.py_comparisons[batch]
+        )  # * self.y_weights[batch]
+
         # Compute gradients using vector-Jacobian products (efficient via einsum)
         # gx: Sum over particles and data points of (derivatives * diffs). Shape: (n_knobs + 1,)
         gx = np.einsum("pkm,pm->k", dx_dk, position_diffs_x)
         gy = np.einsum("pkm,pm->k", dy_dk, position_diffs_y)
-
-        # gx[-1] = 0
-        # gy[-1] = 0
+        gpx = np.einsum("pkm,pm->k", dpx_dk, momentum_diffs_px)
+        gpy = np.einsum("pkm,pm->k", dpy_dk, momentum_diffs_py)
+        # del gpx, gpy  # Unused for now
 
         # Combine gradients and compute loss (factor of 2 for derivative of squared error)
-        grad = 2.0 * (gx + gy)  # Shape: (n_knobs + 1,)
+        # grad = 2.0 * (gx + gy)  # Shape: (n_knobs + 1,)
+        grad = 2.0 * (gx + gy + gpx + gpy)  # Shape: (n_knobs + 1,)
         loss = np.sum(position_diffs_x**2) + np.sum(position_diffs_y**2)  # Scalar
 
         return grad, loss
@@ -345,8 +374,8 @@ end
 
         # Final hessian estimation
         mad.send("""
-var_x = py:recv()
-var_y = py:recv()
+var_x = python:recv()
+var_y = python:recv()
 """)
         mad.send(1 / hessian_var_x)
         mad.send(1 / hessian_var_y)

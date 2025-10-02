@@ -33,25 +33,25 @@ class OptSettings:
     total_tracks: int = field(init=False)
     decay_epochs: int = field(init=False)
 
+    only_energy: bool = False
+    use_off_energy_data: bool = False
     optimise_quadrupoles: bool = field(default=False)
     optimise_sextupoles: bool = field(default=False)
-    use_sextupole_data: bool = field(default=False)
 
     def __post_init__(self):
         self.total_tracks = self.tracks_per_worker * self.num_workers
         self.decay_epochs = self.max_epochs - self.warmup_epochs
         if self.optimise_sextupoles and not self.optimise_quadrupoles:
             logger.warning("Sextupoles cannot be optimised without quadrupoles.")
-        self.only_energy = not (self.optimise_quadrupoles or self.optimise_sextupoles)
         # if self.optimiser_type == "lbfgs" and self.num_batches != 1:
         #     logger.warning("LBFGS optimiser requires num_batches=1; overriding.")
         #     self.num_batches = 1
 
-        if self.optimise_sextupoles is True and self.use_sextupole_data is False:
+        if self.optimise_sextupoles is True and self.use_off_energy_data is False:
             logger.warning(
-                "Sextupole optimisation needs the use_sextupole_data flag set to True; overriding."
+                "Sextupole optimisation needs the use_off_energy_data flag set to True; overriding."
             )
-            self.use_sextupole_data = True
+            self.use_off_energy_data = True
 
 
 # In the future, mode needs to be removed, instead it needs to be a flexible code that can set which parameters will be optimised on the fly.
@@ -61,33 +61,36 @@ class OptSettings:
 DPP_OPT_SETTINGS = OptSettings(
     # max_epochs=400,
     max_epochs=1000,
-    tracks_per_worker=550,
+    tracks_per_worker=666,
     num_workers=60,
-    num_batches=20,
-    warmup_epochs=20,
-    # num_batches=1,
-    # warmup_epochs=3,
+    # num_batches=20,
+    # warmup_epochs=20,
+    num_batches=50,
+    warmup_epochs=10,
     # adam
     warmup_lr_start=1e-7,
-    max_lr=1e-6,
-    min_lr=1e-6,
+    max_lr=3e-6,
+    min_lr=3e-6,
     # lbfgs
-    # warmup_lr_start=5e-2,
-    # max_lr=1e-1,
-    # min_lr=1e-1,
-    gradient_converged_value=5e-9,
+    # warmup_lr_start=5e-7,
+    # max_lr=1e0,
+    # min_lr=1e0,
+    gradient_converged_value=1e-8,
+    # gradient_converged_value=3e-7,
     optimiser_type="adam",
     # optimiser_type="lbfgs",
+    only_energy=True,
+    use_off_energy_data=False,
 )
 
 # Simulation parameters for quadrupole optimisation
 QUAD_OPT_SETTINGS = OptSettings(
-    max_epochs=1000,
-    tracks_per_worker=6000,
+    max_epochs=5000,
+    tracks_per_worker=133,
     num_workers=60,
     # num_workers=1,
     # num_batches=1,
-    num_batches=20,
+    num_batches=10,
     # Adam settings
     warmup_epochs=100,
     warmup_lr_start=2e-8,
@@ -103,6 +106,7 @@ QUAD_OPT_SETTINGS = OptSettings(
     optimise_quadrupoles=True,
     optimiser_type="adam",
     # optimiser_type="lbfgs",
+    use_off_energy_data=False,
 )
 
 # Simulation parameters for sextupole optimisation
@@ -118,7 +122,7 @@ SEXT_OPT_SETTINGS = OptSettings(
     gradient_converged_value=1e-9,
     optimise_quadrupoles=True,
     optimise_sextupoles=True,
-    use_sextupole_data=True,
+    use_off_energy_data=True,
 )
 
 # Optimizer configuration
@@ -134,7 +138,7 @@ GRAD_NORM_ALPHA = 0.7  # Gradient norm smoothing factor for smoothing loss
 POSITION_STD_DEV = 1e-4  # Standard deviation of the position noise
 MOMENTUM_STD_DEV = 3e-6  # Standard deviation of the momentum noise
 REL_K1_STD_DEV = 1e-4  # Standard deviation of the K1 noise
-MACHINE_DELTAP = -20e-5  # -11e-5  # The energy deviation of the machine from expected.
+MACHINE_DELTAP = -16e-5  # -11e-5  # The energy deviation of the machine from expected.
 DELTAP = 1e-3
 
 # =============================================================================
@@ -143,20 +147,25 @@ DELTAP = 1e-3
 
 RUN_ARC_BY_ARC = True
 BPM_START_POINTS = [
-    # "BPM.9R4.B1",
-    "BPM.10R4.B1",
-    # "BPM.11R4.B1",
-    # "BPM.12R4.B1",
-    # "BPM.13R4.B1",
-    # "BPM.14R4.B1",
-    # "BPM.15R4.B1",
-    # "BPM.16R4.B1",
+    "BPM.9R2.B1",
+    "BPM.10R2.B1",
+    "BPM.11R2.B1",
+    "BPM.12R2.B1",
+    "BPM.13R2.B1",
+]
+
+BPM_END_POINTS = [
+    "BPM.9L3.B1",
+    "BPM.10L3.B1",
+    "BPM.11L3.B1",
+    "BPM.12L3.B1",
+    "BPM.13L3.B1",
 ]
 
 # Whether to use different turns for each start BPM
-DIFFERENT_TURNS_FOR_START_BPM = True
+DIFFERENT_TURNS_PER_RANGE = False
 
-N_RUN_TURNS = 1  # Number of turns to run the simulation for each track
+N_RUN_TURNS = 3  # Number of turns to run the simulation for each track
 OBSERVE_TURNS_FROM = 1  # Record from N turns
 N_COMPARE_TURNS = N_RUN_TURNS - OBSERVE_TURNS_FROM + 1  # Number of turns to compare
 
@@ -164,7 +173,7 @@ N_COMPARE_TURNS = N_RUN_TURNS - OBSERVE_TURNS_FROM + 1  # Number of turns to com
 RAMP_UP_TURNS = 1_000  # Number of turns to ramp up the ACD
 FLATTOP_TURNS = 40_000  # Number of turns on the flat top
 NUM_TRACKS = 1  # Number of tracks of FLATTOP_TURNS, so total number of turns is FLATTOP_TURNS * NUM_TRACKS (assuming acd is off)
-TRACK_BATCH_SIZE = 1  # Number of tracks to process in each batch to save RAM
+TRACK_BATCH_SIZE = NUM_TRACKS  # Number of tracks to process in each batch to save RAM
 ACD_ON = False  # Whether the ACD was used or not (Ignores the ramp up turns)
 KICK_BOTH_PLANES = True  # Whether to kick in both planes or separately
 
@@ -172,7 +181,7 @@ KICK_BOTH_PLANES = True  # Whether to kick in both planes or separately
 # SIMULATION SPECIFICS
 # =============================================================================
 
-MAGNET_RANGE = "BPM.11R4.B1/BPM.11L5.B1"
+MAGNET_RANGE = "BPM.11R2.B1/BPM.11L3.B1"
 BEAM_ENERGY = 6800  # Beam energy in GeV
 PARTICLE_MASS = 938.27208816 * 1e-3  # [GeV] Proton energy-mass
 SEQ_NAME = "lhcb1"  # Sequence name in MAD-X (lowercase)
@@ -192,8 +201,8 @@ FILE_COLUMNS: tuple[str, ...] = (
     "px",
     "y",
     "py",
-    "x_weight",
-    "y_weight",
+    # "x_weight",
+    # "y_weight",
     "kick_plane",
 )
 
@@ -205,15 +214,18 @@ module_path = Path(__file__).absolute().parent.parent.parent
 logger.info(f"Current module path: {module_path}")
 
 # Data files
-NO_NOISE_FILE = module_path / "data/track_data.parquet"  # Measurement Parquet file
-NOISY_FILE = module_path / "data/noise_data.parquet"  # Noise Parquet file
+NO_NOISE_FILE = module_path / "data/track_data2.parquet"  # Measurement Parquet file
+NOISY_FILE = module_path / "data/noise_data2.parquet"  # Noise Parquet file
+CLEANED_FILE = module_path / "data/filtered_data2.parquet"  # Filtered TFS file
 
 EPLUS_NOISY_FILE = module_path / "data/eplus_data.parquet"  # E+ data file
 EPLUS_NONOISE_FILE = module_path / "data/eplus_nonoise_data.parquet"
+EPLUS_CLEANED_FILE = module_path / "data/eplus_filtered_data.parquet"
 
 EMINUS_NOISY_FILE = module_path / "data/eminus_data.parquet"  # E- Noisy file
 EMINUS_NONOISE_FILE = module_path / "data/eminus_nonoise_data.parquet"
-CLEANED_FILE = module_path / "data/filtered_data.parquet"  # Filtered TFS file
+EMINUS_CLEANED_FILE = module_path / "data/eminus_filtered_data.parquet"
+
 KALMAN_FILE = module_path / "data/kalman_data.feather"  # Kalman-filtered TFS file
 
 # MAD-NG scripts
@@ -227,15 +239,22 @@ HESSIAN_SCRIPT = MAD_SCRIPTS_DIR / "estimate_hessian.mad"
 
 
 # Other files
-SEQUENCE_FILE = module_path / "mad_scripts/lhcb1.seq"  # MAD-X sequence file
+# The MAD-X sequence file
+SEQUENCE_FILE = module_path / "mad_scripts/lhcb1.seq"
+# The xsuite JSON file for the LHC
 XSUITE_JSON = module_path / "src" / "aba_optimiser" / "xsuite" / "lhcb1.json"
-TRUE_STRENGTHS_FILE = (
-    module_path / "data/true_strengths.txt"
-)  # Ground-truth knob strengths
-OUTPUT_KNOBS = module_path / "data/final_knobs.txt"  # Where to write final strengths
-KNOB_TABLE = module_path / "data/knob_strengths_table.md"  # Markdown summary of results
-TUNE_KNOBS_FILE = module_path / "data/matched_tunes.txt"
-CORRECTOR_STRENGTHS = module_path / "data/corrector_strengths.tfs"
+# Ground-truth knob strengths
+TRUE_STRENGTHS_FILE = module_path / "data/true_strengths2.txt"
+# Where to write final strengths
+OUTPUT_KNOBS = module_path / "data/final_knobs2.txt"
+# Markdown summary of results
+KNOB_TABLE = module_path / "data/knob_strengths_table2.txt"
+# Matched tunes file
+TUNE_KNOBS_FILE = module_path / "data/matched_tunes2.txt"
+# Corrector strengths file
+CORRECTOR_STRENGTHS = module_path / "data/corrector_strengths2.txt"
+# Bend errors file
+BEND_ERROR_FILE = module_path / "data/bend_errors.tfs"
 
 
 # =============================================================================

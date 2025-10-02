@@ -27,7 +27,7 @@ from aba_optimiser.dataframes.utils import (
     select_markers,
 )
 from aba_optimiser.io.utils import read_knobs
-from aba_optimiser.mad.mad_interface import OptimizationMadInterface
+from aba_optimiser.mad.mad_interface import OptimisationMadInterface
 from aba_optimiser.workers.worker import build_worker
 
 if TYPE_CHECKING:
@@ -44,7 +44,7 @@ if "BPM" not in start_bpm:
 if "BPM" not in end_bpm:
     comparison_data = filter_out_marker(comparison_data, end_bpm)
 
-mad_iface = OptimizationMadInterface(SEQUENCE_FILE, MAGNET_RANGE)
+mad_iface = OptimisationMadInterface(SEQUENCE_FILE, MAGNET_RANGE)
 tws = mad_iface.run_twiss()
 start_bpm_idx = tws.index.get_loc(start_bpm)
 end_bpm_idx = tws.index.get_loc(end_bpm)

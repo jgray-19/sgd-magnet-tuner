@@ -5,14 +5,17 @@ import pandas as pd
 
 from aba_optimiser.config import (
     ACD_ON,
+    CLEANED_FILE,
     # BPM_START,
     # BPM_RANGE,
-    CLEANED_FILE,
+    # EMINUS_CLEANED_FILE,
+    # EMINUS_NOISY_FILE,
+    # EMINUS_NONOISE_FILE,
     # EPLUS_NOISY_FILE,
     # EPLUS_NONOISE_FILE,
-    NO_NOISE_FILE,
     # KALMAN_FILE,
-    NOISY_FILE,
+    NO_NOISE_FILE,
+    # NOISY_FILE,
     RAMP_UP_TURNS,
 )
 from aba_optimiser.dataframes.utils import select_markers
@@ -20,20 +23,23 @@ from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 from aba_optimiser.plotting.utils import setup_scientific_formatting
 
 # Extract BPM names
-start_bpm = "BPM.10R1.B1"
-other_bpm = "BPM.11R1.B1"
+start_bpm = "BPM.11R4.B1"
+other_bpm = "BPM.12R4.B1"
 
 # Load non-noisy data
+# init_coords = pd.read_parquet(EMINUS_NONOISE_FILE).set_index("turn")
 init_coords = pd.read_parquet(NO_NOISE_FILE).set_index("turn")
 non_noisy_start = select_markers(init_coords, start_bpm)
 non_noisy_other = select_markers(init_coords, other_bpm)
 
 # Load noisy data
+# noise_init = pd.read_parquet(EMINUS_CLEANED_FILE).set_index("turn")
 noise_init = pd.read_parquet(CLEANED_FILE).set_index("turn")
 noisy_start = select_markers(noise_init, start_bpm)
 noise_other = select_markers(noise_init, other_bpm)
 
 # Load filtered data
+# filtered_init = pd.read_parquet(EMINUS_CLEANED_FILE).set_index("turn")
 filtered_init = pd.read_parquet(CLEANED_FILE).set_index("turn")
 filtered_start = select_markers(filtered_init, start_bpm)
 filtered_other = select_markers(filtered_init, other_bpm)
@@ -97,11 +103,11 @@ def plot_phase_space(
 ):
     """General phase space plot function"""
 
-    ax.scatter(noisy[coord1], noisy[coord2], s=1, color="blue", label="Noisy")
+    # ax.scatter(noisy[coord1], noisy[coord2], s=1, color="blue", label="Noisy")
     ax.scatter(
         non_noisy[coord1], non_noisy[coord2], s=1, color="red", label="Non-noisy"
     )
-    ax.scatter(filtered[coord1], filtered[coord2], s=1, color="green", label="Filtered")
+    # ax.scatter(filtered[coord1], filtered[coord2], s=1, color="green", label="Filtered")
     # ax.scatter(kalman[coord1], kalman[coord2], s=1, color="green", label="Kalman")
 
     if extra_mask is not None and extra_labels is not None:

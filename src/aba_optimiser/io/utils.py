@@ -100,12 +100,25 @@ def scientific_notation(num: float, precision: int = 2) -> str:
     Returns:
         A string of the form "m*10^e" or "0" if num is zero.
     """
-    if num == 0:
-        return "0"
     import math
 
-    exponent = int(math.floor(math.log10(abs(num))))
-    mantissa = num / (10**exponent)
+    # Guard against non-numeric inputs and special float values
+    try:
+        fnum = float(num)
+    except (TypeError, ValueError):
+        # If it's not convertible to float, fall back to its string repr
+        return str(num)
+
+    # Handle zero explicitly
+    if fnum == 0.0:
+        return "0"
+
+    # Handle NaN and infinite values robustly
+    if not math.isfinite(fnum):
+        return str(fnum)
+
+    exponent = int(math.floor(math.log10(abs(fnum))))
+    mantissa = fnum / (10**exponent)
     if exponent == 0:
         return f"{mantissa:.{precision}f}"
     return f"${mantissa:.{precision}f}\\times10^{{{exponent}}}$"

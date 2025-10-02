@@ -55,12 +55,14 @@ MAD.element.marker '{marker_name}' {{ at=-1e-10, from="{bpm_name}" }} ! 1e-12 is
     def get_observation_turns(turn: int) -> list[int]:
         """Get the list of observation turns for ring mode."""
         return [
-            t
-            for t in range(turn, turn + N_RUN_TURNS)
-            if t >= turn + OBSERVE_TURNS_FROM - 1
+            turn
+            # t
+            # for t in range(turn, turn + N_RUN_TURNS)
+            # if t >= turn + OBSERVE_TURNS_FROM - 1
         ]
 
-    @staticmethod
-    def get_bpm_range(start_bpm: str, end_bpm: str) -> str:
+    def get_bpm_range(self, sdir: int) -> str:
         """Get the magnet range for ring mode."""
+        if sdir == -1:
+            return "$end/$start"
         return "$start/$end"

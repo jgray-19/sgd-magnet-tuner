@@ -12,7 +12,7 @@ from aba_optimiser.config import (
     SEQUENCE_FILE,
     USE_NOISY_DATA,
 )
-from aba_optimiser.mad.mad_interface import OptimizationMadInterface
+from aba_optimiser.mad.mad_interface import OptimisationMadInterface
 from aba_optimiser.workers.arc_by_arc import ArcByArcWorker
 from aba_optimiser.workers.ring import RingWorker
 
@@ -44,22 +44,30 @@ class ConfigurationManager:
     """Manages configuration and setup for the optimisation process."""
 
     def __init__(
-        self, opt_settings: OptSettings, magnet_range: str, bpm_start_points: list[str]
+        self,
+        opt_settings: OptSettings,
+        magnet_range: str,
+        bpm_start_points: list[str],
+        bpm_end_points: list[str],
     ):
-        self.mad_iface: OptimizationMadInterface | None = None
+        self.mad_iface: OptimisationMadInterface | None = None
         self.knob_names: list[str] = []
         self.elem_spos: np.ndarray = np.array([])
         self.all_bpms: np.ndarray = np.array([])
         self.Worker: type[BaseWorker] | None = None
         self.initial_strengths: np.ndarray = np.array([])
 
-        self.start_bpms: list[str] = bpm_start_points
+        self.start_bpms = bpm_start_points
+        self.end_bpms = bpm_end_points
         self.magnet_range = magnet_range
         self.global_config = opt_settings
+        self.bpm_ranges = [
+            s + "/" + e for s in bpm_start_points for e in bpm_end_points
+        ]
 
     def setup_mad_interface(self) -> None:
         """Initialise the MAD-NG interface and get basic model parameters."""
-        self.mad_iface = OptimizationMadInterface(
+        self.mad_iface = OptimisationMadInterface(
             SEQUENCE_FILE,
             self.magnet_range,
             opt_settings=self.global_config,
@@ -112,19 +120,12 @@ class ConfigurationManager:
 
         self.initial_strengths = initial_strengths
         current_knobs = dict(zip(self.knob_names, initial_strengths))
+
         # Restrict true strengths to knobs we actually have in model
-        # if RUN_ARC_BY_ARC:
         filtered_true_strengths = {
             knob: true_strengths[knob] for knob in self.knob_names
         }
         print(self.knob_names)
-        # else:
-        #     missing = set(self.knob_names) ^ set(true_strengths)
-        #     if missing:
-        #         raise ValueError(
-        #             f"Mismatch between model knobs and true strengths: {missing}"
-        #         )
-        #     filtered_true_strengths = true_strengths
 
         return current_knobs, filtered_true_strengths
 
@@ -134,8 +135,7 @@ class ConfigurationManager:
             raise ValueError("Worker type must be determined first")
 
         n_data_points = {}
-        for start_bpm in self.start_bpms:
-            bpm_range = self.Worker.get_bpm_range(start_bpm, self.magnet_range)
+        for bpm_range in self.bpm_ranges:
             n_bpms = self.mad_iface.count_bpms(bpm_range)
-            n_data_points[start_bpm] = self.Worker.get_n_data_points(n_bpms)
+            n_data_points[bpm_range] = self.Worker.get_n_data_points(n_bpms)
         return n_data_points

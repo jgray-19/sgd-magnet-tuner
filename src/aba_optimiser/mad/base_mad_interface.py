@@ -37,6 +37,7 @@ class BaseMadInterface:
         """
         self.mad = MAD(**mad_kwargs)
         logger.debug("Initialized base MAD interface")
+        self.py_name = self.mad.py_name
 
     def load_sequence(self, sequence_file: str | Path, seq_name: str) -> None:
         """
@@ -210,7 +211,9 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
             if kind in mappings:
                 for attr, col in mappings[kind]:
                     if col in row.index:
-                        self.mad.send(f"loaded_sequence['{ename}'].{attr} = py:recv()")
+                        self.mad.send(
+                            f"loaded_sequence['{ename}'].{attr} = {self.py_name}:recv()"
+                        )
                         self.mad.send(row[col])
                     else:
                         logger.warning(
@@ -307,7 +310,7 @@ for i, elm, s, ds in {iter_command} do
         table.insert(elem_names, elm.name)
     end
 end
-py:send(elem_names, true)
+{self.py_name}:send(elem_names, true)
 """)
         return self.mad.recv()
 
@@ -378,13 +381,17 @@ MADX['{name}'].{attribute} = current + {error}
 
     def pt2dp(self, pt: float) -> float:
         """Convert transverse momentum to delta p/p."""
-        self.mad.send("py:send(MAD.gphys.pt2dp(py:recv(), loaded_sequence.beam.beta))")
+        self.mad.send(
+            f"{self.py_name}:send(MAD.gphys.pt2dp({self.py_name}:recv(), loaded_sequence.beam.beta))"
+        )
         self.mad.send(pt)
         return self.mad.recv()
 
     def dp2pt(self, dp: float) -> float:
         """Convert delta p/p to transverse momentum."""
-        self.mad.send("py:send(MAD.gphys.dp2pt(py:recv(), loaded_sequence.beam.beta))")
+        self.mad.send(
+            f"{self.py_name}:send(MAD.gphys.dp2pt({self.py_name}:recv(), loaded_sequence.beam.beta))"
+        )
         self.mad.send(dp)
         return self.mad.recv()
 

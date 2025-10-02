@@ -5,7 +5,8 @@ from __future__ import annotations
 import datetime
 import gc
 import logging
-import multiprocessing as mp
+
+# import multiprocessing as mp
 import random
 import time
 from typing import TYPE_CHECKING
@@ -14,9 +15,11 @@ import numpy as np
 from tensorboardX import SummaryWriter
 
 from aba_optimiser.config import (
+    BPM_END_POINTS,
     BPM_START_POINTS,
     MACHINE_DELTAP,
     MAGNET_RANGE,
+    RUN_ARC_BY_ARC,
     TRUE_STRENGTHS_FILE,
 )
 from aba_optimiser.io.utils import read_knobs
@@ -49,6 +52,7 @@ class Controller:
         machine_deltap: float = MACHINE_DELTAP,
         magnet_range: str = MAGNET_RANGE,
         bpm_start_points: list[str] = BPM_START_POINTS,
+        bpm_end_points: list[str] = BPM_END_POINTS,
     ):
         """Initialise the controller with all required managers."""
 
@@ -61,24 +65,26 @@ class Controller:
 
         # Initialise managers
         self.config_manager = ConfigurationManager(
-            opt_settings, magnet_range, bpm_start_points
+            opt_settings, magnet_range, bpm_start_points, bpm_end_points
         )
         self.config_manager.setup_mad_interface()
         self.config_manager.determine_worker_and_bpms()
 
         self.data_manager = DataManager(
             self.config_manager.all_bpms,
-            self.config_manager.start_bpms,
             opt_settings,
         )
-        self.data_manager.prepare_turn_batches()
+        self.data_manager.prepare_turn_batches(self.config_manager)
 
         # Determine the exact set of turns needed and load filtered data
-        needed_turns = {t for batch in self.data_manager.turn_batches for t in batch}
-        needed_turns.add(max(needed_turns) + 1)  # In case we go over the last turn
+        needed_turns = None
+        if RUN_ARC_BY_ARC:
+            needed_turns = {
+                t for batch in self.data_manager.turn_batches for t in batch
+            } | {t + 1 for batch in self.data_manager.turn_batches for t in batch}
         self.data_manager.load_track_data(
             needed_turns=needed_turns,
-            optimise_sextupoles=opt_settings.optimise_sextupoles,
+            use_off_energy_data=opt_settings.use_off_energy_data,
         )
 
         self.worker_manager = WorkerManager(
@@ -90,6 +96,26 @@ class Controller:
         )
 
         true_strengths = read_knobs(TRUE_STRENGTHS_FILE)
+        # For all the main bending magnets, remove the a/b/c/d suffixes
+        # and set the only knob to the c suffix value (the only one that has a reasonable gradient).
+        # bending_magnets: dict[str, float] = {}
+        # mag_names_to_remove = []
+        # for mag_name in true_strengths:
+        #     if mag_name.startswith("MB."):
+        #         if (mag_name[3] == "C" and "R" in mag_name) or (
+        #             mag_name[3] == "A" and "L" in mag_name
+        #         ):
+        #             new_mag_name = (
+        #                 mag_name[:3] + mag_name[4:]
+        #             )  # Remove the a/b/c/d suffix
+        #             bending_magnets[new_mag_name] = true_strengths[mag_name]
+        #         mag_names_to_remove.append(mag_name)
+
+        # for mag_name in mag_names_to_remove:
+        #     del true_strengths[mag_name]
+        # for mag_name in bending_magnets:
+        #     true_strengths[mag_name] = bending_magnets[mag_name]
+
         true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(machine_deltap)
 
         # Initialise knobs
@@ -131,7 +157,7 @@ class Controller:
                 self.data_manager.track_data,
                 self.data_manager.turn_batches,
                 self.data_manager.energy_map,
-                self.config_manager.start_bpms,
+                self.config_manager.bpm_ranges,
                 self.data_manager.var_x,
                 self.data_manager.var_y,
                 self.opt_settings,
@@ -186,7 +212,7 @@ class Controller:
     ) -> None:
         """Clean up resources and save final results."""
         # Calculate uncertainties
-        cov = np.linalg.inv(total_hessian + 1e-12 * np.eye(total_hessian.shape[0]))
+        cov = np.linalg.inv(total_hessian + 1e-8 * np.eye(total_hessian.shape[0]))
         uncertainties = np.sqrt(np.diag(cov))
 
         # Close logging and save results

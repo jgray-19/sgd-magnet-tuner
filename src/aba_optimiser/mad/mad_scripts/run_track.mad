@@ -12,7 +12,7 @@
 ! range: the range of elements to track as a string
 ! vector: a MAD vector object for creating vectors
 ! matrix: a MAD matrix object for creating matrices
-! py: a Python interface object for sending data
+! python: a Python interface object for sending data
 
 
 reset_before_tracking()
@@ -24,10 +24,15 @@ local _, mflw= track{
     observe=observe_from_turn,
     atexit=save_data,
     range=tracking_range,
+    dir=sdir,
 }
 assert(mflw.tpar == mflw.npar, "Lost some particles during tracking")
-py:send(x, true)
-py:send(y, true)
-py:send(dx_dk, true)
-py:send(dy_dk, true)
+python:send(x, true)
+python:send(y, true)
+python:send(px, true)
+python:send(py, true)
+python:send(dx_dk, true)
+python:send(dy_dk, true)
+python:send(dpx_dk, true)
+python:send(dpy_dk, true)
 !collectgarbage("collect")  -- Clean up memory after sending data

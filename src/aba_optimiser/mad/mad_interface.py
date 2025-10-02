@@ -20,7 +20,8 @@ if TYPE_CHECKING:
     from aba_optimiser.config import OptSettings
 
 
-BPM_PATTERN = "^BPM%.%d-%d.*"
+# BPM_PATTERN = "^BPM%.%d-%d.*"
+BPM_PATTERN = "^BPM"
 LOGGER = logging.getLogger(__name__)
 
 # MAD code templates
@@ -31,7 +32,7 @@ for _, elm in loaded_sequence:iter("{bpm_range}") do
         nbpms = nbpms + 1
     end
 end
-py:send(nbpms)
+{py_name}:send(nbpms)
 """
 
 MAKE_KNOBS_INIT_MAD = """
@@ -43,28 +44,35 @@ MAKE_KNOBS_LOOP_MAD = """
 for i, e, s, ds in loaded_sequence:siter(magnet_range) do
     if {element_condition} then
         local k_str_name = e.name .. "_k"
-        if e.k1 and e.k1 ~= 0 then
+        if e.k0 and e.k0 ~= 0 then --and not (k_str_name:match("MB%.[AB][0-9]+R") or k_str_name:match("MB%.[BC][0-9]+L")) then
+            -- k_str_name = k_str_name:gsub("^MB%.[AC]", "MB.")
+            MADX[k_str_name] = e.k0 ! Must not be 0.
+            e.k0 = \\->MADX[k_str_name]
+        elseif e.k1 and e.k1 ~= 0 then
             MADX[k_str_name] = e.k1 ! Must not be 0.
             e.k1 = \\->MADX[k_str_name]
         elseif e.k2 and e.k2 ~= 0 then
             MADX[k_str_name] = e.k2 ! Must not be 0.
             e.k2 = \\->MADX[k_str_name]
+        else
+            goto continue
         end
         table.insert(knob_names, k_str_name)
         table.insert(spos_list, s)
+        ::continue::
     end
 end
 """
 
 MAKE_KNOBS_END_MAD = """
 table.insert(knob_names, "pt")
-coord_names = {"x", "px", "y", "py", "t", "pt"}
-py:send(knob_names, true)
-py:send(spos_list, true)
+coord_names = {{"x", "px", "y", "py", "t", "pt"}}
+{py_name}:send(knob_names, true)
+{py_name}:send(spos_list, true)
 """
 
 
-class OptimizationMadInterface(BaseMadInterface):
+class OptimisationMadInterface(BaseMadInterface):
     """
     Encapsulates communication with MAD-NG via pymadng.MAD.
     """
@@ -141,7 +149,7 @@ class OptimizationMadInterface(BaseMadInterface):
 
     def count_bpms(self, bpm_range) -> None:
         """Count the number of BPM elements in the specified range."""
-        self.mad.send(COUNT_BPMS_MAD.format(bpm_range=bpm_range))
+        self.mad.send(COUNT_BPMS_MAD.format(bpm_range=bpm_range, py_name=self.py_name))
         nbpms = self.mad.recv()
         LOGGER.info(f"Counted {nbpms} BPMs in range: {bpm_range}")
         return nbpms
@@ -192,7 +200,7 @@ class OptimizationMadInterface(BaseMadInterface):
         for name, val in tune_knobs.items():
             self.mad.send(f"MADX.{name} = {self._apply_noise(val)}")
 
-        self.mad.send("py:send(true)")
+        self.mad.send(f"{self.py_name}:send(true)")
         assert self.mad.recv(), "Failed to set tune knobs"
 
         LOGGER.info(f"Set tune knobs from {TUNE_KNOBS_FILE}: {tune_knobs}")
@@ -206,7 +214,7 @@ class OptimizationMadInterface(BaseMadInterface):
         if not opt_settings.only_energy:
             conditions = []
             for kind, attr, pattern, flag in [
-                # ("sbend", "k0", "MB%.", opt_settings.only_energy),
+                ("sbend", "k0", "MB%.", True),
                 ("quadrupole", "k1", "MQ%.", opt_settings.optimise_quadrupoles),
                 ("sextupole", "k2", "MS%.", opt_settings.optimise_sextupoles),
             ]:
@@ -219,7 +227,7 @@ class OptimizationMadInterface(BaseMadInterface):
             loop_code = MAKE_KNOBS_LOOP_MAD.format(element_condition=element_condition)
             mad_code += loop_code
 
-        mad_code += MAKE_KNOBS_END_MAD
+        mad_code += MAKE_KNOBS_END_MAD.format(py_name=self.py_name)
 
         self.mad.send(mad_code)
         self.knob_names: list[str] = self.mad.recv()
