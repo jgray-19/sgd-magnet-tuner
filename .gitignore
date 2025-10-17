@@ -165,3 +165,5 @@ runs/
 betabeat/
 plots/
 *.out
+analysis*/
+*.png
