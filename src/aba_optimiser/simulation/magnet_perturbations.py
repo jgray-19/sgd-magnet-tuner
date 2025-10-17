@@ -16,8 +16,6 @@ import tfs
 from aba_optimiser.config import BEND_ERROR_FILE
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from pymadng import MAD
 
 logger = logging.getLogger(__name__)
@@ -102,20 +100,6 @@ def apply_magnet_perturbations(
         )
 
     return magnet_strengths, true_strengths
-
-
-def save_true_strengths(true_strengths: dict[str, float], filepath: Path) -> None:
-    """
-    Save true magnet strengths to file.
-
-    Args:
-        true_strengths: dictionary of magnet names and strengths
-        filepath: Path to save file
-    """
-    logger.info(f"Saving true magnet strengths to {filepath}")
-    with filepath.open("w") as f:
-        for name, val in true_strengths.items():
-            f.write(f"{name}_k\t{val: .15e}\n")
 
 
 def apply_magnet_strengths_to_mad(

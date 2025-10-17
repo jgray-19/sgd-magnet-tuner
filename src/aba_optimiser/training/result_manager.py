@@ -52,7 +52,7 @@ class ResultManager:
         # Prepare rows with index, knob, true, final, diff, relative difference, and uncertainty.
         rows = []
         for idx, knob in enumerate(self.knob_names):
-            true_val = true_strengths[knob]
+            true_val = true_strengths.get(knob, np.nan)
             final_val = current_knobs[knob]
             diff = final_val - true_val
             rel_diff = diff / true_val if true_val != 0 else 0
@@ -109,7 +109,7 @@ class ResultManager:
             [initial_strengths[i] for i in range(len(knob_names_wo_dpp))]
         )
         final_vals = np.array([current_knobs[k] for k in knob_names_wo_dpp])
-        true_vals = np.array([true_strengths[k] for k in knob_names_wo_dpp])
+        true_vals = np.array([true_strengths.get(k, np.nan) for k in knob_names_wo_dpp])
 
         save_prefix = "plots/"
         show_errorbars = True
@@ -140,7 +140,7 @@ class ResultManager:
             )
 
         deltap_key = "deltap"  # self.knob_names[-1]
-        if current_knobs[deltap_key] != 0:
+        if current_knobs[deltap_key] != 0 and true_strengths.get(deltap_key, 0) != 0:
             plot_deltap_comparison(
                 true_strengths[deltap_key],
                 current_knobs[deltap_key],

@@ -20,13 +20,13 @@ from .mad_setup import (
     select_bpms,
     setup_tracking_interface,
 )
-from .magnet_perturbations import apply_magnet_perturbations, save_true_strengths
+from .magnet_perturbations import apply_magnet_perturbations
 from .optics import (
     calculate_beta_beating,
     match_tunes,
     perform_orbit_correction,
     run_initial_twiss_analysis,
-    save_matched_tunes,
+    save_knobs,
 )
 from .tracking import (
     cleanup_writer_processes,
@@ -41,13 +41,12 @@ __all__ = [
     "select_bpms",
     # Simulation functions
     "apply_magnet_perturbations",
-    "save_true_strengths",
     "calculate_beta_beating",
     "calculate_twiss",
     "match_tunes",
     "perform_orbit_correction",
     "run_initial_twiss_analysis",
-    "save_matched_tunes",
+    "save_knobs",
     "generate_action_angle_coordinates",
     "create_initial_conditions",
     "validate_coordinate_generation",

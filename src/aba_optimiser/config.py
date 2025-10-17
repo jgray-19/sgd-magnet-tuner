@@ -60,13 +60,17 @@ class OptSettings:
 # Simulation parameters for dp/p optimisation
 DPP_OPT_SETTINGS = OptSettings(
     # max_epochs=400,
-    max_epochs=1000,
-    tracks_per_worker=666,
+    max_epochs=75,
+    # For pre trimmed data
+    # tracks_per_worker=447,
+    # num_workers=59,
+    # For post trimmed data
+    tracks_per_worker=329,
     num_workers=60,
-    # num_batches=20,
-    # warmup_epochs=20,
-    num_batches=50,
-    warmup_epochs=10,
+    num_batches=20,
+    warmup_epochs=3,
+    # num_batches=10,
+    # warmup_epochs=2,
     # adam
     warmup_lr_start=1e-7,
     max_lr=3e-6,
@@ -75,8 +79,8 @@ DPP_OPT_SETTINGS = OptSettings(
     # warmup_lr_start=5e-7,
     # max_lr=1e0,
     # min_lr=1e0,
-    gradient_converged_value=1e-8,
-    # gradient_converged_value=3e-7,
+    # gradient_converged_value=1e-8,
+    gradient_converged_value=3e-7,
     optimiser_type="adam",
     # optimiser_type="lbfgs",
     only_energy=True,
@@ -128,7 +132,7 @@ SEXT_OPT_SETTINGS = OptSettings(
 # Optimizer configuration
 # OPTIMISER_TYPE = "adam"  # Options: "adam", "amsgrad", "lbfgs"
 # OPTIMISER_TYPE = "lbfgs"  # Options: "adam", "amsgrad", "lbfgs"
-GRAD_NORM_ALPHA = 0.7  # Gradient norm smoothing factor for smoothing loss
+GRAD_NORM_ALPHA = 0.4  # Gradient norm smoothing factor for smoothing loss
 
 # =============================================================================
 # NOISE PARAMETERS
@@ -171,8 +175,8 @@ N_COMPARE_TURNS = N_RUN_TURNS - OBSERVE_TURNS_FROM + 1  # Number of turns to com
 
 # Tracking parameters
 RAMP_UP_TURNS = 1_000  # Number of turns to ramp up the ACD
-FLATTOP_TURNS = 40_000  # Number of turns on the flat top
-NUM_TRACKS = 1  # Number of tracks of FLATTOP_TURNS, so total number of turns is FLATTOP_TURNS * NUM_TRACKS (assuming acd is off)
+FLATTOP_TURNS = 6_600  # Number of turns on the flat top
+NUM_TRACKS = 3  # Number of tracks of FLATTOP_TURNS, so total number of turns is FLATTOP_TURNS * NUM_TRACKS (assuming acd is off)
 TRACK_BATCH_SIZE = NUM_TRACKS  # Number of tracks to process in each batch to save RAM
 ACD_ON = False  # Whether the ACD was used or not (Ignores the ramp up turns)
 KICK_BOTH_PLANES = True  # Whether to kick in both planes or separately
@@ -201,8 +205,8 @@ FILE_COLUMNS: tuple[str, ...] = (
     "px",
     "y",
     "py",
-    # "x_weight",
-    # "y_weight",
+    "x_weight",
+    "y_weight",
     "kick_plane",
 )
 
@@ -214,9 +218,9 @@ module_path = Path(__file__).absolute().parent.parent.parent
 logger.info(f"Current module path: {module_path}")
 
 # Data files
-NO_NOISE_FILE = module_path / "data/track_data2.parquet"  # Measurement Parquet file
-NOISY_FILE = module_path / "data/noise_data2.parquet"  # Noise Parquet file
-CLEANED_FILE = module_path / "data/filtered_data2.parquet"  # Filtered TFS file
+NO_NOISE_FILE = module_path / "data/track_data.parquet"  # Measurement Parquet file
+NOISY_FILE = module_path / "data/noise_data.parquet"  # Noise Parquet file
+CLEANED_FILE = module_path / "data/filtered_data.parquet"  # Filtered TFS file
 
 EPLUS_NOISY_FILE = module_path / "data/eplus_data.parquet"  # E+ data file
 EPLUS_NONOISE_FILE = module_path / "data/eplus_nonoise_data.parquet"
@@ -244,15 +248,15 @@ SEQUENCE_FILE = module_path / "mad_scripts/lhcb1.seq"
 # The xsuite JSON file for the LHC
 XSUITE_JSON = module_path / "src" / "aba_optimiser" / "xsuite" / "lhcb1.json"
 # Ground-truth knob strengths
-TRUE_STRENGTHS_FILE = module_path / "data/true_strengths2.txt"
+TRUE_STRENGTHS_FILE = module_path / "data/true_strengths.txt"
 # Where to write final strengths
-OUTPUT_KNOBS = module_path / "data/final_knobs2.txt"
+OUTPUT_KNOBS = module_path / "data/final_knobs.txt"
 # Markdown summary of results
-KNOB_TABLE = module_path / "data/knob_strengths_table2.txt"
+KNOB_TABLE = module_path / "data/knob_strengths_table.txt"
 # Matched tunes file
-TUNE_KNOBS_FILE = module_path / "data/matched_tunes2.txt"
+TUNE_KNOBS_FILE = module_path / "data/matched_tunes.txt"
 # Corrector strengths file
-CORRECTOR_STRENGTHS = module_path / "data/corrector_strengths2.txt"
+CORRECTOR_STRENGTHS = module_path / "data/corrector_strengths.txt"
 # Bend errors file
 BEND_ERROR_FILE = module_path / "data/bend_errors.tfs"
 

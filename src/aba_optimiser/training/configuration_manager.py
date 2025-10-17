@@ -10,7 +10,7 @@ import numpy as np
 from aba_optimiser.config import (
     RUN_ARC_BY_ARC,
     SEQUENCE_FILE,
-    USE_NOISY_DATA,
+    # USE_NOISY_DATA,
 )
 from aba_optimiser.mad.mad_interface import OptimisationMadInterface
 from aba_optimiser.workers.arc_by_arc import ArcByArcWorker
@@ -65,21 +65,20 @@ class ConfigurationManager:
             s + "/" + e for s in bpm_start_points for e in bpm_end_points
         ]
 
-    def setup_mad_interface(self) -> None:
+    def setup_mad_interface(self, bad_bpms: list[str]) -> None:
         """Initialise the MAD-NG interface and get basic model parameters."""
         self.mad_iface = OptimisationMadInterface(
             SEQUENCE_FILE,
             self.magnet_range,
             opt_settings=self.global_config,
-            use_real_strengths="noisy" if USE_NOISY_DATA else True,
+            use_real_strengths=False,
             # discard_mad_output=False,
+            bad_bpms=bad_bpms,
         )
         self.knob_names = self.mad_iface.knob_names
 
         self.elem_spos = self.mad_iface.elem_spos
-        tws = self.mad_iface.run_twiss()
-        LOGGER.info(f"Found tunes: {tws['q1']}, {tws['q2']}")
-        self.all_bpms = tws.index.to_numpy()
+        self.all_bpms = self.mad_iface.all_bpms
 
     def determine_worker_and_bpms(self) -> None:
         """Determine the worker type and BPM start points based on the run mode."""
@@ -122,11 +121,13 @@ class ConfigurationManager:
         current_knobs = dict(zip(self.knob_names, initial_strengths))
 
         # Restrict true strengths to knobs we actually have in model
-        filtered_true_strengths = {
-            knob: true_strengths[knob] for knob in self.knob_names
-        }
-        print(self.knob_names)
-
+        if len(true_strengths) == 0:
+            LOGGER.warning("No true strengths provided, skipping filtering")
+            filtered_true_strengths = {}
+        else:
+            filtered_true_strengths = {
+                knob: true_strengths[knob] for knob in self.knob_names
+            }
         return current_knobs, filtered_true_strengths
 
     def calculate_n_data_points(self) -> dict[str, int]:
@@ -136,6 +137,7 @@ class ConfigurationManager:
 
         n_data_points = {}
         for bpm_range in self.bpm_ranges:
-            n_bpms = self.mad_iface.count_bpms(bpm_range)
+            n_bpms, _ = self.mad_iface.count_bpms(bpm_range)
             n_data_points[bpm_range] = self.Worker.get_n_data_points(n_bpms)
+            logging.info(f"{bpm_range}: {n_data_points[bpm_range]} data points")
         return n_data_points

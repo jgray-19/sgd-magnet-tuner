@@ -87,20 +87,6 @@ def match_tunes(
     return matched_tunes
 
 
-def save_matched_tunes(matched_tunes: dict[str, float], filepath: Path) -> None:
-    """
-    Save matched tunes to file.
-
-    Args:
-        matched_tunes: Dictionary of tune knobs and values
-        filepath: Path to save file
-    """
-    logger.info(f"Saving matched tunes to {filepath}")
-    with filepath.open("w") as f:
-        for key, val in matched_tunes.items():
-            f.write(f"{key}\t{val: .15e}\n")
-
-
 def perform_orbit_correction(
     mad: MAD,
     machine_deltap: float,

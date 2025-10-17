@@ -25,6 +25,19 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
+import pandas as pd
+import tfs
+from omc3.optics_measurements.constants import (
+    ALPHA,
+    BETA,
+    BETA_NAME,
+    NAME,
+    NAME2,
+    ORBIT,
+    ORBIT_NAME,
+    PHASE,
+    PHASE_NAME,
+)
 
 from aba_optimiser.config import (
     FILE_COLUMNS,
@@ -35,13 +48,10 @@ from aba_optimiser.mad.mad_interface import OptimisationMadInterface
 from aba_optimiser.physics.bpm_phases import next_bpm_to_pi_2, prev_bpm_to_pi_2
 
 if TYPE_CHECKING:
-    import tfs  # type: ignore[import-not-found]
+    from pathlib import Path
 
 LOGGER = logging.getLogger(__name__)
 OUT_COLS = list(FILE_COLUMNS)
-
-if TYPE_CHECKING:
-    import pandas as pd
 
 
 # ---------- Small data containers ----------
@@ -71,8 +81,8 @@ class LatticeMaps:
     alfay: dict
     cox: dict
     coy: dict
-    copx: dict
-    copy: dict
+    # copx: dict
+    # copy: dict
 
 
 # ---------- Helpers: generic ----------
@@ -169,11 +179,7 @@ def _subtract_bpm_means(df: tfs.TfsDataFrame, info: bool) -> bool:
         df[col] = df_[col]
 
 
-def _add_bpm_means(
-    df_p: tfs.TfsDataFrame,
-    df_n: tfs.TfsDataFrame,
-    df_avg: tfs.TfsDataFrame,
-) -> None:
+def _add_bpm_means(*dfs: tfs.TfsDataFrame) -> None:
     """
     Add back per-BPM mean positions to x/y/px/py measurements.
 
@@ -184,7 +190,7 @@ def _add_bpm_means(
         df_n: DataFrame with next BPM calculations
         df_avg: DataFrame with averaged calculations
     """
-    for df in (df_p, df_n, df_avg):
+    for df in dfs:
         if "x_mean" in df.columns and "y_mean" in df.columns:
             df["x"] += df["x_mean"]
             df["y"] += df["y_mean"]
@@ -250,8 +256,8 @@ def _lattice_maps(tws: tfs.TfsDataFrame) -> LatticeMaps:
         alfay=tws["alfa22"].to_dict(),
         cox=tws["x"].to_dict(),
         coy=tws["y"].to_dict(),
-        copx=tws["px"].to_dict(),
-        copy=tws["py"].to_dict(),
+        # copx=tws["px"].to_dict(),
+        # copy=tws["py"].to_dict(),
     )
 
 
@@ -279,6 +285,128 @@ def _neighbour_tables(
     next_y = next_bpm_to_pi_2(tws["mu2"], tws.q2).rename(
         columns={"next_bpm": "next_bpm_y", "delta": "delta_y"}
     )
+    return prev_x, prev_y, next_x, next_y
+
+
+def _find_neighbors_from_phase_diffs(
+    phase_df: tfs.TfsDataFrame,
+    phase_col: str,
+    bpm_list: list[str],
+    target_phase: float = 0.25,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Find BPM neighbors at target phase difference by summing phase advances.
+
+    Args:
+        phase_df: Phase DataFrame with NAME, NAME2, and phase column
+        phase_col: Name of the phase column ('PHASEX' or 'PHASEY')
+        target_phase: Target phase difference (default 0.25 for π/2)
+
+    Returns:
+        Tuple of (prev_df, next_df) with columns 'prev_bpm', 'delta' and 'next_bpm', 'delta'
+    """
+    # Get ordered list of BPMs as consecutive sequence in the ring, only including pairs with phases
+    best_prev_dict = {}
+    best_next_dict = {}
+    phase_df = phase_df.set_index([NAME, NAME2])
+    for i, bpm in enumerate(bpm_list):
+        # Find best previous BPM
+        phase = 0
+        phase_diffs = {}
+        cur_bpm = bpm
+        for j in range(i - 1, i - 12, -1):  # look back up to 11 BPMs
+            prev_bpm = bpm_list[j]  # the list is circular
+            phase += phase_df.loc[(prev_bpm, cur_bpm), phase_col]
+            phase_diffs[prev_bpm] = phase
+            if phase >= target_phase:
+                break
+            cur_bpm = prev_bpm
+
+        if phase_diffs:
+            best_prev_bpm, best_prev_delta = min(
+                phase_diffs.items(), key=lambda item: abs(item[1] - target_phase)
+            )
+            best_prev_dict[bpm] = (best_prev_bpm, best_prev_delta)
+        else:
+            raise ValueError(f"No previous BPM found for {bpm}")
+        # Find best next BPM
+        phase = 0
+        phase_diffs = {}
+        cur_bpm = bpm
+        for j in range(i + 1, i + 12):  # look forward up to 11 BPMs
+            next_bpm = bpm_list[j % len(bpm_list)]  # the list is circular
+            phase += phase_df.loc[(cur_bpm, next_bpm), phase_col]
+            phase_diffs[next_bpm] = phase
+            if phase >= target_phase:
+                break
+            cur_bpm = next_bpm
+
+        if phase_diffs:
+            best_next_bpm, best_next_delta = min(
+                phase_diffs.items(), key=lambda item: abs(item[1] - target_phase)
+            )
+            best_next_dict[bpm] = (best_next_bpm, best_next_delta)
+        else:
+            raise ValueError(f"No next BPM found for {bpm}")
+
+    # Build result DataFrames
+    prev_results = []
+    next_results = []
+    for bpm in bpm_list:
+        best_prev_bpm, best_prev_delta = best_prev_dict.get(bpm, (None, None))
+        best_next_bpm, best_next_delta = best_next_dict.get(bpm, (None, None))
+        prev_results.append({"prev_bpm": best_prev_bpm, "delta": best_prev_delta})
+        next_results.append({"next_bpm": best_next_bpm, "delta": best_next_delta})
+
+    prev_df = pd.DataFrame(prev_results, index=bpm_list)
+    next_df = pd.DataFrame(next_results, index=bpm_list)
+
+    return prev_df, next_df
+
+
+def _add_final_row(phase_df: tfs.TfsDataFrame, plane: str) -> None:
+    # Add the final row to the phase DataFrames to make them circular. Include the final NAME2 to the first NAME.
+    # The phase should be the tune - the cumulative phase from the first NAME to the last NAME2.
+    tune = "Q1" if plane == "X" else "Q2"
+    first_bpm = phase_df.iloc[0][NAME]
+    last_bpm = phase_df.iloc[-1][NAME2]
+    total_phase = phase_df[PHASE + plane].sum()
+    phase_df.loc[len(phase_df)] = {
+        NAME: last_bpm,
+        NAME2: first_bpm,
+        PHASE + plane: phase_df[tune] - total_phase,
+    }
+
+
+def _measurement_neighbour_tables(
+    phase_x: tfs.TfsDataFrame,
+    phase_y: tfs.TfsDataFrame,
+) -> tuple[tfs.TfsDataFrame, tfs.TfsDataFrame, tfs.TfsDataFrame, tfs.TfsDataFrame]:
+    """
+    Create tables of BPM neighbors from measurement phases.
+
+    Args:
+        phase_x: Phase DataFrame for horizontal plane
+        phase_y: Phase DataFrame for vertical plane
+    Returns:
+        Tuple of (prev_x, prev_y, next_x, next_y) DataFrames
+    """
+    _add_final_row(phase_x, "X")
+    _add_final_row(phase_y, "Y")
+    # Find neighbors for x plane
+    prev_x, next_x = _find_neighbors_from_phase_diffs(
+        phase_x, PHASE + "X", phase_x[NAME].to_list()
+    )
+    prev_x = prev_x.rename(columns={"prev_bpm": "prev_bpm_x", "delta": "delta_x"})
+    next_x = next_x.rename(columns={"next_bpm": "next_bpm_x", "delta": "delta_x"})
+
+    # Find neighbors for y plane
+    prev_y, next_y = _find_neighbors_from_phase_diffs(
+        phase_y, PHASE + "Y", phase_y[NAME].to_list()
+    )
+    prev_y = prev_y.rename(columns={"prev_bpm": "prev_bpm_y", "delta": "delta_y"})
+    next_y = next_y.rename(columns={"next_bpm": "next_bpm_y", "delta": "delta_y"})
+
     return prev_x, prev_y, next_x, next_y
 
 
@@ -647,6 +775,96 @@ def _diagnostics(
             print("py_diff mean (avg rel)", py_rel.abs().mean(), "±", py_rel.std())
         else:
             print("py_diff mean (avg rel): No significant py values")
+
+
+def calculate_pz_from_measurements(
+    data: pd.DataFrame,
+    analysis_dir: str | Path,
+    info: bool = True,
+    subtract_mean: bool = False,
+) -> pd.DataFrame:
+    phase_x = tfs.read(
+        analysis_dir / (PHASE_NAME + "x.tfs"),
+    )
+    phase_y = tfs.read(analysis_dir / (PHASE_NAME + "y.tfs"))
+    beta_x = tfs.read(analysis_dir / (BETA_NAME + "x.tfs"), index=NAME)
+    beta_y = tfs.read(analysis_dir / (BETA_NAME + "y.tfs"), index=NAME)
+    orbit_x = tfs.read(analysis_dir / (ORBIT_NAME + "x.tfs"), index=NAME)
+    orbit_y = tfs.read(analysis_dir / (ORBIT_NAME + "y.tfs"), index=NAME)
+
+    bpm_list = beta_x.index.to_list()
+
+    prev_x_df, prev_y_df, next_x_df, next_y_df = _measurement_neighbour_tables(
+        phase_x, phase_y
+    )
+
+    # Remove all the bpms in the data not in the bpm list
+    data = data[data["name"].isin(bpm_list)].copy()
+
+    # Lattice at current BPM
+    betay = BETA + "Y"
+    betax = BETA + "X"
+    alphax = ALPHA + "X"
+    alphay = ALPHA + "Y"
+    ox = ORBIT + "X"
+    oy = ORBIT + "Y"
+
+    sqrt_betax = np.sqrt(beta_x[betax])
+    sqrt_betay = np.sqrt(beta_y[betay])
+    maps = LatticeMaps(
+        betax=beta_x[betax].to_dict(),
+        betay=beta_y[betay].to_dict(),
+        sqrt_betax=sqrt_betax.to_dict(),
+        sqrt_betay=sqrt_betay.to_dict(),
+        alfax=beta_x[alphax].to_dict(),
+        alfay=beta_y[alphay].to_dict(),
+        cox=orbit_x[ox].to_dict(),
+        coy=orbit_y[oy].to_dict(),
+        # copx=orbit_x[ox].to_dict(),
+        # copy=orbit_y[oy].to_dict(),
+    )
+
+    if subtract_mean:
+        # subtract per-BPM mean orbit
+        data.loc[:, "x_mean"] = data["name"].map(orbit_x[ox].to_dict())
+        data.loc[:, "y_mean"] = data["name"].map(orbit_y[oy].to_dict())
+        data.loc[:, "x"] -= data["x_mean"]
+        data.loc[:, "y"] -= data["y_mean"]
+
+    bpm_index = {b: i for i, b in enumerate(bpm_list)}
+    data_p = data.join(prev_x_df, on="name", rsuffix="_px")
+    data_p = data_p.join(prev_y_df, on="name", rsuffix="_py")
+    data_n = data.join(next_x_df, on="name", rsuffix="_nx")
+    data_n = data_n.join(next_y_df, on="name", rsuffix="_ny")
+
+    _attach_lattice_columns(data_p, maps)
+    _attach_lattice_columns(data_n, maps)
+
+    data_p["sqrt_betax_p"] = data_p["prev_bpm_x"].map(maps.sqrt_betax)
+    data_p["sqrt_betay_p"] = data_p["prev_bpm_y"].map(maps.sqrt_betay)
+    data_n["sqrt_betax_n"] = data_n["next_bpm_x"].map(maps.sqrt_betax)
+    data_n["sqrt_betay_n"] = data_n["next_bpm_y"].map(maps.sqrt_betay)
+
+    turn_x_p, turn_y_p, turn_x_n, turn_y_n = _compute_turn_wraps(
+        data_p, data_n, bpm_index
+    )
+    data_p, data_n = _merge_neighbor_coords(
+        data_p, data_n, turn_x_p, turn_y_p, turn_x_n, turn_y_n
+    )
+
+    data_p = _momenta_from_prev(data_p)
+    data_n = _momenta_from_next(data_n)
+
+    _sync_endpoints(data_p, data_n)
+
+    data_avg = _weighted_average(data_p, data_n, maps.betax, maps.betay)
+
+    if subtract_mean:
+        # add back the mean orbit
+        _add_bpm_means(data_p, data_n, data_avg)
+        _cleanup_mean_cols(data_p, data_n, data_avg)
+
+    return data_avg[OUT_COLS]
 
 
 # ---------- Public API ----------

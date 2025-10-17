@@ -46,9 +46,11 @@ class DataManager:
         self,
         all_bpms: np.ndarray,
         opt_settings: OptSettings,
+        measurement_file: str | None = None,
     ):
         self.all_bpms = all_bpms
         self.opt_settings = opt_settings
+        self.measurement_file = measurement_file
 
         # Available global "turn" ids (already include offsets if sextupoles are on)
         total_files = 3 if opt_settings.use_off_energy_data else 1
@@ -82,7 +84,7 @@ class DataManager:
         """Read a parquet with optional turn filtering and column validation."""
         if needed_turns:
             filtered_turns = [t - offset for t in needed_turns]
-            filters = [("turn", "in", filtered_turns)]
+            filters = [("turn", "in", filtered_turns), ("name", "in", self.all_bpms)]
             df = pd.read_parquet(source, columns=cols_to_read, filters=filters)
             df["turn"] += offset  # Create global ids
         else:
@@ -95,15 +97,19 @@ class DataManager:
 
     def _select_file_0e(self) -> str:
         """Select the appropriate zero-energy file based on noise and filtering settings."""
+        if self.measurement_file is not None:
+            LOGGER.info("Using custom measurement file: %s", self.measurement_file)
+            return self.measurement_file
+
         if USE_NOISY_DATA:
             if CLEAN_DATA:
-                LOGGER.debug("Using filtered data for zero-energy tracks")
+                LOGGER.info("Using filtered data for zero-energy tracks")
                 return CLEANED_FILE
 
-            LOGGER.debug("Using noisy data for zero-energy tracks")
+            LOGGER.info("Using noisy data for zero-energy tracks")
             return NOISY_FILE
 
-        LOGGER.debug("Using non-noisy data for zero-energy tracks")
+        LOGGER.info("Using non-noisy data for zero-energy tracks")
         return NO_NOISE_FILE
 
     # ---------- Public API ----------
@@ -143,6 +149,19 @@ class DataManager:
         for e in energies:
             df = self._read_parquet(sources[e], needed_turns, offsets[e])
             energy_tracks[e] = self._reduce_dataframe(df)
+
+        # Handle NaN values in track data
+        for df in energy_tracks.values():
+            # For each row that contains NaNs in the x, y or px, py columns,
+            # set the x_weight and y_weight to 0
+            nan_mask = df[["x", "y", "px", "py"]].isna().any(axis=1)
+            if nan_mask.any():
+                num_nans = nan_mask.sum()
+                LOGGER.warning(
+                    "Found %d rows with NaNs in track data, setting weights to 0",
+                    num_nans,
+                )
+                df.loc[nan_mask, ["x_weight", "y_weight"]] = 0.0
 
         self.track_data = (
             energy_tracks if use_off_energy_data else {"zero": energy_tracks["zero"]}
@@ -191,7 +210,8 @@ class DataManager:
             )
             self.available_turns = self.available_turns[: -(N_RUN_TURNS + 2)]
         else:
-            to_remove = [(i + 1) * FLATTOP_TURNS for i in range(NUM_TRACKS)]
+            to_remove = [i * FLATTOP_TURNS + 1 for i in range(NUM_TRACKS)]
+            to_remove += [(i + 1) * FLATTOP_TURNS for i in range(NUM_TRACKS)]
             self.available_turns = [
                 t for t in self.available_turns if t not in to_remove
             ]
@@ -225,6 +245,12 @@ class DataManager:
             num_ranges = len(config_manager.bpm_ranges)
             self.tracks_per_worker *= num_ranges
             num_workers = num_workers // num_ranges
+            num_workers = max(1, num_workers)  # Ensure at least one worker
+            LOGGER.info(
+                f"Adjusted tracks per worker to {self.tracks_per_worker} "
+                f"and number of workers to {num_workers} "
+                f"to account for {num_ranges} BPM ranges."
+            )
 
         # Randomly select turns for each batch
         random.shuffle(self.available_turns)

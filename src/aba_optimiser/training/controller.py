@@ -32,7 +32,7 @@ from aba_optimiser.training.worker_manager import WorkerManager
 if TYPE_CHECKING:
     from aba_optimiser.config import OptSettings
 
-LOGGER = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 random.seed(42)  # For reproducibility
 
 
@@ -49,53 +49,72 @@ class Controller:
         opt_settings: OptSettings,
         show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
+        true_strengths_file: str | None = TRUE_STRENGTHS_FILE,
         machine_deltap: float = MACHINE_DELTAP,
         magnet_range: str = MAGNET_RANGE,
         bpm_start_points: list[str] = BPM_START_POINTS,
         bpm_end_points: list[str] = BPM_END_POINTS,
+        measurement_file: str | None = None,
+        bad_bpms: list[str] | None = None,
     ):
         """Initialise the controller with all required managers."""
 
-        LOGGER.info("Optimising energy")
+        logger.info("Optimising energy")
         if opt_settings.optimise_quadrupoles:
-            LOGGER.info("Optimising quadrupoles")
+            logger.info("Optimising quadrupoles")
         if opt_settings.optimise_sextupoles:
-            LOGGER.info("Optimising sextupoles")
+            logger.info("Optimising sextupoles")
         self.opt_settings = opt_settings
+
+        # Remove all the bad bpms from the start and end points
+        if bad_bpms is not None:
+            for bpm in bad_bpms:
+                if bpm in bpm_start_points:
+                    bpm_start_points.remove(bpm)
+                    logger.warning(f"Removed bad BPM {bpm} from start points")
+                if bpm in bpm_end_points:
+                    bpm_end_points.remove(bpm)
+                    logger.warning(f"Removed bad BPM {bpm} from end points")
 
         # Initialise managers
         self.config_manager = ConfigurationManager(
             opt_settings, magnet_range, bpm_start_points, bpm_end_points
         )
-        self.config_manager.setup_mad_interface()
+        self.config_manager.setup_mad_interface(bad_bpms)
         self.config_manager.determine_worker_and_bpms()
 
         self.data_manager = DataManager(
             self.config_manager.all_bpms,
             opt_settings,
+            measurement_file,
         )
         self.data_manager.prepare_turn_batches(self.config_manager)
 
         # Determine the exact set of turns needed and load filtered data
-        needed_turns = None
-        if RUN_ARC_BY_ARC:
-            needed_turns = {
-                t for batch in self.data_manager.turn_batches for t in batch
-            } | {t + 1 for batch in self.data_manager.turn_batches for t in batch}
+        # needed_turns = None
+        # if RUN_ARC_BY_ARC:
+        #     needed_turns = {
+        #         t for batch in self.data_manager.turn_batches for t in batch
+        #     } | {t + 1 for batch in self.data_manager.turn_batches for t in batch}
         self.data_manager.load_track_data(
-            needed_turns=needed_turns,
+            # needed_turns=needed_turns,
             use_off_energy_data=opt_settings.use_off_energy_data,
         )
 
         self.worker_manager = WorkerManager(
             self.config_manager.Worker,
             self.config_manager.calculate_n_data_points(),
-            magnet_range=magnet_range,
             # Assume the start bpm has is largest vertical kick
             ybpm=magnet_range.split("/")[0],
+            magnet_range=magnet_range,
+            bad_bpms=bad_bpms,
         )
-
-        true_strengths = read_knobs(TRUE_STRENGTHS_FILE)
+        if true_strengths_file is None:
+            true_strengths = {}
+            true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(machine_deltap)
+        else:
+            true_strengths = read_knobs(TRUE_STRENGTHS_FILE)
+            true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(machine_deltap)
         # For all the main bending magnets, remove the a/b/c/d suffixes
         # and set the only knob to the c suffix value (the only one that has a reasonable gradient).
         # bending_magnets: dict[str, float] = {}
@@ -115,8 +134,6 @@ class Controller:
         #     del true_strengths[mag_name]
         # for mag_name in bending_magnets:
         #     true_strengths[mag_name] = bending_magnets[mag_name]
-
-        true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(machine_deltap)
 
         # Initialise knobs
         if initial_knob_strengths is not None and "deltap" in initial_knob_strengths:
@@ -174,7 +191,7 @@ class Controller:
                 total_turns,
             )
         except KeyboardInterrupt:
-            LOGGER.warning(
+            logger.warning(
                 "\nKeyboardInterrupt detected. Terminating early and writing results."
             )
             self.final_knobs = self.initial_knobs
@@ -199,9 +216,12 @@ class Controller:
         self.final_knobs["deltap"] = self.config_manager.mad_iface.pt2dp(
             self.final_knobs.pop("pt")
         )
-        self.filtered_true_strengths["deltap"] = self.config_manager.mad_iface.pt2dp(
-            self.filtered_true_strengths.pop("pt")
-        )
+        if "pt" in self.config_manager.initial_strengths:
+            self.filtered_true_strengths["deltap"] = (
+                self.config_manager.mad_iface.pt2dp(
+                    self.filtered_true_strengths.pop("pt")
+                )
+            )
 
         uncertainties[-1] = self.config_manager.mad_iface.pt2dp(uncertainties[-1])
 
@@ -232,5 +252,5 @@ class Controller:
             uncertainties,
         )
 
-        LOGGER.info("Optimisation complete.")
+        logger.info("Optimisation complete.")
         return uncertainties

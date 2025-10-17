@@ -24,6 +24,7 @@ from aba_optimiser.config import (
     TRUE_STRENGTHS_FILE,
     TUNE_KNOBS_FILE,
 )
+from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.simulation import (
     apply_magnet_perturbations,
     cleanup_writer_processes,
@@ -33,8 +34,6 @@ from aba_optimiser.simulation import (
     perform_orbit_correction,
     run_initial_twiss_analysis,
     run_parallel_tracking,
-    save_matched_tunes,
-    save_true_strengths,
     select_bpms,
     setup_writer_processes,
     validate_coordinate_generation,
@@ -124,7 +123,7 @@ def create_a34(
     )
 
     # Save matched tunes to file
-    save_matched_tunes(matched_tunes, TUNE_KNOBS_FILE)
+    save_knobs(matched_tunes, TUNE_KNOBS_FILE)
 
     # Run final twiss calculation after orbit correction
     logger.info("Running final twiss calculation after orbit correction")
@@ -133,7 +132,8 @@ def create_a34(
     logger.info(f"Final twiss completed. Qx={changed_tws.q1}, Qy={changed_tws.q2}")
 
     # Save true magnet strengths
-    save_true_strengths(true_strengths, TRUE_STRENGTHS_FILE)
+    true_strengths = {k + "_k": v for k, v in true_strengths.items()}
+    save_knobs(true_strengths, TRUE_STRENGTHS_FILE)
 
     # Generate action-angle coordinates for tracking
     logger.info("Setting up action-angle tracking parameters")

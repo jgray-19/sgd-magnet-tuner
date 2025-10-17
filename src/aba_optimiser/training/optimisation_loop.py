@@ -37,6 +37,7 @@ class OptimisationLoop:
     ):
         self.knob_names = knob_names
         self.true_strengths = true_strengths
+        self.use_true_strengths = len(true_strengths) > 0
         self.smoothed_grad_norm: float | None = None
 
         self.max_epochs = opt_settings.max_epochs
@@ -56,6 +57,7 @@ class OptimisationLoop:
         )
 
         self.some_magnets = not opt_settings.only_energy
+        self.num_batches = opt_settings.num_batches
 
     def _init_optimiser(self, shape: tuple, optimiser_type: str) -> None:
         """Initialise the optimiser based on type."""
@@ -94,24 +96,37 @@ class OptimisationLoop:
         for epoch in range(self.max_epochs):
             epoch_start = time.time()
 
-            # Send knobs to workers
-            for conn in parent_conns:
-                conn.send(current_knobs)
-
+            epoch_loss = 0.0
+            epoch_grad = None
             lr = self.scheduler(epoch)
-            total_loss, agg_grad = self._collect_worker_results(
-                parent_conns, total_turns
-            )
-
             prev_knobs = current_knobs.copy()
-            current_knobs = self._update_knobs(current_knobs, agg_grad, lr)
-            grad_norm = np.linalg.norm(agg_grad)
+
+            for batch in range(self.num_batches):
+                # Send knobs to workers
+                for conn in parent_conns:
+                    conn.send((current_knobs, batch))
+
+                batch_loss, batch_grad = self._collect_batch_results(parent_conns)
+                epoch_loss += batch_loss
+                if epoch_grad is None:
+                    epoch_grad = batch_grad
+                else:
+                    epoch_grad += batch_grad
+
+                # Update knobs after each batch
+                current_knobs = self._update_knobs(current_knobs, batch_grad, lr)
+
+            # Average over batches for logging
+            epoch_loss /= total_turns
+            epoch_grad /= total_turns
+
+            grad_norm = np.linalg.norm(epoch_grad)
             self._update_smoothed_grad_norm(grad_norm)
 
             self._log_epoch_stats(
                 writer,
                 epoch,
-                total_loss,
+                epoch_loss,
                 grad_norm,
                 lr,
                 epoch_start,
@@ -127,7 +142,7 @@ class OptimisationLoop:
                 break
             if (
                 sum(abs(current_knobs[k] - prev_knobs[k]) for k in self.knob_names)
-                < 1e-10
+                < 1e-11
                 and epoch > 10
             ):
                 LOGGER.info(
@@ -137,19 +152,17 @@ class OptimisationLoop:
 
         return current_knobs
 
-    def _collect_worker_results(
-        self, parent_conns: list[Connection], total_turns: int
+    def _collect_batch_results(
+        self, parent_conns: list[Connection]
     ) -> tuple[float, np.ndarray]:
-        """Collect results from all workers for an epoch."""
+        """Collect results from all workers for a batch."""
         total_loss = 0.0
         agg_grad: None | np.ndarray = None
         for conn in parent_conns:
             _, grad, loss = conn.recv()
             agg_grad = grad if agg_grad is None else agg_grad + grad
             total_loss += loss
-        total_loss /= total_turns
-        agg_grad = agg_grad.flatten() / total_turns
-        return total_loss, agg_grad
+        return total_loss, agg_grad.flatten()
 
     def _update_knobs(
         self, current_knobs: dict[str, float], agg_grad: np.ndarray, lr: float
@@ -173,7 +186,7 @@ class OptimisationLoop:
         self,
         writer: SummaryWriter,
         epoch: int,
-        total_loss: float,
+        loss: float,
         grad_norm: float,
         lr: float,
         epoch_start: float,
@@ -181,23 +194,25 @@ class OptimisationLoop:
         current_knobs: dict[str, float],
     ) -> None:
         """Log statistics for the current epoch."""
-        true_diff = [
-            abs(current_knobs[k] - self.true_strengths[k]) for k in self.knob_names
-        ]
-        rel_diff = [
-            diff / abs(self.true_strengths[k]) if self.true_strengths[k] != 0 else 0
-            for k, diff in zip(self.knob_names, true_diff)
-        ]
-
-        sum_true_diff = np.sum(true_diff)
-        sum_rel_diff = np.sum(rel_diff)
-
-        writer.add_scalar("loss", total_loss, epoch)
+        writer.add_scalar("loss", loss, epoch)
         writer.add_scalar("grad_norm", grad_norm, epoch)
-        writer.add_scalar("true_diff", sum_true_diff, epoch)
-        writer.add_scalar("rel_diff", sum_rel_diff, epoch)
 
-        if self.some_magnets:
+        if self.use_true_strengths:
+            true_diff = [
+                abs(current_knobs[k] - self.true_strengths[k]) for k in self.knob_names
+            ]
+            rel_diff = [
+                diff / abs(self.true_strengths[k]) if self.true_strengths[k] != 0 else 0
+                for k, diff in zip(self.knob_names, true_diff)
+            ]
+
+            sum_true_diff = np.sum(true_diff)
+            sum_rel_diff = np.sum(rel_diff)
+
+            writer.add_scalar("true_diff", sum_true_diff, epoch)
+            writer.add_scalar("rel_diff", sum_rel_diff, epoch)
+
+        if self.some_magnets and self.use_true_strengths:
             true_middle_diff = [
                 abs(current_knobs[k] - self.true_strengths[k])
                 for k in self.knob_names[5:-5]
@@ -220,16 +235,18 @@ class OptimisationLoop:
         total_time = time.time() - run_start
 
         middle = (
+            f"true_diff={sum_true_diff:.3e}, rel_diff={sum_rel_diff:.3e}, "
+            if self.use_true_strengths
+            else ""
+        ) + (
             f"true_middle_diff={sum_true_middle_diff:.3e}, rel_middle_diff={sum_rel_middle_diff:.3e}, "
             if self.some_magnets
             else ""
         )
         message = (
             f"\rEpoch {epoch}: "
-            f"loss={total_loss:.3e}, "
+            f"loss={loss:.3e}, "
             f"grad_norm={grad_norm:.3e}, "
-            f"true_diff={sum_true_diff:.3e}, "
-            f"rel_diff={sum_rel_diff:.3e}, "
             f"{middle}"
             f"lr={lr:.3e}, "
             f"epoch_time={epoch_time:.3f}s, "

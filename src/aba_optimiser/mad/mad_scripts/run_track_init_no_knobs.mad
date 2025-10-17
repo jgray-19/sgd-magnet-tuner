@@ -42,7 +42,6 @@ function save_data(elm, mflw, _, slc)
     local turn in mflw
     -- Observe the BPMs at the specified intervals
     if slc == -2 and elm:is_observed() and turn >= mflw.observe then
-        print("Element:", elm.name, "Slice:", slc, "Turn:", turn)
          -- Loop over each particle in the batch
         for i=1,batch_size do
             x[i]:seti(observe_count, mflw[i].x:get0()) ! get0 returns the scalar

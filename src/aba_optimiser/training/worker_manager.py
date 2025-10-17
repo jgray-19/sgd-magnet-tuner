@@ -59,6 +59,7 @@ class WorkerManager:
         n_data_points: dict[str, int],
         ybpm: str,
         magnet_range: str,
+        bad_bpms: list[str] | None = None,
     ):
         """Initialize the WorkerManager.
 
@@ -76,6 +77,7 @@ class WorkerManager:
         self.magnet_range = magnet_range
         # Per-DataFrame cache mapping (turn, bpm) -> iloc position for faster slicing
         self._pos_cache: dict[int, dict[tuple[int, str], int]] = {}
+        self.bad_bpms = bad_bpms
 
     def _compute_pt(self, energy_type: str) -> float:
         """Compute transverse momentum based on energy type.
@@ -181,6 +183,8 @@ class WorkerManager:
                 "y": df["y"].to_numpy(dtype="float64", copy=False),
                 "px": df["px"].to_numpy(dtype="float64", copy=False),
                 "py": df["py"].to_numpy(dtype="float64", copy=False),
+                "x_weight": df["x_weight"].to_numpy(dtype="float64", copy=False),
+                "y_weight": df["y_weight"].to_numpy(dtype="float64", copy=False),
             }
         sdir = 1  # Start with positive direction
         num_ranges = len(bpm_ranges)
@@ -197,19 +201,27 @@ class WorkerManager:
                     f"Turn batch {batch_idx} for range {bpm_range} is empty. "
                     f"Check TRACKS_PER_WORKER and NUM_WORKERS."
                 )
+                print(self.n_data_points)
 
                 # Create the payload data for this worker (x/y comparisons, initial coords, etc.)
-                x_comp, y_comp, px_comp, py_comp, init_coords, pt_array = (
-                    self._make_worker_payload(
-                        track_data,
-                        turn_batch,
-                        energy_turn_map,
-                        start_bpm,
-                        end_bpm,
-                        self.n_data_points[bpm_range],
-                        sdir,
-                        precomputed_arrays,
-                    )
+                (
+                    x_comp,
+                    y_comp,
+                    px_comp,
+                    py_comp,
+                    init_coords,
+                    pt_array,
+                    # x_weights,
+                    # y_weights,
+                ) = self._make_worker_payload(
+                    track_data,
+                    turn_batch,
+                    energy_turn_map,
+                    start_bpm,
+                    end_bpm,
+                    self.n_data_points[bpm_range],
+                    sdir,
+                    precomputed_arrays,
                 )
 
                 # Make arrays read-only to prevent accidental modification in worker processes
@@ -224,11 +236,14 @@ class WorkerManager:
                         "y_comparisons": y_comp,  # Expected y coordinates for loss calculation
                         "px_comparisons": px_comp,  # Expected px coordinates for loss calculation
                         "py_comparisons": py_comp,  # Expected py coordinates for loss calculation
+                        # "x_weights": x_weights,  # Weights for x coordinates
+                        # "y_weights": y_weights,  # Weights for y coordinates
                         "init_coords": init_coords,  # Initial particle coordinates
                         "start_bpm": start_bpm,
                         "end_bpm": end_bpm,
                         "init_pts": pt_array,
                         "sdir": sdir,
+                        "bad_bpms": self.bad_bpms,  # List of bad BPMs
                     }
                 )
                 sdir *= -1  # Alternate the sign of the tracking direction
@@ -264,6 +279,9 @@ class WorkerManager:
         y_comp = np.empty((n_turns, n_data_points), dtype="float64")
         px_comp = np.empty((n_turns, n_data_points), dtype="float64")
         py_comp = np.empty((n_turns, n_data_points), dtype="float64")
+        # x_weights = np.empty((n_turns, n_data_points), dtype="float64")
+        # y_weights = np.empty((n_turns, n_data_points), dtype="float64")
+
         init_coords_array = np.empty((n_turns, 6), dtype="float64")
         pt_array = np.empty((n_turns,), dtype="float64")
         init_bpm = start_bpm if sdir == 1 else end_bpm
@@ -274,17 +292,21 @@ class WorkerManager:
             energy_type = energy_turn_map[turn]
             if precomputed_arrays is not None and energy_type in precomputed_arrays:
                 entry = precomputed_arrays[energy_type]
-                df: pd.DataFrame = entry["df"]  # type: ignore[assignment]
-                arr_x: np.ndarray = entry["x"]  # type: ignore[assignment]
-                arr_y: np.ndarray = entry["y"]  # type: ignore[assignment]
-                arr_px: np.ndarray = entry["px"]  # type: ignore[assignment]
-                arr_py: np.ndarray = entry["py"]  # type: ignore[assignment]
+                df: pd.DataFrame = entry["df"]
+                arr_x: np.ndarray = entry["x"]
+                arr_y: np.ndarray = entry["y"]
+                arr_px: np.ndarray = entry["px"]
+                arr_py: np.ndarray = entry["py"]
+                # arr_wx: np.ndarray = entry["x_weight"]
+                # arr_wy: np.ndarray = entry["y_weight"]
             else:
                 df = track_data[energy_type]
                 arr_x = df["x"].to_numpy(dtype="float64", copy=False)
                 arr_y = df["y"].to_numpy(dtype="float64", copy=False)
                 arr_px = df["px"].to_numpy(dtype="float64", copy=False)
                 arr_py = df["py"].to_numpy(dtype="float64", copy=False)
+                # arr_wx = df["x_weight"].to_numpy(dtype="float64", copy=False)
+                # arr_wy = df["y_weight"].to_numpy(dtype="float64", copy=False)
 
             # Calculate transverse momentum for this energy type
             pt = self._compute_pt(energy_type)
@@ -297,10 +319,8 @@ class WorkerManager:
             init_turn = turn
             if sdir == -1:
                 # identify the turn of the initial bpm
-                starting_index = self._get_pos(df, turn, start_bpm)
-                next_name = df.index[starting_index + n_data_points]
-                init_turn = next_name[0]
-                if init_turn != turn:
+                start_pos = self._get_pos(df, turn, start_bpm)
+                if (init_turn := self.get_turn(df, start_pos + n_data_points)) != turn:
                     LOGGER.warning(f"Reversed init turn from {turn} to {init_turn}")
 
             init_pos = self._get_pos(df, init_turn, init_bpm)
@@ -312,72 +332,55 @@ class WorkerManager:
             init_coords_array[i, :] = init_coords
 
             # Collect observation data for this turn
-            if len(obs_turns) == 1:
-                pos = self._get_pos(df, obs_turns[0], start_bpm)
-                if sdir == -1:
-                    sl = slice(pos + n_data_points - 1, pos - 1, -1)
-                    x_comp[i, :] = arr_x[sl]
-                    y_comp[i, :] = arr_y[sl]
-                    px_comp[i, :] = arr_px[sl]
-                    py_comp[i, :] = arr_py[sl]
-                else:
-                    sl = slice(pos, pos + n_data_points)
-                    x_comp[i, :] = arr_x[sl]
-                    y_comp[i, :] = arr_y[sl]
-                    px_comp[i, :] = arr_px[sl]
-                    py_comp[i, :] = arr_py[sl]
+            # if len(obs_turns) == 1:
+            if sdir == -1:
+                sl = slice(init_pos, init_pos - n_data_points, -1)
+                x_comp[i, :] = arr_x[sl]
+                y_comp[i, :] = arr_y[sl]
+                px_comp[i, :] = arr_px[sl]
+                py_comp[i, :] = arr_py[sl]
+                # x_weights[i, :] = arr_wx[sl]
+                # y_weights[i, :] = arr_wy[sl]
+                # x_weights[i, :] = 1.0
+                # y_weights[i, :] = 1.0
             else:
-                # Handle multiple observation turns by concatenating blocks
-                blocks_x: list[np.ndarray] = []
-                blocks_y: list[np.ndarray] = []
-                blocks_px: list[np.ndarray] = []
-                blocks_py: list[np.ndarray] = []
-                for ot in obs_turns:
-                    pos = self._get_pos(df, ot, start_bpm)
-                    bx = arr_x[pos : pos + n_data_points]
-                    by = arr_y[pos : pos + n_data_points]
-                    bpx = arr_px[pos : pos + n_data_points]
-                    bpy = arr_py[pos : pos + n_data_points]
-                    if sdir == -1:
-                        bx = bx[::-1]
-                        by = by[::-1]
-                        bpx = bpx[::-1]
-                        bpy = bpy[::-1]
-                    blocks_x.append(bx)
-                    blocks_y.append(by)
-                    blocks_px.append(bpx)
-                    blocks_py.append(bpy)
-                concat_x = (
-                    np.concatenate(blocks_x)
-                    if blocks_x
-                    else np.empty((0,), dtype="float64")
+                sl = slice(init_pos, init_pos + n_data_points)
+                x_comp[i, :] = arr_x[sl]
+                y_comp[i, :] = arr_y[sl]
+                px_comp[i, :] = arr_px[sl]
+                py_comp[i, :] = arr_py[sl]
+                # x_weights[i, :] = arr_wx[sl]
+                # y_weights[i, :] = arr_wy[sl]
+                # x_weights[i, :] = 1.0
+                # y_weights[i, :] = 1.0
+            # Get the turn that the final BPM corresponds to and check it matches
+            # the turn of the first BPM +/- 1
+            first_bpm_turn = self.get_turn(df, init_pos)
+            last_bpm_turn = self.get_turn(df, sl.stop - 1 if sdir == 1 else sl.stop + 1)
+            if not (
+                last_bpm_turn == first_bpm_turn
+                or abs(last_bpm_turn - first_bpm_turn) == 1
+            ):
+                raise ValueError(
+                    f"Unexpected turn mismatch: first BPM turn {first_bpm_turn}, "
+                    f"last BPM turn {last_bpm_turn}, slice {sl}, sdir {sdir}"
                 )
-                concat_y = (
-                    np.concatenate(blocks_y)
-                    if blocks_y
-                    else np.empty((0,), dtype="float64")
-                )
-                concat_px = (
-                    np.concatenate(blocks_px)
-                    if blocks_px
-                    else np.empty((0,), dtype="float64")
-                )
-                concat_py = (
-                    np.concatenate(blocks_py)
-                    if blocks_py
-                    else np.empty((0,), dtype="float64")
-                )
-                if concat_x.shape[0] != n_data_points:
-                    raise ValueError(
-                        f"Turn {turn} (energy={energy_type}): Expected {n_data_points} points from {start_bpm}, "
-                        f"but got {concat_x.shape[0]}."
-                    )
-                x_comp[i, :] = concat_x
-                y_comp[i, :] = concat_y
-                px_comp[i, :] = concat_px
-                py_comp[i, :] = concat_py
 
-        return x_comp, y_comp, px_comp, py_comp, init_coords_array, pt_array
+            if len(obs_turns) > 1:
+                raise NotImplementedError(
+                    "Multiple observation turns not implemented in payload creation"
+                )
+
+        return (
+            x_comp,
+            y_comp,
+            px_comp,
+            py_comp,
+            init_coords_array,
+            pt_array,
+            # x_weights,
+            # y_weights,
+        )
         # return x_comp, y_comp, init_coords_array, pt_array
 
     def _get_pos(self, df: pd.DataFrame, turn: int, bpm: str) -> int:
@@ -390,6 +393,10 @@ class WorkerManager:
             pos = int(df.index.get_loc((turn, bpm)))
             bucket[key] = pos
         return pos
+
+    def get_turn(self, df: pd.DataFrame, pos: int) -> int:
+        """Get the turn number from a DataFrame position."""
+        return df.index[pos][0]
 
     def start_workers(
         self,
@@ -504,7 +511,7 @@ class WorkerManager:
 
         # Signal all workers to stop by sending None through their connections
         for conn in self.parent_conns:
-            conn.send(None)
+            conn.send((None, None))
 
         # Collect Hessian matrices from each worker
         # Each worker computes a local Hessian based on its subset of data

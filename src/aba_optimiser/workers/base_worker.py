@@ -42,6 +42,8 @@ class BaseWorker(Process, ABC):
         y_comparisons: np.ndarray,
         px_comparisons: np.ndarray,
         py_comparisons: np.ndarray,
+        # x_weights: np.ndarray,
+        # y_weights: np.ndarray,
         init_coords: np.ndarray,
         start_bpm: str,
         end_bpm: str,
@@ -49,6 +51,7 @@ class BaseWorker(Process, ABC):
         init_pts: np.ndarray,
         opt_settings: OptSettings,
         sdir=1,
+        bad_bpms: list[str] | None = None,
     ) -> None:
         """
         New constructor that accepts compact numpy payloads built by the parent
@@ -71,10 +74,34 @@ class BaseWorker(Process, ABC):
         self.y_comparisons = y_comparisons[:n_init]
         self.px_comparisons = px_comparisons[:n_init]
         self.py_comparisons = py_comparisons[:n_init]
+        # self.x_weights = self._adjust_weights(x_weights[:n_init])
+        # self.y_weights = self._adjust_weights(y_weights[:n_init])
+        # self.x_weights = x_weights[:n_init]
+        # self.y_weights = y_weights[:n_init]
+
+        # If either x or y first BPM weight is 0, zero the subsequent weights for both
+        # mask = (self.x_weights[:, 0] == 0) | (self.y_weights[:, 0] == 0)
+        # self.x_weights[mask, 1:] = 0
+        # self.y_weights[mask, 1:] = 0
+        # Assert that there are no 0 weights in the first BPM
+        # assert np.all(self.x_weights[:, 0] != 0), "Zero weight found in first x BPM"
+        # assert np.all(self.y_weights[:, 0] != 0), "Zero weight found in first y BPM"
+
         # del px_comparisons, py_comparisons  # Unused for now
+
+        # Normalize x and y weights to the same mean
+        # combined_weights = np.concatenate([self.x_weights, self.y_weights])
+        # mean_weight = np.mean(combined_weights[combined_weights > 0])
+        # if mean_weight > 0:
+        #     self.x_weights /= mean_weight
+        #     self.y_weights /= mean_weight
 
         # Split init_coords into num_batches batches
         init_coords = np.array_split(init_coords, num_batches)
+
+        # Check if there are nans in the initial coordinates
+        if np.isnan(init_coords).any():
+            raise ValueError("NaNs found in initial coordinates")
 
         # Convert init_coords from list of matrices into list of list of lists
         self.init_coords = [ic.tolist() for ic in init_coords]
@@ -86,6 +113,7 @@ class BaseWorker(Process, ABC):
         self.num_batches = num_batches
         self.opt_settings = opt_settings
         self.sdir = sdir
+        self.bad_bpms = bad_bpms
 
         self.init_pts = init_pts
         self._split_data_to_batches()
@@ -126,6 +154,13 @@ class BaseWorker(Process, ABC):
             f"da_x0_base = damap{{nv=#coord_names, np=#knob_names, mo={knob_order}, po={knob_order}, vn=tblcat(coord_names, knob_names)}}"
         )
 
+    def _adjust_weights(self, weights: np.ndarray) -> np.ndarray:
+        """
+        Multiply weights by the first BPM weight.
+        """
+        first_bpm_weight = weights[:, 0]
+        return weights * first_bpm_weight[:, np.newaxis]
+
     def _split_data_to_batches(self):
         """
         Split the comparison data, which will be of dimensions (n_tracks, n_data_points),
@@ -145,6 +180,8 @@ class BaseWorker(Process, ABC):
         self.py_comparisons = np.array_split(
             self.py_comparisons, self.num_batches, axis=0
         )
+        # self.x_weights = np.array_split(self.x_weights, self.num_batches, axis=0)
+        # self.y_weights = np.array_split(self.y_weights, self.num_batches, axis=0)
 
         self.init_pts = [
             arr.tolist()
@@ -194,6 +231,7 @@ end
             opt_settings=self.opt_settings,
             use_real_strengths="noisy" if USE_NOISY_DATA else True,
             py_name="python",
+            bad_bpms=self.bad_bpms,
             # discard_mad_output=False,
             # debug=True,
         )
@@ -331,11 +369,11 @@ end
         gy = np.einsum("pkm,pm->k", dy_dk, position_diffs_y)
         gpx = np.einsum("pkm,pm->k", dpx_dk, momentum_diffs_px)
         gpy = np.einsum("pkm,pm->k", dpy_dk, momentum_diffs_py)
-        # del gpx, gpy  # Unused for now
+        del gpx, gpy  # Unused for now
 
         # Combine gradients and compute loss (factor of 2 for derivative of squared error)
-        # grad = 2.0 * (gx + gy)  # Shape: (n_knobs + 1,)
-        grad = 2.0 * (gx + gy + gpx + gpy)  # Shape: (n_knobs + 1,)
+        grad = 2.0 * (gx + gy)  # Shape: (n_knobs + 1,)
+        # grad = 2.0 * (gx + gy + gpx + gpy)  # Shape: (n_knobs + 1,)
         loss = np.sum(position_diffs_x**2) + np.sum(position_diffs_y**2)  # Scalar
 
         return grad, loss
@@ -356,9 +394,8 @@ end
         LOGGER.debug(
             f"Worker {self.worker_id}: Received Hessian vars x={hessian_var_x}, y={hessian_var_y}"
         )
-        knob_updates = self.conn.recv()  # shape (n_knobs,)
+        knob_updates, batch = self.conn.recv()  # shape (n_knobs,)
 
-        batch = 0
         while knob_updates is not None:
             # Process tracking and compute gradients
             grad, loss = self.compute_gradients_and_loss(mad, knob_updates, batch)
@@ -367,10 +404,7 @@ end
             self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
 
             # Receive next knob updates
-            knob_updates = self.conn.recv()
-
-            # Move to the next batch
-            batch = (batch + 1) % self.num_batches
+            knob_updates, batch = self.conn.recv()
 
         # Final hessian estimation
         mad.send("""

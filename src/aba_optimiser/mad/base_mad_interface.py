@@ -79,6 +79,20 @@ loaded_sequence:deselect(observed)
 loaded_sequence:select(observed, {{pattern="{pattern}"}})
 """)
 
+    def unobserve_elements(self, elements: list[str]) -> None:
+        """
+        Remove specific elements from observation.
+
+        Args:
+            elements: List of element names to unobserve
+        """
+        logger.debug(f"Unobserving elements: {elements}")
+        for elem in elements:
+            self.mad.send(f"""
+local observed in MAD.element.flags
+loaded_sequence:deselect(observed, {{pattern="{elem}"}})
+""")
+
     def cycle_sequence(self, marker_name: str) -> None:
         """
         Cycle sequence to start from a specific marker.
