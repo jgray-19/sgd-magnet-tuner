@@ -22,7 +22,15 @@ def _find_bpm_phase(
 
     np.fill_diagonal(diff, np.nan)
 
-    idx = np.nanargmin(np.abs(diff - target), axis=1)
+    abs_diff = np.abs(diff - target)
+    idx = np.full(n, -1, dtype=int)
+    for i in range(n):
+        row = abs_diff[i, :]
+        min_val = np.nanmin(row)
+        candidates = np.where(row == min_val)[0]
+        distances = np.minimum(np.abs(candidates - i), n - np.abs(candidates - i))
+        idx[i] = candidates[np.argmin(distances)]
+
     delta = diff[np.arange(n), idx] - target
     names = mu.index[idx]
 
