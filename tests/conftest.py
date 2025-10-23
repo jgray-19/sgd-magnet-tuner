@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import contextlib
 from pathlib import Path
-from typing import Generator
+from typing import TYPE_CHECKING
 
 import pytest
 
 from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 from aba_optimiser.mad.tracking_interface import TrackingMadInterface
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 
 @pytest.fixture(scope="module")
