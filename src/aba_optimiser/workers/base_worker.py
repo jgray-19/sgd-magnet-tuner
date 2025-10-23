@@ -15,7 +15,7 @@ from aba_optimiser.config import (
     TRACK_SCRIPT,
     USE_NOISY_DATA,
 )
-from aba_optimiser.mad.mad_interface import OptimisationMadInterface
+from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection

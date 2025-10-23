@@ -2,7 +2,7 @@ from matplotlib import pyplot as plt
 
 from aba_optimiser.config import SEQUENCE_FILE, TRUE_STRENGTHS_FILE
 from aba_optimiser.io.utils import read_knobs
-from aba_optimiser.mad.mad_interface import OptimisationMadInterface
+from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 
 MAGNET_RANGES = [f"BPM.11R{i}.B1/BPM.11L{i % 8 + 1}.B1" for i in range(1, 9)]
 mad = OptimisationMadInterface(

@@ -10,7 +10,7 @@ from aba_optimiser.config import (
     SEQUENCE_FILE,
     module_path,
 )
-from aba_optimiser.mad.mad_interface import OptimisationMadInterface
+from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 
 LOGGER = logging.getLogger(__name__)
 

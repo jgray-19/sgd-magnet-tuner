@@ -27,7 +27,7 @@ from aba_optimiser.dataframes.utils import (
     select_markers,
 )
 from aba_optimiser.io.utils import read_knobs
-from aba_optimiser.mad.mad_interface import OptimisationMadInterface
+from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.workers.worker import build_worker
 
 if TYPE_CHECKING:

@@ -6,7 +6,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from aba_optimiser.config import BPM_START_POINTS, MAGNET_RANGE, SEQUENCE_FILE
-from aba_optimiser.mad.mad_interface import OptimisationMadInterface
+from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 
 LOGGER = logging.getLogger(__name__)

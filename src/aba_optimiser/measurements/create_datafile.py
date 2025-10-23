@@ -24,7 +24,7 @@ from aba_optimiser.config import (
 )
 from aba_optimiser.filtering.svd import svd_clean_measurements
 from aba_optimiser.io.utils import save_knobs
-from aba_optimiser.mad.mad_interface import OptimisationMadInterface
+from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.physics.transverse_momentum import calculate_pz_from_measurements
 from aba_optimiser.training.controller import Controller
 

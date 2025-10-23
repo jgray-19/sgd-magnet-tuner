@@ -29,7 +29,7 @@ from aba_optimiser.config import (
     SEQ_NAME,
     SEQUENCE_FILE,
 )
-from aba_optimiser.mad.mad_interface import create_tracking_interface
+from aba_optimiser.mad.optimising_mad_interface import create_tracking_interface
 from scripts.plot_functions import (
     plot_error_bars_bpm_range,
     plot_std_log_comparison,

@@ -7,7 +7,7 @@ from aba_optimiser.config import (
     TRUE_STRENGTHS_FILE,
 )
 from aba_optimiser.io.utils import read_knobs, read_results
-from aba_optimiser.mad.mad_interface import OptimisationMadInterface
+from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.training.result_manager import ResultManager
 
 # from aba_optimiser.plotting.strengths import (

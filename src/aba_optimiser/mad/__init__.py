@@ -8,7 +8,7 @@ This package provides different interfaces for working with MAD-NG:
 """
 
 from .base_mad_interface import BaseMadInterface
-from .mad_interface import OptimisationMadInterface
+from .optimising_mad_interface import OptimisationMadInterface
 from .tracking_interface import (
     TrackingMadInterface,
 )

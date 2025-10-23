@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 
 from aba_optimiser.config import FILE_COLUMNS, SEQUENCE_FILE
-from aba_optimiser.mad.mad_interface import OptimisationMadInterface
+from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.physics.bpm_phases import (
     next_bpm_to_pi,
     next_bpm_to_pi_2,
