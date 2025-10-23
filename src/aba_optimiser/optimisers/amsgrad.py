@@ -26,7 +26,7 @@ class AMSGradOptimiser(AdamOptimiser):
         super().__init__(
             shape, beta1=beta1, beta2=beta2, eps=eps, weight_decay=weight_decay
         )
-        LOGGER.debug(f"Initialising AMSGrad optimizer with shape={shape}")
+        LOGGER.debug(f"Initialising AMSGrad optimiser with shape={shape}")
         # track the running maximum of the bias-corrected second moment
         self.v_hat_max = np.zeros(shape, dtype=float)
 

@@ -1,7 +1,7 @@
 """
 Tracking interface for beam dynamics simulations.
 
-This module provides a specialized interface for tracking simulations that builds
+This module provides a specialised interface for tracking simulations that builds
 on the base MAD interface without unnecessary optimization setup.
 """
 
@@ -20,7 +20,7 @@ LOGGER = logging.getLogger(__name__)
 
 class TrackingMadInterface(BaseMadInterface):
     """
-    Specialized MAD interface for tracking simulations.
+    Specialised MAD interface for tracking simulations.
 
     This class provides tracking-specific functionality while keeping
     the interface lightweight and focused.
@@ -28,7 +28,7 @@ class TrackingMadInterface(BaseMadInterface):
 
     def __init__(self, enable_logging: bool = True, **mad_kwargs):
         """
-        Initialize tracking MAD interface.
+        Initialise tracking MAD interface.
 
         Args:
             enable_logging: Whether to enable MAD output logging
@@ -43,7 +43,7 @@ class TrackingMadInterface(BaseMadInterface):
             mad_kwargs.setdefault("redirect_stderr", True)
 
         super().__init__(**mad_kwargs)
-        LOGGER.debug("Initialized tracking MAD interface")
+        LOGGER.debug("Initialised tracking MAD interface")
 
     def setup_for_tracking(
         self,

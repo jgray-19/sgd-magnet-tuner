@@ -25,18 +25,18 @@ class BaseMadInterface:
     Base class for MAD-NG interfaces providing core functionality.
 
     This class provides essential MAD-NG operations without automatic
-    initialization, allowing subclasses to customize setup as needed.
+    initialization, allowing subclasses to customise setup as needed.
     """
 
     def __init__(self, **mad_kwargs):
         """
-        Initialize base MAD interface.
+        Initialise base MAD interface.
 
         Args:
             **mad_kwargs: Keyword arguments passed to pymadng.MAD()
         """
         self.mad = MAD(**mad_kwargs)
-        logger.debug("Initialized base MAD interface")
+        logger.debug("Initialised base MAD interface")
         self.py_name = self.mad.py_name
 
     def load_sequence(self, sequence_file: str | Path, seq_name: str) -> None:
@@ -182,7 +182,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
 
     def set_magnet_strengths(self, strengths: dict) -> None:
         """
-        Set magnet strengths using standardized naming conventions.
+        Set magnet strengths using standardised naming conventions.
 
         Args:
             strengths: Dictionary of magnet strengths with '_k' suffix naming

@@ -112,7 +112,7 @@ class BPMKalmanFilter:
     def __init__(
         self,
     ):
-        # Initialize MAD-X interface
+        # Initialise MAD-X interface
         self.mad_iface = OptimisationMadInterface(
             SEQUENCE_FILE,
             bpm_pattern="BPM",
@@ -396,7 +396,7 @@ def _rts_smooth_flat_jit(
     # small regularisation constant
     eps = 1e-16
 
-    # initialize at last time step
+    # initialise at last time step
     x_s[N - 1] = x_fwd[N - 1]
     P_s[N - 1] = p_fwd[N - 1]
 
@@ -460,12 +460,12 @@ def _filter_flat_jit(
         start = boundaries[seg]  # may be -1 for the first segment
         end = boundaries[seg + 1]
 
-        # --- initialize at the FIRST real index of this segment ---
+        # --- initialise at the FIRST real index of this segment ---
         k0 = start + 1  # first valid index in this segment
         bpm_idx0 = 0 if start < 0 else special_idx
 
         z0 = meas_flat[k0]
-        # Initialize state with measured x,y; px,py set to 0 (or keep previous if you prefer)
+        # Initialise state with measured x,y; px,py set to 0 (or keep previous if you prefer)
         x_up0 = np.zeros(4)
         x_up0[0] = z0[0] if not np.isnan(z0[0]) else 0.0
         x_up0[2] = z0[2] if not np.isnan(z0[2]) else 0.0

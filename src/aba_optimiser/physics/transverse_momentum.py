@@ -611,7 +611,7 @@ def _momenta_from_next(data_n: tfs.TfsDataFrame) -> tfs.TfsDataFrame:
 
 def _sync_endpoints(data_p: tfs.TfsDataFrame, data_n: tfs.TfsDataFrame) -> None:
     """
-    Synchronize momentum values at ring endpoints for consistency.
+    Synchronise momentum values at ring endpoints for consistency.
 
     Matches the last point of previous-based calculation with first point
     of next-based calculation, and vice versa.

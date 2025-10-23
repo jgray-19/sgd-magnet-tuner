@@ -129,7 +129,7 @@ SEXT_OPT_SETTINGS = OptSettings(
     use_off_energy_data=True,
 )
 
-# Optimizer configuration
+# Optimiser configuration
 # OPTIMISER_TYPE = "adam"  # Options: "adam", "amsgrad", "lbfgs"
 # OPTIMISER_TYPE = "lbfgs"  # Options: "adam", "amsgrad", "lbfgs"
 GRAD_NORM_ALPHA = 0.4  # Gradient norm smoothing factor for smoothing loss

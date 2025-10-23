@@ -93,7 +93,7 @@ class OptimisationMadInterface(BaseMadInterface):
         **kwargs,
     ):
         """
-        Initialize optimization MAD interface with automatic setup.
+        Initialise optimization MAD interface with automatic setup.
 
         Args:
             sequence_file: Path to the MAD-X sequence file
@@ -110,7 +110,7 @@ class OptimisationMadInterface(BaseMadInterface):
             kwargs.setdefault("stdout", "/dev/null")
             kwargs.setdefault("redirect_stderr", True)
 
-        # Initialize base class
+        # Initialise base class
         super().__init__(**kwargs)
 
         # Store optimization-specific attributes

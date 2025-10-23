@@ -361,7 +361,7 @@ def _momenta_from_next(data_n: tfs.TfsDataFrame, dpp_est: float) -> tfs.TfsDataF
             f"Missing required columns for next BPM calculation: {missing}"
         )
 
-    # Extract arrays for vectorized calculations
+    # Extract arrays for vectorised calculations
     x_current = data_n["x"].to_numpy()
     y_current = data_n["y"].to_numpy()
     x_next = data_n["next_x"].to_numpy()
@@ -386,7 +386,7 @@ def _momenta_from_next(data_n: tfs.TfsDataFrame, dpp_est: float) -> tfs.TfsDataF
     phi_x = data_n["delta_x"].to_numpy() * 2 * np.pi
     phi_y = data_n["delta_y"].to_numpy() * 2 * np.pi
 
-    # Normalized positions (remove dispersion contribution)
+    # Normalised positions (remove dispersion contribution)
     x_current_norm = (x_current - dpp_est * dx_current) / sqrt_beta_x
     x_next_norm = (x_next - dpp_est * dx_next) / sqrt_beta_x_next
     y_current_norm = y_current / sqrt_beta_y
@@ -447,7 +447,7 @@ def _momenta_from_prev(data_p: tfs.TfsDataFrame, dpp_est: float) -> tfs.TfsDataF
             f"Missing required columns for previous BPM calculation: {missing}"
         )
 
-    # Extract arrays for vectorized calculations
+    # Extract arrays for vectorised calculations
     x_current = data_p["x"].to_numpy()
     y_current = data_p["y"].to_numpy()
     x_prev = data_p["prev_x"].to_numpy()
@@ -472,7 +472,7 @@ def _momenta_from_prev(data_p: tfs.TfsDataFrame, dpp_est: float) -> tfs.TfsDataF
     phi_x = data_p["delta_x"].to_numpy() * 2 * np.pi
     phi_y = data_p["delta_y"].to_numpy() * 2 * np.pi
 
-    # Normalized positions (remove dispersion contribution)
+    # Normalised positions (remove dispersion contribution)
     x_current_norm = (x_current - dpp_est * dx_current) / sqrt_beta_x
     x_prev_norm = (x_prev - dpp_est * dx_prev) / sqrt_beta_x_prev
     y_current_norm = y_current / sqrt_beta_y
@@ -513,7 +513,7 @@ def _momenta_from_prev(data_p: tfs.TfsDataFrame, dpp_est: float) -> tfs.TfsDataF
 
 def _sync_endpoints(data_p: tfs.TfsDataFrame, data_n: tfs.TfsDataFrame) -> None:
     """
-    Synchronize momentum values at ring endpoints for consistency.
+    Synchronise momentum values at ring endpoints for consistency.
 
     Matches the last point of previous-based calculation with first point
     of next-based calculation, and vice versa.

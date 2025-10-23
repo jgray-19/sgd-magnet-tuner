@@ -89,7 +89,7 @@ class BaseWorker(Process, ABC):
 
         # del px_comparisons, py_comparisons  # Unused for now
 
-        # Normalize x and y weights to the same mean
+        # Normalise x and y weights to the same mean
         # combined_weights = np.concatenate([self.x_weights, self.y_weights])
         # mean_weight = np.mean(combined_weights[combined_weights > 0])
         # if mean_weight > 0:
@@ -211,7 +211,7 @@ end
 
     def setup_mad_interface(self) -> tuple[MAD, int]:
         """
-        Initialize MAD interface and setup common MAD configuration.
+        Initialise MAD interface and setup common MAD configuration.
 
         Returns:
             mad_iface: The MAD interface object

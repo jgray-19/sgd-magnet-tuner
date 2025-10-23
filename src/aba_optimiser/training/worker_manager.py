@@ -61,7 +61,7 @@ class WorkerManager:
         magnet_range: str,
         bad_bpms: list[str] | None = None,
     ):
-        """Initialize the WorkerManager.
+        """Initialise the WorkerManager.
 
         Args:
             worker_class (type[BaseWorker]): The class to use for creating worker processes
@@ -482,16 +482,16 @@ class WorkerManager:
             # Receive data from worker: (worker_id, gradient_array, loss_value)
             _, grad, loss = conn.recv()
 
-            # Aggregate gradients: initialize with first worker's gradient, then add subsequent ones
+            # Aggregate gradients: initialise with first worker's gradient, then add subsequent ones
             agg_grad = grad if agg_grad is None else agg_grad + grad
 
             # Sum up losses from all workers
             total_loss += loss
 
-        # Normalize total loss by total number of turns across all workers
+        # Normalise total loss by total number of turns across all workers
         total_loss /= total_turns
 
-        # Normalize aggregated gradient by total number of turns
+        # Normalise aggregated gradient by total number of turns
         # This gives the average gradient across all turns and workers
         agg_grad = agg_grad.flatten() / total_turns
 

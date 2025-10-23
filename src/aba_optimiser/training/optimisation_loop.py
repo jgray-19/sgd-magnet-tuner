@@ -91,7 +91,7 @@ class OptimisationLoop:
     ) -> dict[str, float]:
         """Run the main optimisation loop."""
         if current_knobs["pt"] == 0 and not self.some_magnets:
-            current_knobs["pt"] = 1e-6  # Initialize pt to non-zero
+            current_knobs["pt"] = 1e-6  # Initialise pt to non-zero
 
         for epoch in range(self.max_epochs):
             epoch_start = time.time()

@@ -194,7 +194,7 @@ class PhaseSpaceDiagnostics:
         -------
         (βx, αx, εx, βy, αy, εy)
         """
-        from scipy.optimize import least_squares
+        from scipy.optimise import least_squares
 
         old_betax = self.betax
         old_betay = self.betay

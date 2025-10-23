@@ -44,7 +44,7 @@ class AdamOptimiser:
         self.weight_decay = weight_decay
 
         LOGGER.debug(
-            f"Initialising Adam optimizer with shape={shape}, beta1={beta1}, beta2={beta2}, eps={eps}, weight_decay={weight_decay}"
+            f"Initialising Adam optimiser with shape={shape}, beta1={beta1}, beta2={beta2}, eps={eps}, weight_decay={weight_decay}"
         )
 
         # Initialise first and second moments and timestep

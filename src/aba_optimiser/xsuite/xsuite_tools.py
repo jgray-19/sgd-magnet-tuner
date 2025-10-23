@@ -323,7 +323,7 @@ def initialise_env(
     corrector_table: tfs.TfsDataFrame,
 ) -> xt.Environment:
     """
-    Initialize a batch of MAD processes for parallel tracking.
+    Initialise a batch of MAD processes for parallel tracking.
 
     Args:
         matched_tunes: Dictionary of matched tune knobs

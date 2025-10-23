@@ -91,7 +91,7 @@ def create_initial_conditions(
         f"Track {ntrk}: Closed orbit x={cox:.2e}, px={copx:.2e}, y={coy:.2e}, py={copy:.2e}"
     )
 
-    # Compute normalized coordinates from action and angle
+    # Compute normalised coordinates from action and angle
     cos_ang = np.cos(angle)
     sin_ang = np.sin(angle)
 

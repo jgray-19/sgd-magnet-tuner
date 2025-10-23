@@ -34,7 +34,7 @@ def create_mad_interface(
         redirect_stderr: Redirect stderr
 
     Returns:
-        Initialized MAD interface
+        Initialised MAD interface
     """
     logger.debug("Creating new MAD interface")
     kwargs = {"debug": debug, "redirect_stderr": redirect_stderr}

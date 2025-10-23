@@ -131,7 +131,7 @@ def initialise_mad_batch(
     corrector_table: tfs.TfsDataFrame,
 ) -> list[TrackingMadInterface]:
     """
-    Initialize a batch of MAD processes for parallel tracking.
+    Initialise a batch of MAD processes for parallel tracking.
 
     Args:
         batch_start: Starting track index
@@ -144,7 +144,7 @@ def initialise_mad_batch(
         corrector_table: DataFrame with corrector strengths
 
     Returns:
-        List of initialized TrackingMadInterface instances
+        List of initialised TrackingMadInterface instances
     """
     batch_size = batch_end - batch_start
     logger.info(f"Initializing {batch_size} MAD interfaces for batch")
@@ -152,7 +152,7 @@ def initialise_mad_batch(
     interfaces = []
 
     for _ in range(batch_start, batch_end):
-        # Initialize new tracking interface
+        # Initialise new tracking interface
         interface = TrackingMadInterface(
             debug=False, stdout="/dev/null", redirect_stderr=True
         )
@@ -311,7 +311,7 @@ def run_parallel_tracking(
     from .data_processing import process_track
 
     if not use_xsuite:
-        # Initialize MAD interfaces
+        # Initialise MAD interfaces
         interfaces = initialise_mad_batch(
             batch_start,
             batch_end,
