@@ -17,6 +17,8 @@ from aba_optimiser.io.utils import read_knobs
 from .base_mad_interface import BaseMadInterface
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from aba_optimiser.config import OptSettings
 
 
@@ -84,12 +86,16 @@ class OptimisationMadInterface(BaseMadInterface):
         self,
         sequence_file: str,
         magnet_range: str = "$start/$end",
-        opt_settings: OptSettings = None,
         bpm_range: str | None = None,
+        opt_settings: OptSettings = None,
         discard_mad_output: bool = True,
         bpm_pattern: str = BPM_PATTERN,
         use_real_strengths: bool = True,
         bad_bpms: list[str] | None = None,
+        beam_energy: float = BEAM_ENERGY,
+        corrector_strengths: Path = CORRECTOR_STRENGTHS,
+        seq_name: str = SEQ_NAME,
+        tune_knobs_file: Path = TUNE_KNOBS_FILE,
         **kwargs,
     ):
         """
@@ -99,10 +105,15 @@ class OptimisationMadInterface(BaseMadInterface):
             sequence_file: Path to the MAD-X sequence file
             magnet_range: Range of magnets to include, e.g., "MARKER.1/MARKER.10"
             bpm_range: Range of BPMs to observe, e.g., "BPM.13R3.B1/BPM.12L4.B1"
+            opt_settings: Optimization settings for adjustment knobs
             discard_mad_output: Whether to discard MAD-NG output to stdout
             bpm_pattern: Pattern for BPM matching
             use_real_strengths: Whether to use real corrector/knob strengths
-            opt_settings: Optimization settings for adjustment knobs
+            bad_bpms: List of bad BPMs to exclude from observation
+            beam_energy: Beam energy in GeV
+            corrector_strengths: Path to corrector strengths file
+            seq_name: Name of the sequence to load
+            tune_knobs_file: Path to tune knobs file
             **kwargs: Additional keyword arguments for MAD initialization
         """
         # Configure MAD output
@@ -118,6 +129,10 @@ class OptimisationMadInterface(BaseMadInterface):
         self.magnet_range = magnet_range
         self.bpm_range = bpm_range if bpm_range is not None else magnet_range
         self.bpm_pattern = bpm_pattern
+        self.beam_energy = beam_energy
+        self.corrector_strengths = corrector_strengths
+        self.seq_name = seq_name
+        self.tune_knobs_file = tune_knobs_file
 
         # Type hints for attributes set during initialization
         self.nbpms: int
@@ -125,8 +140,8 @@ class OptimisationMadInterface(BaseMadInterface):
         self.elem_spos: list[float]
 
         # Perform automatic setup using base class methods
-        self.load_sequence(sequence_file, SEQ_NAME)
-        self.setup_beam(BEAM_ENERGY)
+        self.load_sequence(sequence_file, self.seq_name)
+        self.setup_beam(self.beam_energy)
 
         # Set MAD variables for ranges and patterns
         self.mad["magnet_range"] = self.magnet_range
@@ -142,14 +157,6 @@ class OptimisationMadInterface(BaseMadInterface):
 
         if opt_settings is not None:
             self._make_adj_knobs(opt_settings)
-
-    def _apply_noise(
-        self, value: float, rng: np.random.Generator | None = None
-    ) -> float:
-        """Apply Gaussian noise to a value if rng is provided."""
-        if rng is None:
-            return value
-        return value + rng.normal(0, 1e-4 * abs(value))
 
     def count_bpms(self, bpm_range) -> None:
         """Count the number of BPM elements in the specified range."""
@@ -170,21 +177,16 @@ class OptimisationMadInterface(BaseMadInterface):
 
     def _set_correctors(self, use_real_strengths: bool | str) -> None:
         """Load corrector strengths from file and apply them to the sequence."""
-        if not CORRECTOR_STRENGTHS.exists():
-            LOGGER.warning(f"Corrector strengths file not found: {CORRECTOR_STRENGTHS}")
+        if not self.corrector_strengths.exists():
+            LOGGER.warning(
+                f"Corrector strengths file not found: {self.corrector_strengths}"
+            )
             return
         if use_real_strengths is False:
             LOGGER.info("Skipping setting correctors as use_real_strengths is False")
             return
-        # if use_real_strengths == "noisy":
-        #     LOGGER.info(
-        #         "Adding noise to corrector strengths as use_real_strengths is 'noisy'"
-        #     )
-        #     rng = np.random.default_rng(seed=43)
-        # else:
-        #     rng = None
         try:
-            corrector_table = tfs.read(CORRECTOR_STRENGTHS)
+            corrector_table = tfs.read(self.corrector_strengths)
 
             # Filter out monitor elements from the corrector table
             corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
@@ -192,7 +194,7 @@ class OptimisationMadInterface(BaseMadInterface):
             # Log how many non-zero correctors are being applied
             nonzero = (corrector_table["hkick"] != 0) | (corrector_table["vkick"] != 0)
             LOGGER.info(
-                f"Applying {nonzero.sum()} non-zero corrector strengths from {CORRECTOR_STRENGTHS}"
+                f"Applying {nonzero.sum()} non-zero corrector strengths from {self.corrector_strengths}"
             )
 
             # Apply corrector strengths for non-zero correctors only
@@ -201,11 +203,13 @@ class OptimisationMadInterface(BaseMadInterface):
             LOGGER.error(
                 f"Error reading or applying corrector strengths: {e}, assuming knobs"
             )
-            knobs = read_knobs(CORRECTOR_STRENGTHS)
+            knobs = read_knobs(self.corrector_strengths)
             for name, val in knobs.items():
                 self.mad.send(f"MADX['{name}'] = {val}")
 
-            LOGGER.info(f"Set {len(knobs)} corrector knobs from {CORRECTOR_STRENGTHS}")
+            LOGGER.info(
+                f"Set {len(knobs)} corrector knobs from {self.corrector_strengths}"
+            )
 
         self.mad.send(f"{self.py_name}:send(true)")
         assert self.mad.recv(), "Failed to set corrector strengths"
@@ -216,16 +220,14 @@ class OptimisationMadInterface(BaseMadInterface):
             LOGGER.info("Skipping setting tune knobs as use_real_strengths is False")
             return
 
-        tune_knobs = read_knobs(TUNE_KNOBS_FILE)
-        # rng = np.random.default_rng(seed=41) if use_real_strengths == "noisy" else None
-
+        tune_knobs = read_knobs(self.tune_knobs_file)
         for name, val in tune_knobs.items():
             self.mad.send(f"MADX['{name}'] = {val}")
 
         self.mad.send(f"{self.py_name}:send(true)")
         assert self.mad.recv(), "Failed to set tune knobs"
 
-        LOGGER.info(f"Set tune knobs from {TUNE_KNOBS_FILE}: {tune_knobs}")
+        LOGGER.info(f"Set tune knobs from {self.tune_knobs_file}: {tune_knobs}")
 
     def _make_adj_knobs(self, opt_settings: OptSettings) -> None:
         """

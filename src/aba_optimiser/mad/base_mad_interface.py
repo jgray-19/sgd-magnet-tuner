@@ -143,8 +143,16 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
         logger.debug("Running twiss calculation")
         if "observe" not in twiss_kwargs:
             twiss_kwargs["observe"] = 1  # Default to no observation if not set
-        tws, _ = self.mad.twiss(sequence="loaded_sequence", **twiss_kwargs)
-        df = tws.to_df()
+
+        try:
+            self.mad["tws", "flw"] = self.mad.twiss(
+                sequence="loaded_sequence", **twiss_kwargs
+            )
+        except ValueError as e:
+            logger.error(f"Error during twiss calculation: {e}")
+            raise RuntimeError("Twiss failed - check MAD output for details") from e
+
+        df = self.mad.tws.to_df()
         if "name" in df.columns:
             df.set_index("name", inplace=True)
         return df
@@ -281,16 +289,6 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
 
         logger.info(f"Matched tune values: {matched_tunes}")
         return matched_tunes
-
-    def apply_tune_values(self, tune_values: dict[str, float]) -> None:
-        """
-        Apply tune knob values.
-
-        Args:
-            tune_values: Dictionary of knob names and values
-        """
-        for knob, value in tune_values.items():
-            self.mad.send(f"MADX['{knob}'] = {value}")
 
     def run_tracking(
         self,

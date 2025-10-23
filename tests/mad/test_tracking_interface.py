@@ -6,7 +6,6 @@ This module contains pytest tests for the TrackingMadInterface class.
 
 from __future__ import annotations
 
-import contextlib
 from typing import TYPE_CHECKING
 
 import pytest
@@ -14,7 +13,13 @@ import pytest
 from aba_optimiser.mad.tracking_interface import (
     TrackingMadInterface,
 )
-from tests.mad.helpers import check_element_observations
+from tests.mad.helpers import (
+    check_beam_setup,
+    check_element_observations,
+    check_interface_basic_init,
+    check_sequence_loaded,
+    cleanup_interface,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -23,8 +28,7 @@ if TYPE_CHECKING:
 def test_init_default() -> None:
     """Test initialization of TrackingMadInterface with default parameters."""
     interface = TrackingMadInterface()
-    assert interface.py_name == "py"
-    assert hasattr(interface, "mad")
+    check_interface_basic_init(interface, "py")
     print(dir(interface.mad))
     assert interface.mad._MAD__process.stdout_file.writable(), (
         "STDOUT file is not writable"
@@ -33,8 +37,7 @@ def test_init_default() -> None:
         "STDOUT file path is incorrect"
     )
     assert interface.mad._MAD__process.debug is True, "Debug mode should be enabled"
-    with contextlib.suppress(Exception):
-        del interface
+    cleanup_interface(interface)
 
 
 def test_init_without_logging() -> None:
@@ -44,8 +47,7 @@ def test_init_without_logging() -> None:
     assert str(interface.mad._MAD__process.stdout_file_path) == "/dev/null"
     assert interface.mad._MAD__process.debug is False, "Debug mode should be disabled"
 
-    with contextlib.suppress(Exception):
-        del interface
+    cleanup_interface(interface)
 
 
 @pytest.mark.parametrize(
@@ -71,12 +73,10 @@ def test_setup_for_tracking(
     )
 
     # Check that sequence is loaded
-    assert interface.mad.SEQ_NAME == "lhcb1"
-    assert interface.mad.loaded_sequence is not None
+    check_sequence_loaded(interface, "lhcb1")
 
     # Check beam setup
-    assert interface.mad.loaded_sequence.beam.particle == "proton"
-    assert interface.mad.loaded_sequence.beam.energy == beam_energy
+    check_beam_setup(interface, particle="proton", energy=beam_energy)
 
     # Check BPMs are observed
     # This would require checking the observation status, similar to base tests

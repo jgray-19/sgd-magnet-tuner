@@ -23,6 +23,12 @@ def data_dir() -> Path:
 
 
 @pytest.fixture(scope="module")
+def corrector_file(data_dir: Path) -> Path:
+    """Path to the example corrector strengths file used by several tests."""
+    return data_dir / "corrector_strengths.tfs"
+
+
+@pytest.fixture(scope="module")
 def sequence_file(data_dir: Path) -> Path:
     """Path to the example sequence file used by several tests."""
     return data_dir / "lhcb1.seq"
@@ -72,7 +78,9 @@ def loaded_tracking_interface(
 
 
 @pytest.fixture(scope="function")
-def loaded_tracking_interface_with_beam(loaded_tracking_interface: TrackingMadInterface) -> TrackingMadInterface:
+def loaded_tracking_interface_with_beam(
+    loaded_tracking_interface: TrackingMadInterface,
+) -> TrackingMadInterface:
     """Fixture that returns a tracking interface with the example sequence loaded and beam set up."""
     loaded_tracking_interface.setup_beam(particle="proton", beam_energy=6800.0)
     return loaded_tracking_interface

@@ -6,16 +6,23 @@ This module contains pytest tests for the BaseMadInterface class.
 
 from __future__ import annotations
 
-import contextlib
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pytest
-import tfs
 
 from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+from src.aba_optimiser.physics.deltap import dp2pt as physics_dp2pt
 from tests.mad.helpers import (
+    check_beam_setup,
+    check_corrector_strengths,
+    check_corrector_strengths_zero,
     check_element_observations,
+    check_interface_basic_init,
+    check_sequence_loaded,
+    cleanup_interface,
     get_marker_and_element_positions,
+    load_corrector_table,
 )
 
 if TYPE_CHECKING:
@@ -36,18 +43,17 @@ def test_init(py_name, expected_py_name, var_name, var_value) -> None:
         interface = BaseMadInterface()
     else:
         interface = BaseMadInterface(py_name=py_name)
-    assert interface.py_name == expected_py_name
+    check_interface_basic_init(interface, expected_py_name)
     interface.mad.send(f"{var_name} = {var_value}")
     assert getattr(interface.mad, var_name) == var_value
-    with contextlib.suppress(Exception):
-        del interface
+    cleanup_interface(interface)
 
 
 def test_load_sequence(interface: BaseMadInterface, sequence_file: Path) -> None:
     """Test loading a sequence file."""
     # this test explicitly checks load_sequence behaviour
     interface.load_sequence(sequence_file, "lhcb1")
-    assert interface.mad.SEQ_NAME == "lhcb1"
+    check_sequence_loaded(interface, "lhcb1")
     assert (
         interface.mad.loaded_sequence is not None and interface.mad.loaded_sequence != 0
     )
@@ -59,10 +65,7 @@ def test_setup_beam(loaded_interface: BaseMadInterface, energy) -> None:
     """Test setting up beam parameters."""
     interface = loaded_interface
     interface.setup_beam(particle="proton", beam_energy=energy)
-    assert interface.mad.loaded_sequence.beam.particle == "proton"
-    assert interface.mad.loaded_sequence.beam.energy == energy
-    assert interface.mad.loaded_sequence.beam.charge == 1
-    assert interface.mad.loaded_sequence.beam.spin == 0.5
+    check_beam_setup(interface, particle="proton", energy=energy)
 
 
 @pytest.mark.parametrize(
@@ -193,26 +196,18 @@ def test_set_magnet_strength(loaded_interface: BaseMadInterface) -> None:
         )
 
 
-def test_apply_corrector_strengths(loaded_interface: BaseMadInterface, data_dir: Path):
-    corrector_file = data_dir / "corrector_strengths.tfs"
-    corrector_table = tfs.read(corrector_file)
-    corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
+def test_apply_corrector_strengths(
+    loaded_interface: BaseMadInterface, corrector_file: Path
+):
+    corrector_table = load_corrector_table(corrector_file)
 
     # Check initial strengths are zero
-    for row in corrector_table.itertuples():
-        strength = loaded_interface.mad[f"MADX['{row.name}'].kick"]
-        assert strength == 0.0, f"Initial strength for {row.name} not zero: {strength}"
+    check_corrector_strengths_zero(loaded_interface, corrector_table)
 
     loaded_interface.apply_corrector_strengths(corrector_table)
 
     # Check strengths updated correctly
-    for row in corrector_table.itertuples():
-        h_or_v = row.kind[0].lower()
-        expected = getattr(row, f"{h_or_v}kick")
-        actual = loaded_interface.mad[f"MADX['{row.name}'].kick"]
-        assert actual == expected, (
-            f"{row.name} strength mismatch: {actual} != {expected}"
-        )
+    check_corrector_strengths(loaded_interface, corrector_table)
 
 
 def test_twiss(loaded_interface_with_beam: BaseMadInterface):
@@ -421,3 +416,90 @@ def test_run_tracking_with_bpms(loaded_interface_with_beam: BaseMadInterface):
         f"Expected 563 tracking rows for BPMs, got {len(results_df)}"
     )
     interface.unobserve_elements("BPM")
+
+
+class TestDp2pt:
+    def test_zero_dp(self, loaded_interface_with_beam: BaseMadInterface):
+        """Test dp2pt with dp=0 returns 0"""
+        interface = loaded_interface_with_beam
+        pt = interface.dp2pt(0.0)
+        assert np.isclose(pt, 0.0, rtol=1e-12, atol=1e-15)
+
+    def test_positive_dp(self, loaded_interface_with_beam: BaseMadInterface):
+        """Test dp2pt with positive dp"""
+        interface = loaded_interface_with_beam
+        dp = 0.01
+        pt = interface.dp2pt(dp)
+        # Compare with physics calculation
+        mass = 0.938  # proton mass
+        energy = interface.mad.loaded_sequence.beam.energy
+        expected_pt = physics_dp2pt(dp, mass, energy)
+        assert np.isclose(pt, expected_pt, rtol=1e-12, atol=1e-13)
+
+    def test_negative_dp(self, loaded_interface_with_beam: BaseMadInterface):
+        """Test dp2pt with negative dp"""
+        interface = loaded_interface_with_beam
+        dp = -0.005
+        pt = interface.dp2pt(dp)
+        # Compare with physics calculation
+        mass = 0.938
+        energy = interface.mad.loaded_sequence.beam.energy
+        expected_pt = physics_dp2pt(dp, mass, energy)
+        assert np.isclose(pt, expected_pt, rtol=1e-12, atol=1e-13)
+
+    def test_high_energy_approximation(
+        self, loaded_interface_with_beam: BaseMadInterface
+    ):
+        """Test at high energy where pt ≈ dp"""
+        interface = loaded_interface_with_beam
+        dp = 0.01
+        pt = interface.dp2pt(dp)
+        # At high energy, pt should be close to dp
+        assert np.isclose(pt, dp, rtol=1e-3, atol=1e-6)
+
+
+class TestPt2dp:
+    def test_zero_pt(self, loaded_interface_with_beam: BaseMadInterface):
+        """Test pt2dp with pt=0 returns 0"""
+        interface = loaded_interface_with_beam
+        dp = interface.pt2dp(0.0)
+        assert np.isclose(dp, 0.0, rtol=1e-12, atol=1e-15)
+
+    def test_positive_pt(self, loaded_interface_with_beam: BaseMadInterface):
+        """Test pt2dp with positive pt"""
+        interface = loaded_interface_with_beam
+        pt = 0.01
+        dp = interface.pt2dp(pt)
+        # Check inverse consistency
+        pt_back = interface.dp2pt(dp)
+        assert np.isclose(pt_back, pt, rtol=1e-12, atol=1e-15)
+
+    def test_negative_pt(self, loaded_interface_with_beam: BaseMadInterface):
+        """Test pt2dp with negative pt"""
+        interface = loaded_interface_with_beam
+        pt = -0.005
+        dp = interface.pt2dp(pt)
+        # Check inverse consistency
+        pt_back = interface.dp2pt(dp)
+        assert np.isclose(pt_back, pt, rtol=1e-12, atol=1e-15)
+
+
+def test_pt2dp_dp2pt_consistency(loaded_interface_with_beam: BaseMadInterface):
+    """Test that pt2dp and dp2pt are inverses of each other."""
+    interface = loaded_interface_with_beam
+    test_dps = [0.0, 0.001, -0.001, 0.01, -0.005]
+    test_pts = [0.0, 0.001, -0.001, 0.01, -0.005]
+
+    for dp in test_dps:
+        pt = interface.dp2pt(dp)
+        dp_back = interface.pt2dp(pt)
+        assert np.isclose(dp_back, dp, rtol=1e-12, atol=1e-15), (
+            f"Inconsistency for dp={dp}: pt={pt}, dp_back={dp_back}"
+        )
+
+    for pt in test_pts:
+        dp = interface.pt2dp(pt)
+        pt_back = interface.dp2pt(dp)
+        assert np.isclose(pt_back, pt, rtol=1e-12, atol=1e-15), (
+            f"Inconsistency for pt={pt}: dp={dp}, pt_back={pt_back}"
+        )
