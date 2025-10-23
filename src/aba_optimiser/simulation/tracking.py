@@ -171,7 +171,7 @@ def initialise_mad_batch(
         for str_name, strength in magnet_strengths.items():
             magnet_name, var = str_name.rsplit(".", 1)
             logger.debug(f"Setting {magnet_name.lower()} {var} to {strength}")
-            interface.set_madx_variables(**{f"MADX['{magnet_name}'].{var}": strength})
+            interface.set_variables(**{f"MADX['{magnet_name}'].{var}": strength})
 
         # Apply corrector strengths
         interface.apply_corrector_strengths(corrector_table)

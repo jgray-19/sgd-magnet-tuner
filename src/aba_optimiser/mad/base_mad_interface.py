@@ -93,7 +93,7 @@ local observed in MAD.element.flags
 loaded_sequence:deselect(observed, {{pattern="{elem}"}})
 """)
 
-    def cycle_sequence(self, marker_name: str) -> None:
+    def cycle_sequence(self, marker_name: str | None = None) -> None:
         """
         Cycle sequence to start from a specific marker.
 
@@ -101,11 +101,14 @@ loaded_sequence:deselect(observed, {{pattern="{elem}"}})
             marker_name: Name of marker to cycle to
         """
         logger.debug(f"Cycling sequence to start from {marker_name}")
-        self.mad.send(f"loaded_sequence:cycle('{marker_name}')")
+        if marker_name is None:
+            self.mad.send("loaded_sequence:cycle()")
+        else:
+            self.mad.send(f"loaded_sequence:cycle('{marker_name}')")
 
     def install_marker(
         self, element_name: str, marker_name: str = None, offset: float = -1e-10
-    ) -> None:
+    ) -> str:
         """
         Install a marker element near an existing element.
 
@@ -125,6 +128,7 @@ loaded_sequence:install{{
 MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
 }}
 """)
+        return marker_name
 
     def run_twiss(self, **twiss_kwargs) -> tfs.TfsDataFrame:
         """
@@ -161,9 +165,8 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
         Args:
             **kwargs: Variable names and their values
         """
-        self.mad.send("MADX:open_env()")
+        kwargs = {f"MADX['{key}']": value for key, value in kwargs.items()}
         self.set_variables(**kwargs)
-        self.mad.send("MADX:close_env()")
 
     def get_variables(self, *names: str) -> float:
         """
@@ -189,11 +192,11 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
             if name.endswith("_k"):
                 element_name = name[:-2]  # Remove '_k' suffix
                 if "MB." in element_name:
-                    self.set_variable(f"MADX['{element_name}'].k0", strength)
+                    self.set_variables(**{f"MADX['{element_name}'].k0": strength})
                 elif "MQ." in element_name:
-                    self.set_variable(f"MADX['{element_name}'].k1", strength)
+                    self.set_variables(**{f"MADX['{element_name}'].k1": strength})
                 elif "MS." in element_name:
-                    self.set_variable(f"MADX['{element_name}'].k2", strength)
+                    self.set_variables(**{f"MADX['{element_name}'].k2": strength})
                 else:
                     logger.warning(f"Unknown magnet type for {element_name}")
 
@@ -210,7 +213,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
         mappings = {
             "hkicker": [("kick", "hkick")],
             "vkicker": [("kick", "vkick")],
-            "tkicker": [("hkick", "hkick"), ("vkick", "vkick")],
+            "tkicker": [("hkick", "hkick"), ("vkick", "vkick")],  # untested
         }
 
         for _, row in corrector_table.iterrows():
@@ -235,16 +238,6 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
                         )
             else:
                 logger.warning(f"Element {ename} has unknown kind '{kind}'")
-
-    def execute_command(self, command: str) -> None:
-        """
-        Execute a raw MAD command.
-
-        Args:
-            command: MAD command string
-        """
-        logger.debug(f"Executing MAD command: {command[:50]}...")
-        self.mad.send(command)
 
     def match_tunes(
         self,
@@ -299,63 +292,6 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
         for knob, value in tune_values.items():
             self.mad.send(f"MADX['{knob}'] = {value}")
 
-    def get_element_names_by_pattern(
-        self, pattern: str, element_range: str = None
-    ) -> list[str]:
-        """
-        Get element names matching a pattern within a range.
-
-        Args:
-            pattern: Pattern to match (e.g., "MQ%." for quadrupoles)
-            element_range: Range to search in (default: entire sequence)
-
-        Returns:
-            List of matching element names
-        """
-        if element_range is None:
-            iter_command = "loaded_sequence:iter()"
-        else:
-            iter_command = f'loaded_sequence:iter("{element_range}")'
-
-        self.mad.send(f"""
-local elem_names = {{}}
-for i, elm, s, ds in {iter_command} do
-    if elm.name:match("{pattern}") then
-        table.insert(elem_names, elm.name)
-    end
-end
-{self.py_name}:send(elem_names, true)
-""")
-        return self.mad.recv()
-
-    def apply_element_errors(
-        self,
-        element_names: list[str],
-        attribute: str,
-        errors: list[float] | dict[str, float],
-    ) -> None:
-        """
-        Apply errors to element attributes.
-
-        Args:
-            element_names: List of element names
-            attribute: Attribute name (e.g., 'k1', 'k2')
-            errors: List of errors or dict mapping element names to errors
-        """
-        if isinstance(errors, dict):
-            for name in element_names:
-                if name in errors:
-                    self.mad.send(f"""
-local current = MADX['{name}'].{attribute}
-MADX['{name}'].{attribute} = current + {errors[name]}
-""")
-
-        for name, error in zip(element_names, errors):
-            self.mad.send(f"""
-local current = MADX['{name}'].{attribute}
-MADX['{name}'].{attribute} = current + {error}
-""")
-
     def run_tracking(
         self,
         x0: float = 0,
@@ -374,12 +310,11 @@ MADX['{name}'].{attribute} = current + {error}
             nturns: Number of turns to track
         """
         logger.debug(f"Running tracking for {nturns} turns")
-        track_cmd = (
-            f"trk, mflw = track{{sequence=loaded_sequence, "
-            f"X0={{x={x0:.6e}, px={px0:.6e}, y={y0:.6e}, py={py0:.6e}, t={t0:.6e}, pt={pt0:.6e}}}, "
-            f"nturn={nturns}}}"
+        self.mad["trk", "mflw"] = self.mad.track(
+            sequence="loaded_sequence",
+            X0={"x": x0, "px": px0, "y": y0, "py": py0, "t": t0, "pt": pt0},
+            nturn=nturns,
         )
-        self.mad.send(track_cmd)
 
     def get_tracking_data(self) -> tfs.TfsDataFrame:
         """

@@ -11,12 +11,10 @@ from .base_mad_interface import BaseMadInterface
 from .mad_interface import OptimisationMadInterface
 from .tracking_interface import (
     TrackingMadInterface,
-    create_tracking_interface,
 )
 
 __all__ = [
     "BaseMadInterface",
     "OptimisationMadInterface",
     "TrackingMadInterface",
-    "create_tracking_interface",
 ]

@@ -7,12 +7,42 @@ LOGGER = logging.getLogger(__name__)
 
 
 def get_beam_beta(mass, energy):
+    """Calculate the relativistic beta (v/c) for a particle.
+
+    Parameters
+    ----------
+    mass : float
+        Particle rest mass in GeV/c².
+    energy : float
+        Total particle energy in GeV.
+
+    Returns
+    -------
+    float
+        Relativistic beta (dimensionless, v/c).
+    """
     LOGGER.debug("Calculating beam beta for mass=%f, energy=%f", mass, energy)
     beta0_sq = (1 - mass / energy) * (1 + mass / energy)
     return sqrt(beta0_sq)
 
 
 def dp2pt(dp, mass, energy):
+    """Convert relative momentum deviation dp/p to transverse momentum pt/p.
+
+    Parameters
+    ----------
+    dp : float
+        Relative momentum deviation (dp/p, dimensionless).
+    mass : float
+        Particle rest mass in GeV/c².
+    energy : float
+        Total particle energy in GeV.
+
+    Returns
+    -------
+    float
+        Transverse momentum relative to total momentum (pt/p, dimensionless).
+    """
     if dp == 0:
         LOGGER.debug("dp2pt: dp is zero, returning 0.0")
         return 0.0

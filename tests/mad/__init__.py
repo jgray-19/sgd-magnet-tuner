@@ -1,0 +1,1 @@
+"""MAD-related tests."""
