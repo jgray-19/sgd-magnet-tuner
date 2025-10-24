@@ -22,12 +22,11 @@ from tests.mad.helpers import (
     check_interface_basic_init,
     check_sequence_loaded,
     cleanup_interface,
-    load_corrector_table,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
     from pathlib import Path
-    from typing import Generator
 
     import tfs
 
@@ -277,6 +276,7 @@ class TestOptimisationMadInterfaceInit:
         self,
         sequence_file: Path,
         corrector_file: Path,
+        corrector_table,
         use_real_strengths: bool,
     ) -> None:
         """Test initialization with different corrector strength settings."""
@@ -285,8 +285,6 @@ class TestOptimisationMadInterfaceInit:
             use_real_strengths=use_real_strengths,
             corrector_strengths=corrector_file,
         )
-
-        corrector_table = load_corrector_table(corrector_file)
         # Check that strengths match expectations
         if use_real_strengths:
             check_corrector_strengths(interface, corrector_table)

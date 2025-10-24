@@ -26,7 +26,6 @@ from .optics import (
     match_tunes,
     perform_orbit_correction,
     run_initial_twiss_analysis,
-    save_knobs,
 )
 from .tracking import (
     cleanup_writer_processes,
@@ -46,7 +45,6 @@ __all__ = [
     "match_tunes",
     "perform_orbit_correction",
     "run_initial_twiss_analysis",
-    "save_knobs",
     "generate_action_angle_coordinates",
     "create_initial_conditions",
     "validate_coordinate_generation",

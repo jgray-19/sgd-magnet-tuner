@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+import tfs
 
 from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 from aba_optimiser.mad.tracking_interface import TrackingMadInterface
@@ -29,6 +30,14 @@ def data_dir() -> Path:
 def corrector_file(data_dir: Path) -> Path:
     """Path to the example corrector strengths file used by several tests."""
     return data_dir / "corrector_strengths.tfs"
+
+
+@pytest.fixture(scope="module")
+def corrector_table(corrector_file: Path) -> tfs.TfsDataFrame:
+    """Load and filter corrector table, removing monitor elements."""
+    corrector_table = tfs.read(corrector_file)
+    # Filter out monitor elements from the corrector table
+    return corrector_table[corrector_table["kind"] != "monitor"]
 
 
 @pytest.fixture(scope="module")

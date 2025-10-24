@@ -22,7 +22,6 @@ from tests.mad.helpers import (
     check_sequence_loaded,
     cleanup_interface,
     get_marker_and_element_positions,
-    load_corrector_table,
 )
 
 if TYPE_CHECKING:
@@ -197,10 +196,8 @@ def test_set_magnet_strength(loaded_interface: BaseMadInterface) -> None:
 
 
 def test_apply_corrector_strengths(
-    loaded_interface: BaseMadInterface, corrector_file: Path
+    loaded_interface: BaseMadInterface, corrector_table
 ):
-    corrector_table = load_corrector_table(corrector_file)
-
     # Check initial strengths are zero
     check_corrector_strengths_zero(loaded_interface, corrector_table)
 

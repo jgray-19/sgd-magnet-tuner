@@ -9,10 +9,8 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-import tfs
-
 if TYPE_CHECKING:
-    from pathlib import Path
+    import tfs
 
 if TYPE_CHECKING:
     from aba_optimiser.mad.base_mad_interface import BaseMadInterface
@@ -103,13 +101,6 @@ py:send(marker_idx)
 py:send(elm_pos)
 py:send(elm_idx)""")
     return _recv_n(interface.mad, 4)
-
-
-def load_corrector_table(corrector_file: Path) -> tfs.TfsDataFrame:
-    """Load and filter corrector table, removing monitor elements."""
-    corrector_table = tfs.read(corrector_file)
-    # Filter out monitor elements from the corrector table
-    return corrector_table[corrector_table["kind"] != "monitor"]
 
 
 def check_corrector_strengths_zero(
