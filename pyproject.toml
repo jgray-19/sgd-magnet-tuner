@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aba_optimiser"
 version = "0.1.0"
-description = "Parallel knob strength optimisation using PyMAD-NG"
+description = "Knob strength optimisation using PyMAD-NG"
 authors = [
     { name="Your Name", email="you@example.com" },
 ]
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "tfs-pandas",
@@ -23,6 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "pytest-cov",
     "black",
     "ruff"
 ]
@@ -30,3 +31,11 @@ dev = [
 [tool.setuptools]
 packages = ["aba_optimiser"]
 package-dir = {"" = "src"}
+
+[tool.coverage.run]
+source = ["src/aba_optimiser"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
