@@ -33,6 +33,7 @@ dev = [
 tracking = [
     "xsuite",
     "omc3",
+    "pyarrow",
 ]
 cern = [
     "nxcals",
