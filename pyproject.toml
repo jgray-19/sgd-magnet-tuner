@@ -14,6 +14,7 @@ license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "numpy",
+    "pandas",
     "tfs-pandas",
     "tensorboardX",
     "pymadng>=0.3.0",
@@ -21,12 +22,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
+test = [
     "pytest",
-    "pytest-cov",
+    "pytest-cov"
+]
+dev = [
     "black",
     "ruff"
 ]
+all = [
+    "xsuite",
+    "nxcals",
+    "omc3",
+]
+
 
 [tool.setuptools]
 packages = ["aba_optimiser"]
