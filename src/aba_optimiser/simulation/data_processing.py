@@ -19,7 +19,7 @@ import pyarrow.parquet as pq
 from aba_optimiser.filtering.svd import svd_clean_measurements
 
 # from aba_optimiser.physics.dispersive_momentum_reconstruction import calculate_pz
-from aba_optimiser.physics.transverse_momentum import calculate_pz, inject_noise_xy
+from aba_optimiser.momentum_recon.transverse import calculate_pz, inject_noise_xy
 
 from .coordinates import get_kick_plane_category
 

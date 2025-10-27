@@ -176,14 +176,14 @@ def insert_ac_dipole(
 
     line.env.elements[f"mkach.6l4.b{beam}"] = xt.ACDipole(
         plane="x",
-        volt=0.042 * pbeam * abs(qxd_qx) / np.sqrt(180.0 * betxac),
+        volt=2 * 0.042 * pbeam * abs(qxd_qx) / np.sqrt(180.0 * betxac),
         freq=driven_tunes[0],
         lag=0,
         ramp=[0, acd_ramp, total_turns, total_turns + acd_ramp],
     )
     line.env.elements[f"mkacv.6l4.b{beam}"] = xt.ACDipole(
         plane="y",
-        volt=0.042 * pbeam * abs(qyd_qx) / np.sqrt(177.0 * betyac),
+        volt=2 * 0.042 * pbeam * abs(qyd_qx) / np.sqrt(177.0 * betyac),
         freq=driven_tunes[1],
         lag=0,
         ramp=[0, acd_ramp, total_turns, total_turns + acd_ramp],

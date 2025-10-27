@@ -27,7 +27,7 @@ from aba_optimiser.config import (
     SEQ_NAME,
     SEQUENCE_FILE,
 )
-from aba_optimiser.physics.transverse_momentum import calculate_pz
+from aba_optimiser.momentum_recon.transverse import calculate_pz
 from scripts.plot_functions import (
     plot_error_bars_bpm_range,
     plot_std_log_comparison,

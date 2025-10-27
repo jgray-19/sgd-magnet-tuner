@@ -92,6 +92,7 @@ def twiss_table(test_line):
     return test_line.twiss(method="4d")
 
 
+@pytest.mark.slow
 def test_create_xsuite_environment(tmp_path):
     # Test basic creation
     XSUITE_JSON.unlink(missing_ok=True)

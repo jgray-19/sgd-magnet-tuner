@@ -139,7 +139,10 @@ match {
     logger.info("Orbit correction and tune rematching completed")
 
     # Store matched tunes in Python variables
-    matched_tunes = {key: mad[f"MADX['{key}']"] for key in ("dqx_b1_op", "dqy_b1_op")}
+    matched_tunes = {
+        "dqx.b1_op": mad["MADX['dqx_b1_op']"],
+        "dqy.b1_op": mad["MADX['dqy_b1_op']"],
+    }
     logger.info(f"Matched tune knobs: {matched_tunes}")
 
     return matched_tunes

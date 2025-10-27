@@ -8,12 +8,12 @@ from turn_by_turn import read_tbt
 
 from aba_optimiser.config import module_path
 from aba_optimiser.dataframes.utils import select_markers
+from aba_optimiser.momentum_recon.transverse import calculate_pz
 
 # from lhcng.model import model_to_ng
 from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 
 # from lhcng.tfs_utils import convert_tfs_to_madx
-from aba_optimiser.physics.transverse_momentum import calculate_pz
 
 real_data_list = [
     "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Measurements/Beam1@BunchTurn@2025_04_09@18_35_18_583/Beam1@BunchTurn@2025_04_09@18_35_18_583.sdds",

@@ -14,7 +14,7 @@ from aba_optimiser.config import (
 
 # from aba_optimiser.ellipse_filtering import filter_noisy_data
 # from aba_optimiser.kalman_filtering import BPMKalmanFilter
-from aba_optimiser.physics.transverse_momentum import calculate_pz
+from aba_optimiser.momentum_recon.transverse import calculate_pz
 
 # from aba_optimiser.filtering.phase_space import PhaseSpaceDiagnostics
 

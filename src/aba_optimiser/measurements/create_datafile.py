@@ -4,17 +4,15 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import tfs
 from nxcals.spark_session_builder import get_or_create
-
-# import tfs
 from omc3.hole_in_one import hole_in_one_entrypoint
 from omc3.optics_measurements.constants import AMP_BETA_NAME, BETA, ERR, NAME
 from pylhc import corrector_extraction, mqt_extraction
 from turn_by_turn import TbtData, read_tbt
-from zoneinfo import ZoneInfo
 
 from aba_optimiser.config import (
     CORRECTOR_STRENGTHS,
@@ -25,7 +23,7 @@ from aba_optimiser.config import (
 from aba_optimiser.filtering.svd import svd_clean_measurements
 from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
-from aba_optimiser.physics.transverse_momentum import calculate_pz_from_measurements
+from aba_optimiser.momentum_recon.transverse import calculate_pz_from_measurements
 from aba_optimiser.training.controller import Controller
 
 if TYPE_CHECKING:
