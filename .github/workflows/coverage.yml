@@ -2,9 +2,9 @@
 name: Coverage
 
 on:  # Runs on all push events to main branch and any push related to a pull request
-  push:
-    branches:
-      - main
+  # push:
+  #   branches:
+  #     - main
   pull_request:
   workflow_dispatch:  # Allow manual triggering
 
