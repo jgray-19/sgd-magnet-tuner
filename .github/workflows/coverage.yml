@@ -39,7 +39,7 @@ jobs:
 
       # The uv pip should make & use an env from the Python install of the previous step
       - name: Install package
-        run: uv pip install '.[test,all]'
+        run: uv pip install '.[test,tracking]'
 
       - name: Run all tests
         run: python -m pytest tests/ --cov=aba_optimiser
