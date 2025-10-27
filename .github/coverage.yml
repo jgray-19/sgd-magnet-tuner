@@ -5,7 +5,8 @@ on:  # Runs on all push events to main branch and any push related to a pull req
   push:
     branches:
       - main
-  pull_request:  # so that codeclimate gets coverage and reports on the diff
+  pull_request:
+  workflow_dispatch:  # Allow manual triggering
 
 env:
   UV_COMPILE_BYTECODE: 1
