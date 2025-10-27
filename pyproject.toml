@@ -34,6 +34,7 @@ tracking = [
     "xsuite",
     "omc3",
     "pyarrow",
+    "psutil",
 ]
 cern = [
     "nxcals",
