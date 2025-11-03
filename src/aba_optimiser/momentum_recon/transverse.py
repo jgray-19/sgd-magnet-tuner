@@ -11,12 +11,13 @@ from omc3.optics_measurements.constants import (
     ALPHA,
     BETA,
     BETA_NAME,
+    DRIVEN_PHASE_NAME,
+    # TOTAL_PHASE_NAME,
     NAME,
     NAME2,
     ORBIT,
     ORBIT_NAME,
     PHASE,
-    PHASE_NAME,
 )
 
 from aba_optimiser.momentum_recon.core import (
@@ -76,84 +77,88 @@ def _cleanup_mean_cols(*dfs: tfs.TfsDataFrame) -> None:
 
 
 def _find_neighbors_from_phase_diffs(
-    phase_df: tfs.TfsDataFrame,
-    phase_col: str,
-    bpm_list: list[str],
+    output_bpm_list: list[str],
+    phase_dict: dict[tuple[str, str], float],
+    full_bpm_list: list[str],
     target_phase: float = 0.25,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    best_prev: dict[str, tuple[str, float]] = {}
-    best_next: dict[str, tuple[str, float]] = {}
-    phase_df = phase_df.set_index([NAME, NAME2])
-    bpm_count = len(bpm_list)
-    for index, bpm in enumerate(bpm_list):
-        phase = 0.0
-        phase_diffs: dict[str, float] = {}
-        current = bpm
-        for offset in range(1, 12):
-            prev_index = (index - offset) % bpm_count
-            prev_bpm = bpm_list[prev_index]
-            phase += phase_df.loc[(prev_bpm, current), phase_col]
-            phase_diffs[prev_bpm] = phase
-            if phase >= target_phase:
-                break
-            current = prev_bpm
-        if not phase_diffs:
-            raise ValueError(f"No previous BPM found for {bpm}")
-        best_prev[bpm] = min(
-            phase_diffs.items(), key=lambda entry: abs(entry[1] - target_phase)
+    def get_forward_phase(from_bpm: str, to_bpm: str) -> float:
+        i1 = full_bpm_list.index(from_bpm)
+        i2 = full_bpm_list.index(to_bpm)
+        n = len(full_bpm_list)
+        dist = (i2 - i1) % n
+        if dist == 0:
+            return 0.0
+        return sum(
+            phase_dict[(full_bpm_list[(i1 + j) % n], full_bpm_list[(i1 + j + 1) % n])]
+            for j in range(dist)
         )
 
+    def find_best_neighbor(bpm: str, direction: str) -> tuple[str, float]:
+        bpm_count = len(output_bpm_list)
+        index = output_bpm_list.index(bpm)
         phase = 0.0
-        phase_diffs = {}
+        delta = np.inf
+        best_bpm = None
         current = bpm
         for offset in range(1, 12):
-            next_index = (index + offset) % bpm_count
-            next_bpm = bpm_list[next_index]
-            phase += phase_df.loc[(current, next_bpm), phase_col]
-            phase_diffs[next_bpm] = phase
-            if phase >= target_phase:
-                break
-            current = next_bpm
-        if not phase_diffs:
-            raise ValueError(f"No next BPM found for {bpm}")
-        best_next[bpm] = min(
-            phase_diffs.items(), key=lambda entry: abs(entry[1] - target_phase)
-        )
+            if direction == "prev":
+                neighbor_index = (index - offset) % bpm_count
+                neighbor = output_bpm_list[neighbor_index]
+                phase += get_forward_phase(neighbor, current)
+                new_delta = target_phase - phase
+            else:
+                neighbor_index = (index + offset) % bpm_count
+                neighbor = output_bpm_list[neighbor_index]
+                phase += get_forward_phase(current, neighbor)
+                new_delta = phase - target_phase
 
-    prev_rows = [
-        {"prev_bpm": best_prev[bpm][0], "delta": best_prev[bpm][1]} for bpm in bpm_list
-    ]
-    next_rows = [
-        {"next_bpm": best_next[bpm][0], "delta": best_next[bpm][1]} for bpm in bpm_list
-    ]
-    prev_df = pd.DataFrame(prev_rows, index=bpm_list)
-    next_df = pd.DataFrame(next_rows, index=bpm_list)
+            # Check if this neighbor is better
+            if abs(new_delta) < abs(delta):
+                delta = new_delta
+                best_bpm = neighbor
+
+            # Check if we need to stop searching, if we passed the target phase
+            # if phase > target_phase:
+            #     break
+            current = neighbor
+        if not best_bpm:
+            raise ValueError(f"No {direction} BPM found for {bpm}")
+        return best_bpm, delta
+
+    best_prev = {bpm: find_best_neighbor(bpm, "prev") for bpm in output_bpm_list}
+    best_next = {bpm: find_best_neighbor(bpm, "next") for bpm in output_bpm_list}
+
+    prev_df = pd.DataFrame(
+        [(bpm, best[0], best[1]) for bpm, best in best_prev.items()],
+        columns=["bpm", "prev_bpm", "delta"],
+    ).set_index("bpm")
+    next_df = pd.DataFrame(
+        [(bpm, best[0], best[1]) for bpm, best in best_next.items()],
+        columns=["bpm", "next_bpm", "delta"],
+    ).set_index("bpm")
     return prev_df, next_df
 
 
-def _add_final_row(phase_df: tfs.TfsDataFrame, plane: str) -> None:
-    tune = "Q1" if plane == "X" else "Q2"
-    first_bpm = phase_df.iloc[0][NAME]
-    last_bpm = phase_df.iloc[-1][NAME2]
-    total_phase = phase_df[PHASE + plane].sum()
-    phase_df.loc[len(phase_df)] = {
-        NAME: last_bpm,
-        NAME2: first_bpm,
-        PHASE + plane: phase_df[tune] - total_phase,
+def _measurement_neighbor_tables(
+    phase_x: pd.DataFrame,
+    phase_y: pd.DataFrame,
+    bpm_list: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    # Build phase dicts and full bpm list
+    full_bpm_list = phase_x[NAME].tolist()
+    phase_dict_x = {
+        (row[NAME], row[NAME2]): row[PHASE + "X"] for _, row in phase_x.iterrows()
+    }
+    phase_dict_y = {
+        (row[NAME], row[NAME2]): row[PHASE + "Y"] for _, row in phase_y.iterrows()
     }
 
-
-def _measurement_neighbor_tables(
-    phase_x: tfs.TfsDataFrame,
-    phase_y: tfs.TfsDataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    _add_final_row(phase_x, "X")
-    _add_final_row(phase_y, "Y")
     prev_x, next_x = _find_neighbors_from_phase_diffs(
-        phase_x, PHASE + "X", phase_x[NAME].to_list()
+        bpm_list, phase_dict_x, full_bpm_list
     )
     prev_y, next_y = _find_neighbors_from_phase_diffs(
-        phase_y, PHASE + "Y", phase_y[NAME].to_list()
+        bpm_list, phase_dict_y, full_bpm_list
     )
     prev_x = prev_x.rename(columns={"prev_bpm": "prev_bpm_x", "delta": "delta_x"})
     prev_y = prev_y.rename(columns={"prev_bpm": "prev_bpm_y", "delta": "delta_y"})
@@ -194,11 +199,13 @@ def calculate_pz(
     if subtract_mean:
         _subtract_bpm_means(data, info)
 
+    bpm_list = data["name"].unique().tolist()
     tws = ensure_twiss(tws, info)
+    tws = tws[tws.index.isin(bpm_list)]
+
     maps = build_lattice_maps(tws)
     prev_x_df, prev_y_df, next_x_df, next_y_df = build_lattice_neighbor_tables(tws)
 
-    bpm_list = tws.index.to_list()
     bpm_index = {bpm: idx for idx, bpm in enumerate(bpm_list)}
 
     data_p = data.join(prev_x_df, on="name", rsuffix="_px")
@@ -239,21 +246,71 @@ def calculate_pz(
 def calculate_pz_from_measurements(
     data: pd.DataFrame,
     analysis_dir: str | Path,
-    info: bool = True,
     subtract_mean: bool = False,
+    tws: tfs.TfsDataFrame | None = None,
 ) -> pd.DataFrame:
+    raise DeprecationWarning(
+        "This function is deprecated and will be removed in a future version."
+    )
     analysis_path = Path(analysis_dir)
-    phase_x = tfs.read(analysis_path / (PHASE_NAME + "x.tfs"))
-    phase_y = tfs.read(analysis_path / (PHASE_NAME + "y.tfs"))
+    phase_x = tfs.read(analysis_path / (DRIVEN_PHASE_NAME + "x.tfs"))
+    phase_y = tfs.read(analysis_path / (DRIVEN_PHASE_NAME + "y.tfs"))
     beta_x = tfs.read(analysis_path / (BETA_NAME + "x.tfs"), index=NAME)
     beta_y = tfs.read(analysis_path / (BETA_NAME + "y.tfs"), index=NAME)
     orbit_x = tfs.read(analysis_path / (ORBIT_NAME + "x.tfs"), index=NAME)
     orbit_y = tfs.read(analysis_path / (ORBIT_NAME + "y.tfs"), index=NAME)
 
-    bpm_list = beta_x.index.to_list()
-    prev_x_df, prev_y_df, next_x_df, next_y_df = _measurement_neighbor_tables(
-        phase_x, phase_y
+    # total_phase_x = tfs.read(analysis_path / (TOTAL_PHASE_NAME + "x.tfs"))
+    # total_phase_y = tfs.read(analysis_path / (TOTAL_PHASE_NAME + "y.tfs"))
+
+    # Add the final row from the total phase files to the phase files
+    # final_row_x = total_phase_x.iloc[[-1]]
+    # final_row_y = total_phase_y.iloc[[-1]]
+    # phase_x = pd.concat([phase_x, final_row_x], ignore_index=True)
+    # phase_y = pd.concat([phase_y, final_row_y], ignore_index=True)
+    # del final_row_x, final_row_y, total_phase_x, total_phase_y
+
+    # Select only necessary columns
+    total_to_final_x = sum(phase_x["PHASEXMDL"]) + sum(phase_x["DELTAPHASEX"])
+    total_to_final_y = sum(phase_y["PHASEYMDL"]) + sum(phase_y["DELTAPHASEY"])
+    phase_x = phase_x[[NAME, NAME2, PHASE + "X"]]
+    phase_y = phase_y[[NAME, NAME2, PHASE + "Y"]]
+
+    # Add final row
+    final_row_x = {
+        NAME: phase_x.iloc[-1][NAME2],
+        NAME2: phase_x.iloc[0][NAME],
+        PHASE + "X": 0.27 - total_to_final_x % 1,
+    }
+    final_row_y = {
+        NAME: phase_y.iloc[-1][NAME2],
+        NAME2: phase_y.iloc[0][NAME],
+        PHASE + "Y": 0.322 - total_to_final_y % 1,
+    }
+    phase_x = pd.concat([phase_x, pd.DataFrame([final_row_x])], ignore_index=True)
+    phase_y = pd.concat([phase_y, pd.DataFrame([final_row_y])], ignore_index=True)
+
+    bpm_list = list(
+        set(phase_x[NAME].unique().tolist())
+        & set(phase_y[NAME].unique().tolist())
+        & set(phase_x[NAME2].unique().tolist())
+        & set(phase_y[NAME2].unique().tolist())
+        & set(beta_x.index.to_list())
+        & set(beta_y.index.to_list())
+        & set(orbit_x.index.to_list())
+        & set(orbit_y.index.to_list())
     )
+
+    # Reorder the bpm_list to match the order in beta_x
+    bpm_list = [bpm for bpm in phase_x[NAME].to_list() if bpm in bpm_list]
+
+    prev_x_df, prev_y_df, next_x_df, next_y_df = _measurement_neighbor_tables(
+        phase_x, phase_y, bpm_list
+    )
+    if tws is not None:
+        prev_x_df_tws, prev_y_df_tws, next_x_df_tws, next_y_df_tws = (
+            build_lattice_neighbor_tables(tws)
+        )
 
     data = data[data["name"].isin(bpm_list)].copy()
 
@@ -314,4 +371,4 @@ def calculate_pz_from_measurements(
         _add_bpm_means(data_p, data_n, data_avg)
         _cleanup_mean_cols(data_p, data_n, data_avg)
 
-    return data_avg[OUT_COLS]
+    return data_n[OUT_COLS]  # data_p seems wrong -> avg will be wrong.

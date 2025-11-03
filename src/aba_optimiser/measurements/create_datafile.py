@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import tfs
 from nxcals.spark_session_builder import get_or_create
-from omc3.hole_in_one import hole_in_one_entrypoint
+
+# from omc3.hole_in_one import hole_in_one_entrypoint
 from omc3.optics_measurements.constants import AMP_BETA_NAME, BETA, ERR, NAME
 from pylhc import corrector_extraction, mqt_extraction
 from turn_by_turn import TbtData, read_tbt
@@ -23,7 +24,7 @@ from aba_optimiser.config import (
 from aba_optimiser.filtering.svd import svd_clean_measurements
 from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
-from aba_optimiser.momentum_recon.transverse import calculate_pz_from_measurements
+from aba_optimiser.momentum_recon.transverse import calculate_pz
 from aba_optimiser.training.controller import Controller
 
 if TYPE_CHECKING:
@@ -43,7 +44,9 @@ def load_files(files: list[str | Path]) -> TbtData:
     return measurements
 
 
-def combine_data(measurements: list[TbtData]) -> pd.DataFrame:
+def convert_measurements(
+    measurements: list[TbtData], bad_bpms: list[str] = []
+) -> list[pd.DataFrame]:
     """Combine multiple TbtData objects into a single DataFrame.
 
     In each turn by turn object, there exists a list stored in the `matrices` attribute.
@@ -75,13 +78,26 @@ def combine_data(measurements: list[TbtData]) -> pd.DataFrame:
             )["y"]
             df_combined["x"] = df_combined["x"] / 1000
             df_combined["y"] = df_combined["y"] / 1000
+            df_combined["kick_plane"] = "xy"
+
+            # Reorder the rows based on BPM names to match the original order
+            original_order = df_x.index.tolist()
+            assert df_y.index.tolist() == original_order, (
+                "BPM order mismatch between X and Y data"
+            )
+            df_combined["name"] = pd.Categorical(
+                df_combined["name"], categories=original_order
+            )
+            # Delete bad bpms from the combined dataframe
+            if bad_bpms:
+                df_combined = df_combined[~df_combined["name"].isin(bad_bpms)]
+            df_combined = df_combined.sort_values(["turn", "name"]).reset_index(
+                drop=True
+            )
+
             all_data.append(df_combined)
             turn_offset += df_x.shape[1]  # Number of turns is number of columns
-
-    combined_df = pd.concat(all_data, ignore_index=True)
-    combined_df["name"] = combined_df["name"].astype("category")
-    combined_df["turn"] = combined_df["turn"].astype("int32")
-    return combined_df
+    return all_data
 
 
 def compute_weights_from_beta_amplitude(
@@ -120,67 +136,132 @@ def compute_weights_from_beta_amplitude(
     return combined
 
 
-def run_analysis(analysis_dir: str | Path, files: list[str | Path]) -> pd.DataFrame:
+def compute_weights_from_known_noise(combined: pd.DataFrame) -> pd.DataFrame:
+    """Compute weights for x and y planes based on known noise levels."""
+    # Read the file in the same directory as this script
+    script_dir = Path(__file__).parent
+    noise_file = script_dir / "bpm_std.txt"
+
+    # The file has three columns: name, x_std, y_std, separated by a space
+    # The units are mm
+    noise_data = pd.read_csv(
+        noise_file,
+        sep=r"\s+",
+        header=0,
+        names=["name", "Horizontal_STD", "Vertical_STD"],
+    )
+    noise_dict_x = noise_data.set_index("name")["Horizontal_STD"].to_dict()
+    noise_dict_y = noise_data.set_index("name")["Vertical_STD"].to_dict()
+    # Replace any 0 std values with infinity, as these should have zero weight
+    noise_dict_x = {k: (v if v != 0 else float("inf")) for k, v in noise_dict_x.items()}
+    noise_dict_y = {k: (v if v != 0 else float("inf")) for k, v in noise_dict_y.items()}
+
+    combined["x_weight"] = combined["name"].apply(
+        lambda bpm: 1.0 / (noise_dict_x.get(bpm, 1e-1) ** 2)
+    )
+    combined["y_weight"] = combined["name"].apply(
+        lambda bpm: 1.0 / ((noise_dict_y.get(bpm, 1e-1)) ** 2)
+    )
+    # Normalize weights to have a max of 1
+    max_x_weight = combined["x_weight"].max()
+    max_y_weight = combined["y_weight"].max()
+    combined["x_weight"] = combined["x_weight"] / max_x_weight
+    combined["y_weight"] = combined["y_weight"] / max_y_weight
+    logger.info("Computed weights based on known noise levels.")
+    logger.debug(f"Max x weight: {max_x_weight}, Max y weight: {max_y_weight}")
+    logger.debug(
+        f"Min x weight: {combined['x_weight'].min()}, Min y weight: {combined['y_weight'].min()}"
+    )
+    logger.debug(
+        f"Weight samples:\n{combined[['name', 'x_weight', 'y_weight']].head()}"
+    )
+    return combined
+
+
+def _add_unit_weights(combined: pd.DataFrame) -> pd.DataFrame:
+    """Add unit weights to the combined DataFrame."""
+    combined["x_weight"] = 1.0
+    combined["y_weight"] = 1.0
+    return combined
+
+
+def run_analysis(
+    analysis_dir: str | Path, model_dir: str | Path, files: list[str | Path], beam: int
+) -> list[str]:
     """Load, combine, and process data from multiple files."""
     analysis_dir = Path(analysis_dir)
     analysis_dir.mkdir(parents=True, exist_ok=True)
-    hole_in_one_entrypoint(
-        harpy=True,
-        files=files,
-        outputdir=analysis_dir / "lin_files",
-        unit="mm",
-        driven_excitation="acd",
-        # nat_tunes=[0.28, 0.31],
-        first_bpm="BPM.33L2.B1",
-        is_free_kick=False,
-        keep_exact_zeros=False,
-        max_peak=0.02,
-        nattunes=[0.28, 0.31, 0.0],
-        num_svd_iterations=3,
-        opposite_direction=False,
-        output_bits=12,
-        peak_to_peak=1e-08,
-        resonances=4,
-        sing_val=12,
-        svd_dominance_limit=0.925,
-        to_write=["lin", "spectra", "full_spectra", "bpm_summary"],
-        tune_clean_limit=1e-05,
-        tunes=[0.27, 0.322, 0.0],
-        turn_bits=18,
-        model_dir="/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Models/b1_flat_60_18cm",
-        turns=[0, 50000],
-        clean=True,
-    )
+    # hole_in_one_entrypoint(
+    #     harpy=True,
+    #     files=files,
+    #     outputdir=analysis_dir / "lin_files",
+    #     unit="mm",
+    #     driven_excitation="acd",
+    #     # nat_tunes=[0.28, 0.31],
+    #     first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
+    #     is_free_kick=False,
+    #     keep_exact_zeros=False,
+    #     max_peak=0.02,
+    #     nattunes=[0.28, 0.31, 0.0],
+    #     num_svd_iterations=3,
+    #     opposite_direction=beam == 2,
+    #     output_bits=12,
+    #     peak_to_peak=1e-08,
+    #     resonances=4,
+    #     sing_val=12,
+    #     svd_dominance_limit=0.925,
+    #     to_write=["lin", "spectra", "full_spectra", "bpm_summary"],
+    #     tune_clean_limit=1e-05,
+    #     tunes=[0.27, 0.322, 0.0],
+    #     turn_bits=18,
+    #     model_dir=model_dir,
+    #     turns=[0, 50000],
+    #     clean=True,
+    # )
 
     analysed_files = [analysis_dir / "lin_files" / f.name for f in files]
 
-    hole_in_one_entrypoint(
-        optics=True,
-        files=analysed_files,
-        outputdir=analysis_dir,
-        analyse_dpp=0,
-        calibrationdir="/afs/cern.ch/eng/sl/lintrack/LHC_commissioning2017/Calibration_factors_2017/Calibration_factors_2017_beam1",
-        chromatic_beating=False,
-        compensation="equation",
-        coupling_method=2,
-        coupling_pairing=0,
-        isolation_forest=False,
-        nonlinear=["rdt"],
-        only_coupling=False,
-        range_of_bpms=11,
-        rdt_magnet_order=4,
-        second_order_dispersion=False,
-        three_bpm_method=False,
-        three_d_excitation=False,
-        union=False,
-        accel="lhc",
-        ats=False,
-        beam=1,
-        dpp=0.0,
-        model_dir="/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Models/b1_flat_60_18cm",
-        xing=False,
-        year="2025",
-    )
+    # hole_in_one_entrypoint(
+    #     optics=True,
+    #     files=analysed_files,
+    #     outputdir=analysis_dir,
+    #     analyse_dpp=0,
+    #     # calibrationdir="/afs/cern.ch/eng/sl/lintrack/LHC_commissioning2017/Calibration_factors_2017/Calibration_factors_2017_beam1",
+    #     chromatic_beating=False,
+    #     compensation="equation",
+    #     coupling_method=2,
+    #     coupling_pairing=0,
+    #     isolation_forest=False,
+    #     nonlinear=["rdt"],
+    #     only_coupling=False,
+    #     range_of_bpms=11,
+    #     rdt_magnet_order=4,
+    #     second_order_dispersion=False,
+    #     three_bpm_method=False,
+    #     three_d_excitation=False,
+    #     union=False,
+    #     accel="lhc",
+    #     ats=False,
+    #     beam=beam,
+    #     dpp=0.0,
+    #     model_dir=model_dir,
+    #     xing=False,
+    #     year="2025",
+    # )
+
+    bad_bpms = []
+    for file in analysed_files:
+        bpm_summary_file_x = file.parent / (file.name + ".bad_bpms_x")
+        bpm_summary_file_y = file.parent / (file.name + ".bad_bpms_y")
+        if bpm_summary_file_x.exists():
+            with bpm_summary_file_x.open("r") as f:
+                bad_bpms.extend([line.split(" ")[0] for line in f.readlines()])
+        if bpm_summary_file_y.exists():
+            with bpm_summary_file_y.open("r") as f:
+                bad_bpms.extend([line.split(" ")[0] for line in f.readlines()])
+    bad_bpms = list(set(bad_bpms))
+    logger.info(f"Identified {len(bad_bpms)} bad BPMs from analysis.")
+    return bad_bpms
 
 
 def build_dict_from_nxcal_result(result: list[NXCalResult]) -> dict[str, float]:
@@ -193,11 +274,11 @@ def build_dict_from_nxcal_result(result: list[NXCalResult]) -> dict[str, float]:
 #     data.to_parquet(output_file)
 
 
-def save_online_knobs(meas_time: datetime) -> None:
+def save_online_knobs(meas_time: datetime, beam: int) -> None:
     """Load and save knob data from NXCal."""
     spark = get_or_create()
-    mqt_results = mqt_extraction.get_mqt_vals(spark, meas_time, 1)
-    corrector_results = corrector_extraction.get_mcb_vals(spark, meas_time, 1)
+    mqt_results = mqt_extraction.get_mqt_vals(spark, meas_time, beam)
+    corrector_results = corrector_extraction.get_mcb_vals(spark, meas_time, beam)
 
     mqt_knobs = build_dict_from_nxcal_result(mqt_results)
     corrector_knobs = build_dict_from_nxcal_result(corrector_results)
@@ -207,20 +288,48 @@ def save_online_knobs(meas_time: datetime) -> None:
 
 
 def process_measurements(
-    files: list[Path], analysis_dir: Path, filename: str = "pz_data.parquet"
+    files: list[Path],
+    analysis_dir: Path,
+    model_dir: str,
+    beam: int,
+    filename: str = "pz_data.parquet",
 ) -> tuple[pd.DataFrame, list[str], Path]:
     """Process measurement files to compute pz data and identify bad BPMs."""
-    run_analysis(analysis_dir, files)
+    bad_bpms = run_analysis(analysis_dir, model_dir, files, beam)
 
     data = load_files(files)
-    combined = combine_data(data)
-    combined["kick_plane"] = "xy"
-    combined = compute_weights_from_beta_amplitude(combined, analysis_dir)
-    cleaned = svd_clean_measurements(combined)
-
-    pzs = calculate_pz_from_measurements(
-        cleaned, analysis_dir, info=True, subtract_mean=True
+    combined = convert_measurements(data, bad_bpms)
+    tws = tfs.read(Path(model_dir) / "twiss_ac.dat")
+    tws.columns = [col.lower() for col in tws.columns]
+    tws = tws.rename(
+        columns={
+            "betx": "beta11",
+            "bety": "beta22",
+            "alfx": "alfa11",
+            "alfy": "alfa22",
+            "mux": "mu1",
+            "muy": "mu2",
+        }
     )
+    tws.headers = {k.lower(): v for k, v in tws.headers.items()}
+    tws = tws.set_index("name")
+
+    for i, df in enumerate(combined):
+        # df = compute_weights_from_beta_amplitude(df, analysis_dir)
+        df = compute_weights_from_known_noise(df)
+        # df = _add_unit_weights(df)
+        df = svd_clean_measurements(df)
+        df = calculate_pz(df, tws=tws, inject_noise=False, subtract_mean=False)
+        # Check that the px and py columns have no NaN values after calculation
+        if df["px"].isna().any() or df["py"].isna().any():
+            logger.warning("NaN values found in px or py after pz calculation.")
+            # Handle NaN values (dropping the rows)
+            df = df.dropna(subset=["px", "py"])
+        combined[i] = df
+    pzs = pd.concat(combined, ignore_index=True)
+    pzs["name"] = pzs["name"].astype("category")
+    pzs["turn"] = pzs["turn"].astype("int32")
+
     mad_iface = OptimisationMadInterface(
         SEQUENCE_FILE,
         discard_mad_output=False,
@@ -231,10 +340,9 @@ def process_measurements(
     pzs["name"] = pzs["name"].astype("category")
 
     # print all bpms and the corresponding plane where py and px are NaN
-    bad_bpms_mask = pzs.groupby("name").apply(
-        lambda g: g[["px", "py"]].isna().any().any()
-    )
-    bad_bpms = bad_bpms_mask[bad_bpms_mask].index.tolist()
+    mask = pzs["px"].isna() | pzs["py"].isna()
+    bad_bpms_mask = mask.groupby(pzs["name"]).any()
+    bad_bpms.extend(bad_bpms_mask[bad_bpms_mask].index.tolist())
     for bpm in bad_bpms:
         logger.info(f"BPM {bpm}: has_nan=True")
 
@@ -257,6 +365,7 @@ if __name__ == "__main__":
     module_root = Path(__file__).absolute().parent.parent.parent.parent
     # analysis_dir = module_root / "analysis"
     analysis_dir = module_root / "analysis_trim"
+    model_dir = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Models/b1_flat_60_18cm"
 
     MAGNET_RANGES = [f"BPM.9R{s}.B1/BPM.9L{s % 8 + 1}.B1" for s in range(1, 9)]
 
@@ -267,10 +376,10 @@ if __name__ == "__main__":
 
     files = [
         # Before the trim
-        # "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Measurements/Beam1@BunchTurn@2025_04_09@18_52_18_410/Beam1@BunchTurn@2025_04_09@18_52_18_410.sdds",
+        # "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Measurements/Beam1@BunchTurn@2025_04_09@18_47_22_071/Beam1@BunchTurn@2025_04_09@18_47_22_071.sdds",
         # "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Measurements/Beam1@BunchTurn@2025_04_09@18_48_27_464/Beam1@BunchTurn@2025_04_09@18_48_27_464.sdds",
         # "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Measurements/Beam1@BunchTurn@2025_04_09@18_51_14_983/Beam1@BunchTurn@2025_04_09@18_51_14_983.sdds",
-        # "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Measurements/Beam1@BunchTurn@2025_04_09@18_47_22_071/Beam1@BunchTurn@2025_04_09@18_47_22_071.sdds",
+        # "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Measurements/Beam1@BunchTurn@2025_04_09@18_52_18_410/Beam1@BunchTurn@2025_04_09@18_52_18_410.sdds",
         # After the trim
         "/nfs/cs-ccr-nfs4/lhc_data/OP_DATA/FILL_DATA/10423/BPM/Beam1@BunchTurn@2025_04_09@19_05_01_818.sdds",
         "/nfs/cs-ccr-nfs4/lhc_data/OP_DATA/FILL_DATA/10423/BPM/Beam1@BunchTurn@2025_04_09@19_06_06_407.sdds",
@@ -282,12 +391,14 @@ if __name__ == "__main__":
     start_str = "2025-04-09 19:04:50"
     tz = ZoneInfo("UTC")
     meas_time = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz)
-    save_online_knobs(meas_time)
+    save_online_knobs(meas_time, beam=1)
     measurement_filename = "pz_data.parquet"
     measurement_file = analysis_dir / measurement_filename
     bad_bpms_file = analysis_dir / "bad_bpms.txt"
 
-    pzs, bad_bpms, _ = process_measurements(files, analysis_dir, measurement_filename)
+    pzs, bad_bpms, _ = process_measurements(
+        files, analysis_dir, model_dir, beam=1, filename=measurement_filename
+    )
 
     # save the bad bpms to a file
     with bad_bpms_file.open("w") as f:

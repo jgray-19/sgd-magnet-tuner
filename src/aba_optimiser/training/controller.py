@@ -15,14 +15,17 @@ import numpy as np
 from tensorboardX import SummaryWriter
 
 from aba_optimiser.config import (
+    BEAM,
     BPM_END_POINTS,
     BPM_START_POINTS,
     MACHINE_DELTAP,
     MAGNET_RANGE,
     RUN_ARC_BY_ARC,
+    SEQUENCE_FILE,
     TRUE_STRENGTHS_FILE,
 )
 from aba_optimiser.io.utils import read_knobs
+from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.training.configuration_manager import ConfigurationManager
 from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.optimisation_loop import OptimisationLoop
@@ -56,6 +59,7 @@ class Controller:
         bpm_end_points: list[str] = BPM_END_POINTS,
         measurement_file: str | None = None,
         bad_bpms: list[str] | None = None,
+        beam: int = BEAM,
     ):
         """Initialise the controller with all required managers."""
 
@@ -76,6 +80,10 @@ class Controller:
                     bpm_end_points.remove(bpm)
                     logger.warning(f"Removed bad BPM {bpm} from end points")
 
+        start_bpm = "BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2"
+        bpm_order = OptimisationMadInterface(
+            SEQUENCE_FILE, bad_bpms=bad_bpms, start_bpm=start_bpm
+        ).all_bpms
         # Initialise managers
         self.config_manager = ConfigurationManager(
             opt_settings, magnet_range, bpm_start_points, bpm_end_points
@@ -87,6 +95,7 @@ class Controller:
             self.config_manager.all_bpms,
             opt_settings,
             measurement_file,
+            bpm_order=bpm_order,
         )
         self.data_manager.prepare_turn_batches(self.config_manager)
 

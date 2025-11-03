@@ -65,14 +65,14 @@ DPP_OPT_SETTINGS = OptSettings(
     # tracks_per_worker=447,
     # num_workers=59,
     # For post trimmed data
-    tracks_per_worker=329,
+    tracks_per_worker=325,
     num_workers=60,
     num_batches=20,
-    warmup_epochs=3,
+    warmup_epochs=1,
     # num_batches=10,
     # warmup_epochs=2,
     # adam
-    warmup_lr_start=1e-7,
+    warmup_lr_start=4e-7,
     max_lr=3e-6,
     min_lr=3e-6,
     # lbfgs
@@ -188,7 +188,8 @@ KICK_BOTH_PLANES = True  # Whether to kick in both planes or separately
 MAGNET_RANGE = "BPM.11R2.B1/BPM.11L3.B1"
 BEAM_ENERGY = 6800  # Beam energy in GeV
 PARTICLE_MASS = 938.27208816 * 1e-3  # [GeV] Proton energy-mass
-SEQ_NAME = "lhcb1"  # Sequence name in MAD-X (lowercase)
+BEAM = 1  # LHC beam number (1 or 2)
+SEQ_NAME = f"lhcb{BEAM}"  # Sequence name in MAD-X (lowercase)
 CLEAN_DATA = True  # Whether to take the filtered data for optimisation (just weights as of 16/09)
 USE_NOISY_DATA = True  # Whether to use noisy data for optimisation
 
@@ -244,9 +245,9 @@ HESSIAN_SCRIPT = MAD_SCRIPTS_DIR / "estimate_hessian.mad"
 
 # Other files
 # The MAD-X sequence file
-SEQUENCE_FILE = module_path / "mad_scripts/lhcb1.seq"
+SEQUENCE_FILE = module_path / f"mad_scripts/lhcb{BEAM}.seq"
 # The xsuite JSON file for the LHC
-XSUITE_JSON = module_path / "src" / "aba_optimiser" / "xsuite" / "lhcb1.json"
+XSUITE_JSON = module_path / "src" / "aba_optimiser" / "xsuite" / f"lhcb{BEAM}.json"
 # Ground-truth knob strengths
 TRUE_STRENGTHS_FILE = module_path / "data/true_strengths.txt"
 # Where to write final strengths

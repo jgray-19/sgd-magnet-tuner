@@ -42,8 +42,8 @@ class BaseWorker(Process, ABC):
         y_comparisons: np.ndarray,
         px_comparisons: np.ndarray,
         py_comparisons: np.ndarray,
-        # x_weights: np.ndarray,
-        # y_weights: np.ndarray,
+        x_weights: np.ndarray,
+        y_weights: np.ndarray,
         init_coords: np.ndarray,
         start_bpm: str,
         end_bpm: str,
@@ -74,10 +74,10 @@ class BaseWorker(Process, ABC):
         self.y_comparisons = y_comparisons[:n_init]
         self.px_comparisons = px_comparisons[:n_init]
         self.py_comparisons = py_comparisons[:n_init]
-        # self.x_weights = self._adjust_weights(x_weights[:n_init])
-        # self.y_weights = self._adjust_weights(y_weights[:n_init])
-        # self.x_weights = x_weights[:n_init]
-        # self.y_weights = y_weights[:n_init]
+        self.x_weights = self._adjust_weights(x_weights[:n_init])
+        self.y_weights = self._adjust_weights(y_weights[:n_init])
+        self.x_weights = x_weights[:n_init]
+        self.y_weights = y_weights[:n_init]
 
         # If either x or y first BPM weight is 0, zero the subsequent weights for both
         # mask = (self.x_weights[:, 0] == 0) | (self.y_weights[:, 0] == 0)
@@ -180,8 +180,8 @@ class BaseWorker(Process, ABC):
         self.py_comparisons = np.array_split(
             self.py_comparisons, self.num_batches, axis=0
         )
-        # self.x_weights = np.array_split(self.x_weights, self.num_batches, axis=0)
-        # self.y_weights = np.array_split(self.y_weights, self.num_batches, axis=0)
+        self.x_weights = np.array_split(self.x_weights, self.num_batches, axis=0)
+        self.y_weights = np.array_split(self.y_weights, self.num_batches, axis=0)
 
         self.init_pts = [
             arr.tolist()
@@ -347,34 +347,28 @@ end
         dpx_dk = np.stack(dpx_dk_results, axis=0)
         dpy_dk = np.stack(dpy_dk_results, axis=0)
 
+        wx = self.x_weights[batch]
+        wy = self.y_weights[batch]
+
         # Compute differences between simulated and reference positions for loss and gradients
         # Shape: (n_particles, n_data_points)
-        position_diffs_x = (
-            particle_positions_x - self.x_comparisons[batch]
-        )  # * self.x_weights[batch]
-        position_diffs_y = (
-            particle_positions_y - self.y_comparisons[batch]
-        )  # * self.y_weights[batch]
-
-        momentum_diffs_px = (
-            particle_momenta_px - self.px_comparisons[batch]
-        )  # * self.x_weights[batch]
-        momentum_diffs_py = (
-            particle_momenta_py - self.py_comparisons[batch]
-        )  # * self.y_weights[batch]
+        residual_x = particle_positions_x - self.x_comparisons[batch]
+        residual_y = particle_positions_y - self.y_comparisons[batch]
+        residual_px = particle_momenta_px - self.px_comparisons[batch]
+        residual_py = particle_momenta_py - self.py_comparisons[batch]
 
         # Compute gradients using vector-Jacobian products (efficient via einsum)
         # gx: Sum over particles and data points of (derivatives * diffs). Shape: (n_knobs + 1,)
-        gx = np.einsum("pkm,pm->k", dx_dk, position_diffs_x)
-        gy = np.einsum("pkm,pm->k", dy_dk, position_diffs_y)
-        gpx = np.einsum("pkm,pm->k", dpx_dk, momentum_diffs_px)
-        gpy = np.einsum("pkm,pm->k", dpy_dk, momentum_diffs_py)
+        gx = np.einsum("pkm,pm->k", dx_dk, wx * residual_x)
+        gy = np.einsum("pkm,pm->k", dy_dk, wy * residual_y)
+        gpx = np.einsum("pkm,pm->k", dpx_dk, residual_px)
+        gpy = np.einsum("pkm,pm->k", dpy_dk, residual_py)
         del gpx, gpy  # Unused for now
 
         # Combine gradients and compute loss (factor of 2 for derivative of squared error)
         grad = 2.0 * (gx + gy)  # Shape: (n_knobs + 1,)
         # grad = 2.0 * (gx + gy + gpx + gpy)  # Shape: (n_knobs + 1,)
-        loss = np.sum(position_diffs_x**2) + np.sum(position_diffs_y**2)  # Scalar
+        loss = np.sum(wx * residual_x**2) + np.sum(wy * residual_y**2)  # Scalar
 
         return grad, loss
 

@@ -116,6 +116,9 @@ loaded_sequence:deselect(observed, {{pattern="{elem}"}})
             element_name: Name of reference element
             marker_name: Name for new marker (auto-generated if None)
             offset: Offset from reference element
+
+        Returns:
+            Name of the installed marker
         """
         if marker_name is None:
             marker_name = f"{element_name}_marker"

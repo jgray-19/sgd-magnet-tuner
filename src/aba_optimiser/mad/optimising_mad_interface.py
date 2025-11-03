@@ -96,6 +96,7 @@ class OptimisationMadInterface(BaseMadInterface):
         corrector_strengths: Path = CORRECTOR_STRENGTHS,
         seq_name: str = SEQ_NAME,
         tune_knobs_file: Path = TUNE_KNOBS_FILE,
+        start_bpm: str | None = None,
         **kwargs,
     ):
         """
@@ -142,6 +143,10 @@ class OptimisationMadInterface(BaseMadInterface):
         # Perform automatic setup using base class methods
         self.load_sequence(sequence_file, self.seq_name)
         self.setup_beam(self.beam_energy)
+
+        if start_bpm is not None:
+            marker_name = self.install_marker(start_bpm, "marker_" + start_bpm)
+            self.cycle_sequence(marker_name=marker_name)
 
         # Set MAD variables for ranges and patterns
         self.mad["magnet_range"] = self.magnet_range

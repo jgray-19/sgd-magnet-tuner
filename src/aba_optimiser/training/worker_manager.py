@@ -201,7 +201,6 @@ class WorkerManager:
                     f"Turn batch {batch_idx} for range {bpm_range} is empty. "
                     f"Check TRACKS_PER_WORKER and NUM_WORKERS."
                 )
-                print(self.n_data_points)
 
                 # Create the payload data for this worker (x/y comparisons, initial coords, etc.)
                 (
@@ -211,8 +210,8 @@ class WorkerManager:
                     py_comp,
                     init_coords,
                     pt_array,
-                    # x_weights,
-                    # y_weights,
+                    x_weights,
+                    y_weights,
                 ) = self._make_worker_payload(
                     track_data,
                     turn_batch,
@@ -236,8 +235,8 @@ class WorkerManager:
                         "y_comparisons": y_comp,  # Expected y coordinates for loss calculation
                         "px_comparisons": px_comp,  # Expected px coordinates for loss calculation
                         "py_comparisons": py_comp,  # Expected py coordinates for loss calculation
-                        # "x_weights": x_weights,  # Weights for x coordinates
-                        # "y_weights": y_weights,  # Weights for y coordinates
+                        "x_weights": x_weights,  # Weights for x coordinates
+                        "y_weights": y_weights,  # Weights for y coordinates
                         "init_coords": init_coords,  # Initial particle coordinates
                         "start_bpm": start_bpm,
                         "end_bpm": end_bpm,
@@ -279,8 +278,8 @@ class WorkerManager:
         y_comp = np.empty((n_turns, n_data_points), dtype="float64")
         px_comp = np.empty((n_turns, n_data_points), dtype="float64")
         py_comp = np.empty((n_turns, n_data_points), dtype="float64")
-        # x_weights = np.empty((n_turns, n_data_points), dtype="float64")
-        # y_weights = np.empty((n_turns, n_data_points), dtype="float64")
+        x_weights = np.empty((n_turns, n_data_points), dtype="float64")
+        y_weights = np.empty((n_turns, n_data_points), dtype="float64")
 
         init_coords_array = np.empty((n_turns, 6), dtype="float64")
         pt_array = np.empty((n_turns,), dtype="float64")
@@ -297,16 +296,16 @@ class WorkerManager:
                 arr_y: np.ndarray = entry["y"]
                 arr_px: np.ndarray = entry["px"]
                 arr_py: np.ndarray = entry["py"]
-                # arr_wx: np.ndarray = entry["x_weight"]
-                # arr_wy: np.ndarray = entry["y_weight"]
+                arr_wx: np.ndarray = entry["x_weight"]
+                arr_wy: np.ndarray = entry["y_weight"]
             else:
                 df = track_data[energy_type]
                 arr_x = df["x"].to_numpy(dtype="float64", copy=False)
                 arr_y = df["y"].to_numpy(dtype="float64", copy=False)
                 arr_px = df["px"].to_numpy(dtype="float64", copy=False)
                 arr_py = df["py"].to_numpy(dtype="float64", copy=False)
-                # arr_wx = df["x_weight"].to_numpy(dtype="float64", copy=False)
-                # arr_wy = df["y_weight"].to_numpy(dtype="float64", copy=False)
+                arr_wx = df["x_weight"].to_numpy(dtype="float64", copy=False)
+                arr_wy = df["y_weight"].to_numpy(dtype="float64", copy=False)
 
             # Calculate transverse momentum for this energy type
             pt = self._compute_pt(energy_type)
@@ -320,7 +319,14 @@ class WorkerManager:
             if sdir == -1:
                 # identify the turn of the initial bpm
                 start_pos = self._get_pos(df, turn, start_bpm)
-                if (init_turn := self.get_turn(df, start_pos + n_data_points)) != turn:
+                end_pos = start_pos + n_data_points - 1
+                if (
+                    init_turn := self.get_turn(df, start_pos + n_data_points - 1)
+                ) != turn:
+                    assert (
+                        start_bpm == df.iloc[start_pos].index[1]
+                        and end_bpm == df.iloc[end_pos].index[1]
+                    )
                     LOGGER.warning(f"Reversed init turn from {turn} to {init_turn}")
 
             init_pos = self._get_pos(df, init_turn, init_bpm)
@@ -339,8 +345,8 @@ class WorkerManager:
                 y_comp[i, :] = arr_y[sl]
                 px_comp[i, :] = arr_px[sl]
                 py_comp[i, :] = arr_py[sl]
-                # x_weights[i, :] = arr_wx[sl]
-                # y_weights[i, :] = arr_wy[sl]
+                x_weights[i, :] = arr_wx[sl]
+                y_weights[i, :] = arr_wy[sl]
                 # x_weights[i, :] = 1.0
                 # y_weights[i, :] = 1.0
             else:
@@ -349,8 +355,8 @@ class WorkerManager:
                 y_comp[i, :] = arr_y[sl]
                 px_comp[i, :] = arr_px[sl]
                 py_comp[i, :] = arr_py[sl]
-                # x_weights[i, :] = arr_wx[sl]
-                # y_weights[i, :] = arr_wy[sl]
+                x_weights[i, :] = arr_wx[sl]
+                y_weights[i, :] = arr_wy[sl]
                 # x_weights[i, :] = 1.0
                 # y_weights[i, :] = 1.0
             # Get the turn that the final BPM corresponds to and check it matches
@@ -378,8 +384,8 @@ class WorkerManager:
             py_comp,
             init_coords_array,
             pt_array,
-            # x_weights,
-            # y_weights,
+            x_weights,
+            y_weights,
         )
         # return x_comp, y_comp, init_coords_array, pt_array
 

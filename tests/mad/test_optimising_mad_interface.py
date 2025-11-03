@@ -297,7 +297,14 @@ class TestOptimisationMadInterfaceInit:
         """Test initialization with knob for tunes and corrector files."""
         corrector_knob_file = data_dir / "corrector_knobs.txt"
         tune_knob_file = data_dir / "tune_knobs.txt"
-        interface = OptimisationMadInterface(
+
+        no_knob_interface = OptimisationMadInterface(
+            sequence_file=str(sequence_file),
+            use_real_strengths=False,
+        )
+        original_mqt_strength = no_knob_interface.mad["MADX['MQT.14R3.B1'].k1"]
+
+        knob_interface = OptimisationMadInterface(
             sequence_file=str(sequence_file),
             corrector_strengths=corrector_knob_file,
             tune_knobs_file=tune_knob_file,
@@ -306,9 +313,20 @@ class TestOptimisationMadInterfaceInit:
         tune_knobs = read_knobs(tune_knob_file)
         all_knobs = {**corrector_knobs, **tune_knobs}
         for name in all_knobs:
-            assert interface.mad[f"MADX['{name}']"] == all_knobs[name]
+            assert knob_interface.mad[f"MADX['{name}']"] == all_knobs[name]
+            assert (
+                knob_interface.mad[f"MADX['{name}']"]
+                != no_knob_interface.mad[f"MADX['{name}']"]
+            )
+        # Check that the mqt strength has changed, not just that the knobs exists in the MAD interface
+        new_mqt_strength = knob_interface.mad["MADX['MQT.14R3.B1'].k1"]
+        assert new_mqt_strength != original_mqt_strength
+        print(
+            f"Original MQT.14R3.B1 strength: {original_mqt_strength}, New strength: {new_mqt_strength}"
+        )
 
-        cleanup_interface(interface)
+        cleanup_interface(knob_interface)
+        cleanup_interface(no_knob_interface)
 
     @pytest.mark.parametrize(
         "bad_bpms",

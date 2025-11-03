@@ -47,10 +47,12 @@ class DataManager:
         all_bpms: np.ndarray,
         opt_settings: OptSettings,
         measurement_file: str | None = None,
+        bpm_order: list[str] | None = None,
     ):
         self.all_bpms = all_bpms
         self.opt_settings = opt_settings
         self.measurement_file = measurement_file
+        self.bpm_order = bpm_order
 
         # Available global "turn" ids (already include offsets if sextupoles are on)
         total_files = 3 if opt_settings.use_off_energy_data else 1
@@ -111,6 +113,29 @@ class DataManager:
 
         LOGGER.info("Using non-noisy data for zero-energy tracks")
         return NO_NOISE_FILE
+
+    def _reorder_track_dataframes(self) -> None:
+        """Reorder track dataframes to have turns in ascending order and BPMs in bpm_order."""
+        for e in self.track_data:
+            all_turns = sorted(
+                self.track_data[e].index.get_level_values("turn").unique()
+            )
+            # reduce bpm order to only those present in the data
+            if self.bpm_order is not None:
+                bpm_order_filtered = [
+                    bpm
+                    for bpm in self.bpm_order
+                    if bpm in self.track_data[e].index.get_level_values("name")
+                ]
+            else:
+                bpm_order_filtered = sorted(
+                    self.track_data[e].index.get_level_values("name").unique()
+                )
+            self.track_data[e] = self.track_data[e].reindex(
+                pd.MultiIndex.from_product(
+                    [all_turns, bpm_order_filtered], names=["turn", "name"]
+                )
+            )
 
     # ---------- Public API ----------
 
@@ -178,6 +203,8 @@ class DataManager:
 
         for df in self.track_data.values():
             df.set_index(["turn", "name"], inplace=True)
+
+        self._reorder_track_dataframes()
 
         # Priority: plus > minus > zero (disjoint in practice if offsets are correct)
         energy_map: dict[int, str] = {}
