@@ -349,7 +349,7 @@ def run_parallel_tracking(
 
         # Create xsuite environment
         logger.info("Creating xsuite environment")
-        env = initialise_env(matched_tunes, magnet_strengths, corrector_table)
+        env = initialise_env(matched_tunes, magnet_strengths, corrector_table, seq_name=seq_name)
 
         # Set up the beam line with corrections
         logger.info("Setting up beam line with orbit correction")
@@ -365,6 +365,7 @@ def run_parallel_tracking(
             progress_interval=progress_interval,
             num_tracks=num_tracks,
             true_deltap=true_deltap,
+            seq_name=seq_name,
         )
 
         true_dfs = line_to_dataframes(tracked_line)

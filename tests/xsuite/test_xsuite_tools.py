@@ -16,10 +16,10 @@ import xtrack as xt
 
 from aba_optimiser.config import (
     BEAM_ENERGY,
-    SEQ_NAME,
-    SEQUENCE_FILE,
-    XSUITE_JSON,
+    LHCB1_SEQ_NAME,
+    PROJECT_ROOT,
 )
+from aba_optimiser.io.utils import get_lhc_file_path
 from aba_optimiser.xsuite.xsuite_tools import (
     create_xsuite_environment,
     initialise_env,
@@ -29,6 +29,13 @@ from aba_optimiser.xsuite.xsuite_tools import (
     run_acd_twiss,
     run_tracking,
 )
+
+
+def _get_default_xsuite_json():
+    """Get the default xsuite JSON file path."""
+    xsuite_dir = PROJECT_ROOT / "src" / "aba_optimiser" / "xsuite"
+    sequence_file = get_lhc_file_path(1)
+    return xsuite_dir / f"{sequence_file.stem}.json"
 
 
 @pytest.fixture(scope="function")
@@ -95,43 +102,44 @@ def twiss_table(test_line):
 @pytest.mark.slow
 def test_create_xsuite_environment(tmp_path):
     # Test basic creation
-    XSUITE_JSON.unlink(missing_ok=True)
-    env = create_xsuite_environment()
-    assert SEQ_NAME in env.lines
-    assert XSUITE_JSON.exists()
-    line = env.lines[SEQ_NAME]
+    xsuite_json = _get_default_xsuite_json()
+    xsuite_json.unlink(missing_ok=True)
+    env = create_xsuite_environment(beam=1)
+    assert LHCB1_SEQ_NAME in env.lines
+    assert xsuite_json.exists()
+    line = env.lines[LHCB1_SEQ_NAME]
     assert np.isclose(line.particle_ref.energy0[0], BEAM_ENERGY * 1e9, rtol=1e-10)
     assert len(line.particle_ref.energy0) == 1
 
     # Test rerun_madx flag
-    mod_time_before = XSUITE_JSON.stat().st_mtime
-    env2 = create_xsuite_environment()
-    mod_time_after = XSUITE_JSON.stat().st_mtime
+    mod_time_before = xsuite_json.stat().st_mtime
+    env2 = create_xsuite_environment(beam=1)
+    mod_time_after = xsuite_json.stat().st_mtime
     assert mod_time_before == mod_time_after
-    assert SEQ_NAME in env2.lines
+    assert LHCB1_SEQ_NAME in env2.lines
 
-    env3 = create_xsuite_environment(rerun_madx=True)
-    mod_time_after_rerun = XSUITE_JSON.stat().st_mtime
+    env3 = create_xsuite_environment(beam=1, rerun_madx=True)
+    mod_time_after_rerun = xsuite_json.stat().st_mtime
     assert mod_time_after_rerun > mod_time_after
-    assert SEQ_NAME in env3.lines
+    assert LHCB1_SEQ_NAME in env3.lines
 
     # Test custom json and energy
     temp_json = tmp_path / "temp_xsuite.json"
-    env4 = create_xsuite_environment(json_file=temp_json, beam_energy=450)
-    assert SEQ_NAME in env4.lines
-    line4 = env4.lines[SEQ_NAME]
+    env4 = create_xsuite_environment(beam=1, json_file=temp_json, beam_energy=450)
+    assert LHCB1_SEQ_NAME in env4.lines
+    line4 = env4.lines[LHCB1_SEQ_NAME]
     assert np.isclose(line4.particle_ref.energy0[0], 450e9, rtol=1e-10)
     assert len(line4.particle_ref.energy0) == 1
 
     # Test sequence file newer than json
-    mod_time_before = XSUITE_JSON.stat().st_mtime
+    mod_time_before = xsuite_json.stat().st_mtime
     # Make sequence file appear newer
     future_time = time.time() + 1
-    os.utime(str(SEQUENCE_FILE), (future_time, future_time))
-    env5 = create_xsuite_environment()
-    mod_time_after = XSUITE_JSON.stat().st_mtime
+    os.utime(str(get_lhc_file_path(beam=1)), (future_time, future_time))
+    env5 = create_xsuite_environment(beam=1)
+    mod_time_after = xsuite_json.stat().st_mtime
     assert mod_time_after > mod_time_before
-    assert SEQ_NAME in env5.lines
+    assert LHCB1_SEQ_NAME in env5.lines
 
 
 @pytest.mark.parametrize(
@@ -158,10 +166,10 @@ def test_initialise_env(corrector_table, qx, qy, k1_mqy, k0_mb, k2_mcs):
         matched_tunes=matched_tunes,
         magnet_strengths=magnet_strengths,
         corrector_table=corrector_table,
-        json_file=XSUITE_JSON,
-        sequence_file=SEQUENCE_FILE,
+        beam=1,
         beam_energy=BEAM_ENERGY,
-        seq_name=SEQ_NAME,
+        seq_name=LHCB1_SEQ_NAME,
+        json_file=_get_default_xsuite_json(),
     )
     assert env["Qx"] == qx
     assert env["Qy"] == qy

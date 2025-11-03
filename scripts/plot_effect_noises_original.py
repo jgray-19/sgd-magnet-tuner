@@ -23,11 +23,11 @@ from tqdm.contrib.concurrent import process_map
 
 from aba_optimiser.config import (
     BEAM_ENERGY,
+    LHCB1_SEQ_NAME,
     MAGNET_RANGE,
     REL_K1_STD_DEV,
-    SEQ_NAME,
-    SEQUENCE_FILE,
 )
+from aba_optimiser.io.utils import get_lhc_file_path
 from scripts.plot_functions import (
     plot_error_bars_bpm_range,
     plot_std_log_comparison,
@@ -113,7 +113,7 @@ def build_track_command(
 
     # Construct MAD-NG track command with initial coordinates
     return (
-        f"trk, mflw = track{{sequence=MADX['{SEQ_NAME}'], "
+        f"trk, mflw = track{{sequence=MADX['{LHCB1_SEQ_NAME}'], "
         f"X0={{x={x0 + dx0:.6e}, px={px0 + dpx0:.6e}, y={y0 + dy0:.6e}, py={py0 + dpy0:.6e}, t=0, pt=0}}, "
         f"nturn={nturns}}}"
     )
@@ -154,7 +154,7 @@ def _compute_error_sample(
         mad_i[f"MADX['{key}']"] = val
 
     # Identify quadrupoles in the specified arc region
-    seq = mad_i.MADX[SEQ_NAME]
+    seq = mad_i.MADX[LHCB1_SEQ_NAME]
     arc_start = df_twiss.loc[MAGNET_RANGE.split("/")[0], "s"]  # Start position [m]
     arc_end = df_twiss.loc[MAGNET_RANGE.split("/")[1], "s"]  # End position [m]
 
@@ -239,8 +239,8 @@ def _setup_mad() -> MAD:
     mad = MAD(stdout="mad_stdout.log", redirect_stderr=True, debug=True)
 
     # Load the accelerator sequence definition from the specified file
-    mad.MADX.load(f"'{SEQUENCE_FILE.absolute()}'")
-    seq = mad.MADX[SEQ_NAME]
+    mad.MADX.load(f"'{get_lhc_file_path(beam=1).absolute()}'")
+    seq = mad.MADX[LHCB1_SEQ_NAME]
 
     # Define beam properties for tracking
     seq.beam = mad.beam(particle='"proton"', energy=BEAM_ENERGY)
@@ -280,7 +280,7 @@ def _match_tunes() -> tuple[dict[str, float], pd.DataFrame]:
         - Twiss dataframe with optical functions at all elements
     """
     mad = _setup_mad()
-    mad["SEQ_NAME"] = SEQ_NAME
+    mad["SEQ_NAME"] = LHCB1_SEQ_NAME
     mad["knob_range"] = MAGNET_RANGE
 
     # Target fractional tunes (the decimal part of the total tune)
@@ -315,7 +315,7 @@ def _match_tunes() -> tuple[dict[str, float], pd.DataFrame]:
     matched = {key: mad[f"MADX['{key}']"] for key in ("dqx_b1_op", "dqy_b1_op")}
 
     # Compute Twiss parameters with the matched tunes
-    tw = mad.twiss(sequence=mad.MADX[SEQ_NAME])[0]
+    tw = mad.twiss(sequence=mad.MADX[LHCB1_SEQ_NAME])[0]
     df_twiss = tw.to_df()
     df_twiss.set_index("name", inplace=True)  # Use element names as index
 

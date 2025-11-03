@@ -7,9 +7,9 @@ import numpy as np
 import tfs
 
 from aba_optimiser.config import (
-    SEQUENCE_FILE,
     module_path,
 )
+from aba_optimiser.io.utils import get_lhc_file_path
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 
 LOGGER = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ class PhaseSpaceDiagnostics:
             self.alfay = beta_phase_y.loc[self.bpm, "ALFY"]
         else:
             mad_iface = OptimisationMadInterface(
-                SEQUENCE_FILE,
+                get_lhc_file_path(beam=1),
                 bpm_pattern="BPM",
                 use_real_strengths=False,
             )

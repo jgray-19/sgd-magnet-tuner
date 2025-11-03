@@ -41,3 +41,4 @@ use, sequence = LHCB1;
 exec, match_tunes(0.28, 0.31, 1);
 exec, coupling_knob(1);
 save, sequence = LHCB1, file = 'lhcb1.seq';
+system, 'cp lhcb1.seq /afs/cern.ch/work/j/jmgray/private/sgd-magnet-tuner/src/aba_optimiser/mad/sequences';

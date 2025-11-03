@@ -9,22 +9,20 @@ import logging
 # import multiprocessing as mp
 import random
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 from tensorboardX import SummaryWriter
 
 from aba_optimiser.config import (
-    BEAM,
     BPM_END_POINTS,
     BPM_START_POINTS,
     MACHINE_DELTAP,
     MAGNET_RANGE,
-    RUN_ARC_BY_ARC,
-    SEQUENCE_FILE,
     TRUE_STRENGTHS_FILE,
 )
-from aba_optimiser.io.utils import read_knobs
+from aba_optimiser.io.utils import get_lhc_file_path, read_knobs
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.training.configuration_manager import ConfigurationManager
 from aba_optimiser.training.data_manager import DataManager
@@ -50,6 +48,7 @@ class Controller:
     def __init__(
         self,
         opt_settings: OptSettings,
+        sequence_file_path: str | Path,
         show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
         true_strengths_file: str | None = TRUE_STRENGTHS_FILE,
@@ -59,7 +58,8 @@ class Controller:
         bpm_end_points: list[str] = BPM_END_POINTS,
         measurement_file: str | None = None,
         bad_bpms: list[str] | None = None,
-        beam: int = BEAM,
+        first_bpm: str | None = None,
+        seq_name: str | None = None,
     ):
         """Initialise the controller with all required managers."""
 
@@ -80,15 +80,14 @@ class Controller:
                     bpm_end_points.remove(bpm)
                     logger.warning(f"Removed bad BPM {bpm} from end points")
 
-        start_bpm = "BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2"
         bpm_order = OptimisationMadInterface(
-            SEQUENCE_FILE, bad_bpms=bad_bpms, start_bpm=start_bpm
+            sequence_file_path, seq_name=seq_name, bad_bpms=bad_bpms, start_bpm=first_bpm
         ).all_bpms
         # Initialise managers
         self.config_manager = ConfigurationManager(
             opt_settings, magnet_range, bpm_start_points, bpm_end_points
         )
-        self.config_manager.setup_mad_interface(bad_bpms)
+        self.config_manager.setup_mad_interface(sequence_file_path, bad_bpms, seq_name)
         self.config_manager.determine_worker_and_bpms()
 
         self.data_manager = DataManager(
@@ -116,7 +115,9 @@ class Controller:
             # Assume the start bpm has is largest vertical kick
             ybpm=magnet_range.split("/")[0],
             magnet_range=magnet_range,
+            sequence_file_path=sequence_file_path,
             bad_bpms=bad_bpms,
+            seq_name=seq_name,
         )
         if true_strengths_file is None:
             true_strengths = {}
@@ -263,3 +264,19 @@ class Controller:
 
         logger.info("Optimisation complete.")
         return uncertainties
+
+
+class LHCController(Controller):
+    """
+    LHC-specific controller that automatically sets sequence file path and first BPM based on beam number.
+    """
+
+    def __init__(self, beam: int, **kwargs):
+        """Initialise the LHC controller with beam number and other parameters."""
+        sequence_file_path = get_lhc_file_path(beam)
+        first_bpm = "BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2"
+        seq_name = f"lhcb{beam}"
+
+        super().__init__(
+            sequence_file_path=sequence_file_path, first_bpm=first_bpm, seq_name=seq_name, **kwargs
+        )

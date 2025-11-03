@@ -12,8 +12,6 @@ from tqdm import tqdm
 from aba_optimiser.config import (
     POSITION_STD_DEV,
     REL_K1_STD_DEV,
-    SEQ_NAME,
-    SEQUENCE_FILE,
 )
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
@@ -35,15 +33,18 @@ def _compute_q_for_bpm(
     knob_names: list[str],
     prepare_derivatives: str,
     sigma_p: np.ndarray,
+    sequence_file_path: str,
+    seq_name: str,
 ) -> np.ndarray:
     """Helper function to compute Q for a single BPM, suitable for parallel execution."""
     # Each parallel process needs its own MAD-X interface
     mad_iface = OptimisationMadInterface(
-        SEQUENCE_FILE,
+        sequence_file_path,
         bpm_pattern="BPM",
         discard_mad_output=True,
     )
-    mad_iface.mad.load("MADX", SEQ_NAME)
+    seq_name = mad_iface.seq_name
+    mad_iface.mad.load("MADX", seq_name)
     mad_iface.mad.load("MAD", "damap", "matrix")
     mad_iface.mad.load("MAD.utility", "tblcat")
     mad_iface.mad.load("MAD.element", "marker")
@@ -83,7 +84,7 @@ end
 
     prev_b = bpm_list[(i - 1) % n_bpm]
     bpm_track = f"""
-_, mflw = track{{sequence={SEQ_NAME}, X0=x0_da, nturn=1, range="{prev_b}/{bpm}"}}
+_, mflw = track{{sequence={seq_name}, X0=x0_da, nturn=1, range="{prev_b}/{bpm}"}}
 """
     mad_iface.mad.send(bpm_track + prepare_derivatives)
     jx = mad_iface.mad.recv()
@@ -111,15 +112,18 @@ class BPMKalmanFilter:
 
     def __init__(
         self,
+        sequence_file_path: str,
     ):
         # Initialise MAD-X interface
         self.mad_iface = OptimisationMadInterface(
-            SEQUENCE_FILE,
+            sequence_file_path,
             bpm_pattern="BPM",
             # discard_mad_output=False,
             # debug=True,
             # stdout="dbg.out",
         )
+        self.sequence_file_path = sequence_file_path
+        self.seq_name = self.mad_iface.seq_name
         self.tws = self.mad_iface.run_twiss()
         # Retrieve BPM names
         self.bpm_list = self._get_bpm_list()
@@ -141,9 +145,9 @@ class BPMKalmanFilter:
 
     def _get_bpm_list(self) -> list[str]:
         code = f"""
-local {SEQ_NAME} in MADX
+local {self.seq_name} in MADX
 local bpm_list = {{}}
-for _, elm in {SEQ_NAME}:iter() do
+for _, elm in {self.seq_name}:iter() do
     if elm.name:match("BPM") then table.insert(bpm_list, elm.name) end
 end
 py:send(bpm_list, true)
@@ -156,8 +160,8 @@ py:send(bpm_list, true)
         for i, bpm in enumerate(self.bpm_list):
             prev_b = self.bpm_list[(i - 1) % self.n_bpm]
             code = f"""
-local {SEQ_NAME} in MADX
-local trk, mflw = track{{sequence={SEQ_NAME}, range=\"{prev_b}/{bpm}\", turn=1, mapdef=2}}
+local {self.seq_name} in MADX
+local trk, mflw = track{{sequence={self.seq_name}, range=\"{prev_b}/{bpm}\", turn=1, mapdef=2}}
 py:send(mflw[1]:get1())
 """
             self.mad_iface.mad.send(code)
@@ -212,6 +216,8 @@ py:send(jx); py:send(jpx); py:send(jy); py:send(jpy)
                 self.mad_iface.knob_names,
                 prepare_derivatives,
                 sigma_p,
+                self.sequence_file_path,
+                self.seq_name,
             )
             for i, bpm in tqdm(
                 enumerate(self.bpm_list), total=self.n_bpm, desc="Computing Q"

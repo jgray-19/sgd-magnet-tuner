@@ -3,10 +3,9 @@ import numpy as np
 from aba_optimiser.config import (
     MAGNET_RANGE,
     OUTPUT_KNOBS,
-    SEQUENCE_FILE,
     TRUE_STRENGTHS_FILE,
 )
-from aba_optimiser.io.utils import read_knobs, read_results
+from aba_optimiser.io.utils import get_lhc_file_path, read_knobs, read_results
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.training.result_manager import ResultManager
 
@@ -16,7 +15,7 @@ from aba_optimiser.training.result_manager import ResultManager
 # )
 
 knob_names, final_vals, uncertainties = read_results(OUTPUT_KNOBS)
-mad_iface = OptimisationMadInterface(SEQUENCE_FILE, MAGNET_RANGE)
+mad_iface = OptimisationMadInterface(get_lhc_file_path(1), MAGNET_RANGE)
 results = ResultManager(knob_names, mad_iface.elem_spos)
 
 knobs_from_file = dict(zip(knob_names, final_vals))

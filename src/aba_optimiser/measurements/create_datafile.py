@@ -18,14 +18,14 @@ from turn_by_turn import TbtData, read_tbt
 from aba_optimiser.config import (
     CORRECTOR_STRENGTHS,
     DPP_OPT_SETTINGS,
-    SEQUENCE_FILE,
+    PROJECT_ROOT,
     TUNE_KNOBS_FILE,
 )
 from aba_optimiser.filtering.svd import svd_clean_measurements
-from aba_optimiser.io.utils import save_knobs
+from aba_optimiser.io.utils import get_lhc_file_path, save_knobs
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.momentum_recon.transverse import calculate_pz
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.controller import LHCController as Controller
 
 if TYPE_CHECKING:
     from pylhc.nxcal_knobs import NXCalResult
@@ -331,7 +331,7 @@ def process_measurements(
     pzs["turn"] = pzs["turn"].astype("int32")
 
     mad_iface = OptimisationMadInterface(
-        SEQUENCE_FILE,
+        get_lhc_file_path(beam),
         discard_mad_output=False,
     )
     all_bpms = set(mad_iface.all_bpms)
@@ -362,9 +362,8 @@ def process_measurements(
 if __name__ == "__main__":
     # set logging level to debug
     logging.basicConfig(level=logging.INFO)
-    module_root = Path(__file__).absolute().parent.parent.parent.parent
-    # analysis_dir = module_root / "analysis"
-    analysis_dir = module_root / "analysis_trim"
+    # analysis_dir = PROJECT_ROOT / "analysis"
+    analysis_dir = PROJECT_ROOT / "analysis_trim"
     model_dir = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Models/b1_flat_60_18cm"
 
     MAGNET_RANGES = [f"BPM.9R{s}.B1/BPM.9L{s % 8 + 1}.B1" for s in range(1, 9)]
@@ -419,6 +418,7 @@ if __name__ == "__main__":
         logger.info(f"Starting optimisation for arc {arc + 1}/8")
 
         controller = Controller(
+            beam=1,
             opt_settings=DPP_OPT_SETTINGS,
             show_plots=False,
             initial_knob_strengths=None,

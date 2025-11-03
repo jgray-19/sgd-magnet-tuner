@@ -24,11 +24,11 @@ from tqdm.contrib.concurrent import process_map
 
 from aba_optimiser.config import (
     BEAM_ENERGY,
+    LHCB1_SEQ_NAME,
     MAGNET_RANGE,
     REL_K1_STD_DEV,
-    SEQ_NAME,
-    SEQUENCE_FILE,
 )
+from aba_optimiser.io.utils import get_lhc_file_path
 from aba_optimiser.mad.optimising_mad_interface import create_tracking_interface
 from scripts.plot_functions import (
     plot_error_bars_bpm_range,
@@ -131,7 +131,7 @@ def build_track_command(
         dx0, dpx0, dy0, dpy0 = 0.0, 0.0, 0.0, 0.0
 
     return (
-        f"trk, mflw = track{{sequence=MADX['{SEQ_NAME}'], "
+        f"trk, mflw = track{{sequence=MADX['{LHCB1_SEQ_NAME}'], "
         f"X0={{x={x0 + dx0:.6e}, px={px0 + dpx0:.6e}, y={y0 + dy0:.6e}, py={py0 + dpy0:.6e}, t=0, pt=0}}, "
         f"nturn={nturns}}}"
     )
@@ -149,7 +149,11 @@ class MADSimulator:
         """Get or create the MAD interface."""
         if self._mad_interface is None:
             self._mad_interface = create_tracking_interface(
-                SEQUENCE_FILE, SEQ_NAME, BEAM_ENERGY, MAGNET_RANGE, enable_logging=True
+                get_lhc_file_path(beam=1),
+                LHCB1_SEQ_NAME,
+                BEAM_ENERGY,
+                MAGNET_RANGE,
+                enable_logging=True,
             )
         return self._mad_interface
 
@@ -257,7 +261,11 @@ class NoiseAnalyzer:
         """
         # Create a new interface for this sample to avoid interference
         interface = create_tracking_interface(
-            SEQUENCE_FILE, SEQ_NAME, BEAM_ENERGY, MAGNET_RANGE, enable_logging=False
+            get_lhc_file_path(beam=1),
+            LHCB1_SEQ_NAME,
+            BEAM_ENERGY,
+            MAGNET_RANGE,
+            enable_logging=False,
         )
 
         # Get quadrupole names and apply errors
@@ -330,7 +338,7 @@ class NoiseAnalyzer:
             mad[f"MADX['{key}']"] = val
 
         # Build quadrupole groups and apply errors
-        seq = mad.MADX[SEQ_NAME]
+        seq = mad.MADX[LHCB1_SEQ_NAME]
         arc_start = df_twiss.loc[MAGNET_RANGE.split("/")[0], "s"]
         arc_end = df_twiss.loc[MAGNET_RANGE.split("/")[1], "s"]
 

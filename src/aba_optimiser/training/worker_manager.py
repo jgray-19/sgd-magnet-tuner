@@ -19,7 +19,6 @@ if TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
     from aba_optimiser.config import OptSettings
-    from aba_optimiser.workers.base_worker import BaseWorker
 
 from aba_optimiser.config import (
     BEAM_ENERGY,
@@ -28,6 +27,7 @@ from aba_optimiser.config import (
     PARTICLE_MASS,
 )
 from aba_optimiser.physics.deltap import dp2pt
+from aba_optimiser.workers.base_worker import BaseWorker, WorkerConfig, WorkerData
 
 LOGGER = logging.getLogger(__name__)
 
@@ -59,7 +59,9 @@ class WorkerManager:
         n_data_points: dict[str, int],
         ybpm: str,
         magnet_range: str,
+        sequence_file_path: str,
         bad_bpms: list[str] | None = None,
+        seq_name: str | None = None,
     ):
         """Initialise the WorkerManager.
 
@@ -75,9 +77,11 @@ class WorkerManager:
             ybpm  # Name at which the vertical kick is highest for the start points
         )
         self.magnet_range = magnet_range
+        self.sequence_file_path = sequence_file_path
         # Per-DataFrame cache mapping (turn, bpm) -> iloc position for faster slicing
         self._pos_cache: dict[int, dict[tuple[int, str], int]] = {}
         self.bad_bpms = bad_bpms
+        self.seq_name = seq_name
 
     def _compute_pt(self, energy_type: str) -> float:
         """Compute transverse momentum based on energy type.
@@ -153,7 +157,7 @@ class WorkerManager:
         turn_batches: list[list[int]],
         energy_turn_map: dict[int, str],
         bpm_ranges: list[str],
-    ) -> list[dict]:
+    ) -> list[tuple[WorkerData, WorkerConfig, int]]:
         """Create payloads for all workers.
 
         Args:
@@ -163,12 +167,10 @@ class WorkerManager:
             bpm_start_points (list[str]): List of starting BPM names for each batch
 
         Returns:
-            list[dict]: List of payload dictionaries, each containing:
-                - wid: worker ID
-                - x_comp: x-coordinate comparison arrays
-                - y_comp: y-coordinate comparison arrays
-                - init_coords: initial coordinates arrays
-                - start_bpm: starting BPM name
+            list[tuple[WorkerData, WorkerConfig, int]]: List of tuples containing:
+                - WorkerData: Data arrays for the worker
+                - WorkerConfig: Configuration parameters for the worker
+                - int: Worker ID
 
         Raises:
             AssertionError: If a turn batch is empty
@@ -202,49 +204,45 @@ class WorkerManager:
                     f"Check TRACKS_PER_WORKER and NUM_WORKERS."
                 )
 
-                # Create the payload data for this worker (x/y comparisons, initial coords, etc.)
-                (
-                    x_comp,
-                    y_comp,
-                    px_comp,
-                    py_comp,
-                    init_coords,
-                    pt_array,
-                    x_weights,
-                    y_weights,
-                ) = self._make_worker_payload(
-                    track_data,
-                    turn_batch,
-                    energy_turn_map,
-                    start_bpm,
-                    end_bpm,
-                    self.n_data_points[bpm_range],
-                    sdir,
-                    precomputed_arrays,
+                # Create the payload data for this worker (position/momentum comparisons, initial coords, etc.)
+                position_comp, momentum_comp, weights, init_coords, pt_array = (
+                    self._make_worker_payload(
+                        track_data,
+                        turn_batch,
+                        energy_turn_map,
+                        start_bpm,
+                        end_bpm,
+                        self.n_data_points[bpm_range],
+                        sdir,
+                        precomputed_arrays,
+                    )
                 )
 
                 # Make arrays read-only to prevent accidental modification in worker processes
-                x_comp.setflags(write=False)
-                y_comp.setflags(write=False)
+                position_comp.setflags(write=False)
+                momentum_comp.setflags(write=False)
+                weights.setflags(write=False)
 
-                # Package all data needed by the worker into a payload dictionary
-                payloads.append(
-                    {
-                        "worker_id": batch_idx,  # Worker ID
-                        "x_comparisons": x_comp,  # Expected x coordinates for loss calculation
-                        "y_comparisons": y_comp,  # Expected y coordinates for loss calculation
-                        "px_comparisons": px_comp,  # Expected px coordinates for loss calculation
-                        "py_comparisons": py_comp,  # Expected py coordinates for loss calculation
-                        "x_weights": x_weights,  # Weights for x coordinates
-                        "y_weights": y_weights,  # Weights for y coordinates
-                        "init_coords": init_coords,  # Initial particle coordinates
-                        "start_bpm": start_bpm,
-                        "end_bpm": end_bpm,
-                        "init_pts": pt_array,
-                        "sdir": sdir,
-                        "bad_bpms": self.bad_bpms,  # List of bad BPMs
-                    }
+                # Create WorkerData and WorkerConfig instances
+                data = WorkerData(
+                    position_comparisons=position_comp,  # Shape: (n_turns, n_data_points, 2)
+                    momentum_comparisons=momentum_comp,  # Shape: (n_turns, n_data_points, 2)
+                    weights=weights,  # Shape: (n_turns, n_data_points, 2)
+                    init_coords=init_coords,
+                    init_pts=pt_array,
                 )
+                config = WorkerConfig(
+                    start_bpm=start_bpm,
+                    end_bpm=end_bpm,
+                    magnet_range=self.magnet_range,
+                    sequence_file_path=self.sequence_file_path,
+                    sdir=sdir,
+                    bad_bpms=self.bad_bpms,
+                    seq_name=self.seq_name,
+                )
+
+                # Package data and config for the worker
+                payloads.append((data, config, batch_idx))
                 sdir *= -1  # Alternate the sign of the tracking direction
         return payloads
 
@@ -258,8 +256,8 @@ class WorkerManager:
         n_data_points: int,
         sdir: int,
         precomputed_arrays: dict[str, dict[str, object]] | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Create x/y comparison arrays and initial coordinates for a worker.
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Create 2D comparison arrays and initial coordinates for a worker.
 
         Args:
             track_data (dict[str, pd.DataFrame]): Dictionary mapping energy types to track data DataFrames
@@ -269,17 +267,19 @@ class WorkerManager:
             n_data_points (int): Number of data points to collect per observation turn
 
         Returns:
-            tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-            A tuple containing the x/y/px/py comparisons, initial coordinates per turn, and pt array
+            tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            A tuple containing the position_comparisons, momentum_comparisons, weights,
+            initial coordinates per turn, and pt array
         """
-        # Preallocate output arrays (n_turns, n_points)
+        # Preallocate output arrays (n_turns, n_points, 2) for 2D structure
         n_turns = len(turn_batch)
-        x_comp = np.empty((n_turns, n_data_points), dtype="float64")
-        y_comp = np.empty((n_turns, n_data_points), dtype="float64")
-        px_comp = np.empty((n_turns, n_data_points), dtype="float64")
-        py_comp = np.empty((n_turns, n_data_points), dtype="float64")
-        x_weights = np.empty((n_turns, n_data_points), dtype="float64")
-        y_weights = np.empty((n_turns, n_data_points), dtype="float64")
+        position_comp = np.empty((n_turns, n_data_points, 2), dtype="float64")  # [x, y]
+        momentum_comp = np.empty(
+            (n_turns, n_data_points, 2), dtype="float64"
+        )  # [px, py]
+        weights = np.empty(
+            (n_turns, n_data_points, 2), dtype="float64"
+        )  # [x_weight, y_weight]
 
         init_coords_array = np.empty((n_turns, 6), dtype="float64")
         pt_array = np.empty((n_turns,), dtype="float64")
@@ -341,24 +341,22 @@ class WorkerManager:
             # if len(obs_turns) == 1:
             if sdir == -1:
                 sl = slice(init_pos, init_pos - n_data_points, -1)
-                x_comp[i, :] = arr_x[sl]
-                y_comp[i, :] = arr_y[sl]
-                px_comp[i, :] = arr_px[sl]
-                py_comp[i, :] = arr_py[sl]
-                x_weights[i, :] = arr_wx[sl]
-                y_weights[i, :] = arr_wy[sl]
-                # x_weights[i, :] = 1.0
-                # y_weights[i, :] = 1.0
+                position_comp[i, :, 0] = arr_x[sl]  # x positions
+                position_comp[i, :, 1] = arr_y[sl]  # y positions
+                momentum_comp[i, :, 0] = arr_px[sl]  # px momenta
+                momentum_comp[i, :, 1] = arr_py[sl]  # py momenta
+                weights[i, :, 0] = arr_wx[sl]  # x weights
+                weights[i, :, 1] = arr_wy[sl]  # y weights
+                # weights[i, :, :] = 1.0  # Uncomment to set uniform weights
             else:
                 sl = slice(init_pos, init_pos + n_data_points)
-                x_comp[i, :] = arr_x[sl]
-                y_comp[i, :] = arr_y[sl]
-                px_comp[i, :] = arr_px[sl]
-                py_comp[i, :] = arr_py[sl]
-                x_weights[i, :] = arr_wx[sl]
-                y_weights[i, :] = arr_wy[sl]
-                # x_weights[i, :] = 1.0
-                # y_weights[i, :] = 1.0
+                position_comp[i, :, 0] = arr_x[sl]  # x positions
+                position_comp[i, :, 1] = arr_y[sl]  # y positions
+                momentum_comp[i, :, 0] = arr_px[sl]  # px momenta
+                momentum_comp[i, :, 1] = arr_py[sl]  # py momenta
+                weights[i, :, 0] = arr_wx[sl]  # x weights
+                weights[i, :, 1] = arr_wy[sl]  # y weights
+                # weights[i, :, :] = 1.0  # Uncomment to set uniform weights
             # Get the turn that the final BPM corresponds to and check it matches
             # the turn of the first BPM +/- 1
             first_bpm_turn = self.get_turn(df, init_pos)
@@ -378,16 +376,12 @@ class WorkerManager:
                 )
 
         return (
-            x_comp,
-            y_comp,
-            px_comp,
-            py_comp,
+            position_comp,
+            momentum_comp,
+            weights,
             init_coords_array,
             pt_array,
-            x_weights,
-            y_weights,
         )
-        # return x_comp, y_comp, init_coords_array, pt_array
 
     def _get_pos(self, df: pd.DataFrame, turn: int, bpm: str) -> int:
         """Fast integer index position for MultiIndex (turn, bpm) with caching."""
@@ -436,18 +430,19 @@ class WorkerManager:
         )
 
         # Start a worker process for each payload
-        for payload in payloads:
+        for data, config, worker_id in payloads:
             # Create a Pipe for bidirectional communication between parent and child
             # parent_conn is used by the manager, child_conn is passed to the worker
             parent, child = mp.Pipe()
 
             # Create and start the worker process
-            # The worker receives: connection, worker_id, comparison data, initial coords, BPM, sextupole flag
+            # The worker receives: connection, worker_id, data, config, opt_settings
             w = self.Worker(
                 child,  # Connection for communication
-                **payload,  # Unpack the payload dictionary into keyword arguments
-                opt_settings=opt_settings,  # Pass the optimisation settings
-                magnet_range=self.magnet_range,
+                worker_id,  # Worker ID
+                data,  # WorkerData instance
+                config,  # WorkerConfig instance
+                opt_settings,  # Optimisation settings
             )
             w.start()  # Start the worker process
 

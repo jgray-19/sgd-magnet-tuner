@@ -17,14 +17,13 @@ from aba_optimiser.config import (
     EPLUS_CLEANED_FILE,
     EPLUS_NOISY_FILE,
     EPLUS_NONOISE_FILE,
+    LHCB1_SEQ_NAME,
     NO_NOISE_FILE,
     NOISY_FILE,
-    SEQ_NAME,
-    SEQUENCE_FILE,
     TRUE_STRENGTHS_FILE,
     TUNE_KNOBS_FILE,
 )
-from aba_optimiser.io.utils import save_knobs
+from aba_optimiser.io.utils import get_lhc_file_path, save_knobs
 from aba_optimiser.simulation import (
     apply_magnet_perturbations,
     cleanup_writer_processes,
@@ -81,7 +80,7 @@ def create_a34(
     mad = mad_interface.mad  # For backward compatibility with existing code
 
     # Load the sequence
-    mad_interface.load_sequence(SEQUENCE_FILE, SEQ_NAME)
+    mad_interface.load_sequence(get_lhc_file_path(1), LHCB1_SEQ_NAME)
 
     # Set beam
     mad_interface.setup_beam(BEAM_ENERGY)
@@ -208,8 +207,8 @@ def create_a34(
             run_parallel_tracking(
                 batch_start,
                 batch_end,
-                SEQUENCE_FILE,
-                SEQ_NAME,
+                get_lhc_file_path(beam=1),
+                LHCB1_SEQ_NAME,
                 BEAM_ENERGY,
                 matched_tunes,
                 magnet_strengths,

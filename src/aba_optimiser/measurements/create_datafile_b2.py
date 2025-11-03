@@ -3,40 +3,25 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
-import pandas as pd
-import tfs
-from nxcals.spark_session_builder import get_or_create
-from omc3.hole_in_one import hole_in_one_entrypoint
-from omc3.optics_measurements.constants import AMP_BETA_NAME, BETA, ERR, NAME
-from pylhc import corrector_extraction, mqt_extraction
-from turn_by_turn import TbtData, read_tbt
-
 from aba_optimiser.config import (
-    CORRECTOR_STRENGTHS,
     DPP_OPT_SETTINGS,
-    SEQUENCE_FILE,
-    TUNE_KNOBS_FILE,
+    PROJECT_ROOT,
 )
-from aba_optimiser.filtering.svd import svd_clean_measurements
-from aba_optimiser.io.utils import save_knobs
-from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.measurements.create_datafile import (
     process_measurements,
     save_online_knobs,
 )
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.controller import LHCController as Controller
 
 logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     # set logging level to debug
     logging.basicConfig(level=logging.INFO)
-    module_root = Path(__file__).absolute().parent.parent.parent.parent
-    analysis_dir = module_root / "analysis_b2"
-    # analysis_dir = module_root / "analysis_trim_b2"
+    analysis_dir = PROJECT_ROOT / "analysis_b2"
+    # analysis_dir = PROJECT_ROOT / "analysis_trim_b2"
     model_dir = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB2/Models/2025_LHCB2_0p18m"
     MAGNET_RANGES = [
         f"BPM.9L{i}.B2/BPM.9R{(i - 2) % 8 + 1}.B2" for i in range(8, 0, -1)
@@ -98,6 +83,7 @@ if __name__ == "__main__":
         logger.info(f"Starting optimisation for arc {arc + 1}/8")
 
         controller = Controller(
+            beam=2,
             opt_settings=DPP_OPT_SETTINGS,
             show_plots=False,
             initial_knob_strengths=None,

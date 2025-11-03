@@ -18,15 +18,14 @@ from itertools import product
 from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
-import pandas as pd
 from pymadng import MAD
 from tqdm.contrib.concurrent import process_map
 
 from aba_optimiser.config import (
+    LHCB1_SEQ_NAME,
     REL_K1_STD_DEV,
-    SEQ_NAME,
-    SEQUENCE_FILE,
 )
+from aba_optimiser.io.utils import get_lhc_file_path
 from aba_optimiser.momentum_recon.transverse import calculate_pz
 from scripts.plot_functions import (
     plot_error_bars_bpm_range,
@@ -35,6 +34,7 @@ from scripts.plot_functions import (
 )
 
 if TYPE_CHECKING:
+    import pandas as pd
     import tfs
 
 # Configure logging
@@ -102,7 +102,7 @@ def build_track_command(
     if initial_coords is not None:
         x_init, px_init, y_init, py_init = initial_coords
         return (
-            f"trk, mflw = track{{sequence=MADX['{SEQ_NAME}'], "
+            f"trk, mflw = track{{sequence=MADX['{LHCB1_SEQ_NAME}'], "
             f"X0={{x={x_init:.16e}, px={px_init:.16e}, y={y_init:.16e}, py={py_init:.16e}, t=0, pt=0}}, "
             f"nturn={config.nturns}}}"
         )
@@ -123,7 +123,7 @@ def build_track_command(
     py0 = -np.sqrt(action / beta22) * (sin0 + alfa22 * cos0)
 
     return (
-        f"trk, _ = track{{sequence=MADX['{SEQ_NAME}'], "
+        f"trk, _ = track{{sequence=MADX['{LHCB1_SEQ_NAME}'], "
         f"X0={{x={x0:.16e}, px={px0:.16e}, y={y0:.16e}, py={py0:.16e}, t=0, pt=0}}, "
         f"nturn={config.nturns}}}\n"
     )
@@ -158,21 +158,21 @@ class MADSimulator:
         """
         mad = MAD(stdout="mad_stdout.log", redirect_stderr=True, debug=True)
         init_string = f"""
-MADX:load("{SEQUENCE_FILE.absolute()}")
-local {SEQ_NAME} in MADX
-{SEQ_NAME}.beam = beam {{ particle = 'proton', energy = {self.config.beam_energy} }}
+MADX:load("{get_lhc_file_path(beam=1).absolute()}")
+local {LHCB1_SEQ_NAME} in MADX
+{LHCB1_SEQ_NAME}.beam = beam {{ particle = 'proton', energy = {self.config.beam_energy} }}
 local observed in MAD.element.flags
-{SEQ_NAME}:deselect(observed)
-{SEQ_NAME}:select(observed, {{pattern="BPM"}})
+{LHCB1_SEQ_NAME}:deselect(observed)
+{LHCB1_SEQ_NAME}:select(observed, {{pattern="BPM"}})
 """
         # Install marker at start BPM and cycle sequence
         bpm_name = self.config.bpm_range.split("/")[0]
         marker_name = mad.quote_strings(f"{bpm_name}_marker")
         install_string = f"""
-{SEQ_NAME}:install{{
+{LHCB1_SEQ_NAME}:install{{
 MAD.element.marker {marker_name} {{ at=-1e-10, from="{bpm_name}" }} ! 1e-10 is too small for a drift but ensures we cycle to before the BPM
 }}
-{SEQ_NAME}:cycle({marker_name})
+{LHCB1_SEQ_NAME}:cycle({marker_name})
 """
         mad.send(init_string + install_string)
         return mad
@@ -187,7 +187,7 @@ MAD.element.marker {marker_name} {{ at=-1e-10, from="{bpm_name}" }} ! 1e-10 is t
         if self.matched_tunes is not None and self.df_twiss is not None:
             return
 
-        self.mad["SEQ_NAME"] = SEQ_NAME
+        self.mad["SEQ_NAME"] = LHCB1_SEQ_NAME
         self.mad["knob_range"] = self.config.bpm_range
 
         # Desired fractional tunes
@@ -211,7 +211,7 @@ MAD.element.marker {marker_name} {{ at=-1e-10, from="{bpm_name}" }} ! 1e-10 is t
         }
 
         # Get Twiss at start of sequence
-        tw = self.mad.twiss(sequence=self.mad.MADX[SEQ_NAME], observe=1)[0]
+        tw = self.mad.twiss(sequence=self.mad.MADX[LHCB1_SEQ_NAME], observe=1)[0]
         self.df_twiss: tfs.TfsDataFrame = tw.to_df()
         self.df_twiss.set_index("name", inplace=True)
 
@@ -219,7 +219,7 @@ MAD.element.marker {marker_name} {{ at=-1e-10, from="{bpm_name}" }} ! 1e-10 is t
         self.mad.send(f"""
 local knob_range = "{self.config.bpm_range}"
 local elem_names = {{}}
-for i, elm, s, ds in MADX.{SEQ_NAME}:iter(knob_range) do
+for i, elm, s, ds in MADX.{LHCB1_SEQ_NAME}:iter(knob_range) do
     if elm.k1 and elm.k1 ~= 0 and elm.name:match("MQ%.") then
         -- Check if the element is a main quadrupole
         table.insert(elem_names, elm.name)

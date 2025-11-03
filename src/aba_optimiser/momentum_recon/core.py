@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.config import FILE_COLUMNS, POSITION_STD_DEV, SEQUENCE_FILE
+from aba_optimiser.config import FILE_COLUMNS, POSITION_STD_DEV
+from aba_optimiser.io.utils import get_lhc_file_path
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 
 LOGGER = logging.getLogger(__name__)
@@ -74,8 +75,9 @@ def inject_noise_xy(
 def ensure_twiss(tws: tfs.TfsDataFrame | None, info: bool) -> tfs.TfsDataFrame:
     if tws is not None:
         return tws
+    # If no Twiss provided, we provide LHC beam 1 twiss
     mad = OptimisationMadInterface(
-        SEQUENCE_FILE, bpm_pattern="BPM", use_real_strengths=False
+        get_lhc_file_path(beam=1), bpm_pattern="BPM", use_real_strengths=False
     )
     tws = mad.run_twiss()
     if info:

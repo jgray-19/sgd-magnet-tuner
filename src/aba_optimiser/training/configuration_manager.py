@@ -9,7 +9,6 @@ import numpy as np
 
 from aba_optimiser.config import (
     RUN_ARC_BY_ARC,
-    SEQUENCE_FILE,
     # USE_NOISY_DATA,
 )
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
@@ -65,11 +64,12 @@ class ConfigurationManager:
             s + "/" + e for s in bpm_start_points for e in bpm_end_points
         ]
 
-    def setup_mad_interface(self, bad_bpms: list[str]) -> None:
+    def setup_mad_interface(self, sequence_file_path: str, bad_bpms: list[str], seq_name: str | None = None) -> None:
         """Initialise the MAD-NG interface and get basic model parameters."""
         self.mad_iface = OptimisationMadInterface(
-            SEQUENCE_FILE,
-            self.magnet_range,
+            sequence_file_path,
+            seq_name=seq_name,
+            magnet_range=self.magnet_range,
             opt_settings=self.global_config,
             use_real_strengths=False,
             # discard_mad_output=False,

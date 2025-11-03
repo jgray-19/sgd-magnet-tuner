@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from multiprocessing import Process
 from typing import TYPE_CHECKING
 
@@ -9,11 +10,9 @@ import numpy as np
 
 from aba_optimiser.config import (
     HESSIAN_SCRIPT,
-    SEQUENCE_FILE,
     TRACK_INIT,
     TRACK_NO_KNOBS_INIT,
     TRACK_SCRIPT,
-    USE_NOISY_DATA,
 )
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 
@@ -27,6 +26,30 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 
+@dataclass
+class WorkerData:
+    """Container for worker tracking data arrays."""
+
+    position_comparisons: np.ndarray  # Shape: (n_turns, n_data_points, 2) - [x, y]
+    momentum_comparisons: np.ndarray  # Shape: (n_turns, n_data_points, 2) - [px, py]
+    weights: np.ndarray  # Shape: (n_turns, n_data_points, 2) - [x_weight, y_weight]
+    init_coords: np.ndarray
+    init_pts: np.ndarray
+
+
+@dataclass
+class WorkerConfig:
+    """Container for worker configuration parameters."""
+
+    start_bpm: str
+    end_bpm: str
+    magnet_range: str
+    sequence_file_path: str
+    sdir: int = 1
+    bad_bpms: list[str] | None = None
+    seq_name: str | None = None
+
+
 class BaseWorker(Process, ABC):
     """
     Base worker process that provides common functionality for running
@@ -38,46 +61,36 @@ class BaseWorker(Process, ABC):
         self,
         conn: Connection,
         worker_id: int,
-        x_comparisons: np.ndarray,
-        y_comparisons: np.ndarray,
-        px_comparisons: np.ndarray,
-        py_comparisons: np.ndarray,
-        x_weights: np.ndarray,
-        y_weights: np.ndarray,
-        init_coords: np.ndarray,
-        start_bpm: str,
-        end_bpm: str,
-        magnet_range: str,
-        init_pts: np.ndarray,
+        data: WorkerData,
+        config: WorkerConfig,
         opt_settings: OptSettings,
-        sdir=1,
-        bad_bpms: list[str] | None = None,
     ) -> None:
         """
-        New constructor that accepts compact numpy payloads built by the parent
-        process to avoid sending the full DataFrame to every worker.
+        Constructor that accepts grouped data and config parameters for cleaner code.
         """
         super().__init__()
         self.worker_id = worker_id
         self.conn = conn
 
         LOGGER.debug(
-            f"Initialising worker {worker_id} for BPM {start_bpm} with {len(init_coords)} particles"
+            f"Initialising worker {worker_id} for BPM {config.start_bpm} with {len(data.init_coords)} particles"
         )
 
         num_batches = opt_settings.num_batches
 
         # reduce data to be divisible by num_batches
-        n_init = len(init_coords) - (len(init_coords) % num_batches)
-        init_coords = init_coords[:n_init]
-        self.x_comparisons = x_comparisons[:n_init]
-        self.y_comparisons = y_comparisons[:n_init]
-        self.px_comparisons = px_comparisons[:n_init]
-        self.py_comparisons = py_comparisons[:n_init]
-        self.x_weights = self._adjust_weights(x_weights[:n_init])
-        self.y_weights = self._adjust_weights(y_weights[:n_init])
-        self.x_weights = x_weights[:n_init]
-        self.y_weights = y_weights[:n_init]
+        n_init = len(data.init_coords) - (len(data.init_coords) % num_batches)
+        init_coords = data.init_coords[:n_init]
+
+        # Unpack 2D arrays into separate x/y arrays
+        self.x_comparisons = data.position_comparisons[:n_init, :, 0]  # x positions
+        self.y_comparisons = data.position_comparisons[:n_init, :, 1]  # y positions
+        self.px_comparisons = data.momentum_comparisons[:n_init, :, 0]  # px momenta
+        self.py_comparisons = data.momentum_comparisons[:n_init, :, 1]  # py momenta
+        self.x_weights = self._adjust_weights(data.weights[:n_init, :, 0])  # x weights
+        self.y_weights = self._adjust_weights(data.weights[:n_init, :, 1])  # y weights
+        self.x_weights = data.weights[:n_init, :, 0]  # x weights (overwrite adjusted)
+        self.y_weights = data.weights[:n_init, :, 1]  # y weights (overwrite adjusted)
 
         # If either x or y first BPM weight is 0, zero the subsequent weights for both
         # mask = (self.x_weights[:, 0] == 0) | (self.y_weights[:, 0] == 0)
@@ -107,15 +120,17 @@ class BaseWorker(Process, ABC):
         self.init_coords = [ic.tolist() for ic in init_coords]
         self.batch_size = len(self.init_coords[0])
 
-        self.start_bpm = start_bpm
-        self.end_bpm = end_bpm
-        self.magnet_range = magnet_range
+        self.start_bpm = config.start_bpm
+        self.end_bpm = config.end_bpm
+        self.magnet_range = config.magnet_range
         self.num_batches = num_batches
         self.opt_settings = opt_settings
-        self.sdir = sdir
-        self.bad_bpms = bad_bpms
+        self.sequence_file_path = config.sequence_file_path
+        self.sdir = config.sdir
+        self.bad_bpms = config.bad_bpms
+        self.seq_name = config.seq_name
 
-        self.init_pts = init_pts
+        self.init_pts = data.init_pts
         self._split_data_to_batches()
 
         # Load common MAD scripts
@@ -225,11 +240,12 @@ end
         LOGGER.debug(f"Worker {self.worker_id}: Using BPM range {bpm_range}")
 
         mad_iface = OptimisationMadInterface(
-            SEQUENCE_FILE,
+            self.sequence_file_path,
+            seq_name=self.seq_name,
             magnet_range=self.magnet_range,
             bpm_range=bpm_range,
             opt_settings=self.opt_settings,
-            use_real_strengths="noisy" if USE_NOISY_DATA else True,
+            use_real_strengths=True,
             py_name="python",
             bad_bpms=self.bad_bpms,
             # discard_mad_output=False,

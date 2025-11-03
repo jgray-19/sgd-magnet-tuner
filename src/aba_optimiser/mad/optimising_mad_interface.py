@@ -1,7 +1,5 @@
-from __future__ import annotations
-
 import logging
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import numpy as np
 import tfs
@@ -9,18 +7,12 @@ import tfs
 from aba_optimiser.config import (
     BEAM_ENERGY,
     CORRECTOR_STRENGTHS,
-    SEQ_NAME,
     TUNE_KNOBS_FILE,
+    OptSettings,
 )
 from aba_optimiser.io.utils import read_knobs
 
 from .base_mad_interface import BaseMadInterface
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from aba_optimiser.config import OptSettings
-
 
 # BPM_PATTERN = "^BPM%.%d-%d.*"
 BPM_PATTERN = "^BPM"
@@ -85,6 +77,7 @@ class OptimisationMadInterface(BaseMadInterface):
     def __init__(
         self,
         sequence_file: str,
+        seq_name: str | None = None,
         magnet_range: str = "$start/$end",
         bpm_range: str | None = None,
         opt_settings: OptSettings = None,
@@ -94,7 +87,6 @@ class OptimisationMadInterface(BaseMadInterface):
         bad_bpms: list[str] | None = None,
         beam_energy: float = BEAM_ENERGY,
         corrector_strengths: Path = CORRECTOR_STRENGTHS,
-        seq_name: str = SEQ_NAME,
         tune_knobs_file: Path = TUNE_KNOBS_FILE,
         start_bpm: str | None = None,
         **kwargs,
@@ -125,15 +117,16 @@ class OptimisationMadInterface(BaseMadInterface):
         # Initialise base class
         super().__init__(**kwargs)
 
-        # Store optimization-specific attributes
+        # Store optimisation-specific attributes
         self.sequence_file = sequence_file
+        if seq_name is None:
+            seq_name = Path(sequence_file).stem
+        self.seq_name = seq_name
         self.magnet_range = magnet_range
         self.bpm_range = bpm_range if bpm_range is not None else magnet_range
         self.bpm_pattern = bpm_pattern
         self.beam_energy = beam_energy
-        self.corrector_strengths = corrector_strengths
         self.seq_name = seq_name
-        self.tune_knobs_file = tune_knobs_file
 
         # Type hints for attributes set during initialization
         self.nbpms: int
@@ -157,8 +150,13 @@ class OptimisationMadInterface(BaseMadInterface):
         self._observe_bpms(bad_bpms)
         self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
         # if opt_settings.only_energy:
-        self._set_correctors(use_real_strengths)
-        self._set_tune_knobs(use_real_strengths)
+        if use_real_strengths is False:
+            LOGGER.info(
+                "Skipping setting correctors and tune knobs as use_real_strengths is False"
+            )
+        else:
+            self._set_correctors(corrector_strengths)
+            self._set_tune_knobs(tune_knobs_file)
 
         if opt_settings is not None:
             self._make_adj_knobs(opt_settings)
@@ -180,18 +178,13 @@ class OptimisationMadInterface(BaseMadInterface):
             self.unobserve_elements(bad_bpms)
             LOGGER.info(f"Set up observation for bad BPMs: {bad_bpms}")
 
-    def _set_correctors(self, use_real_strengths: bool | str) -> None:
+    def _set_correctors(self, corrector_strengths: Path) -> None:
         """Load corrector strengths from file and apply them to the sequence."""
-        if not self.corrector_strengths.exists():
-            LOGGER.warning(
-                f"Corrector strengths file not found: {self.corrector_strengths}"
-            )
-            return
-        if use_real_strengths is False:
-            LOGGER.info("Skipping setting correctors as use_real_strengths is False")
+        if not corrector_strengths.exists():
+            LOGGER.warning(f"Corrector strengths file not found: {corrector_strengths}")
             return
         try:
-            corrector_table = tfs.read(self.corrector_strengths)
+            corrector_table = tfs.read(corrector_strengths)
 
             # Filter out monitor elements from the corrector table
             corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
@@ -199,7 +192,7 @@ class OptimisationMadInterface(BaseMadInterface):
             # Log how many non-zero correctors are being applied
             nonzero = (corrector_table["hkick"] != 0) | (corrector_table["vkick"] != 0)
             LOGGER.info(
-                f"Applying {nonzero.sum()} non-zero corrector strengths from {self.corrector_strengths}"
+                f"Applying {nonzero.sum()} non-zero corrector strengths from {corrector_strengths}"
             )
 
             # Apply corrector strengths for non-zero correctors only
@@ -208,31 +201,25 @@ class OptimisationMadInterface(BaseMadInterface):
             LOGGER.error(
                 f"Error reading or applying corrector strengths: {e}, assuming knobs"
             )
-            knobs = read_knobs(self.corrector_strengths)
+            knobs = read_knobs(corrector_strengths)
             for name, val in knobs.items():
                 self.mad.send(f"MADX['{name}'] = {val}")
 
-            LOGGER.info(
-                f"Set {len(knobs)} corrector knobs from {self.corrector_strengths}"
-            )
+            LOGGER.info(f"Set {len(knobs)} corrector knobs from {corrector_strengths}")
 
         self.mad.send(f"{self.py_name}:send(true)")
         assert self.mad.recv(), "Failed to set corrector strengths"
 
-    def _set_tune_knobs(self, use_real_strengths: bool | str) -> None:
+    def _set_tune_knobs(self, tune_knobs_file: Path) -> None:
         """Load and set predefined tune knobs from file."""
-        if use_real_strengths is False:
-            LOGGER.info("Skipping setting tune knobs as use_real_strengths is False")
-            return
-
-        tune_knobs = read_knobs(self.tune_knobs_file)
+        tune_knobs = read_knobs(tune_knobs_file)
         for name, val in tune_knobs.items():
             self.mad.send(f"MADX['{name}'] = {val}")
 
         self.mad.send(f"{self.py_name}:send(true)")
         assert self.mad.recv(), "Failed to set tune knobs"
 
-        LOGGER.info(f"Set tune knobs from {self.tune_knobs_file}: {tune_knobs}")
+        LOGGER.info(f"Set tune knobs from {tune_knobs_file}: {tune_knobs}")
 
     def _make_adj_knobs(self, opt_settings: OptSettings) -> None:
         """

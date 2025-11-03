@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from aba_optimiser.config import BPM_START_POINTS, MAGNET_RANGE, SEQUENCE_FILE
+from aba_optimiser.config import BPM_START_POINTS, MAGNET_RANGE
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 
@@ -22,12 +22,12 @@ def is_x_bpm(name: str) -> bool:
     raise ValueError(f"Invalid BPM name: {name}")
 
 
-def filter_noisy_data(data: pd.DataFrame) -> pd.DataFrame:
+def filter_noisy_data(data: pd.DataFrame, sequence_file_path: str) -> pd.DataFrame:
     LOGGER.info(f"Starting ellipse filtering on {len(data)} data points")
     data = data.copy()
     data.set_index(["turn", "name"], inplace=True)
     mad_iface = OptimisationMadInterface(
-        SEQUENCE_FILE,
+        sequence_file_path,
         use_real_strengths=False,
         bpm_pattern="BPM",
     )

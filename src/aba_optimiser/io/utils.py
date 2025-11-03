@@ -3,7 +3,22 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from aba_optimiser.config import PROJECT_ROOT
+
 logger = logging.getLogger(__name__)
+
+
+def get_lhc_file_path(beam: int) -> Path:
+    """
+    Get the path to the LHC sequence file for the given beam.
+
+    Args:
+        beam: The LHC beam number (1 or 2).
+
+    Returns:
+        Path to the LHC sequence file.
+    """
+    return PROJECT_ROOT / "src" / "aba_optimiser" / "mad" / "sequences" / f"lhcb{beam}.seq"
 
 
 def read_knobs(path: str) -> dict[str, float]:

@@ -188,8 +188,7 @@ KICK_BOTH_PLANES = True  # Whether to kick in both planes or separately
 MAGNET_RANGE = "BPM.11R2.B1/BPM.11L3.B1"
 BEAM_ENERGY = 6800  # Beam energy in GeV
 PARTICLE_MASS = 938.27208816 * 1e-3  # [GeV] Proton energy-mass
-BEAM = 1  # LHC beam number (1 or 2)
-SEQ_NAME = f"lhcb{BEAM}"  # Sequence name in MAD-X (lowercase)
+LHCB1_SEQ_NAME = "lhcb1"  # Sequence name in MAD-X (lowercase)
 CLEAN_DATA = True  # Whether to take the filtered data for optimisation (just weights as of 16/09)
 USE_NOISY_DATA = True  # Whether to use noisy data for optimisation
 
@@ -215,27 +214,27 @@ FILE_COLUMNS: tuple[str, ...] = (
 # FILE PATHS
 # =============================================================================
 
-module_path = Path(__file__).absolute().parent.parent.parent
-logger.info(f"Current module path: {module_path}")
+PROJECT_ROOT = Path(__file__).absolute().parent.parent.parent
+logger.info(f"Current project root: {PROJECT_ROOT}")
 
 # Data files
-NO_NOISE_FILE = module_path / "data/track_data.parquet"  # Measurement Parquet file
-NOISY_FILE = module_path / "data/noise_data.parquet"  # Noise Parquet file
-CLEANED_FILE = module_path / "data/filtered_data.parquet"  # Filtered TFS file
+NO_NOISE_FILE = PROJECT_ROOT / "data/track_data.parquet"  # Measurement Parquet file
+NOISY_FILE = PROJECT_ROOT / "data/noise_data.parquet"  # Noise Parquet file
+CLEANED_FILE = PROJECT_ROOT / "data/filtered_data.parquet"  # Filtered TFS file
 
-EPLUS_NOISY_FILE = module_path / "data/eplus_data.parquet"  # E+ data file
-EPLUS_NONOISE_FILE = module_path / "data/eplus_nonoise_data.parquet"
-EPLUS_CLEANED_FILE = module_path / "data/eplus_filtered_data.parquet"
+EPLUS_NOISY_FILE = PROJECT_ROOT / "data/eplus_data.parquet"  # E+ data file
+EPLUS_NONOISE_FILE = PROJECT_ROOT / "data/eplus_nonoise_data.parquet"
+EPLUS_CLEANED_FILE = PROJECT_ROOT / "data/eplus_filtered_data.parquet"
 
-EMINUS_NOISY_FILE = module_path / "data/eminus_data.parquet"  # E- Noisy file
-EMINUS_NONOISE_FILE = module_path / "data/eminus_nonoise_data.parquet"
-EMINUS_CLEANED_FILE = module_path / "data/eminus_filtered_data.parquet"
+EMINUS_NOISY_FILE = PROJECT_ROOT / "data/eminus_data.parquet"  # E- Noisy file
+EMINUS_NONOISE_FILE = PROJECT_ROOT / "data/eminus_nonoise_data.parquet"
+EMINUS_CLEANED_FILE = PROJECT_ROOT / "data/eminus_filtered_data.parquet"
 
-KALMAN_FILE = module_path / "data/kalman_data.feather"  # Kalman-filtered TFS file
+KALMAN_FILE = PROJECT_ROOT / "data/kalman_data.feather"  # Kalman-filtered TFS file
 
 # MAD-NG scripts
 MAD_SCRIPTS_DIR = (
-    module_path / "src" / "aba_optimiser" / "mad" / "mad_scripts"
+    PROJECT_ROOT / "src" / "aba_optimiser" / "mad" / "mad_scripts"
 )  # Directory for MAD-NG scripts
 TRACK_NO_KNOBS_INIT = MAD_SCRIPTS_DIR / "run_track_init_no_knobs.mad"
 TRACK_INIT = MAD_SCRIPTS_DIR / "run_track_init.mad"
@@ -245,21 +244,21 @@ HESSIAN_SCRIPT = MAD_SCRIPTS_DIR / "estimate_hessian.mad"
 
 # Other files
 # The MAD-X sequence file
-SEQUENCE_FILE = module_path / f"mad_scripts/lhcb{BEAM}.seq"
+# SEQUENCE_FILE = PROJECT_ROOT / "src" / "aba_optimiser" / "mad" / "sequences" / f"lhcb{BEAM}.seq"
 # The xsuite JSON file for the LHC
-XSUITE_JSON = module_path / "src" / "aba_optimiser" / "xsuite" / f"lhcb{BEAM}.json"
+xsuite_dir = PROJECT_ROOT / "src" / "aba_optimiser" / "xsuite"
 # Ground-truth knob strengths
-TRUE_STRENGTHS_FILE = module_path / "data/true_strengths.txt"
+TRUE_STRENGTHS_FILE = PROJECT_ROOT / "data/true_strengths.txt"
 # Where to write final strengths
-OUTPUT_KNOBS = module_path / "data/final_knobs.txt"
+OUTPUT_KNOBS = PROJECT_ROOT / "data/final_knobs.txt"
 # Markdown summary of results
-KNOB_TABLE = module_path / "data/knob_strengths_table.txt"
+KNOB_TABLE = PROJECT_ROOT / "data/knob_strengths_table.txt"
 # Matched tunes file
-TUNE_KNOBS_FILE = module_path / "data/matched_tunes.txt"
+TUNE_KNOBS_FILE = PROJECT_ROOT / "data/matched_tunes.txt"
 # Corrector strengths file
-CORRECTOR_STRENGTHS = module_path / "data/corrector_strengths.txt"
+CORRECTOR_STRENGTHS = PROJECT_ROOT / "data/corrector_strengths.txt"
 # Bend errors file
-BEND_ERROR_FILE = module_path / "data/bend_errors.tfs"
+BEND_ERROR_FILE = PROJECT_ROOT / "data/bend_errors.tfs"
 
 
 # =============================================================================

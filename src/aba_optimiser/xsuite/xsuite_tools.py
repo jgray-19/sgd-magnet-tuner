@@ -23,10 +23,9 @@ from xtrack.mad_parser.loader import load_madx_lattice
 
 from aba_optimiser.config import (
     BEAM_ENERGY,
-    SEQ_NAME,
-    SEQUENCE_FILE,
-    XSUITE_JSON,
+    PROJECT_ROOT,
 )
+from aba_optimiser.io.utils import get_lhc_file_path
 from aba_optimiser.simulation.tracking import create_initial_conditions
 
 if TYPE_CHECKING:
@@ -38,25 +37,38 @@ logger = logging.getLogger(__name__)
 
 
 def create_xsuite_environment(
-    json_file: Path = XSUITE_JSON,
-    sequence_file: Path = SEQUENCE_FILE,
+    beam: int | None = None,
+    sequence_file: Path | None = None,
     beam_energy: float = BEAM_ENERGY,
-    seq_name: str = SEQ_NAME,
+    seq_name: str | None = None,
     rerun_madx: bool = False,
+    json_file: Path | None = None,
 ) -> xt.Environment:
     """
     Run MADX to create a saved sequence then load this into xsuite.
 
     Args:
-        json_file: Path to the JSON file for saving/loading the environment
-        sequence_file: Path to the MADX sequence file
+        beam: LHC beam number (1 or 2). If provided, sequence_file is constructed automatically.
+        sequence_file: Path to MADX sequence file. Takes precedence over beam.
         beam_energy: Beam energy in GeV
         seq_name: Name of the sequence
         rerun_madx: Whether to force re-running MADX
+        json_file: Optional custom path to JSON file (overrides automatic path)
 
     Returns:
         xsuite Environment object
     """
+    if sequence_file is None:
+        if beam is None:
+            raise ValueError("Either beam or sequence_file must be provided.")
+        sequence_file = get_lhc_file_path(beam)
+
+    if json_file is None:
+        xsuite_dir = PROJECT_ROOT / "src" / "aba_optimiser" / "xsuite"
+        json_file = xsuite_dir / f"{sequence_file.stem}.json"
+
+    if seq_name is None:
+        seq_name = sequence_file.stem
 
     if (
         not json_file.exists()  # If the JSON file does not exist
@@ -274,33 +286,36 @@ def initialise_env(
     matched_tunes: dict[str, float],
     magnet_strengths: dict[str, float],
     corrector_table: tfs.TfsDataFrame,
-    json_file: Path = XSUITE_JSON,
-    sequence_file: Path = SEQUENCE_FILE,
+    beam: int | None = None,
+    sequence_file: Path | None = None,
     beam_energy: float = BEAM_ENERGY,
-    seq_name: str = SEQ_NAME,
+    seq_name: str | None = None,
+    json_file: Path | None = None,
 ) -> xt.Environment:
     """
     Initialise a batch of MAD processes for parallel tracking.
 
     Args:
-        json_file: Path to the JSON file for saving/loading the environment
-        sequence_file: Path to the MADX sequence file
-        beam_energy: Beam energy in GeV
-        seq_name: Name of the sequence
         matched_tunes: Dictionary of matched tune knobs
         magnet_strengths: Dictionary of magnet strengths
         corrector_table: DataFrame with corrector strengths
+        beam: LHC beam number (1 or 2). If provided, sequence_file is constructed automatically.
+        sequence_file: Path to MADX sequence file. Takes precedence over beam.
+        beam_energy: Beam energy in GeV
+        seq_name: Name of the sequence
+        json_file: Optional custom path to JSON file (overrides automatic path)
 
     Returns:
         Configured xsuite Environment object
     """
     # logger.info(f"Initializing {batch_size} MAD interfaces for batch")
     base_env = create_xsuite_environment(
-        json_file=json_file,
+        beam=beam,
         sequence_file=sequence_file,
         beam_energy=beam_energy,
         seq_name=seq_name,
         rerun_madx=False,
+        json_file=json_file,
     )
 
     for k, v in matched_tunes.items():
@@ -327,6 +342,7 @@ def start_tracking_xsuite_batch(
     progress_interval: int,
     num_tracks: int,
     true_deltap: float,
+    seq_name: str,
 ) -> None:
     """
     Start tracking commands for a batch of MAD interfaces.
@@ -366,7 +382,7 @@ def start_tracking_xsuite_batch(
             angle_list,
             twiss_data,
             kick_both_planes,
-            starting_bpm=env[SEQ_NAME].element_names[0].upper(),
+            starting_bpm=env[seq_name].element_names[0].upper(),
         )
         x_list.append(x0_data["x"])
         px_list.append(x0_data["px"])
@@ -376,7 +392,7 @@ def start_tracking_xsuite_batch(
 
     ctx = Context(32)
 
-    particles = env[SEQ_NAME].build_particles(
+    particles = env[seq_name].build_particles(
         _context=ctx,
         x=x_list,
         px=px_list,
@@ -386,7 +402,7 @@ def start_tracking_xsuite_batch(
     )
 
     insert_particle_monitors_at_pattern(
-        env[SEQ_NAME],
+        env[seq_name],
         pattern="bpm.*[^k]",
         num_turns=flattop_turns,
         num_particles=len(deltas),
@@ -395,11 +411,11 @@ def start_tracking_xsuite_batch(
 
     # Run tracking using interface
     run_tracking(
-        line=env[SEQ_NAME],
+        line=env[seq_name],
         particles=particles,
         nturns=flattop_turns,
     )
-    return env[SEQ_NAME]
+    return env[seq_name]
 
 
 def line_to_dataframes(tracked_line: xt.Line) -> list[pd.DataFrame]:
