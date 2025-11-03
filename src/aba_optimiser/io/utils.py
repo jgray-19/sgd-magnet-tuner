@@ -18,7 +18,9 @@ def get_lhc_file_path(beam: int) -> Path:
     Returns:
         Path to the LHC sequence file.
     """
-    return PROJECT_ROOT / "src" / "aba_optimiser" / "mad" / "sequences" / f"lhcb{beam}.seq"
+    return (
+        PROJECT_ROOT / "src" / "aba_optimiser" / "mad" / "sequences" / f"lhcb{beam}.seq"
+    )
 
 
 def read_knobs(path: str) -> dict[str, float]:
