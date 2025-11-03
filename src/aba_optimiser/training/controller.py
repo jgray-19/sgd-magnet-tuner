@@ -9,7 +9,6 @@ import logging
 # import multiprocessing as mp
 import random
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -31,6 +30,8 @@ from aba_optimiser.training.result_manager import ResultManager
 from aba_optimiser.training.worker_manager import WorkerManager
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from aba_optimiser.config import OptSettings
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,24 @@ class Controller:
         first_bpm: str | None = None,
         seq_name: str | None = None,
     ):
-        """Initialise the controller with all required managers."""
+        """
+        Initialise the controller with all required managers.
+
+        Args:
+            opt_settings (OptSettings): Optimisation settings.
+            sequence_file_path (str | Path): Path to the sequence file.
+            show_plots (bool, optional): Whether to show plots. Defaults to True.
+            initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths.
+            true_strengths_file (str | None, optional): Path to true strengths file.
+            machine_deltap (float, optional): Machine delta p.
+            magnet_range (str, optional): Magnet range.
+            bpm_start_points (list[str], optional): BPM start points.
+            bpm_end_points (list[str], optional): BPM end points.
+            measurement_file (str | None, optional): Measurement file path.
+            bad_bpms (list[str] | None, optional): List of bad BPMs.
+            first_bpm (str | None, optional): First BPM.
+            seq_name (str | None, optional): Sequence name.
+        """
 
         logger.info("Optimising energy")
         if opt_settings.optimise_quadrupoles:
@@ -81,7 +99,10 @@ class Controller:
                     logger.warning(f"Removed bad BPM {bpm} from end points")
 
         bpm_order = OptimisationMadInterface(
-            sequence_file_path, seq_name=seq_name, bad_bpms=bad_bpms, start_bpm=first_bpm
+            sequence_file_path,
+            seq_name=seq_name,
+            bad_bpms=bad_bpms,
+            start_bpm=first_bpm,
         ).all_bpms
         # Initialise managers
         self.config_manager = ConfigurationManager(
@@ -272,11 +293,21 @@ class LHCController(Controller):
     """
 
     def __init__(self, beam: int, **kwargs):
-        """Initialise the LHC controller with beam number and other parameters."""
+        """
+        Initialise the LHC controller with beam number and other parameters.
+
+        Args:
+            beam (int): The beam number (1 or 2).
+            **kwargs: Additional keyword arguments passed to the parent Controller class.
+                See Controller.__init__ for the full list of available parameters.
+        """
         sequence_file_path = get_lhc_file_path(beam)
         first_bpm = "BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2"
         seq_name = f"lhcb{beam}"
 
         super().__init__(
-            sequence_file_path=sequence_file_path, first_bpm=first_bpm, seq_name=seq_name, **kwargs
+            sequence_file_path=sequence_file_path,
+            first_bpm=first_bpm,
+            seq_name=seq_name,
+            **kwargs,
         )
