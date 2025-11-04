@@ -22,7 +22,7 @@ class ArcByArcWorker(BaseWorker):
         mad["n_compare_turns"] = 1
         # Set to 0, as with a range on the tracking, we start at turn 0
         mad["observe_from_turn"] = 0
-        mad["tracking_range"] = self.get_bpm_range(self.sdir)
+        mad["tracking_range"] = self.get_bpm_range(self.config.sdir)
 
     @staticmethod
     def get_observation_turns(turn: int) -> list[int]:
@@ -32,8 +32,8 @@ class ArcByArcWorker(BaseWorker):
     def get_bpm_range(self, sdir: int) -> str:
         """Get the magnet range for arc-by-arc mode."""
         if sdir == -1:
-            return self.end_bpm + "/" + self.start_bpm
-        return self.start_bpm + "/" + self.end_bpm
+            return self.config.end_bpm + "/" + self.config.start_bpm
+        return self.config.start_bpm + "/" + self.config.end_bpm
 
     @staticmethod
     def get_n_data_points(nbpms: int) -> int:

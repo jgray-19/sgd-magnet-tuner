@@ -17,8 +17,11 @@ from tensorboardX import SummaryWriter
 from aba_optimiser.config import (
     BPM_END_POINTS,
     BPM_START_POINTS,
+    CORRECTOR_STRENGTHS,
+    FLATTOP_TURNS,
     MACHINE_DELTAP,
     MAGNET_RANGE,
+    NUM_TRACKS,
     TRUE_STRENGTHS_FILE,
 )
 from aba_optimiser.io.utils import get_lhc_file_path, read_knobs
@@ -52,7 +55,8 @@ class Controller:
         sequence_file_path: str | Path,
         show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
-        true_strengths_file: str | None = TRUE_STRENGTHS_FILE,
+        corrector_file: Path = CORRECTOR_STRENGTHS,
+        true_strengths_file: Path = TRUE_STRENGTHS_FILE,
         machine_deltap: float = MACHINE_DELTAP,
         magnet_range: str = MAGNET_RANGE,
         bpm_start_points: list[str] = BPM_START_POINTS,
@@ -61,6 +65,8 @@ class Controller:
         bad_bpms: list[str] | None = None,
         first_bpm: str | None = None,
         seq_name: str | None = None,
+        num_tracks: int = NUM_TRACKS,
+        flattop_turns: int = FLATTOP_TURNS,
     ):
         """
         Initialise the controller with all required managers.
@@ -79,6 +85,8 @@ class Controller:
             bad_bpms (list[str] | None, optional): List of bad BPMs.
             first_bpm (str | None, optional): First BPM.
             seq_name (str | None, optional): Sequence name.
+            num_tracks (int, optional): Number of tracks per measurement file. Defaults to NUM_TRACKS.
+            flattop_turns (int, optional): Number of turns on the flat top. Defaults to FLATTOP_TURNS.
         """
 
         logger.info("Optimising energy")
@@ -98,6 +106,8 @@ class Controller:
                     bpm_end_points.remove(bpm)
                     logger.warning(f"Removed bad BPM {bpm} from end points")
 
+        self.corrector_strengths_file = corrector_file
+
         bpm_order = OptimisationMadInterface(
             sequence_file_path,
             seq_name=seq_name,
@@ -108,7 +118,9 @@ class Controller:
         self.config_manager = ConfigurationManager(
             opt_settings, magnet_range, bpm_start_points, bpm_end_points
         )
-        self.config_manager.setup_mad_interface(sequence_file_path, bad_bpms, seq_name)
+        self.config_manager.setup_mad_interface(
+            sequence_file_path, bad_bpms, corrector_file, seq_name
+        )
         self.config_manager.determine_worker_and_bpms()
 
         self.data_manager = DataManager(
@@ -116,6 +128,8 @@ class Controller:
             opt_settings,
             measurement_file,
             bpm_order=bpm_order,
+            num_tracks=num_tracks,
+            flattop_turns=flattop_turns,
         )
         self.data_manager.prepare_turn_batches(self.config_manager)
 
@@ -137,12 +151,12 @@ class Controller:
             ybpm=magnet_range.split("/")[0],
             magnet_range=magnet_range,
             sequence_file_path=sequence_file_path,
+            corrector_strengths_file=corrector_file,
             bad_bpms=bad_bpms,
             seq_name=seq_name,
         )
         if true_strengths_file is None:
             true_strengths = {}
-            true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(machine_deltap)
         else:
             true_strengths = read_knobs(TRUE_STRENGTHS_FILE)
             true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(machine_deltap)
@@ -176,6 +190,9 @@ class Controller:
                 true_strengths, initial_knob_strengths
             )
         )
+        if not true_strengths:
+            # Set the true strengths to the initial strengths if not provided
+            self.filtered_true_strengths = self.initial_knobs.copy()
 
         # Setup optimisation and result managers
         self.optimisation_loop = OptimisationLoop(

@@ -16,6 +16,8 @@ from aba_optimiser.workers.arc_by_arc import ArcByArcWorker
 from aba_optimiser.workers.ring import RingWorker
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from aba_optimiser.config import OptSettings
     from aba_optimiser.workers.base_worker import BaseWorker
 
@@ -64,7 +66,13 @@ class ConfigurationManager:
             s + "/" + e for s in bpm_start_points for e in bpm_end_points
         ]
 
-    def setup_mad_interface(self, sequence_file_path: str, bad_bpms: list[str], seq_name: str | None = None) -> None:
+    def setup_mad_interface(
+        self,
+        sequence_file_path: str,
+        bad_bpms: list[str],
+        corrector_strengths_file: Path,
+        seq_name: str | None = None,
+    ) -> None:
         """Initialise the MAD-NG interface and get basic model parameters."""
         self.mad_iface = OptimisationMadInterface(
             sequence_file_path,
@@ -73,6 +81,7 @@ class ConfigurationManager:
             opt_settings=self.global_config,
             use_real_strengths=False,
             # discard_mad_output=False,
+            corrector_strengths=corrector_strengths_file,
             bad_bpms=bad_bpms,
         )
         self.knob_names = self.mad_iface.knob_names

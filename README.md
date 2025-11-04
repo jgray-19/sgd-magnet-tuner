@@ -40,3 +40,15 @@ To use this repository, follow these steps:
    python scripts/run_optimiser.py
    ```
 3. Review the output and apply the correction strategies suggested by the model.
+
+## Documentation
+
+The project ships with Sphinx documentation configured for automatic API
+extraction. Install the documentation extras and build the site with::
+
+   pip install -e .[docs]
+   cd docs
+   make html
+
+Open ``docs/_build/html/index.html`` in a browser to explore usage tutorials and
+API reference material generated from the source code docstrings.

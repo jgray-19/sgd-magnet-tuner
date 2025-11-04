@@ -18,6 +18,7 @@ from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
+    from pathlib import Path
 
     from pymadng import MAD
 
@@ -44,7 +45,8 @@ class WorkerConfig:
     start_bpm: str
     end_bpm: str
     magnet_range: str
-    sequence_file_path: str
+    sequence_file_path: Path
+    corrector_strengths: Path
     sdir: int = 1
     bad_bpms: list[str] | None = None
     seq_name: str | None = None
@@ -120,15 +122,9 @@ class BaseWorker(Process, ABC):
         self.init_coords = [ic.tolist() for ic in init_coords]
         self.batch_size = len(self.init_coords[0])
 
-        self.start_bpm = config.start_bpm
-        self.end_bpm = config.end_bpm
-        self.magnet_range = config.magnet_range
+        self.config = config
         self.num_batches = num_batches
         self.opt_settings = opt_settings
-        self.sequence_file_path = config.sequence_file_path
-        self.sdir = config.sdir
-        self.bad_bpms = config.bad_bpms
-        self.seq_name = config.seq_name
 
         self.init_pts = data.init_pts
         self._split_data_to_batches()
@@ -240,14 +236,15 @@ end
         LOGGER.debug(f"Worker {self.worker_id}: Using BPM range {bpm_range}")
 
         mad_iface = OptimisationMadInterface(
-            self.sequence_file_path,
-            seq_name=self.seq_name,
-            magnet_range=self.magnet_range,
+            self.config.sequence_file_path,
+            seq_name=self.config.seq_name,
+            magnet_range=self.config.magnet_range,
             bpm_range=bpm_range,
             opt_settings=self.opt_settings,
             use_real_strengths=True,
             py_name="python",
-            bad_bpms=self.bad_bpms,
+            bad_bpms=self.config.bad_bpms,
+            corrector_strengths=self.config.corrector_strengths,
             # discard_mad_output=False,
             # debug=True,
         )
@@ -257,7 +254,7 @@ end
         mad["batch_size"] = self.batch_size
         mad["num_batches"] = self.num_batches
         mad["nbpms"] = mad_iface.nbpms
-        mad["sdir"] = self.sdir
+        mad["sdir"] = self.config.sdir
 
         # Import required MAD-NG modules
         mad.load("MAD", "damap", "matrix", "vector")

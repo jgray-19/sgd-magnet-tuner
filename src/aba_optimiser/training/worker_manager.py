@@ -15,11 +15,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-if TYPE_CHECKING:
-    from multiprocessing.connection import Connection
-
-    from aba_optimiser.config import OptSettings
-
 from aba_optimiser.config import (
     BEAM_ENERGY,
     DELTAP,
@@ -28,6 +23,13 @@ from aba_optimiser.config import (
 )
 from aba_optimiser.physics.deltap import dp2pt
 from aba_optimiser.workers.base_worker import BaseWorker, WorkerConfig, WorkerData
+
+if TYPE_CHECKING:
+    from multiprocessing.connection import Connection
+    from pathlib import Path
+
+    from aba_optimiser.config import OptSettings
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -59,7 +61,8 @@ class WorkerManager:
         n_data_points: dict[str, int],
         ybpm: str,
         magnet_range: str,
-        sequence_file_path: str,
+        sequence_file_path: Path,
+        corrector_strengths_file: Path,
         bad_bpms: list[str] | None = None,
         seq_name: str | None = None,
     ):
@@ -78,6 +81,7 @@ class WorkerManager:
         )
         self.magnet_range = magnet_range
         self.sequence_file_path = sequence_file_path
+        self.corrector_strengths_file = corrector_strengths_file
         # Per-DataFrame cache mapping (turn, bpm) -> iloc position for faster slicing
         self._pos_cache: dict[int, dict[tuple[int, str], int]] = {}
         self.bad_bpms = bad_bpms
@@ -239,6 +243,7 @@ class WorkerManager:
                     sdir=sdir,
                     bad_bpms=self.bad_bpms,
                     seq_name=self.seq_name,
+                    corrector_strengths=self.corrector_strengths_file,
                 )
 
                 # Package data and config for the worker

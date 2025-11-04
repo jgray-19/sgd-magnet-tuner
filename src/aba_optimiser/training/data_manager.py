@@ -48,16 +48,20 @@ class DataManager:
         opt_settings: OptSettings,
         measurement_file: str | None = None,
         bpm_order: list[str] | None = None,
+        num_tracks: int = NUM_TRACKS,
+        flattop_turns: int = FLATTOP_TURNS,
     ):
         self.all_bpms = all_bpms
         self.opt_settings = opt_settings
         self.measurement_file = measurement_file
         self.bpm_order = bpm_order
+        self.num_tracks = num_tracks
+        self.flattop_turns = flattop_turns
 
         # Available global "turn" ids (already include offsets if sextupoles are on)
         total_files = 3 if opt_settings.use_off_energy_data else 1
         self.available_turns: list[int] = list(
-            range(1, FLATTOP_TURNS * NUM_TRACKS * total_files + 1)
+            range(1, self.flattop_turns * self.num_tracks * total_files + 1)
         )
 
         self.turn_batches: list[list[int]] = []
@@ -162,8 +166,8 @@ class DataManager:
         # Turn offsets per energy type (global turn space)
         offsets = {
             "zero": 0,
-            "minus": FLATTOP_TURNS * NUM_TRACKS,
-            "plus": 2 * FLATTOP_TURNS * NUM_TRACKS,
+            "minus": self.flattop_turns * self.num_tracks,
+            "plus": 2 * self.flattop_turns * self.num_tracks,
         }
 
         # Which energies to load
@@ -237,8 +241,8 @@ class DataManager:
             )
             self.available_turns = self.available_turns[: -(N_RUN_TURNS + 2)]
         else:
-            to_remove = [i * FLATTOP_TURNS + 1 for i in range(NUM_TRACKS)]
-            to_remove += [(i + 1) * FLATTOP_TURNS for i in range(NUM_TRACKS)]
+            to_remove = [i * self.flattop_turns + 1 for i in range(self.num_tracks)]
+            to_remove += [(i + 1) * self.flattop_turns for i in range(self.num_tracks)]
             self.available_turns = [
                 t for t in self.available_turns if t not in to_remove
             ]

@@ -211,6 +211,10 @@ class OptimisationLoop:
 
             writer.add_scalar("true_diff", sum_true_diff, epoch)
             writer.add_scalar("rel_diff", sum_rel_diff, epoch)
+        else:
+            writer.add_scalar(
+                "avg_knob_value", np.mean(list(current_knobs.values())), epoch
+            )
 
         if self.some_magnets and self.use_true_strengths:
             true_middle_diff = [
@@ -240,7 +244,7 @@ class OptimisationLoop:
             else ""
         ) + (
             f"true_middle_diff={sum_true_middle_diff:.3e}, rel_middle_diff={sum_rel_middle_diff:.3e}, "
-            if self.some_magnets
+            if self.some_magnets and self.use_true_strengths
             else ""
         )
         message = (
