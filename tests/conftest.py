@@ -7,6 +7,7 @@ This module contains shared fixtures used across MAD interface test modules.
 from __future__ import annotations
 
 import contextlib
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -18,6 +19,9 @@ from aba_optimiser.mad.tracking_interface import TrackingMadInterface
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+
+# Configure logging for tests
+logging.getLogger("xdeps").setLevel(logging.WARNING)
 
 
 @pytest.fixture(scope="module")

@@ -19,6 +19,51 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+shushing_script = """
+-- LuaJIT-only: shush()/unshush() redirect fd 1&2 to /dev/null (mutes Lua + C warnings)
+
+local ffi = require("ffi")
+local C = ffi.C
+
+ffi.cdef[[
+  int open(const char *pathname, int flags, ...);
+  int close(int fd);
+  int dup(int oldfd);
+  int dup2(int oldfd, int newfd);
+  int fflush(void *stream);  // fflush(NULL) flushes all streams
+]]
+
+local O_WRONLY = 1            -- POSIX
+local DEVNULL  = "/dev/null"
+
+local depth = 0
+local saved_out_fd, saved_err_fd
+
+function shush()
+  if depth == 0 then
+    C.fflush(nil)                                  -- flush all stdio first
+    local devnull = C.open(DEVNULL, O_WRONLY)
+    saved_out_fd = C.dup(1)
+    saved_err_fd = C.dup(2)
+    C.dup2(devnull, 1)                              -- redirect stdout -> /dev/null
+    C.dup2(devnull, 2)                              -- redirect stderr -> /dev/null
+    C.close(devnull)
+  end
+  depth = depth + 1
+end
+
+function unshush()
+  if depth == 0 then return end
+  depth = depth - 1
+  if depth == 0 then
+    C.dup2(saved_out_fd, 1)
+    C.dup2(saved_err_fd, 2)
+    C.close(saved_out_fd)
+    C.close(saved_err_fd)
+    saved_out_fd, saved_err_fd = nil, nil
+  end
+end
+"""
 
 class BaseMadInterface:
     """
@@ -38,6 +83,8 @@ class BaseMadInterface:
         self.mad = MAD(**mad_kwargs)
         logger.debug("Initialised base MAD interface")
         self.py_name = self.mad.py_name
+        self.mad.send(shushing_script)
+
 
     def load_sequence(self, sequence_file: str | Path, seq_name: str) -> None:
         """
@@ -48,9 +95,11 @@ class BaseMadInterface:
             seq_name: Name of the sequence to load
         """
         logger.info(f"Loading sequence from {sequence_file}")
+        self.mad.send("shush()")
         self.mad.send(f'MADX:load("{sequence_file}")')
         self.mad.send(f"loaded_sequence = MADX.{seq_name}")
         self.mad["SEQ_NAME"] = seq_name
+        self.mad.send("unshush()")
 
     def setup_beam(self, beam_energy: float, particle: str = "proton") -> None:
         """

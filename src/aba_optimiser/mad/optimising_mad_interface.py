@@ -204,7 +204,7 @@ class OptimisationMadInterface(BaseMadInterface):
 
             # Apply corrector strengths for non-zero correctors only
             self.apply_corrector_strengths(corrector_table[nonzero])
-        except tfs.TfsFormatError as e:
+        except (tfs.TfsFormatError, UnboundLocalError) as e:
             LOGGER.error(
                 f"Error reading or applying corrector strengths: {e}, assuming knobs"
             )

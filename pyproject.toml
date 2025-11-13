@@ -58,3 +58,7 @@ source = ["src/aba_optimiser"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
+addopts = [
+    "--log-cli-level=INFO",
+    "--log-cli-format=%(levelname)s %(name)s %(message)s",
+]
