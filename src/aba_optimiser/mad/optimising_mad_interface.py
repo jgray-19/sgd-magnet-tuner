@@ -40,23 +40,24 @@ local spos_list = {}
 MAKE_KNOBS_LOOP_MAD = """
 for i, e, s, ds in loaded_sequence:siter(magnet_range) do
     if {element_condition} then
-        local k_str_name = e.name .. "_k"
-        if e.k0 and e.k0 ~= 0 then --and not (k_str_name:match("MB%.[AB][0-9]+R") or k_str_name:match("MB%.[BC][0-9]+L")) then
-            -- k_str_name = k_str_name:gsub("^MB%.[AC]", "MB.")
+        local k_str_name
+        if e.k0 and e.k0 ~= 0 then
+            k_str_name = e.name .. ".k0"
             MADX[k_str_name] = e.k0 ! Must not be 0.
             e.k0 = \\->MADX[k_str_name]
         elseif e.k1 and e.k1 ~= 0 then
+            k_str_name = e.name .. ".k1"
             MADX[k_str_name] = e.k1 ! Must not be 0.
             e.k1 = \\->MADX[k_str_name]
         elseif e.k2 and e.k2 ~= 0 then
+            k_str_name = e.name .. ".k2"
             MADX[k_str_name] = e.k2 ! Must not be 0.
             e.k2 = \\->MADX[k_str_name]
-        else
-            goto continue
         end
-        table.insert(knob_names, k_str_name)
-        table.insert(spos_list, s)
-        ::continue::
+        if k_str_name then
+            table.insert(knob_names, k_str_name)
+            table.insert(spos_list, s)
+        end
     end
 end
 """
@@ -146,6 +147,9 @@ class OptimisationMadInterface(BaseMadInterface):
         self.mad["bpm_range"] = self.bpm_range
         self.mad["bpm_pattern"] = self.bpm_pattern
 
+        if opt_settings is not None:
+            self._make_adj_knobs(opt_settings)
+
         # Setup optimization-specific functionality
         self._observe_bpms(bad_bpms)
         self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
@@ -158,8 +162,11 @@ class OptimisationMadInterface(BaseMadInterface):
             self._set_correctors(corrector_strengths)
             self._set_tune_knobs(tune_knobs_file)
 
-        if opt_settings is not None:
-            self._make_adj_knobs(opt_settings)
+        # try:
+        #     tws = self.run_twiss()
+        #     LOGGER.info(f"Initial tunes: {tws.q1}, {tws.q2}")
+        # except RuntimeError as e:
+        #     LOGGER.error(f"Failed to run twiss after setup: {e}")
 
     def count_bpms(self, bpm_range) -> None:
         """Count the number of BPM elements in the specified range."""
@@ -213,12 +220,16 @@ class OptimisationMadInterface(BaseMadInterface):
     def _set_tune_knobs(self, tune_knobs_file: Path) -> None:
         """Load and set predefined tune knobs from file."""
         tune_knobs = read_knobs(tune_knobs_file)
+        # Get existing tune knob names in MAD
+        prev = self.mad.recv_vars(*[f"MADX['{name}']" for name in tune_knobs])
+
         for name, val in tune_knobs.items():
             self.mad.send(f"MADX['{name}'] = {val}")
 
         self.mad.send(f"{self.py_name}:send(true)")
         assert self.mad.recv(), "Failed to set tune knobs"
 
+        LOGGER.info(f"Previous tune knob values: {prev}")
         LOGGER.info(f"Set tune knobs from {tune_knobs_file}: {tune_knobs}")
 
     def _make_adj_knobs(self, opt_settings: OptSettings) -> None:
@@ -230,7 +241,7 @@ class OptimisationMadInterface(BaseMadInterface):
         if not opt_settings.only_energy:
             conditions = []
             for kind, attr, pattern, flag in [
-                ("sbend", "k0", "MB%.", True),
+                # ("sbend", "k0", "MB%.", True),
                 ("quadrupole", "k1", "MQ%.", opt_settings.optimise_quadrupoles),
                 ("sextupole", "k2", "MS%.", opt_settings.optimise_sextupoles),
             ]:

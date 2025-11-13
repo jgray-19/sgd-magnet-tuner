@@ -10,8 +10,8 @@
 ! python: a Python interface object for sending data
 
 assert(
-    batch_size and nbpms and
-    knob_names and vector and matrix and python and n_compare_turns,
+    batch_size and nbpms and knob_monomials and
+    knob_names and vector and matrix and python,
     "Missing required variables for initialising"
 )
 
@@ -32,26 +32,34 @@ dpx_dk = table.new(batch_size, 0)
 dpy_dk = table.new(batch_size, 0)
 
 for i=1,batch_size do
-    x[i] = vector(nbpms*n_compare_turns)
-    y[i] = vector(nbpms*n_compare_turns)
-    px[i] = vector(nbpms*n_compare_turns)
-    py[i] = vector(nbpms*n_compare_turns)
-    dx_dk[i] = matrix(num_knobs+1, nbpms*n_compare_turns)
-    dy_dk[i] = matrix(num_knobs+1, nbpms*n_compare_turns)
-    dpx_dk[i] = matrix(num_knobs+1, nbpms*n_compare_turns)
-    dpy_dk[i] = matrix(num_knobs+1, nbpms*n_compare_turns)
+    x[i] = vector(nbpms)
+    y[i] = vector(nbpms)
+    px[i] = vector(nbpms)
+    py[i] = vector(nbpms)
+    dx_dk[i] = matrix(num_knobs+1, nbpms)
+    dy_dk[i] = matrix(num_knobs+1, nbpms)
+    dpx_dk[i] = matrix(num_knobs+1, nbpms)
+    dpy_dk[i] = matrix(num_knobs+1, nbpms)
 end
 
-local function get_knob_vec(xy_damap)
-    local all_first_deriv = xy_damap:getvec(1, num_knobs + 7)
+local function get_knob_vec(xy_tpsa)
+    local all_first_deriv = xy_tpsa:getvec(1, num_knobs + 7)
     return all_first_deriv:getvec(get_range) ! Remove 0, dx, dpx, dy, dpy, dt, dpt
+    -- local vector_result = vector(num_knobs)
+    -- for i, name in ipairs(knob_names) do
+    --     vector_result:seti(i, xy_tpsa:get(knob_monomials[name]))
+    -- end
+    -- return vector_result
 end
 
-observe_count = 1
+observe_count = nbpms + 1  ! Start beyond the last bpm to ensure reset is called before tracking
 function save_data(elm, mflw, _, slc)
     local turn in mflw
     -- Observe the BPMs at the specified intervals
-    if slc == -2 and elm:is_observed() and turn >= mflw.observe then
+    -- if elm:is_observed() then
+    --     print(slc) end
+    if slc == -2 and elm:is_observed() then
+        -- print(elm.name .. ": Observing at turn " .. turn .. ", index " .. observe_count)
          -- Loop over each particle in the batch
         for i=1,batch_size do
             x[i]:seti(observe_count, mflw[i].x:get0()) ! get0 returns the scalar
@@ -75,6 +83,7 @@ function save_data(elm, mflw, _, slc)
 end
 
 function reset_before_tracking()
+    assert(observe_count == nbpms + 1, "Not all BPMs observed before resetting, got " .. observe_count - 1 .. ", expected " .. nbpms)
     observe_count = 1
     for i=1,batch_size do
         x[i]:zeros()

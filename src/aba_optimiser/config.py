@@ -60,12 +60,12 @@ class OptSettings:
 # Simulation parameters for dp/p optimisation
 DPP_OPT_SETTINGS = OptSettings(
     # max_epochs=400,
-    max_epochs=75,
+    max_epochs=150,
     # For pre trimmed data
     # tracks_per_worker=447,
     # num_workers=59,
     # For post trimmed data
-    tracks_per_worker=325,
+    tracks_per_worker=219,
     num_workers=60,
     num_batches=20,
     warmup_epochs=1,
@@ -205,8 +205,10 @@ FILE_COLUMNS: tuple[str, ...] = (
     "px",
     "y",
     "py",
-    "x_weight",
-    "y_weight",
+    "var_x",
+    "var_y",
+    "var_px",
+    "var_py",
     "kick_plane",
 )
 

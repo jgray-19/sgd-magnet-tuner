@@ -31,7 +31,9 @@ from aba_optimiser.momentum_recon.core import (
     inject_noise_xy,
     sync_endpoints,
     validate_input,
-    weighted_average,
+)
+from aba_optimiser.momentum_recon.core import (
+    weighted_average_from_weights as weighted_average,
 )
 from aba_optimiser.momentum_recon.momenta import (
     momenta_from_next,
@@ -233,7 +235,11 @@ def calculate_pz(
 
     sync_endpoints(data_p, data_n)
 
-    data_avg = weighted_average(data_p, data_n, maps.betax, maps.betay)
+    data_avg = weighted_average(data_p, data_n)
+
+    # Restore original order of orig_data
+    orig_order = orig_data.set_index(["name", "turn"]).index
+    data_avg = data_avg.set_index(["name", "turn"]).reindex(orig_order).reset_index()
 
     if subtract_mean:
         _add_bpm_means(data_p, data_n, data_avg)
@@ -365,7 +371,7 @@ def calculate_pz_from_measurements(
 
     sync_endpoints(data_p, data_n)
 
-    data_avg = weighted_average(data_p, data_n, maps.betax, maps.betay)
+    data_avg = weighted_average(data_p, data_n)
 
     if subtract_mean:
         _add_bpm_means(data_p, data_n, data_avg)

@@ -33,7 +33,12 @@ class WorkerData:
 
     position_comparisons: np.ndarray  # Shape: (n_turns, n_data_points, 2) - [x, y]
     momentum_comparisons: np.ndarray  # Shape: (n_turns, n_data_points, 2) - [px, py]
-    weights: np.ndarray  # Shape: (n_turns, n_data_points, 2) - [x_weight, y_weight]
+    position_variances: (
+        np.ndarray
+    )  # Shape: (n_turns, n_data_points, 2) - [var_x, var_y]
+    momentum_variances: (
+        np.ndarray
+    )  # Shape: (n_turns, n_data_points, 2) - [var_px, var_py]
     init_coords: np.ndarray
     init_pts: np.ndarray
 
@@ -47,6 +52,8 @@ class WorkerConfig:
     magnet_range: str
     sequence_file_path: Path
     corrector_strengths: Path
+    tune_knobs_file: Path
+    beam_energy: float
     sdir: int = 1
     bad_bpms: list[str] | None = None
     seq_name: str | None = None
@@ -85,31 +92,39 @@ class BaseWorker(Process, ABC):
         init_coords = data.init_coords[:n_init]
 
         # Unpack 2D arrays into separate x/y arrays
+        # Shape: (n_tracks, n_data_points)
         self.x_comparisons = data.position_comparisons[:n_init, :, 0]  # x positions
         self.y_comparisons = data.position_comparisons[:n_init, :, 1]  # y positions
         self.px_comparisons = data.momentum_comparisons[:n_init, :, 0]  # px momenta
         self.py_comparisons = data.momentum_comparisons[:n_init, :, 1]  # py momenta
-        self.x_weights = self._adjust_weights(data.weights[:n_init, :, 0])  # x weights
-        self.y_weights = self._adjust_weights(data.weights[:n_init, :, 1])  # y weights
-        self.x_weights = data.weights[:n_init, :, 0]  # x weights (overwrite adjusted)
-        self.y_weights = data.weights[:n_init, :, 1]  # y weights (overwrite adjusted)
+        positional_variances = data.position_variances[:n_init]
+        self.x_variances = positional_variances[:, :, 0]
+        self.y_variances = positional_variances[:, :, 1]
 
-        # If either x or y first BPM weight is 0, zero the subsequent weights for both
-        # mask = (self.x_weights[:, 0] == 0) | (self.y_weights[:, 0] == 0)
-        # self.x_weights[mask, 1:] = 0
-        # self.y_weights[mask, 1:] = 0
-        # Assert that there are no 0 weights in the first BPM
-        # assert np.all(self.x_weights[:, 0] != 0), "Zero weight found in first x BPM"
-        # assert np.all(self.y_weights[:, 0] != 0), "Zero weight found in first y BPM"
+        momentum_variances = data.momentum_variances[:n_init]
+        self.px_variances = momentum_variances[:, :, 0]
+        self.py_variances = momentum_variances[:, :, 1]
 
-        # del px_comparisons, py_comparisons  # Unused for now
+        x_weights = self._variance_to_weight(self.x_variances)
+        y_weights = self._variance_to_weight(self.y_variances)
+        px_weights = self._variance_to_weight(self.px_variances)
+        py_weights = self._variance_to_weight(self.py_variances)
 
-        # Normalise x and y weights to the same mean
-        # combined_weights = np.concatenate([self.x_weights, self.y_weights])
-        # mean_weight = np.mean(combined_weights[combined_weights > 0])
-        # if mean_weight > 0:
-        #     self.x_weights /= mean_weight
-        #     self.y_weights /= mean_weight
+        self.hessian_weight_x = self._aggregate_hessian_weights(x_weights)
+        self.hessian_weight_y = self._aggregate_hessian_weights(y_weights)
+        self.hessian_weight_px = self._aggregate_hessian_weights(px_weights)
+        self.hessian_weight_py = self._aggregate_hessian_weights(py_weights)
+
+        self.x_weights = self._normalise_weights(x_weights)
+        self.y_weights = self._normalise_weights(y_weights)
+        self.px_weights = self._normalise_weights(px_weights)
+        self.py_weights = self._normalise_weights(py_weights)
+
+        # For each particle, weight all the weights by the first BPM weight
+        # self.x_weights = self._adjust_weights(self.x_weights)
+        # self.y_weights = self._adjust_weights(self.y_weights)
+        # self.px_weights = self._adjust_weights(self.px_weights)
+        # self.py_weights = self._adjust_weights(self.py_weights)
 
         # Split init_coords into num_batches batches
         init_coords = np.array_split(init_coords, num_batches)
@@ -151,12 +166,6 @@ class BaseWorker(Process, ABC):
         """Setup MAD sequence specific to the worker type."""
         pass
 
-    @staticmethod
-    @abstractmethod
-    def get_observation_turns(turn: int) -> list[int]:
-        """Get the list of observation turns for a given starting turn."""
-        pass
-
     def create_base_damap(self, mad: MAD, knob_order: int = 1) -> None:
         """
         Create a base damap object in MAD-NG with the given knob order.
@@ -171,6 +180,34 @@ class BaseWorker(Process, ABC):
         """
         first_bpm_weight = weights[:, 0]
         return weights * first_bpm_weight[:, np.newaxis]
+
+    @staticmethod
+    def _variance_to_weight(variances: np.ndarray) -> np.ndarray:
+        """Convert variances to inverse-variance weights, zeroing invalid entries."""
+        weights = np.zeros_like(variances, dtype=np.float64)
+        valid = np.isfinite(variances) & (variances > 0.0)
+        np.divide(1.0, variances, out=weights, where=valid)
+        return weights
+
+    @staticmethod
+    def _normalise_weights(weights: np.ndarray) -> np.ndarray:
+        """Normalise weights so that the maximum weight is 1."""
+        max_weight = np.max(weights)
+        if max_weight > 0:
+            return weights / max_weight
+        return weights
+
+    @staticmethod
+    def _aggregate_hessian_weights(weights: np.ndarray) -> np.ndarray:
+        """Aggregate per-track weights into a single weight per BPM for Hessian use."""
+        if weights.size == 0:
+            return np.array([], dtype=np.float64)
+
+        sums = np.sum(weights, axis=0)
+        counts = np.count_nonzero(weights, axis=0)
+        aggregated = np.zeros_like(sums, dtype=np.float64)
+        np.divide(sums, counts, out=aggregated, where=counts > 0)
+        return aggregated
 
     def _split_data_to_batches(self):
         """
@@ -193,6 +230,8 @@ class BaseWorker(Process, ABC):
         )
         self.x_weights = np.array_split(self.x_weights, self.num_batches, axis=0)
         self.y_weights = np.array_split(self.y_weights, self.num_batches, axis=0)
+        self.px_weights = np.array_split(self.px_weights, self.num_batches, axis=0)
+        self.py_weights = np.array_split(self.py_weights, self.num_batches, axis=0)
 
         self.init_pts = [
             arr.tolist()
@@ -220,7 +259,7 @@ for i=1,num_batches do
 end
             """)
 
-    def setup_mad_interface(self) -> tuple[MAD, int]:
+    def setup_mad_interface(self, init_knobs: dict[str, float]) -> tuple[MAD, int]:
         """
         Initialise MAD interface and setup common MAD configuration.
 
@@ -237,17 +276,21 @@ end
 
         mad_iface = OptimisationMadInterface(
             self.config.sequence_file_path,
+            py_name="python",
             seq_name=self.config.seq_name,
             magnet_range=self.config.magnet_range,
             bpm_range=bpm_range,
             opt_settings=self.opt_settings,
             use_real_strengths=True,
-            py_name="python",
             bad_bpms=self.config.bad_bpms,
             corrector_strengths=self.config.corrector_strengths,
+            tune_knobs_file=self.config.tune_knobs_file,
+            beam_energy=self.config.beam_energy,
             # discard_mad_output=False,
             # debug=True,
         )
+
+        assert mad_iface.knob_names == list(init_knobs.keys())
 
         mad = mad_iface.mad
         mad["knob_names"] = mad_iface.knob_names[:-1]  # ignore pt
@@ -362,64 +405,70 @@ end
 
         wx = self.x_weights[batch]
         wy = self.y_weights[batch]
+        wpx = self.px_weights[batch]
+        wpy = self.py_weights[batch]
 
-        # Compute differences between simulated and reference positions for loss and gradients
-        # Shape: (n_particles, n_data_points)
         residual_x = particle_positions_x - self.x_comparisons[batch]
         residual_y = particle_positions_y - self.y_comparisons[batch]
         residual_px = particle_momenta_px - self.px_comparisons[batch]
         residual_py = particle_momenta_py - self.py_comparisons[batch]
 
-        # Compute gradients using vector-Jacobian products (efficient via einsum)
-        # gx: Sum over particles and data points of (derivatives * diffs). Shape: (n_knobs + 1,)
         gx = np.einsum("pkm,pm->k", dx_dk, wx * residual_x)
+        gpx = np.einsum("pkm,pm->k", dpx_dk, wpx * residual_px)
         gy = np.einsum("pkm,pm->k", dy_dk, wy * residual_y)
-        gpx = np.einsum("pkm,pm->k", dpx_dk, residual_px)
-        gpy = np.einsum("pkm,pm->k", dpy_dk, residual_py)
-        del gpx, gpy  # Unused for now
+        gpy = np.einsum("pkm,pm->k", dpy_dk, wpy * residual_py)
+        loss = (
+            np.sum(wy * residual_y**2)
+            + np.sum(wpy * residual_py**2)
+            + np.sum(wx * residual_x**2)
+            + np.sum(wpx * residual_px**2)
+        )
 
-        # Combine gradients and compute loss (factor of 2 for derivative of squared error)
-        grad = 2.0 * (gx + gy)  # Shape: (n_knobs + 1,)
-        # grad = 2.0 * (gx + gy + gpx + gpy)  # Shape: (n_knobs + 1,)
-        loss = np.sum(wx * residual_x**2) + np.sum(wy * residual_y**2)  # Scalar
-
+        grad = 2.0 * (gx + gy + gpx + gpy)
         return grad, loss
 
     def run(self) -> None:
         """Main worker run loop."""
+        self.conn.recv()  # Initial handshake from the manager
+        knob_values, batch = self.conn.recv()  # shape (n_knobs,)
+
         # Setup MAD interface
-        mad, nbpms = self.setup_mad_interface()
+        mad, nbpms = self.setup_mad_interface(knob_values)
 
         # Send initial conditions
         self.send_initial_conditions(mad)
 
+        # Main tracking loop
+        LOGGER.debug(
+            "Worker %s: Prepared Hessian weights for %d BPMs",
+            self.worker_id,
+            self.hessian_weight_x.size,
+        )
+
         # Initialise the MAD environment ready for tracking
         mad.send(self.run_track_init_path.read_text())
 
-        # Main tracking loop
-        hessian_var_x, hessian_var_y = self.conn.recv()
-        LOGGER.debug(
-            f"Worker {self.worker_id}: Received Hessian vars x={hessian_var_x}, y={hessian_var_y}"
-        )
-        knob_updates, batch = self.conn.recv()  # shape (n_knobs,)
-
-        while knob_updates is not None:
+        while knob_values is not None:
             # Process tracking and compute gradients
-            grad, loss = self.compute_gradients_and_loss(mad, knob_updates, batch)
+            grad, loss = self.compute_gradients_and_loss(mad, knob_values, batch)
 
             # Send results back - normalised with nbpms
             self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
 
             # Receive next knob updates
-            knob_updates, batch = self.conn.recv()
+            knob_values, batch = self.conn.recv()
 
         # Final hessian estimation
         mad.send("""
-var_x = python:recv()
-var_y = python:recv()
+weights_x = python:recv()
+weights_px = python:recv()
+weights_y = python:recv()
+weights_py = python:recv()
 """)
-        mad.send(1 / hessian_var_x)
-        mad.send(1 / hessian_var_y)
+        mad.send(self.hessian_weight_x.tolist())
+        mad.send(self.hessian_weight_px.tolist())
+        mad.send(self.hessian_weight_y.tolist())
+        mad.send(self.hessian_weight_py.tolist())
         mad.send(HESSIAN_SCRIPT.read_text())
         h_part = mad.recv()
         self.conn.send(h_part)  # shape (n_knobs, n_knobs)

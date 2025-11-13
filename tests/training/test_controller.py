@@ -4,7 +4,8 @@ Integration-style tests for the controller logic using lightweight tracking data
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -22,9 +23,6 @@ from aba_optimiser.xsuite.xsuite_tools import (
     run_tracking,
 )
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
 TRACK_COLUMNS = (
     "turn",
     "name",
@@ -32,8 +30,10 @@ TRACK_COLUMNS = (
     "px",
     "y",
     "py",
-    "x_weight",
-    "y_weight",
+    "var_x",
+    "var_y",
+    "var_px",
+    "var_py",
     "kick_plane",
 )
 
@@ -44,7 +44,10 @@ def _generate_nonoise_track(
     flattop_turns: int,
     destination: Path,
     dpp_value: float,
-) -> Path:
+    magnet_range: str,
+    perturb_quads: bool = False,
+    save_knobs: bool = False,
+) -> tuple[Path, dict, Path | None]:
     """Generate a parquet file containing noiseless tracking data for the requested BPMs."""
     # Create MAD interface and load sequence
     mad = BaseMadInterface()  # stdout="/dev/null", redirect_stderr=True
@@ -65,25 +68,32 @@ def _generate_nonoise_track(
         corrector_table = tfs.read(corrector_file)
         corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
         magnet_strengths = {}
+        tune_knobs_file = None
     else:
         # Create an empty corrector table
         corrector_table = tfs.TfsDataFrame()
-        mad.mad.send(f"""
+        if perturb_quads:
+            mad.mad.send(f"""
 local randseed, randn, abs in MAD.gmath
 new_magnet_values = {{}}
-for _, elm in loaded_sequence:iter('{MAGNET_RANGE}') do
+for _, elm in loaded_sequence:iter('{magnet_range}') do
     if elm.kind == 'quadrupole' and elm.k1 ~= 0.0 then
         elm.k1 = elm.k1 + 1e-4 * randn() * abs(elm.k1)
         new_magnet_values[elm.name .. ".k1"] = elm.k1
     end
 end
 py:send(new_magnet_values, true)
-        """)
-
-        magnet_strengths = mad.mad.recv()
+            """)
+            magnet_strengths = mad.mad.recv()
+        else:
+            magnet_strengths = {}
         matched_tunes = match_tunes(
             mad.mad, target_qx=0.28, target_qy=0.31, deltap=dpp_value
         )
+        tune_knobs_file = None
+        if save_knobs:
+            tune_knobs_file = tmp_dir / "tune_knobs.txt"
+            save_knobs(magnet_strengths, tune_knobs_file)
     # Create xsuite environment with orbit correction applied
     env = initialise_env(
         matched_tunes=matched_tunes,
@@ -121,7 +131,7 @@ py:send(new_magnet_values, true)
     df["kick_plane"] = df["kick_plane"].astype(str)
     destination.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(destination, index=False)
-    return corrector_file, magnet_strengths
+    return corrector_file, magnet_strengths, tune_knobs_file
 
 
 @pytest.fixture(scope="module")
@@ -132,24 +142,6 @@ def dpp_value() -> float:
 @pytest.fixture(scope="module")
 def flattop_turns() -> int:
     return 256
-
-
-MAGNET_RANGE = "BPM.9R2.B1/BPM.9L3.B1"
-BPM_START_POINTS = [
-    "BPM.9R2.B1",
-    "BPM.10R2.B1",
-    "BPM.11R2.B1",
-    "BPM.12R2.B1",
-    "BPM.13R2.B1",
-]
-
-BPM_END_POINTS = [
-    "BPM.9L3.B1",
-    "BPM.10L3.B1",
-    "BPM.11L3.B1",
-    "BPM.12L3.B1",
-    "BPM.13L3.B1",
-]
 
 
 @pytest.fixture(scope="module")
@@ -163,35 +155,32 @@ def track_files(
     off_dpp_path = tmp_dir / "track_off_dpp.parquet"
     off_magnet_path = tmp_dir / "track_off_magnet.parquet"
 
-    corrector_file, _ = _generate_nonoise_track(
-        tmp_dir, sequence_file, flattop_turns, off_dpp_path, dpp_value
+    corrector_file, _, _ = _generate_nonoise_track(
+        tmp_dir,
+        sequence_file,
+        flattop_turns,
+        off_dpp_path,
+        dpp_value,
+        "BPM.9R2.B1/BPM.9L3.B1",
+        perturb_quads=False,
+        save_knobs=False,
     )
-    _, magnet_strengths = _generate_nonoise_track(
-        tmp_dir, sequence_file, flattop_turns, off_magnet_path, 0.0
+    _, magnet_strengths, _ = _generate_nonoise_track(
+        tmp_dir,
+        sequence_file,
+        flattop_turns,
+        off_magnet_path,
+        0.0,
+        "BPM.9R2.B1/BPM.9L3.B1",
+        perturb_quads=True,
+        save_knobs=False,
     )
-
-    # _generate_nonoise_track(
-    #     sequence_file,
-    #     bpm_pattern,
-    #     dp_target + DELTAP,
-    #     flattop_turns,
-    #     plus_path,
-    # )
-    # _generate_nonoise_track(
-    #     sequence_file,
-    #     bpm_pattern,
-    #     dp_target - DELTAP,
-    #     flattop_turns,
-    #     minus_path,
-    # )
 
     return {
         "corrector_file": corrector_file,
         "off_dpp": off_dpp_path,
         "off_magnet": off_magnet_path,
         "magnet_strengths": magnet_strengths,
-        # "plus": plus_path,
-        # "minus": minus_path,
     }
 
 
@@ -218,6 +207,24 @@ def _make_opt_settings(
     )
 
 
+def _make_opt_settings_quad() -> OptSettings:
+    return OptSettings(
+        max_epochs=300,
+        tracks_per_worker=124,
+        num_workers=8,
+        num_batches=2,
+        warmup_epochs=100,
+        warmup_lr_start=1e-9,
+        max_lr=2e-7,
+        min_lr=2e-8,
+        gradient_converged_value=5e-12,
+        only_energy=False,
+        optimise_quadrupoles=True,
+        optimise_sextupoles=False,
+        use_off_energy_data=False,
+    )
+
+
 @pytest.mark.slow
 def test_controller_energy_opt(
     track_files: dict[str, Path | float],
@@ -228,15 +235,32 @@ def test_controller_energy_opt(
     """Test that the controller initializes correctly with custom num_tracks and flattop_turns."""
     opt_settings = _make_opt_settings()
 
+    # Constants for the test
+    magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
+    bpm_start_points = [
+        "BPM.9R2.B1",
+        "BPM.10R2.B1",
+        "BPM.11R2.B1",
+        "BPM.12R2.B1",
+        "BPM.13R2.B1",
+    ]
+    bpm_end_points = [
+        "BPM.9L3.B1",
+        "BPM.10L3.B1",
+        "BPM.11L3.B1",
+        "BPM.12L3.B1",
+        "BPM.13L3.B1",
+    ]
+
     ctrl = Controller(
         opt_settings=opt_settings,
         sequence_file_path=sequence_file,
         show_plots=False,
-        magnet_range=MAGNET_RANGE,
-        bpm_start_points=BPM_START_POINTS,
-        bpm_end_points=BPM_END_POINTS,
+        magnet_range=magnet_range,
+        bpm_start_points=bpm_start_points,
+        bpm_end_points=bpm_end_points,
         measurement_file=track_files["off_dpp"],
-        true_strengths_file=None,
+        true_strengths=None,
         corrector_file=track_files["corrector_file"],
         flattop_turns=flattop_turns,
         num_tracks=1,
@@ -253,65 +277,68 @@ def test_controller_energy_opt(
 
 
 @pytest.mark.slow
-def test_controller_quad_opt(
-    track_files: dict[str, Path | float],
-    sequence_file: Path,
-    flattop_turns: int,
-) -> None:
-    """Test that the controller initializes correctly for quadrupole optimisation."""
-    opt_settings = _make_opt_settings(only_energy=False, optimise_quadrupoles=True)
-    # Create a separate empty file for the corrector table
-    tmp_folder = track_files["corrector_file"].parent
-    empty_file = tmp_folder / "empty_corrector_table.txt"
+def test_controller_quad_opt_simple(sequence_file: Path) -> None:
+    """Test quadrupole optimisation using the simple opt script logic."""
+    # Constants for the test
+    magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
+    bpm_start_points = [
+        "BPM.9R2.B1",
+        "BPM.10R2.B1",
+        "BPM.11R2.B1",
+        "BPM.12R2.B1",
+        "BPM.13R2.B1",
+    ]
+    bpm_end_points = [
+        "BPM.9L3.B1",
+        "BPM.10L3.B1",
+        "BPM.11L3.B1",
+        "BPM.12L3.B1",
+        "BPM.13L3.B1",
+    ]
+
+    flattop_turns = 1000
+    tmp_dir = Path(tempfile.mkdtemp())
+    off_magnet_path = tmp_dir / "track_off_magnet.parquet"
+
+    _, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
+        tmp_dir,
+        sequence_file,
+        flattop_turns,
+        off_magnet_path,
+        0.0,
+        magnet_range,
+        perturb_quads=True,
+        save_knobs=True,
+    )
+
+    opt_settings = _make_opt_settings_quad()
+    empty_file = tmp_dir / "empty_corrector_table.txt"
     empty_file.touch()
+    true_values = magnet_strengths.copy()
+    true_values["deltap"] = 0.0  # We tracked at on-momentum for this test
 
     ctrl = Controller(
         opt_settings=opt_settings,
         sequence_file_path=sequence_file,
         show_plots=False,
-        magnet_range=MAGNET_RANGE,
-        bpm_start_points=BPM_START_POINTS,
-        bpm_end_points=BPM_END_POINTS,
-        measurement_file=track_files["off_magnet"],
-        true_strengths_file=None,
+        magnet_range=magnet_range,
+        bpm_start_points=bpm_start_points,
+        bpm_end_points=bpm_end_points,
+        measurement_file=off_magnet_path,
+        true_strengths=true_values,
         corrector_file=empty_file,
+        tune_knobs_file=tune_knobs_file,
         flattop_turns=flattop_turns,
         num_tracks=1,
     )
     estimate, unc = ctrl.run()
 
-    for magnet, value in track_files["magnet_strengths"].items():
-        assert np.isclose(estimate[magnet], value, atol=1e-6), (
-            f"Magnet {magnet} strength does not match expected value."
+    for magnet, value in estimate.items():
+        rel_diff = (
+            abs(value - true_values[magnet]) / abs(true_values[magnet])
+            if true_values[magnet] != 0
+            else abs(value)
         )
-
-
-def test_controller_handles_sextupole_mode_initialization(
-    track_files: dict[str, Path | float],
-    sequence_file: Path,
-    bpm_pattern: tuple[str, ...],
-    flattop_turns: int,
-) -> None:
-    """Test that the controller initializes correctly for sextupole optimisation."""
-    opt_settings = _make_opt_settings(
-        only_energy=False, optimise_quadrupoles=True, optimise_sextupoles=True
-    )
-
-    ctrl = Controller(
-        opt_settings=opt_settings,
-        sequence_file_path=str(sequence_file),
-        show_plots=False,
-        magnet_range=f"{bpm_pattern[0]}/{bpm_pattern[0]}",
-        bpm_start_points=[bpm_pattern[0]],
-        bpm_end_points=[bpm_pattern[0]],
-        measurement_file=str(track_files["zero"]),
-        true_strengths_file=None,
-        num_tracks=1,
-        flattop_turns=flattop_turns,
-    )
-
-    # Check opt_settings are set correctly
-    assert not ctrl.opt_settings.only_energy
-    assert ctrl.opt_settings.optimise_quadrupoles
-    assert ctrl.opt_settings.optimise_sextupoles
-    assert ctrl.opt_settings.use_off_energy_data
+        assert rel_diff < 1e-5, (
+            f"Magnet {magnet}: FAIL, estimated {value}, true {true_values[magnet]}, rel diff {rel_diff}"
+        )

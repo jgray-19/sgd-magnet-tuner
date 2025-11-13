@@ -60,9 +60,9 @@ class BaseMadInterface:
             beam_energy: Beam energy in GeV
             particle: Particle type (default: proton)
         """
-        logger.info(f"Setting beam: particle={particle}, energy={beam_energy}")
+        logger.info(f"Setting beam: particle={particle}, energy={beam_energy:.15e} GeV")
         self.mad.send(
-            f'loaded_sequence.beam = beam {{ particle = "{particle}", energy = {beam_energy} }}'
+            f'loaded_sequence.beam = beam {{ particle = "{particle}", energy = {beam_energy:.15e} }}'
         )
 
     def observe_elements(self, pattern: str = "BPM") -> None:
@@ -191,25 +191,26 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
         """
         return self.mad.recv_vars(*names, shallow_copy=True)
 
-    def set_magnet_strengths(self, strengths: dict) -> None:
+    def set_magnet_strengths(self, strengths: dict[str, float]) -> None:
         """
         Set magnet strengths using standardised naming conventions.
 
         Args:
-            strengths: Dictionary of magnet strengths with '_k' suffix naming
+            strengths: Dictionary of magnet strengths with '.k[0-2]' suffix naming
         """
+        suffixes = {".k0", ".k1", ".k2"}
         logger.debug(f"Setting {len(strengths)} magnet strengths")
+
+        variables_to_set = {}
         for name, strength in strengths.items():
-            if name.endswith("_k"):
-                element_name = name[:-2]  # Remove '_k' suffix
-                if "MB." in element_name:
-                    self.set_variables(**{f"MADX['{element_name}'].k0": strength})
-                elif "MQ." in element_name:
-                    self.set_variables(**{f"MADX['{element_name}'].k1": strength})
-                elif "MS." in element_name:
-                    self.set_variables(**{f"MADX['{element_name}'].k2": strength})
-                else:
-                    logger.warning(f"Unknown magnet type for {element_name}")
+            if not any(suffix in name for suffix in suffixes):
+                raise ValueError(
+                    f"Magnet name '{name}' must end with one of {suffixes}"
+                )
+            magnet_name, var = name.rsplit(".", 1)
+            variables_to_set[f"MADX['{magnet_name}'].{var}"] = strength
+
+        self.set_variables(**variables_to_set)
 
     def apply_corrector_strengths(self, corrector_table: tfs.TfsDataFrame) -> None:
         """

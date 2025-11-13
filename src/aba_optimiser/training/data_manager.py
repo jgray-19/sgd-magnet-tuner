@@ -23,7 +23,6 @@ from aba_optimiser.config import (
     NO_NOISE_FILE,
     NOISY_FILE,
     NUM_TRACKS,
-    POSITION_STD_DEV,
     RUN_ARC_BY_ARC,
     USE_NOISY_DATA,
 )
@@ -66,10 +65,6 @@ class DataManager:
 
         self.turn_batches: list[list[int]] = []
         self.tracks_per_worker: int = 0  # set in prepare_turn_batches
-
-        # For the Hessian
-        self.var_x = POSITION_STD_DEV**2
-        self.var_y = POSITION_STD_DEV**2
 
         # Only populated when sextupoles are optimised
         self.track_data: dict[str, pd.DataFrame] | None = None
@@ -185,12 +180,9 @@ class DataManager:
             # set the x_weight and y_weight to 0
             nan_mask = df[["x", "y", "px", "py"]].isna().any(axis=1)
             if nan_mask.any():
-                num_nans = nan_mask.sum()
-                LOGGER.warning(
-                    "Found %d rows with NaNs in track data, setting weights to 0",
-                    num_nans,
+                raise ValueError(
+                    "Found NaN values in track data. Please clean the data before proceeding."
                 )
-                df.loc[nan_mask, ["x_weight", "y_weight"]] = 0.0
 
         self.track_data = (
             energy_tracks if use_off_energy_data else {"zero": energy_tracks["zero"]}
@@ -272,15 +264,23 @@ class DataManager:
             tracks_per_worker,
         )
 
+        num_ranges = len(config_manager.bpm_ranges)
         if not DIFFERENT_TURNS_PER_RANGE:
-            num_ranges = len(config_manager.bpm_ranges)
             self.tracks_per_worker *= num_ranges
             num_workers = num_workers // num_ranges
-            num_workers = max(1, num_workers)  # Ensure at least one worker
-            LOGGER.info(
-                f"Adjusted tracks per worker to {self.tracks_per_worker} "
-                f"and number of workers to {num_workers} "
-                f"to account for {num_ranges} BPM ranges."
+
+        num_workers = num_workers // 2  # /2 for sdir = +/-1
+        self.tracks_per_worker *= 2
+
+        num_workers = max(1, num_workers)  # Ensure at least one worker
+        LOGGER.info(
+            f"Adjusted tracks per worker to {self.tracks_per_worker} "
+            f"and number of workers to {num_workers} "
+        )
+        if num_workers * num_ranges * 2 > 60:  # * 2 for sdir = +/-1
+            LOGGER.warning(
+                "Total number of workers (%d) exceeds 60, which may lead to resource issues.",
+                num_workers * num_ranges * 2,
             )
 
         # Randomly select turns for each batch

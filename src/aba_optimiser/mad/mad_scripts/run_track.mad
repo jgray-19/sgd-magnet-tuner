@@ -21,7 +21,6 @@ local _, mflw= track{
     X0=da_x0_c[batch],
     nturn=n_run_turns,
     save=false,
-    observe=observe_from_turn,
     atexit=save_data,
     range=tracking_range,
     dir=sdir,

@@ -85,6 +85,8 @@ def filter_noisy_data(data: pd.DataFrame, sequence_file_path: str) -> pd.DataFra
     # Compute and set x_weight and y_weight for each BPM in range
     filtered.loc[:, "x_weight"] = np.nan
     filtered.loc[:, "y_weight"] = np.nan
+    filtered.loc[:, "px_weight"] = np.nan
+    filtered.loc[:, "py_weight"] = np.nan
     x_weight_dict = {}
     y_weight_dict = {}
     for bpm in tqdm(reduced_bpms, desc="Retrieving x_weight/y_weight"):
@@ -122,6 +124,8 @@ def filter_noisy_data(data: pd.DataFrame, sequence_file_path: str) -> pd.DataFra
 
     filtered.loc[:, "x_weight"] = filtered.index.map(x_weight_dict)
     filtered.loc[:, "y_weight"] = filtered.index.map(y_weight_dict)
+    filtered.loc[:, "px_weight"] = filtered["x_weight"]
+    filtered.loc[:, "py_weight"] = filtered["y_weight"]
 
     print(f"Total failed turns: {len(failed_turns)}")
     return filtered

@@ -166,25 +166,22 @@ def test_set_madx_variables(interface: BaseMadInterface) -> None:
 def test_set_magnet_strength(loaded_interface: BaseMadInterface) -> None:
     """Test setting magnet strengths."""
     magnet_strengths = {
-        "MB.A8R2.B1_k": 3.566169870533780e-04,
-        "MB.B8R2.B1_k": 3.566320017035819e-04,
-        "MQ.11R2.B1_k": -8.555311397913858e-03,
-        "MS.11R2.B1_k": -1.366585087094679e-01,
+        "MB.A8R2.B1.k0": 3.566169870533780e-04,
+        "MB.B8R2.B1.k0": 3.566320017035819e-04,
+        "MQ.11R2.B1.k1": -8.555311397913858e-03,
+        "MS.11R2.B1.k2": -1.366585087094679e-01,
     }
-    mag_type_to_num = {"MB": 0, "MQ": 1, "MS": 2}
     strengths_before = {}
     for mag_name, new_strength in magnet_strengths.items():
-        mag_base = mag_name[:-2]
-        strength_num = mag_type_to_num[mag_name[:2]]
+        mag_base, strength_num = mag_name.rsplit(".", 1)
         strengths_before[mag_base] = loaded_interface.mad[
-            f"MADX['{mag_base}'].k{strength_num}"
+            f"MADX['{mag_base}'].{strength_num}"
         ]
 
     loaded_interface.set_magnet_strengths(magnet_strengths)
     for mag_name, new_strength in magnet_strengths.items():
-        mag_base = mag_name[:-2]
-        strength_num = mag_type_to_num[mag_name[:2]]
-        updated_strength = loaded_interface.mad[f"MADX['{mag_base}'].k{strength_num}"]
+        mag_base, strength_num = mag_name.rsplit(".", 1)
+        updated_strength = loaded_interface.mad[f"MADX['{mag_base}'].{strength_num}"]
 
         assert updated_strength != strengths_before[mag_base], (
             f"Magnet {mag_name} strength did not change from previous value."
@@ -195,9 +192,30 @@ def test_set_magnet_strength(loaded_interface: BaseMadInterface) -> None:
         )
 
 
-def test_apply_corrector_strengths(
-    loaded_interface: BaseMadInterface, corrector_table
-):
+def test_set_magnet_strengths_error(loaded_interface: BaseMadInterface) -> None:
+    """Test setting magnet strengths with incorrect naming raises error."""
+    with pytest.raises(ValueError):
+        loaded_interface.set_magnet_strengths(
+            {
+                "MOB.A8R2.B1.k4": 3.566169870533780e-04,  # Invalid magnet type
+            }
+        )
+
+    magnet_strengths_invalid_suffix = {
+        "MB.A8R2.B1.k": 3.566169870533780e-04,  # Invalid suffix
+    }
+    with pytest.raises(ValueError):
+        loaded_interface.set_magnet_strengths(magnet_strengths_invalid_suffix)
+
+    with pytest.raises(ValueError):
+        loaded_interface.set_magnet_strengths(
+            {
+                "MB.A8R2.B1_k0": 3.566169870533780e-04,  # Invalid format
+            }
+        )
+
+
+def test_apply_corrector_strengths(loaded_interface: BaseMadInterface, corrector_table):
     # Check initial strengths are zero
     check_corrector_strengths_zero(loaded_interface, corrector_table)
 

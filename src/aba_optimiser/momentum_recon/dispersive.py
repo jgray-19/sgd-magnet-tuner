@@ -13,7 +13,9 @@ from aba_optimiser.momentum_recon.core import (
     inject_noise_xy,
     sync_endpoints,
     validate_input,
-    weighted_average,
+)
+from aba_optimiser.momentum_recon.core import (
+    weighted_average_from_weights as weighted_average,
 )
 from aba_optimiser.momentum_recon.momenta import momenta_from_next, momenta_from_prev
 from aba_optimiser.momentum_recon.neighbors import (
@@ -91,7 +93,7 @@ def calculate_pz(
 
     sync_endpoints(data_p, data_n)
 
-    data_avg = weighted_average(data_p, data_n, maps.betax, maps.betay)
+    data_avg = weighted_average(data_p, data_n)
 
     diagnostics(orig_data, data_p, data_n, data_avg, info, has_px, has_py)
     return data_avg[OUT_COLS]

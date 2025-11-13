@@ -1,4 +1,4 @@
-! run_track_init.mad
+! run_track_init_no_knobs.mad
 
 ! Assumes the following variables are defined:
 ! loaded_sequence: the sequence to be used for tracking
@@ -10,8 +10,8 @@
 ! python: a Python interface object for sending data
 
 assert(
-    batch_size and nbpms and
-    vector and matrix and python and n_compare_turns,
+    batch_size and nbpms and knob_monomials and
+    knob_names and vector and matrix and python,
     "Missing required variables for initialising"
 )
 
@@ -27,21 +27,21 @@ dpx_dk = table.new(batch_size, 0)
 dpy_dk = table.new(batch_size, 0)
 
 for i=1,batch_size do
-    x[i] = vector(nbpms*n_compare_turns)
-    y[i] = vector(nbpms*n_compare_turns)
-    px[i] = vector(nbpms*n_compare_turns)
-    py[i] = vector(nbpms*n_compare_turns)
-    dx_dk[i] = matrix(1, nbpms*n_compare_turns)
-    dy_dk[i] = matrix(1, nbpms*n_compare_turns)
-    dpx_dk[i] = matrix(1, nbpms*n_compare_turns)
-    dpy_dk[i] = matrix(1, nbpms*n_compare_turns)
+    x[i] = vector(nbpms)
+    y[i] = vector(nbpms)
+    px[i] = vector(nbpms)
+    py[i] = vector(nbpms)
+    dx_dk[i] = matrix(1, nbpms)
+    dy_dk[i] = matrix(1, nbpms)
+    dpx_dk[i] = matrix(1, nbpms)
+    dpy_dk[i] = matrix(1, nbpms)
 end
 
-observe_count = 1
+observe_count = nbpms + 1  ! Start beyond the last bpm to ensure reset is called before tracking
 function save_data(elm, mflw, _, slc)
     local turn in mflw
     -- Observe the BPMs at the specified intervals
-    if slc == -2 and elm:is_observed() and turn >= mflw.observe then
+    if slc == -2 and elm:is_observed() then
          -- Loop over each particle in the batch
         for i=1,batch_size do
             x[i]:seti(observe_count, mflw[i].x:get0()) ! get0 returns the scalar
@@ -60,6 +60,7 @@ function save_data(elm, mflw, _, slc)
 end
 
 function reset_before_tracking()
+    assert(observe_count == nbpms + 1, "Not all BPMs observed before resetting, got " .. observe_count - 1 .. ", expected " .. nbpms)
     observe_count = 1
     for i=1,batch_size do
         x[i]:zeros()

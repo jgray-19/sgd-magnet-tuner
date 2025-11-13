@@ -56,21 +56,53 @@ def merge_neighbor_coords(
     turn_x_n: np.ndarray,
     turn_y_n: np.ndarray,
 ) -> tuple[tfs.TfsDataFrame, tfs.TfsDataFrame]:
-    coords_p = data_p[["turn", "name", "x", "y"]]
-    coords_n = data_n[["turn", "name", "x", "y"]]
+    required = {"var_x", "var_y"}
+    missing_p = required.difference(data_p.columns)
+    missing_n = required.difference(data_n.columns)
+    if missing_p or missing_n:
+        raise KeyError(
+            "Variance columns missing for neighbour merge: "
+            f"data_p missing {sorted(missing_p)}; data_n missing {sorted(missing_n)}"
+        )
+
+    coords_p = data_p[["turn", "name", "x", "y", "var_x", "var_y"]]
+    coords_n = data_n[["turn", "name", "x", "y", "var_x", "var_y"]]
 
     coords_x_p = coords_p.rename(
-        columns={"turn": "turn_x_p", "name": "prev_bpm_x", "x": "prev_x"}
-    )[["turn_x_p", "prev_bpm_x", "prev_x"]]
+        columns={
+            "turn": "turn_x_p",
+            "name": "prev_bpm_x",
+            "x": "prev_x",
+            "var_x": "prev_x_var",
+        }
+    )[["turn_x_p", "prev_bpm_x", "prev_x", "prev_x_var"]]
+
     coords_y_p = coords_p.rename(
-        columns={"turn": "turn_y_p", "name": "prev_bpm_y", "y": "prev_y"}
-    )[["turn_y_p", "prev_bpm_y", "prev_y"]]
+        columns={
+            "turn": "turn_y_p",
+            "name": "prev_bpm_y",
+            "y": "prev_y",
+            "var_y": "prev_y_var",
+        }
+    )[["turn_y_p", "prev_bpm_y", "prev_y", "prev_y_var"]]
+
     coords_x_n = coords_n.rename(
-        columns={"turn": "turn_x_n", "name": "next_bpm_x", "x": "next_x"}
-    )[["turn_x_n", "next_bpm_x", "next_x"]]
+        columns={
+            "turn": "turn_x_n",
+            "name": "next_bpm_x",
+            "x": "next_x",
+            "var_x": "next_x_var",
+        }
+    )[["turn_x_n", "next_bpm_x", "next_x", "next_x_var"]]
+
     coords_y_n = coords_n.rename(
-        columns={"turn": "turn_y_n", "name": "next_bpm_y", "y": "next_y"}
-    )[["turn_y_n", "next_bpm_y", "next_y"]]
+        columns={
+            "turn": "turn_y_n",
+            "name": "next_bpm_y",
+            "y": "next_y",
+            "var_y": "next_y_var",
+        }
+    )[["turn_y_n", "next_bpm_y", "next_y", "next_y_var"]]
 
     data_p["turn_x_p"] = turn_x_p
     data_p["turn_y_p"] = turn_y_p
@@ -97,6 +129,14 @@ def merge_neighbor_coords(
         (data_n, "next_y"),
     ):
         frame[column] = frame[column].fillna(0.0)
+
+    for frame, column in (
+        (data_p, "prev_x_var"),
+        (data_p, "prev_y_var"),
+        (data_n, "next_x_var"),
+        (data_n, "next_y_var"),
+    ):
+        frame[column] = frame[column].fillna(np.inf)
 
     data_p.drop(columns=["turn_x_p", "turn_y_p"], inplace=True)
     data_n.drop(columns=["turn_x_n", "turn_y_n"], inplace=True)

@@ -13,7 +13,6 @@ import multiprocessing as mp
 from typing import TYPE_CHECKING
 
 import numpy as np
-import pandas as pd
 
 from aba_optimiser.config import (
     BEAM_ENERGY,
@@ -27,6 +26,8 @@ from aba_optimiser.workers.base_worker import BaseWorker, WorkerConfig, WorkerDa
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
     from pathlib import Path
+
+    import pandas as pd
 
     from aba_optimiser.config import OptSettings
 
@@ -63,14 +64,16 @@ class WorkerManager:
         magnet_range: str,
         sequence_file_path: Path,
         corrector_strengths_file: Path,
+        tune_knobs_file: Path,
         bad_bpms: list[str] | None = None,
         seq_name: str | None = None,
+        beam_energy: float = BEAM_ENERGY,
     ):
         """Initialise the WorkerManager.
 
-        Args:
-            worker_class (type[BaseWorker]): The class to use for creating worker processes
-            n_data_points (dict[str, int]): Dictionary mapping BPM names to number of data points to collect
+                    position_variances,
+                    momentum_variances,
+        n_data_points (dict[str, int]): Dictionary mapping BPM names to number of data points to collect
         """
         self.Worker = worker_class
         self.n_data_points = n_data_points
@@ -82,10 +85,12 @@ class WorkerManager:
         self.magnet_range = magnet_range
         self.sequence_file_path = sequence_file_path
         self.corrector_strengths_file = corrector_strengths_file
+        self.tune_knobs_file = tune_knobs_file
         # Per-DataFrame cache mapping (turn, bpm) -> iloc position for faster slicing
         self._pos_cache: dict[int, dict[tuple[int, str], int]] = {}
         self.bad_bpms = bad_bpms
         self.seq_name = seq_name
+        self.beam_energy = beam_energy
 
     def _compute_pt(self, energy_type: str) -> float:
         """Compute transverse momentum based on energy type.
@@ -97,7 +102,7 @@ class WorkerManager:
             float: The transverse momentum calculated from energy deviation
         """
         dpp = self.ENERGY_DPP_MAP[energy_type]
-        return dp2pt(dpp, PARTICLE_MASS, BEAM_ENERGY)
+        return dp2pt(dpp, PARTICLE_MASS, self.beam_energy)
 
     def _create_init_coords(self, starting_row: pd.Series, pt: float) -> np.ndarray:
         """Create initial coordinates array for particle tracking.
@@ -117,43 +122,6 @@ class WorkerManager:
         # Extend to include t=0 and pt to create 6D phase space coordinates
         # Final format: [x, px, y, py, t, pt] where t=0 (time) and pt is transverse momentum
         return np.concatenate((coords, [0, pt]))
-
-    def _collect_observation_data(
-        self,
-        df: pd.DataFrame,
-        obs_turns: list[int],
-        start_bpm: str,
-        n_data_points: int,
-        turn: int,
-    ) -> pd.DataFrame:
-        """Collect observation data for a specific turn from track data.
-
-        Args:
-            df (pd.DataFrame): Track data DataFrame with MultiIndex (turn, bpm)
-            obs_turns (list[int]): List of observation turn numbers to collect data for
-            start_bpm (str): Starting BPM name for data collection
-            n_data_points (int): Number of data points to collect per observation turn
-            turn (int): The current turn number (for error reporting)
-
-        Returns:
-            pd.DataFrame: Concatenated DataFrame containing observation data
-
-        Raises:
-            ValueError: If no data is available for the specified turn
-        """
-        blocks = []
-        for ot in obs_turns:
-            # Find the position of this (observation_turn, start_bpm) in the DataFrame
-            pos = df.index.get_loc((ot, start_bpm))
-            # Extract n_data_points rows starting from this position
-            # This gives us data for this observation turn at the starting BPM
-            blocks.append(df.iloc[pos : pos + n_data_points])
-        # Concatenate all blocks into a single DataFrame
-        filtered = pd.concat(blocks, axis=0)
-
-        if filtered.shape[0] == 0:
-            raise ValueError(f"No data available for turn {turn}")
-        return filtered
 
     def create_worker_payloads(
         self,
@@ -189,28 +157,36 @@ class WorkerManager:
                 "y": df["y"].to_numpy(dtype="float64", copy=False),
                 "px": df["px"].to_numpy(dtype="float64", copy=False),
                 "py": df["py"].to_numpy(dtype="float64", copy=False),
-                "x_weight": df["x_weight"].to_numpy(dtype="float64", copy=False),
-                "y_weight": df["y_weight"].to_numpy(dtype="float64", copy=False),
+                "var_x": df["var_x"].to_numpy(dtype="float64", copy=False),
+                "var_y": df["var_y"].to_numpy(dtype="float64", copy=False),
+                "var_px": df["var_px"].to_numpy(dtype="float64", copy=False),
+                "var_py": df["var_py"].to_numpy(dtype="float64", copy=False),
             }
-        sdir = 1  # Start with positive direction
+        # sdir = 1  # Start with positive direction
         num_ranges = len(bpm_ranges)
-        # for sdir in [1, -1]:  # Alternate tracking direction for each set of workers
-        for bpm_i, bpm_range in enumerate(bpm_ranges):
-            start_bpm, end_bpm = bpm_range.split("/")
-            for batch_idx, turn_batch in enumerate(turn_batches):
-                # Cycle through BPM start points using modulo to distribute work evenly, if required
-                if DIFFERENT_TURNS_PER_RANGE and batch_idx % num_ranges != bpm_i:
-                    continue
+        for sdir in [1, -1]:  # Alternate tracking direction for each set of workers
+            for bpm_i, bpm_range in enumerate(bpm_ranges):
+                start_bpm, end_bpm = bpm_range.split("/")
+                for batch_idx, turn_batch in enumerate(turn_batches):
+                    # Cycle through BPM start points using modulo to distribute work evenly, if required
+                    if DIFFERENT_TURNS_PER_RANGE and batch_idx % num_ranges != bpm_i:
+                        continue
 
-                # Ensure the turn batch is not empty
-                assert turn_batch, (
-                    f"Turn batch {batch_idx} for range {bpm_range} is empty. "
-                    f"Check TRACKS_PER_WORKER and NUM_WORKERS."
-                )
+                    # Ensure the turn batch is not empty
+                    assert turn_batch, (
+                        f"Turn batch {batch_idx} for range {bpm_range} is empty. "
+                        f"Check TRACKS_PER_WORKER and NUM_WORKERS."
+                    )
 
-                # Create the payload data for this worker (position/momentum comparisons, initial coords, etc.)
-                position_comp, momentum_comp, weights, init_coords, pt_array = (
-                    self._make_worker_payload(
+                    # Create the payload data for this worker (position/momentum comparisons, initial coords, etc.)
+                    (
+                        position_comp,
+                        momentum_comp,
+                        position_variances,
+                        momentum_variances,
+                        init_coords,
+                        pt_array,
+                    ) = self._make_worker_payload(
                         track_data,
                         turn_batch,
                         energy_turn_map,
@@ -220,35 +196,38 @@ class WorkerManager:
                         sdir,
                         precomputed_arrays,
                     )
-                )
 
-                # Make arrays read-only to prevent accidental modification in worker processes
-                position_comp.setflags(write=False)
-                momentum_comp.setflags(write=False)
-                weights.setflags(write=False)
+                    # Make arrays read-only to prevent accidental modification in worker processes
+                    position_comp.setflags(write=False)
+                    momentum_comp.setflags(write=False)
+                    position_variances.setflags(write=False)
+                    momentum_variances.setflags(write=False)
 
-                # Create WorkerData and WorkerConfig instances
-                data = WorkerData(
-                    position_comparisons=position_comp,  # Shape: (n_turns, n_data_points, 2)
-                    momentum_comparisons=momentum_comp,  # Shape: (n_turns, n_data_points, 2)
-                    weights=weights,  # Shape: (n_turns, n_data_points, 2)
-                    init_coords=init_coords,
-                    init_pts=pt_array,
-                )
-                config = WorkerConfig(
-                    start_bpm=start_bpm,
-                    end_bpm=end_bpm,
-                    magnet_range=self.magnet_range,
-                    sequence_file_path=self.sequence_file_path,
-                    sdir=sdir,
-                    bad_bpms=self.bad_bpms,
-                    seq_name=self.seq_name,
-                    corrector_strengths=self.corrector_strengths_file,
-                )
+                    # Create WorkerData and WorkerConfig instances
+                    data = WorkerData(
+                        position_comparisons=position_comp,  # Shape: (n_turns, n_data_points, 2)
+                        momentum_comparisons=momentum_comp,  # Shape: (n_turns, n_data_points, 2)
+                        position_variances=position_variances,
+                        momentum_variances=momentum_variances,
+                        init_coords=init_coords,
+                        init_pts=pt_array,
+                    )
+                    config = WorkerConfig(
+                        start_bpm=start_bpm,
+                        end_bpm=end_bpm,
+                        magnet_range=self.magnet_range,
+                        sequence_file_path=self.sequence_file_path,
+                        sdir=sdir,
+                        bad_bpms=self.bad_bpms,
+                        seq_name=self.seq_name,
+                        corrector_strengths=self.corrector_strengths_file,
+                        tune_knobs_file=self.tune_knobs_file,
+                        beam_energy=self.beam_energy,
+                    )
 
-                # Package data and config for the worker
-                payloads.append((data, config, batch_idx))
-                sdir *= -1  # Alternate the sign of the tracking direction
+                    # Package data and config for the worker
+                    payloads.append((data, config, batch_idx))
+                # sdir *= -1  # Alternate the sign of the tracking direction
         return payloads
 
     def _make_worker_payload(
@@ -261,7 +240,7 @@ class WorkerManager:
         n_data_points: int,
         sdir: int,
         precomputed_arrays: dict[str, dict[str, object]] | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Create 2D comparison arrays and initial coordinates for a worker.
 
         Args:
@@ -272,9 +251,10 @@ class WorkerManager:
             n_data_points (int): Number of data points to collect per observation turn
 
         Returns:
-            tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-            A tuple containing the position_comparisons, momentum_comparisons, weights,
-            initial coordinates per turn, and pt array
+            tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            A tuple containing the position comparisons, momentum comparisons,
+            positional variances, momentum variances, initial coordinates per turn,
+            and pt array
         """
         # Preallocate output arrays (n_turns, n_points, 2) for 2D structure
         n_turns = len(turn_batch)
@@ -282,9 +262,12 @@ class WorkerManager:
         momentum_comp = np.empty(
             (n_turns, n_data_points, 2), dtype="float64"
         )  # [px, py]
-        weights = np.empty(
+        position_variances = np.empty(
             (n_turns, n_data_points, 2), dtype="float64"
-        )  # [x_weight, y_weight]
+        )  # [var_x, var_y]
+        momentum_variances = np.empty(
+            (n_turns, n_data_points, 2), dtype="float64"
+        )  # [var_px, var_py]
 
         init_coords_array = np.empty((n_turns, 6), dtype="float64")
         pt_array = np.empty((n_turns,), dtype="float64")
@@ -301,23 +284,24 @@ class WorkerManager:
                 arr_y: np.ndarray = entry["y"]
                 arr_px: np.ndarray = entry["px"]
                 arr_py: np.ndarray = entry["py"]
-                arr_wx: np.ndarray = entry["x_weight"]
-                arr_wy: np.ndarray = entry["y_weight"]
+                arr_vx: np.ndarray = entry["var_x"]
+                arr_vy: np.ndarray = entry["var_y"]
+                arr_vpx: np.ndarray = entry["var_px"]
+                arr_vpy: np.ndarray = entry["var_py"]
             else:
                 df = track_data[energy_type]
                 arr_x = df["x"].to_numpy(dtype="float64", copy=False)
                 arr_y = df["y"].to_numpy(dtype="float64", copy=False)
                 arr_px = df["px"].to_numpy(dtype="float64", copy=False)
                 arr_py = df["py"].to_numpy(dtype="float64", copy=False)
-                arr_wx = df["x_weight"].to_numpy(dtype="float64", copy=False)
-                arr_wy = df["y_weight"].to_numpy(dtype="float64", copy=False)
+                arr_vx = df["var_x"].to_numpy(dtype="float64", copy=False)
+                arr_vy = df["var_y"].to_numpy(dtype="float64", copy=False)
+                arr_vpx = df["var_px"].to_numpy(dtype="float64", copy=False)
+                arr_vpy = df["var_py"].to_numpy(dtype="float64", copy=False)
 
             # Calculate transverse momentum for this energy type
             pt = self._compute_pt(energy_type)
             pt_array[i] = pt
-
-            # Observation turns for this turn
-            obs_turns = self.Worker.get_observation_turns(turn)
 
             # Initial coords selection (sdir-dependent)
             init_turn = turn
@@ -325,16 +309,20 @@ class WorkerManager:
                 # identify the turn of the initial bpm
                 start_pos = self._get_pos(df, turn, start_bpm)
                 end_pos = start_pos + n_data_points - 1
-                if (
-                    init_turn := self.get_turn(df, start_pos + n_data_points - 1)
-                ) != turn:
+                if (init_turn := self.get_turn(df, end_pos)) != turn:
                     assert (
-                        start_bpm == df.iloc[start_pos].index[1]
-                        and end_bpm == df.iloc[end_pos].index[1]
+                        # start_bpm == df.iloc[start_pos].index[1]
+                        # and end_bpm == df.iloc[end_pos].index[1]
+                        start_bpm == df.index[start_pos][1]
+                        and end_bpm == df.index[end_pos][1]
                     )
                     LOGGER.warning(f"Reversed init turn from {turn} to {init_turn}")
 
             init_pos = self._get_pos(df, init_turn, init_bpm)
+            assert init_bpm == df.index[init_pos][1], (
+                f"Initial BPM mismatch at pos {init_pos}: expected {init_bpm}, "
+                f"found {df.index[init_pos][1]}"
+            )
             x0 = arr_x[init_pos]
             px0 = arr_px[init_pos]
             y0 = arr_y[init_pos]
@@ -343,15 +331,16 @@ class WorkerManager:
             init_coords_array[i, :] = init_coords
 
             # Collect observation data for this turn
-            # if len(obs_turns) == 1:
             if sdir == -1:
                 sl = slice(init_pos, init_pos - n_data_points, -1)
                 position_comp[i, :, 0] = arr_x[sl]  # x positions
                 position_comp[i, :, 1] = arr_y[sl]  # y positions
                 momentum_comp[i, :, 0] = arr_px[sl]  # px momenta
                 momentum_comp[i, :, 1] = arr_py[sl]  # py momenta
-                weights[i, :, 0] = arr_wx[sl]  # x weights
-                weights[i, :, 1] = arr_wy[sl]  # y weights
+                position_variances[i, :, 0] = arr_vx[sl]  # x variances
+                position_variances[i, :, 1] = arr_vy[sl]  # y variances
+                momentum_variances[i, :, 0] = arr_vpx[sl]  # px variances
+                momentum_variances[i, :, 1] = arr_vpy[sl]  # py variances
                 # weights[i, :, :] = 1.0  # Uncomment to set uniform weights
             else:
                 sl = slice(init_pos, init_pos + n_data_points)
@@ -359,31 +348,17 @@ class WorkerManager:
                 position_comp[i, :, 1] = arr_y[sl]  # y positions
                 momentum_comp[i, :, 0] = arr_px[sl]  # px momenta
                 momentum_comp[i, :, 1] = arr_py[sl]  # py momenta
-                weights[i, :, 0] = arr_wx[sl]  # x weights
-                weights[i, :, 1] = arr_wy[sl]  # y weights
+                position_variances[i, :, 0] = arr_vx[sl]  # x variances
+                position_variances[i, :, 1] = arr_vy[sl]  # y variances
                 # weights[i, :, :] = 1.0  # Uncomment to set uniform weights
-            # Get the turn that the final BPM corresponds to and check it matches
-            # the turn of the first BPM +/- 1
-            first_bpm_turn = self.get_turn(df, init_pos)
-            last_bpm_turn = self.get_turn(df, sl.stop - 1 if sdir == 1 else sl.stop + 1)
-            if not (
-                last_bpm_turn == first_bpm_turn
-                or abs(last_bpm_turn - first_bpm_turn) == 1
-            ):
-                raise ValueError(
-                    f"Unexpected turn mismatch: first BPM turn {first_bpm_turn}, "
-                    f"last BPM turn {last_bpm_turn}, slice {sl}, sdir {sdir}"
-                )
-
-            if len(obs_turns) > 1:
-                raise NotImplementedError(
-                    "Multiple observation turns not implemented in payload creation"
-                )
+                momentum_variances[i, :, 0] = arr_vpx[sl]  # px variances
+                momentum_variances[i, :, 1] = arr_vpy[sl]  # py variances
 
         return (
             position_comp,
             momentum_comp,
-            weights,
+            position_variances,
+            momentum_variances,
             init_coords_array,
             pt_array,
         )
@@ -409,8 +384,6 @@ class WorkerManager:
         turn_batches: list[list[int]],
         energy_turn_map: dict[int, str],
         bpm_ranges: list[str],
-        var_x: float,
-        var_y: float,
         opt_settings: OptSettings,
     ):
         """Start worker processes and return their parent connections.
@@ -420,8 +393,6 @@ class WorkerManager:
             turn_batches (list[list[int]]): List of turn batches for worker distribution
             energy_turn_map (dict[int, str]): Mapping from turn numbers to energy types
             bpm_start_points (list[str]): List of starting BPM names
-            var_x (float): Variance for x-coordinate measurements
-            var_y (float): Variance for y-coordinate measurements
             opt_settings (OptSettings): Optimisation settings
 
         Note:
@@ -455,19 +426,8 @@ class WorkerManager:
             self.parent_conns.append(parent)
             self.workers.append(w)
 
-            # Send initial variance values to the worker for noise modeling
-            parent.send((var_x, var_y))
-
-    def send_knobs_to_workers(self, current_knobs: dict[str, float]) -> None:
-        """Send current knob values to all workers.
-
-        Args:
-            current_knobs (dict[str, float]): Dictionary mapping knob names to their current values
-        """
-        # Send the current magnet knob settings to each worker
-        # Workers use these values to compute particle trajectories and losses
-        for conn in self.parent_conns:
-            conn.send(current_knobs)
+            # Send an initial handshake to signal the worker to start listening
+            parent.send(None)
 
     def collect_worker_results(self, total_turns: int) -> tuple[float, np.ndarray]:
         """Collect results from all workers for an epoch.

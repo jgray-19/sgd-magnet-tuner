@@ -6,12 +6,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 import tfs
 from nxcals.spark_session_builder import get_or_create
-
-# from omc3.hole_in_one import hole_in_one_entrypoint
-from omc3.optics_measurements.constants import AMP_BETA_NAME, BETA, ERR, NAME
+from omc3.hole_in_one import hole_in_one_entrypoint
 from pylhc import corrector_extraction, mqt_extraction
 from turn_by_turn import TbtData, read_tbt
 
@@ -100,88 +99,79 @@ def convert_measurements(
     return all_data
 
 
-def compute_weights_from_beta_amplitude(
-    combined: pd.DataFrame, analysis_dir: Path
+def compute_vars_from_known_noise(
+    combined: pd.DataFrame, bad_bpms: list[str]
 ) -> pd.DataFrame:
-    """Compute weights for x and y planes based on relative errors from beta amplitude data.
-
-    For each BPM, weight = 1 / relative_error if BPM exists in beta data, else 0.
-    """
-    beta_x_data = tfs.read(analysis_dir / (AMP_BETA_NAME + "x.tfs"), index=NAME)
-    beta_y_data = tfs.read(analysis_dir / (AMP_BETA_NAME + "y.tfs"), index=NAME)
-
-    beta_x = beta_x_data[BETA + "X"].to_dict()
-    beta_y = beta_y_data[BETA + "Y"].to_dict()
-    error_x = beta_x_data[ERR + BETA + "X"].to_dict()
-    error_y = beta_y_data[ERR + BETA + "Y"].to_dict()
-
-    def compute_weight(bpm, beta_dict, error_dict):
-        if bpm not in beta_dict or bpm not in error_dict:
-            return 0.0
-        beta_val = beta_dict[bpm]
-        err_val = error_dict[bpm]
-        if beta_val == 0:
-            return 0.0
-        rel_err = abs(err_val) / abs(beta_val)
-        if rel_err <= 0:
-            return 0.0
-        return 1.0 / rel_err
-
-    combined["x_weight"] = combined["name"].apply(
-        lambda bpm: compute_weight(bpm, beta_x, error_x)
-    )
-    combined["y_weight"] = combined["name"].apply(
-        lambda bpm: compute_weight(bpm, beta_y, error_y)
-    )
-    return combined
-
-
-def compute_weights_from_known_noise(combined: pd.DataFrame) -> pd.DataFrame:
-    """Compute weights for x and y planes based on known noise levels."""
+    """Compute variances for x and y planes based on known noise levels."""
     # Read the file in the same directory as this script
     script_dir = Path(__file__).parent
     noise_file = script_dir / "bpm_std.txt"
 
     # The file has three columns: name, x_std, y_std, separated by a space
-    # The units are mm
+    # The units are mm, convert to meters
     noise_data = pd.read_csv(
         noise_file,
         sep=r"\s+",
         header=0,
         names=["name", "Horizontal_STD", "Vertical_STD"],
     )
+    noise_data["Horizontal_STD"] /= 1000  # Convert mm to m
+    noise_data["Vertical_STD"] /= 1000  # Convert mm to m
     noise_dict_x = noise_data.set_index("name")["Horizontal_STD"].to_dict()
     noise_dict_y = noise_data.set_index("name")["Vertical_STD"].to_dict()
-    # Replace any 0 std values with infinity, as these should have zero weight
+    # Replace any 0 std values with infinity, as these should have zero weight (infinite variance)
     noise_dict_x = {k: (v if v != 0 else float("inf")) for k, v in noise_dict_x.items()}
     noise_dict_y = {k: (v if v != 0 else float("inf")) for k, v in noise_dict_y.items()}
 
-    combined["x_weight"] = combined["name"].apply(
-        lambda bpm: 1.0 / (noise_dict_x.get(bpm, 1e-1) ** 2)
-    )
-    combined["y_weight"] = combined["name"].apply(
-        lambda bpm: 1.0 / ((noise_dict_y.get(bpm, 1e-1)) ** 2)
-    )
-    # Normalize weights to have a max of 1
-    max_x_weight = combined["x_weight"].max()
-    max_y_weight = combined["y_weight"].max()
-    combined["x_weight"] = combined["x_weight"] / max_x_weight
-    combined["y_weight"] = combined["y_weight"] / max_y_weight
-    logger.info("Computed weights based on known noise levels.")
-    logger.debug(f"Max x weight: {max_x_weight}, Max y weight: {max_y_weight}")
-    logger.debug(
-        f"Min x weight: {combined['x_weight'].min()}, Min y weight: {combined['y_weight'].min()}"
-    )
-    logger.debug(
-        f"Weight samples:\n{combined[['name', 'x_weight', 'y_weight']].head()}"
-    )
-    return combined
+    # Extract BPM types and compute mean std per type
+    def get_bpm_type(name):
+        if not name.startswith("BPM"):
+            raise ValueError(f"Invalid BPM name: {name}")
+        parts = name.split(".")
+        if len(parts) < 2:
+            raise ValueError(f"Invalid BPM name: {name}")
+        type_ = parts[0].strip("BPM")
+        # Special handling for BPMW variations: treat all as type 'W'
+        if type_.startswith("W") and len(type_) >= 2:
+            return "W"
+        return type_
 
+    noise_data["type"] = noise_data["name"].apply(get_bpm_type)
 
-def _add_unit_weights(combined: pd.DataFrame) -> pd.DataFrame:
-    """Add unit weights to the combined DataFrame."""
-    combined["x_weight"] = 1.0
-    combined["y_weight"] = 1.0
+    type_means_x = {}
+    type_means_y = {}
+    for type_, group in noise_data.groupby("type"):
+        x_vals = group["Horizontal_STD"]
+        y_vals = group["Vertical_STD"]
+        non_zero_x = x_vals[x_vals != 0]
+        non_zero_y = y_vals[y_vals != 0]
+        type_means_x[type_] = (
+            (non_zero_x**2).mean() if len(non_zero_x) > 0 else float("inf")
+        )
+        type_means_y[type_] = (
+            (non_zero_y**2).mean() if len(non_zero_y) > 0 else float("inf")
+        )
+
+    def get_variance(bpm, noise_dict, type_means):
+        if bpm in noise_dict:
+            val = noise_dict[bpm] ** 2
+        else:
+            type_ = get_bpm_type(bpm)
+            if type_ not in type_means:
+                raise ValueError(f"Unknown BPM type '{type_}' for BPM {bpm}")
+            val = type_means[type_]
+        if val == float("inf"):
+            return float("inf")
+        return val
+
+    combined["var_x"] = combined["name"].apply(
+        lambda bpm: get_variance(bpm, noise_dict_x, type_means_x)
+    )
+    combined["var_y"] = combined["name"].apply(
+        lambda bpm: get_variance(bpm, noise_dict_y, type_means_y)
+    )
+    combined.loc[combined["name"].isin(bad_bpms), "var_x"] = float("inf")
+    combined.loc[combined["name"].isin(bad_bpms), "var_y"] = float("inf")
     return combined
 
 
@@ -191,63 +181,68 @@ def run_analysis(
     """Load, combine, and process data from multiple files."""
     analysis_dir = Path(analysis_dir)
     analysis_dir.mkdir(parents=True, exist_ok=True)
-    # hole_in_one_entrypoint(
-    #     harpy=True,
-    #     files=files,
-    #     outputdir=analysis_dir / "lin_files",
-    #     unit="mm",
-    #     driven_excitation="acd",
-    #     # nat_tunes=[0.28, 0.31],
-    #     first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
-    #     is_free_kick=False,
-    #     keep_exact_zeros=False,
-    #     max_peak=0.02,
-    #     nattunes=[0.28, 0.31, 0.0],
-    #     num_svd_iterations=3,
-    #     opposite_direction=beam == 2,
-    #     output_bits=12,
-    #     peak_to_peak=1e-08,
-    #     resonances=4,
-    #     sing_val=12,
-    #     svd_dominance_limit=0.925,
-    #     to_write=["lin", "spectra", "full_spectra", "bpm_summary"],
-    #     tune_clean_limit=1e-05,
-    #     tunes=[0.27, 0.322, 0.0],
-    #     turn_bits=18,
-    #     model_dir=model_dir,
-    #     turns=[0, 50000],
-    #     clean=True,
-    # )
+    bunches = [32, 1228, 2000] if beam == 2 else [0, 1138, 1968]
+    hole_in_one_entrypoint(
+        harpy=True,
+        files=files,
+        outputdir=analysis_dir / "lin_files",
+        unit="mm",
+        driven_excitation="acd",
+        # nat_tunes=[0.28, 0.31],
+        first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
+        is_free_kick=False,
+        keep_exact_zeros=False,
+        max_peak=0.02,
+        nattunes=[0.28, 0.31, 0.0],
+        num_svd_iterations=3,
+        opposite_direction=beam == 2,
+        output_bits=12,
+        peak_to_peak=1e-08,
+        resonances=4,
+        sing_val=12,
+        svd_dominance_limit=0.925,
+        to_write=["lin", "spectra", "full_spectra", "bpm_summary"],
+        tune_clean_limit=1e-05,
+        tunes=[0.27, 0.322, 0.0],
+        turn_bits=18,
+        model_dir=model_dir,
+        turns=[0, 50000],
+        clean=True,
+    )
 
-    analysed_files = [analysis_dir / "lin_files" / f.name for f in files]
+    analysed_files = [
+        analysis_dir / "lin_files" / f"{f.name}_bunchID{bunch_id}"
+        for f in files
+        for bunch_id in bunches
+    ]
 
-    # hole_in_one_entrypoint(
-    #     optics=True,
-    #     files=analysed_files,
-    #     outputdir=analysis_dir,
-    #     analyse_dpp=0,
-    #     # calibrationdir="/afs/cern.ch/eng/sl/lintrack/LHC_commissioning2017/Calibration_factors_2017/Calibration_factors_2017_beam1",
-    #     chromatic_beating=False,
-    #     compensation="equation",
-    #     coupling_method=2,
-    #     coupling_pairing=0,
-    #     isolation_forest=False,
-    #     nonlinear=["rdt"],
-    #     only_coupling=False,
-    #     range_of_bpms=11,
-    #     rdt_magnet_order=4,
-    #     second_order_dispersion=False,
-    #     three_bpm_method=False,
-    #     three_d_excitation=False,
-    #     union=False,
-    #     accel="lhc",
-    #     ats=False,
-    #     beam=beam,
-    #     dpp=0.0,
-    #     model_dir=model_dir,
-    #     xing=False,
-    #     year="2025",
-    # )
+    hole_in_one_entrypoint(
+        optics=True,
+        files=analysed_files,
+        outputdir=analysis_dir,
+        analyse_dpp=0,
+        # calibrationdir="/afs/cern.ch/eng/sl/lintrack/LHC_commissioning2017/Calibration_factors_2017/Calibration_factors_2017_beam1",
+        chromatic_beating=False,
+        compensation="equation",
+        coupling_method=2,
+        coupling_pairing=0,
+        isolation_forest=False,
+        nonlinear=["rdt"],
+        only_coupling=False,
+        range_of_bpms=11,
+        rdt_magnet_order=4,
+        second_order_dispersion=False,
+        three_bpm_method=False,
+        three_d_excitation=False,
+        union=False,
+        accel="lhc",
+        ats=False,
+        beam=beam,
+        dpp=0.0,
+        model_dir=model_dir,
+        xing=False,
+        year="2025",
+    )
 
     bad_bpms = []
     for file in analysed_files:
@@ -274,17 +269,30 @@ def build_dict_from_nxcal_result(result: list[NXCalResult]) -> dict[str, float]:
 #     data.to_parquet(output_file)
 
 
-def save_online_knobs(meas_time: datetime, beam: int) -> None:
+def save_online_knobs(
+    meas_time: datetime,
+    beam: int,
+    tune_knobs_file: Path | None = None,
+    corrector_knobs_file: Path | None = None,
+) -> None:
     """Load and save knob data from NXCal."""
     spark = get_or_create()
     mqt_results = mqt_extraction.get_mqt_vals(spark, meas_time, beam)
+    ms_results = mqt_extraction.get_ms_vals(spark, meas_time, beam)
+    # mqs_results = mqt_extraction.get_mqs_vals(spark, meas_time, beam)
     corrector_results = corrector_extraction.get_mcb_vals(spark, meas_time, beam)
 
     mqt_knobs = build_dict_from_nxcal_result(mqt_results)
+    ms_knobs = build_dict_from_nxcal_result(ms_results)
     corrector_knobs = build_dict_from_nxcal_result(corrector_results)
+    if tune_knobs_file is None:
+        tune_knobs_file = TUNE_KNOBS_FILE
+    if corrector_knobs_file is None:
+        corrector_knobs_file = CORRECTOR_STRENGTHS
 
-    save_knobs(mqt_knobs, TUNE_KNOBS_FILE)
-    save_knobs(corrector_knobs, CORRECTOR_STRENGTHS)
+    ms_and_mqt_knobs = {**mqt_knobs, **ms_knobs}
+    save_knobs(ms_and_mqt_knobs, tune_knobs_file)
+    save_knobs(corrector_knobs, corrector_knobs_file)
 
 
 def process_measurements(
@@ -292,13 +300,16 @@ def process_measurements(
     analysis_dir: Path,
     model_dir: str,
     beam: int,
-    filename: str = "pz_data.parquet",
+    filename: str | None = "pz_data.parquet",
 ) -> tuple[pd.DataFrame, list[str], Path]:
     """Process measurement files to compute pz data and identify bad BPMs."""
     bad_bpms = run_analysis(analysis_dir, model_dir, files, beam)
 
     data = load_files(files)
     combined = convert_measurements(data, bad_bpms)
+    logger.info(
+        f"Combined data has {len(combined)} DataFrames from different files/bunches."
+    )
     tws = tfs.read(Path(model_dir) / "twiss_ac.dat")
     tws.columns = [col.lower() for col in tws.columns]
     tws = tws.rename(
@@ -316,9 +327,9 @@ def process_measurements(
 
     for i, df in enumerate(combined):
         # df = compute_weights_from_beta_amplitude(df, analysis_dir)
-        df = compute_weights_from_known_noise(df)
         # df = _add_unit_weights(df)
         df = svd_clean_measurements(df)
+        df = compute_vars_from_known_noise(df, bad_bpms)
         df = calculate_pz(df, tws=tws, inject_noise=False, subtract_mean=False)
         # Check that the px and py columns have no NaN values after calculation
         if df["px"].isna().any() or df["py"].isna().any():
@@ -346,6 +357,18 @@ def process_measurements(
     for bpm in bad_bpms:
         logger.info(f"BPM {bpm}: has_nan=True")
 
+    # Add all bpms that have infinite variance in both planes
+    # fmt: off
+    zero_mask = (
+        (np.isinf(pzs["var_x"])) | (np.isinf(pzs["var_px"]))
+        & (np.isinf(pzs["var_y"])) | (np.isinf(pzs["var_py"]))
+    )
+    # fmt: on
+    bad_bpms_zero = zero_mask.groupby(pzs["name"]).any()
+    bad_bpms.extend(bad_bpms_zero[bad_bpms_zero].index.tolist())
+    for bpm in bad_bpms_zero[bad_bpms_zero].index.tolist():
+        logger.info(f"BPM {bpm}: zero_weight=True")
+
     missing_bpms = all_bpms - set(pzs["name"].unique())
     for bpm in missing_bpms:
         logger.info(f"BPM {bpm}: missing from data")
@@ -353,10 +376,12 @@ def process_measurements(
 
     logger.info(f"Total bad BPMs: {len(bad_bpms)}")
 
-    file_path = analysis_dir / filename
-    pzs.to_parquet(file_path)
+    if filename:
+        file_path = analysis_dir / filename
+        pzs.to_parquet(file_path)
 
-    return pzs, bad_bpms, file_path
+        return pzs, bad_bpms, file_path
+    return pzs, bad_bpms, analysis_dir
 
 
 if __name__ == "__main__":
@@ -441,8 +466,6 @@ if __name__ == "__main__":
     logger.info("Final deltaps for each arc:")
     for i, dp in enumerate(results):
         logger.info(f"Arc {i + 1}: deltap = {dp}")
-
-    import numpy as np
 
     logger.info(f"Mean deltap: {np.mean(results)}")
     logger.info(f"Std dev of deltap: {np.std(results)}")

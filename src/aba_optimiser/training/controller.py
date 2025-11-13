@@ -9,12 +9,13 @@ import logging
 # import multiprocessing as mp
 import random
 import time
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import numpy as np
 from tensorboardX import SummaryWriter
 
 from aba_optimiser.config import (
+    BEAM_ENERGY,
     BPM_END_POINTS,
     BPM_START_POINTS,
     CORRECTOR_STRENGTHS,
@@ -23,6 +24,8 @@ from aba_optimiser.config import (
     MAGNET_RANGE,
     NUM_TRACKS,
     TRUE_STRENGTHS_FILE,
+    TUNE_KNOBS_FILE,
+    OptSettings,
 )
 from aba_optimiser.io.utils import get_lhc_file_path, read_knobs
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
@@ -31,11 +34,6 @@ from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.optimisation_loop import OptimisationLoop
 from aba_optimiser.training.result_manager import ResultManager
 from aba_optimiser.training.worker_manager import WorkerManager
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from aba_optimiser.config import OptSettings
 
 logger = logging.getLogger(__name__)
 random.seed(42)  # For reproducibility
@@ -56,8 +54,10 @@ class Controller:
         show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
         corrector_file: Path = CORRECTOR_STRENGTHS,
-        true_strengths_file: Path = TRUE_STRENGTHS_FILE,
+        tune_knobs_file: Path = TUNE_KNOBS_FILE,
+        true_strengths: Path | dict[str, float] = TRUE_STRENGTHS_FILE,
         machine_deltap: float = MACHINE_DELTAP,
+        beam_energy: float = BEAM_ENERGY,
         magnet_range: str = MAGNET_RANGE,
         bpm_start_points: list[str] = BPM_START_POINTS,
         bpm_end_points: list[str] = BPM_END_POINTS,
@@ -78,6 +78,7 @@ class Controller:
             initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths.
             true_strengths_file (str | None, optional): Path to true strengths file.
             machine_deltap (float, optional): Machine delta p.
+            beam_energy (float, optional): Beam energy in GeV.
             magnet_range (str, optional): Magnet range.
             bpm_start_points (list[str], optional): BPM start points.
             bpm_end_points (list[str], optional): BPM end points.
@@ -106,20 +107,26 @@ class Controller:
                     bpm_end_points.remove(bpm)
                     logger.warning(f"Removed bad BPM {bpm} from end points")
 
-        self.corrector_strengths_file = corrector_file
-
         bpm_order = OptimisationMadInterface(
             sequence_file_path,
             seq_name=seq_name,
             bad_bpms=bad_bpms,
             start_bpm=first_bpm,
+            tune_knobs_file=tune_knobs_file,
+            corrector_strengths=corrector_file,
+            beam_energy=beam_energy,
         ).all_bpms
         # Initialise managers
         self.config_manager = ConfigurationManager(
             opt_settings, magnet_range, bpm_start_points, bpm_end_points
         )
         self.config_manager.setup_mad_interface(
-            sequence_file_path, bad_bpms, corrector_file, seq_name
+            sequence_file_path,
+            bad_bpms,
+            corrector_file,
+            tune_knobs_file,
+            seq_name,
+            beam_energy,
         )
         self.config_manager.determine_worker_and_bpms()
 
@@ -152,14 +159,23 @@ class Controller:
             magnet_range=magnet_range,
             sequence_file_path=sequence_file_path,
             corrector_strengths_file=corrector_file,
+            tune_knobs_file=tune_knobs_file,
             bad_bpms=bad_bpms,
             seq_name=seq_name,
+            beam_energy=beam_energy,
         )
-        if true_strengths_file is None:
+        if isinstance(true_strengths, dict):
+            true_strengths = true_strengths.copy()
+        elif true_strengths is None:
             true_strengths = {}
-        else:
-            true_strengths = read_knobs(TRUE_STRENGTHS_FILE)
+        elif isinstance(true_strengths, Path):
+            true_strengths = read_knobs(true_strengths)
             true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(machine_deltap)
+
+        if "deltap" in true_strengths:
+            true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(
+                true_strengths.pop("deltap")
+            )
         # For all the main bending magnets, remove the a/b/c/d suffixes
         # and set the only knob to the c suffix value (the only one that has a reasonable gradient).
         # bending_magnets: dict[str, float] = {}
@@ -223,8 +239,6 @@ class Controller:
                 self.data_manager.turn_batches,
                 self.data_manager.energy_map,
                 self.config_manager.bpm_ranges,
-                self.data_manager.var_x,
-                self.data_manager.var_y,
                 self.opt_settings,
             )
 

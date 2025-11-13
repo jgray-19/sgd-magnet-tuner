@@ -9,15 +9,15 @@
 ! da_x0_c: a table with the initial conditions for each starting bpm
 ! range: the range of elements to track as a string
 ! knob_monomials: a table with the monomial definitions for each knob
-! var_x: the variance for the x coordinate
-! var_y: the variance for the y coordinate
+! weights_x: inverse-variance weights for the x coordinate (length = nbpms)
+! weights_y: inverse-variance weights for the y coordinate (length = nbpms)
 ! vector: a MAD vector object for creating vectors
 ! matrix: a MAD matrix object for creating matrices
 ! python: a Python interface object for sending data
 assert(
-    loaded_sequence and batch_size and nbpms and observe_from_turn and
-    knob_names and coord_names and da_x0_c and knob_monomials and reset_before_tracking and
-    var_x and var_y and vector and matrix and python and n_run_turns and n_compare_turns,
+    loaded_sequence and batch_size and nbpms and reset_before_tracking and
+    knob_names and coord_names and da_x0_c and knob_monomials and
+    weights_x and weights_y and vector and matrix and python and n_run_turns,
     "Missing required variables for tracking"
 )
 
@@ -25,16 +25,15 @@ local matrix, vector in MAD
 
 local num_knobs = #knob_names + 1 ! Include dpt
 local Htot = matrix(num_knobs, num_knobs):zeros()
-local W_x = vector(nbpms * n_compare_turns):fill(var_x):diag()
-local W_y = vector(nbpms * n_compare_turns):fill(var_y):diag()
+local W_x_vec = vector(weights_x)
+local W_px_vec = vector(weights_px)
+local W_y_vec = vector(weights_y)
+local W_py_vec = vector(weights_py)
 
-for i=1,batch_size do
-    x[i] = vector(nbpms * n_compare_turns)
-    y[i] = vector(nbpms * n_compare_turns)
-    dx_dk[i] = matrix(num_knobs, nbpms * n_compare_turns)
-    dy_dk[i] = matrix(num_knobs, nbpms * n_compare_turns)
-end
-observe_count = 1
+local W_x = W_x_vec:diag()
+local W_y = W_y_vec:diag()
+local W_px = W_px_vec:diag()
+local W_py = W_py_vec:diag()
 collectgarbage("collect")
 
 for batch=1,num_batches do
@@ -44,7 +43,6 @@ for batch=1,num_batches do
         X0 = da_x0_c[batch],
         nturn = n_run_turns,
         save=false,
-        observe=observe_from_turn,
         atexit=save_data,
         range=tracking_range,
         dir=sdir,
@@ -52,10 +50,14 @@ for batch=1,num_batches do
 
     for part = 1, batch_size do
         local jx = dx_dk[part]
+        local jpx = dpx_dk[part]
         local jy = dy_dk[part]
+        local jpy = dpy_dk[part]
         local Gx = jx * (W_x * jx:t())
         local Gy = jy * (W_y * jy:t())
-        Htot = Htot + (Gx + Gy)
+        local Gpx = jpx * (W_px * jpx:t())
+        local Gpy = jpy * (W_py * jpy:t())
+        Htot = Htot + (Gx + Gy + Gpx + Gpy)
     end
 end
 python:send(Htot, true)

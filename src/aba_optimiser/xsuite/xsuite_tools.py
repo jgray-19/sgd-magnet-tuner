@@ -319,6 +319,8 @@ def initialise_env(
     )
 
     for k, v in matched_tunes.items():
+        # convert dq[x|y]_b{beam}_op to dq[x|y].b{beam}_op
+        k = k[:3] + "." + k[4:]
         base_env.set(k, v)
 
     for str_name, strength in magnet_strengths.items():

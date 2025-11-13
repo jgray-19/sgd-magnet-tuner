@@ -148,25 +148,123 @@ def weights(
     return 1.0 / f
 
 
-def weighted_average(
+def weighted_average_from_weights(
+    data_p: tfs.TfsDataFrame, data_n: tfs.TfsDataFrame
+) -> tfs.TfsDataFrame:
+    # Align dataframes by sorting on name and turn, preserving original order
+    data_p_aligned = data_p.sort_values(["name", "turn"]).reset_index(drop=True)
+    data_n_aligned = data_n.sort_values(["name", "turn"]).reset_index(drop=True)
+
+    data_avg = data_p_aligned.copy(deep=True)
+
+    var_px_p = data_p_aligned["var_px"].to_numpy(dtype=float, copy=False)
+    var_px_n = data_n_aligned["var_px"].to_numpy(dtype=float, copy=False)
+    var_py_p = data_p_aligned["var_py"].to_numpy(dtype=float, copy=False)
+    var_py_n = data_n_aligned["var_py"].to_numpy(dtype=float, copy=False)
+
+    mask_px_p_nan = np.isnan(data_p_aligned["px"])
+    mask_px_n_nan = np.isnan(data_n_aligned["px"])
+    mask_py_p_nan = np.isnan(data_p_aligned["py"])
+    mask_py_n_nan = np.isnan(data_n_aligned["py"])
+
+    inv_var_px_p = np.zeros_like(var_px_p)
+    inv_var_px_n = np.zeros_like(var_px_n)
+    inv_var_py_p = np.zeros_like(var_py_p)
+    inv_var_py_n = np.zeros_like(var_py_n)
+
+    valid_px_p = np.isfinite(var_px_p) & (var_px_p > 0.0) & ~mask_px_p_nan
+    valid_px_n = np.isfinite(var_px_n) & (var_px_n > 0.0) & ~mask_px_n_nan
+    valid_py_p = np.isfinite(var_py_p) & (var_py_p > 0.0) & ~mask_py_p_nan
+    valid_py_n = np.isfinite(var_py_n) & (var_py_n > 0.0) & ~mask_py_n_nan
+
+    np.divide(1.0, var_px_p, out=inv_var_px_p, where=valid_px_p)
+    np.divide(1.0, var_px_n, out=inv_var_px_n, where=valid_px_n)
+    np.divide(1.0, var_py_p, out=inv_var_py_p, where=valid_py_p)
+    np.divide(1.0, var_py_n, out=inv_var_py_n, where=valid_py_n)
+
+    px_prev = data_p_aligned["px"].to_numpy(dtype=float, copy=False)
+    px_next = data_n_aligned["px"].to_numpy(dtype=float, copy=False)
+    py_prev = data_p_aligned["py"].to_numpy(dtype=float, copy=False)
+    py_next = data_n_aligned["py"].to_numpy(dtype=float, copy=False)
+
+    denom_px = inv_var_px_p + inv_var_px_n
+    denom_py = inv_var_py_p + inv_var_py_n
+
+    weighted_px = np.zeros_like(px_prev)
+    weighted_py = np.zeros_like(py_prev)
+
+    np.divide(
+        inv_var_px_p * px_prev + inv_var_px_n * px_next,
+        denom_px,
+        out=weighted_px,
+        where=denom_px > 0.0,
+    )
+    np.divide(
+        inv_var_py_p * py_prev + inv_var_py_n * py_next,
+        denom_py,
+        out=weighted_py,
+        where=denom_py > 0.0,
+    )
+
+    only_prev_px = valid_px_p & ~valid_px_n
+    only_next_px = valid_px_n & ~valid_px_p
+    only_prev_py = valid_py_p & ~valid_py_n
+    only_next_py = valid_py_n & ~valid_py_p
+
+    data_avg["px"] = np.where(denom_px > 0.0, weighted_px, px_prev)
+    data_avg["px"] = np.where(only_prev_px, px_prev, data_avg["px"])
+    data_avg["px"] = np.where(only_next_px, px_next, data_avg["px"])
+
+    data_avg["py"] = np.where(denom_py > 0.0, weighted_py, py_prev)
+    data_avg["py"] = np.where(only_prev_py, py_prev, data_avg["py"])
+    data_avg["py"] = np.where(only_next_py, py_next, data_avg["py"])
+
+    combined_inv_px = inv_var_px_p + inv_var_px_n
+    combined_inv_py = inv_var_py_p + inv_var_py_n
+
+    combined_var_px = np.full_like(var_px_p, np.inf)
+    combined_var_py = np.full_like(var_py_p, np.inf)
+
+    positive_inv_px = combined_inv_px > 0.0
+    positive_inv_py = combined_inv_py > 0.0
+
+    np.divide(1.0, combined_inv_px, out=combined_var_px, where=positive_inv_px)
+    np.divide(1.0, combined_inv_py, out=combined_var_py, where=positive_inv_py)
+
+    combined_var_px = np.where(valid_px_p & ~valid_px_n, var_px_p, combined_var_px)
+    combined_var_px = np.where(valid_px_n & ~valid_px_p, var_px_n, combined_var_px)
+    combined_var_py = np.where(valid_py_p & ~valid_py_n, var_py_p, combined_var_py)
+    combined_var_py = np.where(valid_py_n & ~valid_py_p, var_py_n, combined_var_py)
+
+    data_avg["var_px"] = combined_var_px
+    data_avg["var_py"] = combined_var_py
+    # Restore original order
+    return data_avg
+
+
+def weighted_average_from_angles(
     data_p: tfs.TfsDataFrame,
     data_n: tfs.TfsDataFrame,
     beta_x_map: Mapping[str, float],
     beta_y_map: Mapping[str, float],
 ) -> tfs.TfsDataFrame:
-    data_avg = data_p.copy(deep=True)
+    # Align dataframes by sorting on name and turn, preserving original order
+    data_p_aligned = data_p.sort_values(["name", "turn"]).reset_index(drop=True)
+    data_n_aligned = data_n.sort_values(["name", "turn"]).reset_index(drop=True)
 
-    psi_x_prev = (data_p["delta_x"].to_numpy() + 0.25) * 2 * np.pi
-    psi_y_prev = (data_p["delta_y"].to_numpy() + 0.25) * 2 * np.pi
-    psi_x_next = (data_n["delta_x"].to_numpy() + 0.25) * 2 * np.pi
-    psi_y_next = (data_n["delta_y"].to_numpy() + 0.25) * 2 * np.pi
+    data_avg = data_p_aligned.copy(deep=True)
 
-    inv_beta_x = 1.0 / data_p["betax"].to_numpy()
-    inv_beta_y = 1.0 / data_p["betay"].to_numpy()
-    inv_beta_p_x = 1.0 / data_p["prev_bpm_x"].map(beta_x_map).to_numpy()
-    inv_beta_p_y = 1.0 / data_p["prev_bpm_y"].map(beta_y_map).to_numpy()
-    inv_beta_n_x = 1.0 / data_n["next_bpm_x"].map(beta_x_map).to_numpy()
-    inv_beta_n_y = 1.0 / data_n["next_bpm_y"].map(beta_y_map).to_numpy()
+    psi_x_prev = (data_p_aligned["delta_x"].to_numpy() + 0.25) * 2 * np.pi
+    psi_y_prev = (data_p_aligned["delta_y"].to_numpy() + 0.25) * 2 * np.pi
+    psi_x_next = (data_n_aligned["delta_x"].to_numpy() + 0.25) * 2 * np.pi
+    psi_y_next = (data_n_aligned["delta_y"].to_numpy() + 0.25) * 2 * np.pi
+
+    inv_beta_x = 1.0 / data_p_aligned["betax"].to_numpy()
+    inv_beta_y = 1.0 / data_p_aligned["betay"].to_numpy()
+    inv_beta_p_x = 1.0 / data_p_aligned["prev_bpm_x"].map(beta_x_map).to_numpy()
+    inv_beta_p_y = 1.0 / data_p_aligned["prev_bpm_y"].map(beta_y_map).to_numpy()
+    inv_beta_n_x = 1.0 / data_n_aligned["next_bpm_x"].map(beta_x_map).to_numpy()
+    inv_beta_n_y = 1.0 / data_n_aligned["next_bpm_y"].map(beta_y_map).to_numpy()
 
     wpx_prev = weights(psi_x_prev, inv_beta_p_x, inv_beta_x)
     wpy_prev = weights(psi_y_prev, inv_beta_p_y, inv_beta_y)
@@ -175,11 +273,29 @@ def weighted_average(
 
     eps = 0.0
     data_avg["px"] = (
-        wpx_prev * data_p["px"].to_numpy() + wpx_next * data_n["px"].to_numpy()
+        wpx_prev * data_p_aligned["px"].to_numpy()
+        + wpx_next * data_n_aligned["px"].to_numpy()
     ) / (wpx_prev + wpx_next + eps)
     data_avg["py"] = (
-        wpy_prev * data_p["py"].to_numpy() + wpy_next * data_n["py"].to_numpy()
+        wpy_prev * data_p_aligned["py"].to_numpy()
+        + wpy_next * data_n_aligned["py"].to_numpy()
     ) / (wpy_prev + wpy_next + eps)
+
+    # Handle NaNs: if one df has NaN, use the other df's value
+    mask_px_p_nan = np.isnan(data_p_aligned["px"])
+    mask_px_n_nan = np.isnan(data_n_aligned["px"])
+    mask_py_p_nan = np.isnan(data_p_aligned["py"])
+    mask_py_n_nan = np.isnan(data_n_aligned["py"])
+
+    # fmt: off
+    data_avg["px"] = np.where(mask_px_p_nan & ~mask_px_n_nan, data_n_aligned["px"], data_avg["px"])
+    data_avg["px"] = np.where(mask_px_n_nan & ~mask_px_p_nan, data_p_aligned["px"], data_avg["px"])
+
+    data_avg["py"] = np.where(mask_py_p_nan & ~mask_py_n_nan, data_n_aligned["py"], data_avg["py"])
+    data_avg["py"] = np.where(mask_py_n_nan & ~mask_py_p_nan, data_p_aligned["py"], data_avg["py"])
+    # fmt: on
+
+    # Restore original order
     return data_avg
 
 

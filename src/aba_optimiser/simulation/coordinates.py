@@ -110,9 +110,10 @@ def create_initial_conditions(
             x = cox
             px = copx
 
-    logger.debug(
+    logger.info(
         f"Track {ntrk}: Created initial conditions with action={action:.2e}, angle={angle:.3f}"
     )
+    logger.info(f"Track {ntrk}: x={x:.2e}, px={px:.2e}, y={y:.2e}, py={py:.2e}")
 
     return {
         "x": x,

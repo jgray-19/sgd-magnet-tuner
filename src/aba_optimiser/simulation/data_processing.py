@@ -16,6 +16,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from aba_optimiser.config import MOMENTUM_STD_DEV, POSITION_STD_DEV
 from aba_optimiser.filtering.svd import svd_clean_measurements
 
 # from aba_optimiser.physics.dispersive_momentum_reconstruction import calculate_pz
@@ -99,8 +100,10 @@ def process_track_with_queue(
 
         # Add a new category column that indicates if it is a x or y kick
         true_df["kick_plane"] = get_kick_plane_category(ntrk, kick_both_planes)
-        true_df["x_weight"] = 1.0
-        true_df["y_weight"] = 1.0
+        true_df["var_x"] = POSITION_STD_DEV**2
+        true_df["var_y"] = POSITION_STD_DEV**2
+        true_df["var_px"] = MOMENTUM_STD_DEV**2
+        true_df["var_py"] = MOMENTUM_STD_DEV**2
 
         # Enqueue tracking data as Arrow table
         track_table = pa.Table.from_pandas(true_df, preserve_index=False)
@@ -217,8 +220,10 @@ def prepare_track_dataframe(
 
     # Add kick plane category
     true_df["kick_plane"] = get_kick_plane_category(ntrk, kick_both_planes)
-    true_df["x_weight"] = 1.0
-    true_df["y_weight"] = 1.0
+    true_df["var_x"] = POSITION_STD_DEV**2
+    true_df["var_y"] = POSITION_STD_DEV**2
+    true_df["var_px"] = MOMENTUM_STD_DEV**2
+    true_df["var_py"] = MOMENTUM_STD_DEV**2
 
     return true_df
 
@@ -241,14 +246,13 @@ def add_noise_and_clean(
     true_df["kick_plane"] = true_df["kick_plane"].astype("category")
 
     # Add noise
-    noisy_df = calculate_pz(true_df, tws=tws, info=False)
+    noisy_df = calculate_pz(true_df, inject_noise=True, tws=tws, info=True)
     noisy_df["name"] = noisy_df["name"].astype(str)
     noisy_df["kick_plane"] = noisy_df["kick_plane"].astype(str)
 
     # Apply SVD cleaning
     cleaned_df = svd_clean_measurements(noisy_df)
     cleaned_df = calculate_pz(cleaned_df, inject_noise=False, tws=tws, info=True)
-
     return noisy_df, cleaned_df
 
 
