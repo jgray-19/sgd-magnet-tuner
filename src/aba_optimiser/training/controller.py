@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import gc
 import logging
 
 # import multiprocessing as mp
 import random
+import re
 import time
 from pathlib import Path
 
@@ -93,9 +95,9 @@ class Controller:
         logger.info("Optimising energy")
         if opt_settings.optimise_quadrupoles:
             logger.info("Optimising quadrupoles")
-        if opt_settings.optimise_sextupoles:
-            logger.info("Optimising sextupoles")
-        self.opt_settings = opt_settings
+        if opt_settings.optimise_bends:
+            logger.info("Optimising bends")
+        self.opt_settings = dataclasses.replace(opt_settings)
 
         # Remove all the bad bpms from the start and end points
         if bad_bpms is not None:
@@ -140,6 +142,12 @@ class Controller:
         )
         self.data_manager.prepare_turn_batches(self.config_manager)
 
+        # Adjust num_batches to not exceed tracks_per_worker for consistency
+        self.opt_settings = dataclasses.replace(
+            self.opt_settings,
+            num_batches=min(self.opt_settings.num_batches, self.data_manager.tracks_per_worker)
+        )
+
         # Determine the exact set of turns needed and load filtered data
         # needed_turns = None
         # if RUN_ARC_BY_ARC:
@@ -148,7 +156,7 @@ class Controller:
         #     } | {t + 1 for batch in self.data_manager.turn_batches for t in batch}
         self.data_manager.load_track_data(
             # needed_turns=needed_turns,
-            use_off_energy_data=opt_settings.use_off_energy_data,
+            use_off_energy_data=self.opt_settings.use_off_energy_data,
         )
 
         self.worker_manager = WorkerManager(
@@ -176,25 +184,19 @@ class Controller:
             true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(
                 true_strengths.pop("deltap")
             )
-        # For all the main bending magnets, remove the a/b/c/d suffixes
-        # and set the only knob to the c suffix value (the only one that has a reasonable gradient).
-        # bending_magnets: dict[str, float] = {}
-        # mag_names_to_remove = []
-        # for mag_name in true_strengths:
-        #     if mag_name.startswith("MB."):
-        #         if (mag_name[3] == "C" and "R" in mag_name) or (
-        #             mag_name[3] == "A" and "L" in mag_name
-        #         ):
-        #             new_mag_name = (
-        #                 mag_name[:3] + mag_name[4:]
-        #             )  # Remove the a/b/c/d suffix
-        #             bending_magnets[new_mag_name] = true_strengths[mag_name]
-        #         mag_names_to_remove.append(mag_name)
-
-        # for mag_name in mag_names_to_remove:
-        #     del true_strengths[mag_name]
-        # for mag_name in bending_magnets:
-        #     true_strengths[mag_name] = bending_magnets[mag_name]
+        # Update bend keys to remove [ABCD] and average over them
+        pattern = r"(MB\.)([ABCD])([0-9]+[LR][1-8]\.B[12])\.k0"
+        new_true_strengths = {}
+        for key, value in true_strengths.items():
+            match = re.match(pattern, key)
+            if match:
+                new_key = match.group(1) + match.group(3) + ".k0"
+                if new_key not in new_true_strengths:
+                    new_true_strengths[new_key] = []
+                new_true_strengths[new_key].append(value)
+            else:
+                new_true_strengths[key] = value
+        true_strengths = {k: np.mean(v) if isinstance(v, list) else v for k, v in new_true_strengths.items()}
 
         # Initialise knobs
         if initial_knob_strengths is not None and "deltap" in initial_knob_strengths:
@@ -215,16 +217,20 @@ class Controller:
             self.config_manager.initial_strengths,
             self.config_manager.knob_names,
             self.filtered_true_strengths,
-            opt_settings,
-            optimiser_type=opt_settings.optimiser_type,
+            self.opt_settings,
+            optimiser_type=self.opt_settings.optimiser_type,
         )
-
-        deltap_knob_names = self.config_manager.knob_names[:-1] + ["deltap"]
+        # Replace "pt" with "deltap" in the result manager if optimising energy
+        deltap_knob_names = self.config_manager.knob_names
+        if self.opt_settings.optimise_energy:
+            deltap_knob_names = deltap_knob_names + ["deltap"]
+            deltap_knob_names.remove("pt")
+    
         self.result_manager = ResultManager(
             deltap_knob_names,
             self.config_manager.elem_spos,
             show_plots=show_plots,
-            opt_settings=opt_settings,
+            opt_settings=self.opt_settings,
         )
 
     def run(self) -> tuple[dict[str, float], dict[str, float]]:
@@ -300,8 +306,9 @@ class Controller:
         # Close logging and save results
         writer.close()
 
-        # Convert the knobs back from pt to dp.
-        self._convert_pt2dp(uncertainties)
+        # Convert the knobs back from pt to dp if we had optimised energy
+        if "pt" in self.final_knobs:
+            self._convert_pt2dp(uncertainties)
 
         # Save and plot using the final knobs (not the initial ones)
         self.result_manager.save_results(

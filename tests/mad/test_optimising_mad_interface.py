@@ -85,7 +85,7 @@ def opt_settings() -> OptSettings:
         max_lr=1e-6,
         min_lr=1e-7,
         gradient_converged_value=1e-6,
-        only_energy=True,
+        optimise_energy=True,
     )
 
 
@@ -222,24 +222,24 @@ class TestOptimisationMadInterfaceInit:
         cleanup_interface(interface)
 
     @pytest.mark.parametrize(
-        "only_energy, optimise_quadrupoles, optimise_sextupoles",
-        [(True, False, False), (False, True, False), (False, True, True)],
-        ids=["opt-energy_only", "opt-quad_opt", "opt-sext_opt"],
+        "optimise_energy, optimise_quadrupoles, optimise_bends",
+        [(True, False, False), (False, True, False), (False, False, True), (True, True, False)],
+        ids=["opt-energy_only", "opt-quad_only", "opt-bend_only", "opt-energy_quad"],
     )
     def test_with_opt_settings(
         self,
         sequence_file: Path,
         opt_settings: OptSettings,
-        only_energy: bool,
+        optimise_energy: bool,
         optimise_quadrupoles: bool,
-        optimise_sextupoles: bool,
+        optimise_bends: bool,
     ) -> None:
         """Test initialisation with optimisation settings."""
         opt_settings = dataclasses.replace(
             opt_settings,
-            only_energy=only_energy,
+            optimise_energy=optimise_energy,
             optimise_quadrupoles=optimise_quadrupoles,
-            optimise_sextupoles=optimise_sextupoles,
+            optimise_bends=optimise_bends,
         )
         interface = OptimisationMadInterface(
             sequence_file=str(sequence_file),
@@ -249,26 +249,34 @@ class TestOptimisationMadInterfaceInit:
         )
         check_interface_basic_init(interface, "py")
         # Check that knobs were created for energy optimization
-        assert "pt" in interface.knob_names
+        if optimise_energy:
+            assert "pt" in interface.knob_names
 
-        allowed_substrings = ["pt"]
+        allowed_substrings = []
+        if optimise_energy:
+            allowed_substrings.append("pt")
         if optimise_quadrupoles:
-            allowed_substrings.extend(["MQ", "MB"])
-        if optimise_sextupoles:
-            allowed_substrings.append("MS")
+            allowed_substrings.append("MQ")
+        if optimise_bends:
+            allowed_substrings.append("MB")
 
         assert all(
             any(sub in name for sub in allowed_substrings)
             for name in interface.knob_names
         )
 
-        if only_energy:
+        if optimise_energy and not (optimise_quadrupoles or optimise_bends):
             assert len(interface.knob_names) == 1
             assert len(interface.elem_spos) == 0
         else:
-            assert (
-                len(interface.elem_spos) == len(interface.knob_names) - 1
-            )  # Exclude pt
+            if optimise_energy:
+                assert (
+                    len(interface.elem_spos) == len(interface.knob_names) - 1
+                )  # Exclude pt
+            else:
+                assert (
+                    len(interface.elem_spos) == len(interface.knob_names)
+                )
         cleanup_interface(interface)
 
     @pytest.mark.parametrize("use_real_strengths", [True, False])

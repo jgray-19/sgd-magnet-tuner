@@ -15,10 +15,24 @@ assert(
     "Missing required variables for initialising"
 )
 
-num_knobs = #knob_names ! Includes dpp
-local set_range = vector(num_knobs):seq() ! I want to set 1 to num_knobs (without dpp)
-! I want to get 7 to 7 + num_knobs. idx 1 is the scalar. idx 2 - 7 is dx/dx, dx/px, dx/dy, dx/dpy, dx/dt, dx/dpt
-local get_range = vector(num_knobs):seq(7)
+num_knobs = #knob_names ! Number of magnet knobs
+print("Number of knobs: " .. num_knobs)
+local matrix_size = optimise_energy and (num_knobs + 1) or num_knobs
+
+! Have the set and get ranges in this scope to prevent errors in the save_data function
+local set_range, get_range, get_knob_vec
+
+! Only define these if there are knobs to optimise
+if num_knobs > 0 then
+    set_range = vector(num_knobs):seq() ! I want to set 1 to num_knobs (without dpp)
+    ! I want to get 7 to 7 + num_knobs. idx 1 is the scalar. idx 2 - 7 is dx/dx, dx/px, dx/dy, dx/dpy, dx/dt, dx/dpt
+    get_range = vector(num_knobs):seq(7)
+
+    function get_knob_vec(xy_tpsa)
+        local all_first_deriv = xy_tpsa:getvec(1, num_knobs + 7)
+        return all_first_deriv:getvec(get_range) ! Remove 0, dx, dpx, dy, dpy, dt, dpt
+    end
+end
 
 ! Create tables to hold the x, y, dx_dk, and dy_dk data for each particle.
 ! Specifying how many indexable slots we want in each table. (lujit)
@@ -36,30 +50,17 @@ for i=1,batch_size do
     y[i] = vector(nbpms)
     px[i] = vector(nbpms)
     py[i] = vector(nbpms)
-    dx_dk[i] = matrix(num_knobs+1, nbpms)
-    dy_dk[i] = matrix(num_knobs+1, nbpms)
-    dpx_dk[i] = matrix(num_knobs+1, nbpms)
-    dpy_dk[i] = matrix(num_knobs+1, nbpms)
-end
-
-local function get_knob_vec(xy_tpsa)
-    local all_first_deriv = xy_tpsa:getvec(1, num_knobs + 7)
-    return all_first_deriv:getvec(get_range) ! Remove 0, dx, dpx, dy, dpy, dt, dpt
-    -- local vector_result = vector(num_knobs)
-    -- for i, name in ipairs(knob_names) do
-    --     vector_result:seti(i, xy_tpsa:get(knob_monomials[name]))
-    -- end
-    -- return vector_result
+    dx_dk[i] = matrix(matrix_size, nbpms)
+    dy_dk[i] = matrix(matrix_size, nbpms)
+    dpx_dk[i] = matrix(matrix_size, nbpms)
+    dpy_dk[i] = matrix(matrix_size, nbpms)
 end
 
 observe_count = nbpms + 1  ! Start beyond the last bpm to ensure reset is called before tracking
 function save_data(elm, mflw, _, slc)
     local turn in mflw
     -- Observe the BPMs at the specified intervals
-    -- if elm:is_observed() then
-    --     print(slc) end
     if slc == -2 and elm:is_observed() then
-        -- print(elm.name .. ": Observing at turn " .. turn .. ", index " .. observe_count)
          -- Loop over each particle in the batch
         for i=1,batch_size do
             x[i]:seti(observe_count, mflw[i].x:get0()) ! get0 returns the scalar
@@ -67,15 +68,20 @@ function save_data(elm, mflw, _, slc)
             px[i]:seti(observe_count, mflw[i].px:get0()) ! get0 returns the scalar
             py[i]:seti(observe_count, mflw[i].py:get0()) ! get0 returns the scalar
 
-            dx_dk[i] :setsub(set_range, observe_count, get_knob_vec(mflw[i].x))
-            dy_dk[i] :setsub(set_range, observe_count, get_knob_vec(mflw[i].y))
-            dpx_dk[i]:setsub(set_range, observe_count, get_knob_vec(mflw[i].px))
-            dpy_dk[i]:setsub(set_range, observe_count, get_knob_vec(mflw[i].py))
+            if set_range then ! If set_range is defined (i.e. num_knobs > 0)
+                dx_dk[i] :setsub(set_range, observe_count, get_knob_vec(mflw[i].x))
+                dy_dk[i] :setsub(set_range, observe_count, get_knob_vec(mflw[i].y))
+                dpx_dk[i]:setsub(set_range, observe_count, get_knob_vec(mflw[i].px))
+                dpy_dk[i]:setsub(set_range, observe_count, get_knob_vec(mflw[i].py))
+            end
 
-            dx_dk[i]:setsub(num_knobs+1, observe_count, mflw[i].x:get(7)) ! Set dx_dpt
-            dy_dk[i]:setsub(num_knobs+1, observe_count, mflw[i].y:get(7)) ! Set dy_dpt
-            dpx_dk[i]:setsub(num_knobs+1, observe_count, mflw[i].px:get(7)) ! Set dpx_dpt
-            dpy_dk[i]:setsub(num_knobs+1, observe_count, mflw[i].py:get(7)) ! Set dpy_dpt
+            if optimise_energy then
+                local dpt_idx = num_knobs + 1
+                dx_dk[i]:setsub(dpt_idx, observe_count, mflw[i].x:get(7)) ! Set dx_dpt
+                dy_dk[i]:setsub(dpt_idx, observe_count, mflw[i].y:get(7)) ! Set dy_dpt
+                dpx_dk[i]:setsub(dpt_idx, observe_count, mflw[i].px:get(7)) ! Set dpx_dpt
+                dpy_dk[i]:setsub(dpt_idx, observe_count, mflw[i].py:get(7)) ! Set dpy_dpt
+            end
         end
         -- Increment the index for the next bpm
         observe_count = observe_count + 1

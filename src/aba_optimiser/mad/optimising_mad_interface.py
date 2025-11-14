@@ -38,11 +38,12 @@ local spos_list = {}
 """
 
 MAKE_KNOBS_LOOP_MAD = """
+local used = {{}}
 for i, e, s, ds in loaded_sequence:siter(magnet_range) do
     if {element_condition} then
         local k_str_name
         if e.k0 and e.k0 ~= 0 then
-            k_str_name = e.name .. ".k0"
+            k_str_name = string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".k0"
             MADX[k_str_name] = e.k0 ! Must not be 0.
             e.k0 = \\->MADX[k_str_name]
         elseif e.k1 and e.k1 ~= 0 then
@@ -54,7 +55,8 @@ for i, e, s, ds in loaded_sequence:siter(magnet_range) do
             MADX[k_str_name] = e.k2 ! Must not be 0.
             e.k2 = \\->MADX[k_str_name]
         end
-        if k_str_name then
+        if k_str_name and not used[k_str_name] then
+            used[k_str_name] = true ! We assume that all the bends have the same k0 for [A-D].
             table.insert(knob_names, k_str_name)
             table.insert(spos_list, s)
         end
@@ -63,7 +65,6 @@ end
 """
 
 MAKE_KNOBS_END_MAD = """
-table.insert(knob_names, "pt")
 coord_names = {{"x", "px", "y", "py", "t", "pt"}}
 {py_name}:send(knob_names, true)
 {py_name}:send(spos_list, true)
@@ -238,12 +239,11 @@ class OptimisationMadInterface(BaseMadInterface):
         """
         mad_code = MAKE_KNOBS_INIT_MAD
 
-        if not opt_settings.only_energy:
+        if opt_settings.optimise_quadrupoles or opt_settings.optimise_bends:
             conditions = []
             for kind, attr, pattern, flag in [
-                # ("sbend", "k0", "MB%.", True),
+                ("sbend", "k0", "MB%.", opt_settings.optimise_bends),
                 ("quadrupole", "k1", "MQ%.", opt_settings.optimise_quadrupoles),
-                ("sextupole", "k2", "MS%.", opt_settings.optimise_sextupoles),
             ]:
                 if flag:
                     conditions.append(
@@ -253,6 +253,9 @@ class OptimisationMadInterface(BaseMadInterface):
 
             loop_code = MAKE_KNOBS_LOOP_MAD.format(element_condition=element_condition)
             mad_code += loop_code
+        
+        if opt_settings.optimise_energy:
+            mad_code += 'table.insert(knob_names, "pt")\n'
 
         mad_code += MAKE_KNOBS_END_MAD.format(py_name=self.py_name)
 

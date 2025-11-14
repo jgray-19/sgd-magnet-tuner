@@ -11,7 +11,6 @@ import numpy as np
 from aba_optimiser.config import (
     HESSIAN_SCRIPT,
     TRACK_INIT,
-    TRACK_NO_KNOBS_INIT,
     TRACK_SCRIPT,
 )
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
@@ -91,6 +90,10 @@ class BaseWorker(Process, ABC):
         n_init = len(data.init_coords) - (len(data.init_coords) % num_batches)
         init_coords = data.init_coords[:n_init]
 
+        LOGGER.debug(
+            f"Worker {worker_id}: Using {n_init} initial coordinates divided into {num_batches} batches"
+        )
+
         # Unpack 2D arrays into separate x/y arrays
         # Shape: (n_tracks, n_data_points)
         self.x_comparisons = data.position_comparisons[:n_init, :, 0]  # x positions
@@ -146,9 +149,7 @@ class BaseWorker(Process, ABC):
 
         # Load common MAD scripts
         self.run_track_script = TRACK_SCRIPT.read_text()
-        self.run_track_init_path = (
-            TRACK_NO_KNOBS_INIT if opt_settings.only_energy else TRACK_INIT
-        )
+        self.run_track_init_path = TRACK_INIT
 
     @abstractmethod
     def get_bpm_range(self, sdir: int) -> str:
@@ -286,18 +287,27 @@ end
             corrector_strengths=self.config.corrector_strengths,
             tune_knobs_file=self.config.tune_knobs_file,
             beam_energy=self.config.beam_energy,
-            # discard_mad_output=False,
-            # debug=True,
-        )
+            # discard_mad_output=not LOGGER.isEnabledFor(logging.DEBUG),
+            discard_mad_output=False,
 
-        assert mad_iface.knob_names == list(init_knobs.keys())
+        )
+        knob_names = mad_iface.knob_names
+        if knob_names != list(init_knobs.keys()):
+            raise ValueError(
+                f"Worker {self.worker_id}: Knob names from MAD {knob_names} do not match initial knobs {list(init_knobs.keys())}"
+            )
+
+        # Remove "pt" from knob names if present
+        if "pt" in knob_names:
+            knob_names.remove("pt")
 
         mad = mad_iface.mad
-        mad["knob_names"] = mad_iface.knob_names[:-1]  # ignore pt
+        mad["knob_names"] = knob_names
         mad["batch_size"] = self.batch_size
         mad["num_batches"] = self.num_batches
         mad["nbpms"] = mad_iface.nbpms
         mad["sdir"] = self.config.sdir
+        mad["optimise_energy"] = self.opt_settings.optimise_energy
 
         # Import required MAD-NG modules
         mad.load("MAD", "damap", "matrix", "vector")
@@ -360,7 +370,7 @@ end
             >>> print(loss)  # e.g., 0.123
         """
         # Extract energy deviation ('pt') from knob updates
-        machine_pt = knob_updates.pop("pt")
+        machine_pt = knob_updates.pop("pt", 0.0)
 
         # Prepare MAD commands to update knob values in the sequence
         update_commands = [

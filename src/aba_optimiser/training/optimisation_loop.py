@@ -40,6 +40,7 @@ class OptimisationLoop:
         self.use_true_strengths = len(true_strengths) > 0
         self.smoothed_grad_norm: float | None = None
 
+
         self.max_epochs = opt_settings.max_epochs
         self.gradient_converged_value = opt_settings.gradient_converged_value
 
@@ -56,7 +57,7 @@ class OptimisationLoop:
             min_lr=opt_settings.min_lr,
         )
 
-        self.some_magnets = not opt_settings.only_energy
+        self.some_magnets = opt_settings.optimise_quadrupoles or opt_settings.optimise_bends
         self.num_batches = opt_settings.num_batches
 
     def _init_optimiser(self, shape: tuple, optimiser_type: str) -> None:
@@ -90,7 +91,7 @@ class OptimisationLoop:
         total_turns: int,
     ) -> dict[str, float]:
         """Run the main optimisation loop."""
-        if current_knobs["pt"] == 0 and not self.some_magnets:
+        if "pt" in current_knobs and current_knobs["pt"] == 0.0:
             current_knobs["pt"] = 1e-6  # Initialise pt to non-zero
 
         for epoch in range(self.max_epochs):

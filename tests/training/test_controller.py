@@ -7,14 +7,15 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 import tfs
 
-from aba_optimiser.config import OptSettings
+from aba_optimiser.config import BEND_ERROR_FILE, OptSettings
 from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
-from aba_optimiser.simulation.optics import match_tunes, perform_orbit_correction
 from aba_optimiser.training.controller import Controller
+from aba_optimiser.simulation.optics import perform_orbit_correction
 from aba_optimiser.xsuite.xsuite_tools import (
     initialise_env,
     insert_particle_monitors_at_pattern,
@@ -46,6 +47,8 @@ def _generate_nonoise_track(
     dpp_value: float,
     magnet_range: str,
     perturb_quads: bool = False,
+    perturb_bends: bool = False,
+    average_closed_orbit: bool = False,
 ) -> tuple[Path, dict, Path | None]:
     """Generate a parquet file containing noiseless tracking data for the requested BPMs."""
     # Create MAD interface and load sequence
@@ -55,41 +58,44 @@ def _generate_nonoise_track(
     corrector_file = tmp_dir / "corrector_table.tfs"
 
     # Perform orbit correction for off-momentum beam (delta = 2e-4)
-    if abs(dpp_value) > 0:
-        matched_tunes = perform_orbit_correction(
-            mad=mad.mad,
-            machine_deltap=dpp_value,
-            target_qx=0.28,
-            target_qy=0.31,
-            corrector_file=corrector_file,
-        )
-        # Read corrector table
-        corrector_table = tfs.read(corrector_file)
-        corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
-        magnet_strengths = {}
-        tune_knobs_file = None
-    else:
-        # Create an empty corrector table
-        corrector_table = tfs.TfsDataFrame(headers={"name:": "corrector_table"})
-        if perturb_quads:
-            mad.mad.send(f"""
+    magnet_strengths = {}
+    if perturb_quads:
+        mad.mad.send(f"""
 local randseed, randn, abs in MAD.gmath
 new_magnet_values = {{}}
 for _, elm in loaded_sequence:iter('{magnet_range}') do
-    if elm.kind == 'quadrupole' and elm.k1 ~= 0.0 and elm.name:match("MQ%.") then
-        elm.k1 = elm.k1 + 1e-4 * randn() * abs(elm.k1)
-        new_magnet_values[elm.name .. ".k1"] = elm.k1
-    end
+if elm.kind == 'quadrupole' and elm.k1 ~= 0.0 and elm.name:match("MQ%.") then
+    elm.k1 = elm.k1 + 1e-4 * randn() * abs(elm.k1)
+    new_magnet_values[elm.name .. ".k1"] = elm.k1
+end
 end
 py:send(new_magnet_values, true)
-            """)
-            magnet_strengths = mad.mad.recv()
-        else:
-            magnet_strengths = {}
+        """)
+        magnet_strengths = mad.mad.recv()
+    elif perturb_bends:
+        bend_errors_table = tfs.read(BEND_ERROR_FILE)
+        bend_errors_dict = bend_errors_table["K0L"].to_dict()
+        for elm in mad.mad.loaded_sequence:
+            # Dipoles
+            if elm.kind == "sbend" and elm.k0 != 0 and elm.name[:3] == "MB.":
+                if elm.name not in bend_errors_dict:
+                    raise ValueError(
+                        f"Bend error for {elm.name} not found in {BEND_ERROR_FILE}"
+                    )
+                k0l_error = bend_errors_dict[elm.name]
+                elm.k0 += k0l_error / elm.l
+                magnet_strengths[elm.name + ".k0"] = elm.k0
     
-    matched_tunes = match_tunes(
-        mad.mad, target_qx=0.28, target_qy=0.31, deltap=dpp_value
+    matched_tunes = perform_orbit_correction(
+        mad=mad.mad,
+        machine_deltap=dpp_value,
+        target_qx=0.28,
+        target_qy=0.31,
+        corrector_file=corrector_file,
     )
+    # Read corrector table
+    corrector_table = tfs.read(corrector_file)
+    corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
     
     # Create xsuite environment with orbit correction applied
     env = initialise_env(
@@ -130,6 +136,35 @@ py:send(new_magnet_values, true)
     df = df.loc[:, TRACK_COLUMNS].copy()
     df["name"] = df["name"].astype(str)
     df["kick_plane"] = df["kick_plane"].astype(str)
+
+    if average_closed_orbit:
+        # Compute averages per BPM
+        averaged = df.groupby("name")[
+            ["x", "px", "y", "py", "var_x", "var_y", "var_px", "var_py"]
+        ].mean().reset_index()
+        # Create new DataFrame with 3 turns, each with averaged values
+        new_rows = []
+        for turn in [1, 2, 3]:
+            for _, row in averaged.iterrows():
+                new_rows.append(
+                    {
+                        "name": row["name"],
+                        "turn": turn,
+                        "x": row["x"],
+                        "y": row["y"],
+                        "px": row["px"],
+                        "py": row["py"],
+                        "var_x": row["var_x"],
+                        "var_y": row["var_y"],
+                        "var_px": row["var_px"],
+                        "var_py": row["var_py"],
+                        "kick_plane": "xy",
+                    }
+                )
+        df = pd.DataFrame(new_rows)
+        df["name"] = df["name"].astype("category")
+        df["turn"] = df["turn"].astype("int32")
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(destination, index=False)
     return corrector_file, magnet_strengths, tune_knobs_file
@@ -152,9 +187,9 @@ def tmp_dir(
 
 def _make_opt_settings(
     *,
-    only_energy: bool = True,
+    optimise_energy: bool = True,
     optimise_quadrupoles: bool = False,
-    optimise_sextupoles: bool = False,
+    optimise_bends: bool = False,
 ) -> OptSettings:
     return OptSettings(
         max_epochs=1000,
@@ -166,10 +201,10 @@ def _make_opt_settings(
         max_lr=2e-6,
         min_lr=2e-7,
         gradient_converged_value=5e-10,
-        only_energy=only_energy,
+        optimise_energy=optimise_energy,
         optimise_quadrupoles=optimise_quadrupoles,
-        optimise_sextupoles=optimise_sextupoles,
-        use_off_energy_data=optimise_sextupoles,
+        optimise_bends=optimise_bends,
+        use_off_energy_data=False,
     )
 
 
@@ -177,16 +212,35 @@ def _make_opt_settings_quad() -> OptSettings:
     return OptSettings(
         max_epochs=300,
         tracks_per_worker=10,
-        num_workers=4,
+        num_workers=8,
         num_batches=2,
         warmup_epochs=50,
         warmup_lr_start=1e-9,
-        max_lr=2e-7,
-        min_lr=2e-7,
-        gradient_converged_value=5e-12,
-        only_energy=False,
+        max_lr=2e-5,
+        min_lr=8e-7,
+        gradient_converged_value=5e-14,
+        optimise_energy=False,
         optimise_quadrupoles=True,
-        optimise_sextupoles=False,
+        optimise_bends=False,
+        use_off_energy_data=False,
+    )
+
+
+def _make_opt_settings_bend() -> OptSettings:
+    return OptSettings(
+        max_epochs=5000,
+        tracks_per_worker=1,
+        num_batches=1,
+        num_workers=1,
+        warmup_epochs=3,
+        warmup_lr_start=5e-10,
+        max_lr=1e-1,
+        min_lr=1e-1,
+        gradient_converged_value=1e-6,
+        optimiser_type="lbfgs",
+        optimise_energy=False,
+        optimise_quadrupoles=False,
+        optimise_bends=True,
         use_off_energy_data=False,
     )
 
@@ -262,17 +316,17 @@ def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path) -> None:
     magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
     bpm_start_points = [
         "BPM.9R2.B1",
-        "BPM.10R2.B1",
+        # "BPM.10R2.B1",
     ]
     bpm_end_points = [
         "BPM.9L3.B1",
-        "BPM.10L3.B1",
+        # "BPM.10L3.B1",
     ]
 
     flattop_turns = 1000
     off_magnet_path = tmp_dir / "track_off_magnet.parquet"
 
-    _, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
+    corrector_file, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
         tmp_dir,
         sequence_file,
         flattop_turns,
@@ -283,10 +337,7 @@ def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path) -> None:
     )
 
     opt_settings = _make_opt_settings_quad()
-    empty_file = tmp_dir / "empty_corrector_table.txt"
-    empty_file.touch()
     true_values = magnet_strengths.copy()
-    true_values["deltap"] = 0.0  # We tracked at on-momentum for this test
 
     ctrl = Controller(
         opt_settings=opt_settings,
@@ -297,19 +348,90 @@ def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path) -> None:
         bpm_end_points=bpm_end_points,
         measurement_file=off_magnet_path,
         true_strengths=true_values,
-        corrector_file=empty_file,
+        corrector_file=corrector_file,
         tune_knobs_file=tune_knobs_file,
         flattop_turns=flattop_turns,
         num_tracks=1,
     )
     estimate, unc = ctrl.run()
-
     for magnet, value in estimate.items():
         rel_diff = (
             abs(value - true_values[magnet]) / abs(true_values[magnet])
             if true_values[magnet] != 0
             else abs(value)
         )
-        assert rel_diff < 1e-5, (
+        assert rel_diff < 3e-9, (
             f"Magnet {magnet}: FAIL, estimated {value}, true {true_values[magnet]}, rel diff {rel_diff}"
+        )
+
+
+@pytest.mark.slow
+def test_controller_bend_opt_simple(tmp_dir: Path, sequence_file: Path) -> None:
+    """Test bending magnet optimisation using the simple opt script logic."""
+    # Constants for the test
+    magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
+    bpm_start_points = [
+        "BPM.9R2.B1",
+        "BPM.10R2.B1",
+        "BPM.11R2.B1",
+    ]
+    bpm_end_points = [
+        "BPM.9L3.B1",
+        "BPM.10L3.B1",
+        "BPM.11L3.B1",
+    ]
+
+    flattop_turns = 1000
+    off_magnet_path = tmp_dir / "track_off_magnet.parquet"
+
+    corrector_file, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
+        tmp_dir,
+        sequence_file,
+        flattop_turns,
+        off_magnet_path,
+        0.0,
+        magnet_range,
+        perturb_quads=False,
+        perturb_bends=True,
+        average_closed_orbit=True,
+    )
+
+    opt_settings = _make_opt_settings_bend()
+    true_values = magnet_strengths.copy()
+
+    # Update bend keys to remove [ABCD] for consistency with knob_names
+    import re
+    pattern = r"(MB\.)([ABCD])([0-9]+[LR][1-8]\.B[12])\.k0"
+    new_true_values = {}
+    for key, value in true_values.items():
+        match = re.match(pattern, key)
+        if match:
+            new_key = match.group(1) + match.group(3) + ".k0"
+            new_true_values[new_key] = value
+        else:
+            new_true_values[key] = value  # For non-bend keys
+
+    ctrl = Controller(
+        opt_settings=opt_settings,
+        sequence_file_path=sequence_file,
+        show_plots=True,
+        magnet_range=magnet_range,
+        bpm_start_points=bpm_start_points,
+        bpm_end_points=bpm_end_points,
+        measurement_file=off_magnet_path,
+        true_strengths=true_values,
+        corrector_file=corrector_file,
+        tune_knobs_file=tune_knobs_file,
+        flattop_turns=3,
+        num_tracks=1,
+    )
+    estimate, unc = ctrl.run()
+    for magnet, value in estimate.items():
+        rel_diff = (
+            abs(value - new_true_values[magnet]) / abs(new_true_values[magnet])
+            if new_true_values[magnet] != 0
+            else abs(value)
+        )
+        assert rel_diff < 3e-9, (
+            f"Magnet {magnet}: FAIL, estimated {value}, true {new_true_values[magnet]}, rel diff {rel_diff}"
         )

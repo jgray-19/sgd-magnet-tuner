@@ -23,8 +23,8 @@ assert(
 
 local matrix, vector in MAD
 
-local num_knobs = #knob_names + 1 ! Include dpt
-local Htot = matrix(num_knobs, num_knobs):zeros()
+local matrix_size = optimise_energy and (num_knobs + 1) or num_knobs
+local Htot = matrix(matrix_size, matrix_size):zeros()
 local W_x_vec = vector(weights_x)
 local W_px_vec = vector(weights_px)
 local W_y_vec = vector(weights_y)

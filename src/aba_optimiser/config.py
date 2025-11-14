@@ -33,29 +33,21 @@ class OptSettings:
     total_tracks: int = field(init=False)
     decay_epochs: int = field(init=False)
 
-    only_energy: bool = False
+    optimise_energy: bool = field(default=True)
     use_off_energy_data: bool = False
     optimise_quadrupoles: bool = field(default=False)
-    optimise_sextupoles: bool = field(default=False)
+    optimise_bends: bool = field(default=False)
 
     def __post_init__(self):
         self.total_tracks = self.tracks_per_worker * self.num_workers
         self.decay_epochs = self.max_epochs - self.warmup_epochs
-        if self.optimise_sextupoles and not self.optimise_quadrupoles:
-            logger.warning("Sextupoles cannot be optimised without quadrupoles.")
         # if self.optimiser_type == "lbfgs" and self.num_batches != 1:
         #     logger.warning("LBFGS optimiser requires num_batches=1; overriding.")
         #     self.num_batches = 1
 
-        if self.optimise_sextupoles is True and self.use_off_energy_data is False:
-            logger.warning(
-                "Sextupole optimisation needs the use_off_energy_data flag set to True; overriding."
-            )
-            self.use_off_energy_data = True
-
 
 # In the future, mode needs to be removed, instead it needs to be a flexible code that can set which parameters will be optimised on the fly.
-# This includes quadrupoles, sextupoles and energy.
+# This includes bends, quadrupoles and energy.
 
 # Simulation parameters for dp/p optimisation
 DPP_OPT_SETTINGS = OptSettings(
@@ -83,7 +75,7 @@ DPP_OPT_SETTINGS = OptSettings(
     gradient_converged_value=3e-7,
     optimiser_type="adam",
     # optimiser_type="lbfgs",
-    only_energy=True,
+    optimise_energy=True,
     use_off_energy_data=False,
 )
 
@@ -107,14 +99,15 @@ QUAD_OPT_SETTINGS = OptSettings(
     # min_lr=5e-2,
     # Rest
     gradient_converged_value=1e-9,
+    optimise_energy=False,
     optimise_quadrupoles=True,
     optimiser_type="adam",
     # optimiser_type="lbfgs",
     use_off_energy_data=False,
 )
 
-# Simulation parameters for sextupole optimisation
-SEXT_OPT_SETTINGS = OptSettings(
+# Simulation parameters for bend optimisation
+BEND_OPT_SETTINGS = OptSettings(
     max_epochs=1000,
     tracks_per_worker=2400,
     num_workers=50,
@@ -124,9 +117,9 @@ SEXT_OPT_SETTINGS = OptSettings(
     max_lr=4e-7,
     min_lr=2e-7,
     gradient_converged_value=1e-9,
-    optimise_quadrupoles=True,
-    optimise_sextupoles=True,
-    use_off_energy_data=True,
+    optimise_energy=False,
+    optimise_bends=True,
+    use_off_energy_data=False,
 )
 
 # Optimiser configuration
@@ -238,7 +231,6 @@ KALMAN_FILE = PROJECT_ROOT / "data/kalman_data.feather"  # Kalman-filtered TFS f
 MAD_SCRIPTS_DIR = (
     PROJECT_ROOT / "src" / "aba_optimiser" / "mad" / "mad_scripts"
 )  # Directory for MAD-NG scripts
-TRACK_NO_KNOBS_INIT = MAD_SCRIPTS_DIR / "run_track_init_no_knobs.mad"
 TRACK_INIT = MAD_SCRIPTS_DIR / "run_track_init.mad"
 TRACK_SCRIPT = MAD_SCRIPTS_DIR / "run_track.mad"
 HESSIAN_SCRIPT = MAD_SCRIPTS_DIR / "estimate_hessian.mad"

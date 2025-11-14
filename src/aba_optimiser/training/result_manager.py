@@ -101,20 +101,23 @@ class ResultManager:
     ) -> None:
         """Generate all plotting results using the plotting module."""
         LOGGER.info("Generating plots...")
-        knob_names_wo_dpp = self.knob_names[:-1]
-        quad_unc = uncertainties[:-1]
+        quad_unc = uncertainties.copy()
+        knob_names = self.knob_names.copy()
+        if self.opt_settings.optimise_energy:
+            knob_names.remove("deltap")
+            quad_unc = quad_unc[:-1]  # Remove uncertainty for deltap
 
-        magnet_names = [knob[:-3] for knob in knob_names_wo_dpp]
+        magnet_names = [knob[:-3] for knob in knob_names]
         initial_vals = np.array(
-            [initial_strengths[i] for i in range(len(knob_names_wo_dpp))]
+            [initial_strengths[i] for i in range(len(knob_names))]
         )
-        final_vals = np.array([current_knobs[k] for k in knob_names_wo_dpp])
-        true_vals = np.array([true_strengths.get(k, np.nan) for k in knob_names_wo_dpp])
+        final_vals = np.array([current_knobs[k] for k in knob_names])
+        true_vals = np.array([true_strengths.get(k, np.nan) for k in knob_names])
 
         save_prefix = "plots/"
         show_errorbars = True
 
-        if not self.opt_settings.only_energy:  # Relative difference comparison
+        if self.opt_settings.optimise_quadrupoles or self.opt_settings.optimise_bends:  # Relative difference comparison
             plot_strengths_comparison(
                 magnet_names,
                 final_vals,
@@ -139,14 +142,12 @@ class ResultManager:
                 magnet_names=magnet_names,
             )
 
-        deltap_key = "deltap"  # self.knob_names[-1]
-        if current_knobs[deltap_key] != 0 and true_strengths.get(deltap_key, 0) != 0:
+        if "deltap" in current_knobs:  # Energy knob was optimised
             plot_deltap_comparison(
-                true_strengths[deltap_key],
-                current_knobs[deltap_key],
+                true_strengths.get("deltap", 0),
+                current_knobs["deltap"],
                 uncertainties[-1],
             )
-        else:
-            LOGGER.info("Skipping delta-p plot as the final value is zero.")
+        
         if self.show_plots:
             show_plots()

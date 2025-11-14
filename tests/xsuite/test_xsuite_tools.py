@@ -155,7 +155,7 @@ def test_create_xsuite_environment(tmp_path):
 )
 def test_initialise_env(corrector_table, qx, qy, k1_mqy, k0_mb, k2_mcs):
     """Test initialise_env function."""
-    matched_tunes = {"Qx": qx, "Qy": qy}
+    matched_tunes = {"dqx_b1_op": qx, "dqy_b1_op": qy}
     magnet_strengths = {
         "mqy.b5l2.b1.k1": k1_mqy,
         "mb.b8r2.b1.k0": k0_mb,
@@ -171,8 +171,8 @@ def test_initialise_env(corrector_table, qx, qy, k1_mqy, k0_mb, k2_mcs):
         seq_name=LHCB1_SEQ_NAME,
         json_file=_get_default_xsuite_json(),
     )
-    assert env["Qx"] == qx
-    assert env["Qy"] == qy
+    assert env["dqx.b1_op"] == qx
+    assert env["dqy.b1_op"] == qy
     assert np.isclose(env["mqy.b5l2.b1"].k1, k1_mqy)
     assert np.isclose(env["mb.b8r2.b1"].k0, k0_mb)
     assert np.isclose(env["mcs.b8r2.b1"].k2, k2_mcs)

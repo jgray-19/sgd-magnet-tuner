@@ -29,7 +29,6 @@ def test_init_default() -> None:
     """Test initialization of TrackingMadInterface with default parameters."""
     interface = TrackingMadInterface()
     check_interface_basic_init(interface, "py")
-    print(dir(interface.mad))
     assert interface.mad._MAD__process.stdout_file.writable(), (
         "STDOUT file is not writable"
     )

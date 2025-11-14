@@ -368,7 +368,7 @@ def process_single_config(
         min_lr=1e0,
         gradient_converged_value=1e-6,
         optimiser_type="lbfgs",
-        only_energy=True,
+        optimise_energy=True,
         use_off_energy_data=False,
     )
 

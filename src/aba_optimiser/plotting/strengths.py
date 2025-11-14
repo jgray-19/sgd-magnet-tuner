@@ -244,7 +244,7 @@ def plot_strengths_vs_position(
     # Validation
     n = len(elem_spos)
     assert len(final_vals) == n == len(true_vals) == len(uncertainties), (
-        f"All inputs must have same length, final_vals: {len(final_vals)}, true_vals: {len(true_vals)}, uncertainties: {len(uncertainties)}"
+        f"All inputs must have same length, final_vals: {len(final_vals)}, true_vals: {len(true_vals)}, uncertainties: {len(uncertainties)}, elem_spos: {len(elem_spos)}"
     )
     if initial_vals is not None:
         assert len(initial_vals) == n

@@ -9,9 +9,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import tfs
-from nxcals.spark_session_builder import get_or_create
 from omc3.hole_in_one import hole_in_one_entrypoint
-from pylhc import corrector_extraction, mqt_extraction
 from turn_by_turn import TbtData, read_tbt
 
 from aba_optimiser.config import (
@@ -27,7 +25,10 @@ from aba_optimiser.momentum_recon.transverse import calculate_pz
 from aba_optimiser.training.controller import LHCController as Controller
 
 if TYPE_CHECKING:
-    from pylhc.nxcal_knobs import NXCalResult
+    try:
+        from pylhc.nxcal_knobs import NXCalResult
+    except ImportError:
+        NXCalResult = None
 
 logger = logging.getLogger(__name__)
 
@@ -276,6 +277,12 @@ def save_online_knobs(
     corrector_knobs_file: Path | None = None,
 ) -> None:
     """Load and save knob data from NXCal."""
+    try:
+        from nxcals.spark_session_builder import get_or_create
+        from pylhc import corrector_extraction, mqt_extraction
+    except ImportError as e:
+        raise ImportError("nxcals and pylhc are required for save_online_knobs but are not installed.") from e
+    
     spark = get_or_create()
     mqt_results = mqt_extraction.get_mqt_vals(spark, meas_time, beam)
     ms_results = mqt_extraction.get_ms_vals(spark, meas_time, beam)
