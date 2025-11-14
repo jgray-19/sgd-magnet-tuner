@@ -9,22 +9,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from aba_optimiser.config import (
-    CLEAN_DATA,
-    CLEANED_FILE,
-    DIFFERENT_TURNS_PER_RANGE,
-    EMINUS_NOISY_FILE,
-    EMINUS_NONOISE_FILE,
-    EPLUS_NOISY_FILE,
-    EPLUS_NONOISE_FILE,
     FILE_COLUMNS,
-    FLATTOP_TURNS,
-    N_COMPARE_TURNS,
-    N_RUN_TURNS,
-    NO_NOISE_FILE,
-    NOISY_FILE,
-    NUM_TRACKS,
-    RUN_ARC_BY_ARC,
-    USE_NOISY_DATA,
 )
 from aba_optimiser.dataframes.utils import select_markers
 
@@ -45,20 +30,20 @@ class DataManager:
         self,
         all_bpms: np.ndarray,
         opt_settings: OptSettings,
-        measurement_file: str | None = None,
-        bpm_order: list[str] | None = None,
-        num_tracks: int = NUM_TRACKS,
-        flattop_turns: int = FLATTOP_TURNS,
+        measurement_files: list[str],
+        bpm_order: list[str],
+        num_tracks: int,
+        flattop_turns: int,
     ):
         self.all_bpms = all_bpms
         self.opt_settings = opt_settings
-        self.measurement_file = measurement_file
+        self.measurement_files = measurement_files
         self.bpm_order = bpm_order
         self.num_tracks = num_tracks
         self.flattop_turns = flattop_turns
 
-        # Available global "turn" ids (already include offsets if sextupoles are on)
-        total_files = 3 if opt_settings.use_off_energy_data else 1
+        # Available global "turn" ids (now include offsets for multiple files)
+        total_files = len(measurement_files)
         self.available_turns: list[int] = list(
             range(1, self.flattop_turns * self.num_tracks * total_files + 1)
         )
@@ -66,11 +51,31 @@ class DataManager:
         self.turn_batches: list[list[int]] = []
         self.tracks_per_worker: int = 0  # set in prepare_turn_batches
 
-        # Only populated when sextupoles are optimised
-        self.track_data: dict[str, pd.DataFrame] | None = None
-        self.energy_map: dict[int, str] | None = None  # {turn -> "plus"|"minus"|"zero"}
+        # Track data per measurement file (indexed by file index)
+        self.track_data: dict[int, pd.DataFrame] | None = None
+        self.file_map: dict[int, int] | None = None  # {turn -> file_index}
 
     # ---------- Internals ----------
+
+    def _get_file_and_bunch_index(self, turn: int) -> tuple[int, int]:
+        """Get the file index and bunch index for a given global turn number.
+        
+        Args:
+            turn (int): Global turn number (1-indexed)
+            
+        Returns:
+            tuple[int, int]: (file_index, bunch_index) where bunch_index is 0-indexed
+        """
+        # Adjust to 0-indexed for calculations
+        turn_0indexed = turn - 1
+        turns_per_file = self.flattop_turns * self.num_tracks
+        file_idx = turn_0indexed // turns_per_file
+        
+        # Within file: determine which bunch (track) this turn belongs to
+        turn_in_file = turn_0indexed % turns_per_file
+        bunch_idx = turn_in_file // self.flattop_turns
+        
+        return file_idx, bunch_idx
 
     def _reduce_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         df["turn"] = df["turn"].astype("int32", copy=False)
@@ -96,41 +101,24 @@ class DataManager:
             raise ValueError(f"Missing columns in track data: {missing}")
         return df
 
-    def _select_file_0e(self) -> str:
-        """Select the appropriate zero-energy file based on noise and filtering settings."""
-        if self.measurement_file is not None:
-            LOGGER.info("Using custom measurement file: %s", self.measurement_file)
-            return self.measurement_file
-
-        if USE_NOISY_DATA:
-            if CLEAN_DATA:
-                LOGGER.info("Using filtered data for zero-energy tracks")
-                return CLEANED_FILE
-
-            LOGGER.info("Using noisy data for zero-energy tracks")
-            return NOISY_FILE
-
-        LOGGER.info("Using non-noisy data for zero-energy tracks")
-        return NO_NOISE_FILE
-
     def _reorder_track_dataframes(self) -> None:
         """Reorder track dataframes to have turns in ascending order and BPMs in bpm_order."""
-        for e in self.track_data:
+        for file_idx in self.track_data:
             all_turns = sorted(
-                self.track_data[e].index.get_level_values("turn").unique()
+                self.track_data[file_idx].index.get_level_values("turn").unique()
             )
             # reduce bpm order to only those present in the data
             if self.bpm_order is not None:
                 bpm_order_filtered = [
                     bpm
                     for bpm in self.bpm_order
-                    if bpm in self.track_data[e].index.get_level_values("name")
+                    if bpm in self.track_data[file_idx].index.get_level_values("name")
                 ]
             else:
                 bpm_order_filtered = sorted(
-                    self.track_data[e].index.get_level_values("name").unique()
+                    self.track_data[file_idx].index.get_level_values("name").unique()
                 )
-            self.track_data[e] = self.track_data[e].reindex(
+            self.track_data[file_idx] = self.track_data[file_idx].reindex(
                 pd.MultiIndex.from_product(
                     [all_turns, bpm_order_filtered], names=["turn", "name"]
                 )
@@ -139,43 +127,41 @@ class DataManager:
     # ---------- Public API ----------
 
     def load_track_data(
-        self, needed_turns: set[int] | None = None, use_off_energy_data: bool = False
+        self, needed_turns: set[int] | None = None
     ) -> None:
-        """Load track data for optimisation and build energy map.
+        """Load track data from all measurement files and build file map.
 
-        Note: When use_off_energy_data=False, only the 'zero' file is loaded.
+        Each measurement file gets a unique file index and corresponding turn offset.
         """
         LOGGER.info(
-            "Loading energy track data (custom turns=%s, use_off_energy_data=%s)...",
+            "Loading track data from %d measurement file(s) (custom turns=%s)...",
+            len(self.measurement_files),
             needed_turns is not None,
-            use_off_energy_data,
         )
 
-        # Pick source files based on noise setting
-        sources = {
-            "plus": EPLUS_NOISY_FILE if USE_NOISY_DATA else EPLUS_NONOISE_FILE,
-            "minus": EMINUS_NOISY_FILE if USE_NOISY_DATA else EMINUS_NONOISE_FILE,
-            "zero": self._select_file_0e(),
-        }
+        # Determine source files - controller has already resolved None to actual files
+        sources = []
+        for mf in self.measurement_files:
+            if mf is not None:
+                sources.append(mf)
+            else:
+                raise ValueError("measurement_files should not contain None - controller should have resolved defaults")
 
-        # Turn offsets per energy type (global turn space)
+        # Turn offsets per file (global turn space)
         offsets = {
-            "zero": 0,
-            "minus": self.flattop_turns * self.num_tracks,
-            "plus": 2 * self.flattop_turns * self.num_tracks,
+            file_idx: file_idx * self.flattop_turns * self.num_tracks
+            for file_idx in range(len(sources))
         }
-
-        # Which energies to load
-        energies = ("plus", "minus", "zero") if use_off_energy_data else ("zero",)
 
         # Load and reduce
-        energy_tracks: dict[str, pd.DataFrame] = {}
-        for e in energies:
-            df = self._read_parquet(sources[e], needed_turns, offsets[e])
-            energy_tracks[e] = self._reduce_dataframe(df)
+        file_tracks: dict[int, pd.DataFrame] = {}
+        for file_idx, source in enumerate(sources):
+            LOGGER.info(f"Loading file {file_idx}: {source}")
+            df = self._read_parquet(source, needed_turns, offsets[file_idx])
+            file_tracks[file_idx] = self._reduce_dataframe(df)
 
         # Handle NaN values in track data
-        for df in energy_tracks.values():
+        for df in file_tracks.values():
             # For each row that contains NaNs in the x, y or px, py columns,
             # set the x_weight and y_weight to 0
             nan_mask = df[["x", "y", "px", "py"]].isna().any(axis=1)
@@ -184,60 +170,54 @@ class DataManager:
                     "Found NaN values in track data. Please clean the data before proceeding."
                 )
 
-        self.track_data = (
-            energy_tracks if use_off_energy_data else {"zero": energy_tracks["zero"]}
-        )
+        self.track_data = file_tracks
 
-        # Build a fast energy map {turn -> energy}, using unique turn sets
-        zero_turns = set(self.track_data["zero"]["turn"].unique())
-        if use_off_energy_data:
-            plus_turns = set(self.track_data["plus"]["turn"].unique())
-            minus_turns = set(self.track_data["minus"]["turn"].unique())
-        else:
-            plus_turns = set()
-            minus_turns = set()
+        # Build a fast file map {turn -> file_index}
+        file_turn_sets = {
+            file_idx: set(self.track_data[file_idx]["turn"].unique())
+            for file_idx in file_tracks.keys()
+        }
 
         for df in self.track_data.values():
             df.set_index(["turn", "name"], inplace=True)
 
         self._reorder_track_dataframes()
 
-        # Priority: plus > minus > zero (disjoint in practice if offsets are correct)
-        energy_map: dict[int, str] = {}
-        for t in plus_turns | minus_turns | zero_turns:
-            if t in plus_turns:
-                energy_map[t] = "plus"
-            elif t in minus_turns:
-                energy_map[t] = "minus"
-            else:
-                energy_map[t] = "zero"
+        # Build file map
+        file_map: dict[int, int] = {}
+        for file_idx, turns in file_turn_sets.items():
+            for t in turns:
+                file_map[t] = file_idx
 
-        self.energy_map = energy_map
+        self.file_map = file_map
 
         LOGGER.info(
-            "Loaded track data: zero=%d, minus=%d, plus=%d unique turns",
-            len(zero_turns),
-            len(minus_turns),
-            len(plus_turns),
+            "Loaded track data: %s",
+            ", ".join(
+                f"file_{idx}={len(file_turn_sets[idx])} turns"
+                for idx in sorted(file_tracks.keys())
+            ),
         )
 
     def prepare_turn_batches(self, config_manager: ConfigurationManager) -> None:
         """Build the list of turns to be processed and validate availability."""
         LOGGER.info("Preparing turn batches for worker distribution")
 
-        if not RUN_ARC_BY_ARC:
-            # Drop the last N_RUN_TURNS in RING mode
-            LOGGER.debug(
-                "Removing last %d turns from available turns for RING mode",
-                N_RUN_TURNS + 1,
-            )
-            self.available_turns = self.available_turns[: -(N_RUN_TURNS + 2)]
-        else:
-            to_remove = [i * self.flattop_turns + 1 for i in range(self.num_tracks)]
-            to_remove += [(i + 1) * self.flattop_turns for i in range(self.num_tracks)]
-            self.available_turns = [
-                t for t in self.available_turns if t not in to_remove
-            ]
+        # Remove boundary turns from each bunch to ensure loop data availability
+        # First and last turn in each bunch cannot be selected as they need prev/next turns
+        total_files = len(self.measurement_files)
+        turns_to_remove = []
+        
+        for file_idx in range(total_files):
+            for bunch_idx in range(self.num_tracks):
+                # Calculate global turn numbers for first and last turn in this bunch
+                base_turn = file_idx * self.flattop_turns * self.num_tracks + bunch_idx * self.flattop_turns + 1
+                first_turn = base_turn  # First turn in bunch (1-indexed)
+                last_turn = base_turn + self.flattop_turns - 1  # Last turn in bunch
+                turns_to_remove.extend([first_turn, last_turn])
+        
+        # Remove boundary turns
+        self.available_turns = [t for t in self.available_turns if t not in turns_to_remove]
 
         num_turns_needed = self.opt_settings.total_tracks
         num_workers = self.opt_settings.num_workers
@@ -265,7 +245,7 @@ class DataManager:
         )
 
         num_ranges = len(config_manager.bpm_ranges)
-        if not DIFFERENT_TURNS_PER_RANGE:
+        if not self.opt_settings.different_turns_per_range:
             self.tracks_per_worker *= num_ranges
             num_workers = num_workers // num_ranges
 
@@ -283,17 +263,43 @@ class DataManager:
                 num_workers * num_ranges * 2,
             )
 
-        # Randomly select turns for each batch
-        random.shuffle(self.available_turns)
-        LOGGER.info("Each worker will process %d turns", self.tracks_per_worker)
-        self.turn_batches = [
-            self.available_turns[
-                i * self.tracks_per_worker : (i + 1) * self.tracks_per_worker
-            ]
-            for i in range(num_workers)
-        ]
+        # Group turns by (file, bunch) and shuffle within groups for variety
+        turns_by_group: dict[tuple[int, int], list[int]] = {}
+        for turn in self.available_turns:
+            file_idx, bunch_idx = self._get_file_and_bunch_index(turn)
+            key = (file_idx, bunch_idx)
+            turns_by_group.setdefault(key, []).append(turn)
+        
+        # Shuffle within each group for varied data
+        for turns_list in turns_by_group.values():
+            random.shuffle(turns_list)
+        
+        # Distribute turns: fill each batch from one group, cycling through groups
+        self.turn_batches = []
+        groups = list(turns_by_group.keys())
+        group_idx = 0
+        
+        LOGGER.info("Each worker will process %d turns from %d (file, bunch) groups", 
+                    self.tracks_per_worker, len(groups))
+        
+        for _ in range(num_workers):
+            # Try to get a full batch from current group
+            for _ in range(len(groups)):  # Try all groups
+                if groups[group_idx] in turns_by_group:
+                    turns_list = turns_by_group[groups[group_idx]]
+                    if len(turns_list) >= self.tracks_per_worker:
+                        batch = turns_list[:self.tracks_per_worker]
+                        turns_by_group[groups[group_idx]] = turns_list[self.tracks_per_worker:]
+                        if not turns_by_group[groups[group_idx]]:
+                            del turns_by_group[groups[group_idx]]
+                        self.turn_batches.append(batch)
+                        group_idx = (group_idx + 1) % len(groups)
+                        break
+                group_idx = (group_idx + 1) % len(groups)
+            else:
+                # No group has enough turns left
+                break
 
     def get_total_turns(self) -> int:
         """Calculate total number of turns to process."""
-        n_compare = N_COMPARE_TURNS if not RUN_ARC_BY_ARC else 1
-        return self.opt_settings.num_workers * self.tracks_per_worker * n_compare
+        return self.opt_settings.num_workers * self.tracks_per_worker

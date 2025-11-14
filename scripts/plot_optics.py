@@ -6,7 +6,7 @@ from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 
 MAGNET_RANGES = [f"BPM.11R{i}.B1/BPM.11L{i % 8 + 1}.B1" for i in range(1, 9)]
 mad = OptimisationMadInterface(
-    sequence_file=get_lhc_file_path(beam=1), bpm_pattern="BPM", use_real_strengths=False
+    sequence_file=get_lhc_file_path(beam=1), bpm_pattern="BPM", corrector_strengths=None, tune_knobs_file=None
 )
 mad.mad["full_tws", "mflw"] = mad.mad.twiss(
     sequence="loaded_sequence", observe=1, savemap=True

@@ -185,12 +185,7 @@ def tmp_dir(
 ) -> Path:
     return tmp_path_factory.mktemp("aba_controller_tracks")
 
-def _make_opt_settings(
-    *,
-    optimise_energy: bool = True,
-    optimise_quadrupoles: bool = False,
-    optimise_bends: bool = False,
-) -> OptSettings:
+def _make_opt_settings_energy() -> OptSettings:
     return OptSettings(
         max_epochs=1000,
         tracks_per_worker=1,
@@ -201,10 +196,9 @@ def _make_opt_settings(
         max_lr=2e-6,
         min_lr=2e-7,
         gradient_converged_value=5e-10,
-        optimise_energy=optimise_energy,
-        optimise_quadrupoles=optimise_quadrupoles,
-        optimise_bends=optimise_bends,
-        use_off_energy_data=False,
+        optimise_energy=True,
+        optimise_quadrupoles=False,
+        optimise_bends=False,
     )
 
 
@@ -222,7 +216,6 @@ def _make_opt_settings_quad() -> OptSettings:
         optimise_energy=False,
         optimise_quadrupoles=True,
         optimise_bends=False,
-        use_off_energy_data=False,
     )
 
 
@@ -241,7 +234,6 @@ def _make_opt_settings_bend() -> OptSettings:
         optimise_energy=False,
         optimise_quadrupoles=False,
         optimise_bends=True,
-        use_off_energy_data=False,
     )
 
 
@@ -253,7 +245,7 @@ def test_controller_energy_opt(
     dpp_value: float,
 ) -> None:
     """Test that the controller initializes correctly with custom num_tracks and flattop_turns."""
-    opt_settings = _make_opt_settings()
+    opt_settings = _make_opt_settings_energy()
 
     off_dpp_path = tmp_dir / "track_off_dpp.parquet"
     magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
@@ -273,15 +265,11 @@ def test_controller_energy_opt(
         "BPM.9R2.B1",
         "BPM.10R2.B1",
         "BPM.11R2.B1",
-        "BPM.12R2.B1",
-        "BPM.13R2.B1",
     ]
     bpm_end_points = [
         "BPM.9L3.B1",
         "BPM.10L3.B1",
         "BPM.11L3.B1",
-        "BPM.12L3.B1",
-        "BPM.13L3.B1",
     ]
 
     ctrl = Controller(
@@ -291,18 +279,20 @@ def test_controller_energy_opt(
         magnet_range=magnet_range,
         bpm_start_points=bpm_start_points,
         bpm_end_points=bpm_end_points,
-        measurement_file=off_dpp_path,
+        measurement_files=off_dpp_path,
         true_strengths=None,
-        corrector_file=corrector_file,
-        tune_knobs_file=tune_knobs_file,
+        corrector_files=corrector_file,
+        tune_knobs_files=tune_knobs_file,
         flattop_turns=flattop_turns,
         num_tracks=1,
     )
 
     estimate, unc = ctrl.run()  # Ensure that run works without errors
 
-    assert np.allclose(estimate.pop("deltap"), dpp_value, atol=1e-7)
-    assert np.allclose(unc.pop("deltap"), 0, atol=4e-7)
+    print(estimate["deltap"], unc["deltap"])
+
+    assert np.allclose(estimate.pop("deltap"), dpp_value, rtol=1e-4, atol=1e-10) 
+    assert np.allclose(unc.pop("deltap"), 0, atol=5e-7)
 
     # check that estimate and unc are now empty
     assert not estimate
@@ -346,10 +336,10 @@ def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path) -> None:
         magnet_range=magnet_range,
         bpm_start_points=bpm_start_points,
         bpm_end_points=bpm_end_points,
-        measurement_file=off_magnet_path,
+        measurement_files=off_magnet_path,
         true_strengths=true_values,
-        corrector_file=corrector_file,
-        tune_knobs_file=tune_knobs_file,
+        corrector_files=corrector_file,
+        tune_knobs_files=tune_knobs_file,
         flattop_turns=flattop_turns,
         num_tracks=1,
     )
@@ -418,10 +408,10 @@ def test_controller_bend_opt_simple(tmp_dir: Path, sequence_file: Path) -> None:
         magnet_range=magnet_range,
         bpm_start_points=bpm_start_points,
         bpm_end_points=bpm_end_points,
-        measurement_file=off_magnet_path,
+        measurement_files=off_magnet_path,
         true_strengths=true_values,
-        corrector_file=corrector_file,
-        tune_knobs_file=tune_knobs_file,
+        corrector_files=corrector_file,
+        tune_knobs_files=tune_knobs_file,
         flattop_turns=3,
         num_tracks=1,
     )

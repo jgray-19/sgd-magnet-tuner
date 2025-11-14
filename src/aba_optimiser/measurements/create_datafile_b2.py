@@ -6,7 +6,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from aba_optimiser.config import (
-    DPP_OPT_SETTINGS,
+    DPP_OPT_SETTINGS_TEMPLATE,
     PROJECT_ROOT,
 )
 from aba_optimiser.measurements.create_datafile import (
@@ -84,7 +84,7 @@ if __name__ == "__main__":
 
         controller = Controller(
             beam=2,
-            opt_settings=DPP_OPT_SETTINGS,
+            opt_settings=DPP_OPT_SETTINGS_TEMPLATE,
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths_file=None,

@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.config import GRAD_NORM_ALPHA
 from aba_optimiser.optimisers.adam import AdamOptimiser
 from aba_optimiser.optimisers.amsgrad import AMSGradOptimiser
 from aba_optimiser.optimisers.lbfgs import LBFGSOptimiser
@@ -39,7 +38,7 @@ class OptimisationLoop:
         self.true_strengths = true_strengths
         self.use_true_strengths = len(true_strengths) > 0
         self.smoothed_grad_norm: float | None = None
-
+        self.grad_norm_alpha = opt_settings.grad_norm_alpha
 
         self.max_epochs = opt_settings.max_epochs
         self.gradient_converged_value = opt_settings.gradient_converged_value
@@ -179,8 +178,8 @@ class OptimisationLoop:
             self.smoothed_grad_norm = grad_norm
         else:
             self.smoothed_grad_norm = (
-                GRAD_NORM_ALPHA * self.smoothed_grad_norm
-                + (1.0 - GRAD_NORM_ALPHA) * grad_norm
+                self.grad_norm_alpha * self.smoothed_grad_norm
+                + (1.0 - self.grad_norm_alpha) * grad_norm
             )
 
     def _log_epoch_stats(

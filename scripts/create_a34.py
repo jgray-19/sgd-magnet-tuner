@@ -10,13 +10,6 @@ from aba_optimiser.config import (
     BEAM_ENERGY,
     CLEANED_FILE,
     CORRECTOR_STRENGTHS,
-    DELTAP,
-    EMINUS_CLEANED_FILE,
-    EMINUS_NOISY_FILE,
-    EMINUS_NONOISE_FILE,
-    EPLUS_CLEANED_FILE,
-    EPLUS_NOISY_FILE,
-    EPLUS_NONOISE_FILE,
     LHCB1_SEQ_NAME,
     NO_NOISE_FILE,
     NOISY_FILE,
@@ -149,20 +142,14 @@ def create_a34(
     validate_coordinate_generation(num_tracks, action_list, angle_list)
 
     no_noise_files = {
-        -DELTAP: EMINUS_NONOISE_FILE,
         0: NO_NOISE_FILE,
-        DELTAP: EPLUS_NONOISE_FILE,
     }
     noise_files = {
-        -DELTAP: EMINUS_NOISY_FILE,
         0: NOISY_FILE,
-        DELTAP: EPLUS_NOISY_FILE,
     }
 
     cleaned_files = {
-        -DELTAP: EMINUS_CLEANED_FILE,
         0: CLEANED_FILE,
-        DELTAP: EPLUS_CLEANED_FILE,
     }
 
     logger.info("Loading corrector strengths table")
@@ -274,35 +261,60 @@ def create_a34(
 
 
 if __name__ == "__main__":
-    # Import config values and call create_a34 for backward compatibility
-    from aba_optimiser.config import (
-        FLATTOP_TURNS,
-        KICK_BOTH_PLANES,
-        MACHINE_DELTAP,
-        NUM_TRACKS,
-        REL_K1_STD_DEV,
-        TRACK_BATCH_SIZE,
-        USE_XSUITE,
-    )
-
     # Parse command line arguments (only for xsuite flag default)
     parser = argparse.ArgumentParser(
         description="Create A34 tracking data using MAD-NG or xsuite"
     )
     parser.add_argument(
+        "--turns",
+        type=int,
+        default=6600,
+        help="Number of flattop turns for tracking (default: 6600)",
+    )
+    parser.add_argument(
+        "--kick-both-planes",
+        action="store_true",
+        default=True,
+        help="Kick in both planes during tracking (default: True)",
+    )
+    parser.add_argument(
+        "--machine-deltap",
+        type=float,
+        default=0.0,
+        help="Machine deltap value (default: 0.0)",
+    )
+    parser.add_argument(
+        "--num-tracks",
+        type=int,
+        default=3,
+        help="Number of parallel tracks (could be considered bunches) to simulate (default: 3)",
+    )
+    parser.add_argument(
+        "--rel-k1-std-dev",
+        type=float,
+        default=1e-4,
+        help="Relative K1 standard deviation for magnet perturbations (default: 1e-4)",
+    )
+    parser.add_argument(
+        "--track-batch-size",
+        type=int,
+        default=3,
+        help="Number of tracks to process in each batch to save RAM (default: 3)",
+    )
+    parser.add_argument(
         "--xsuite",
         action="store_true",
-        default=USE_XSUITE,
+        default=True,
         help="Use xsuite for tracking instead of MAD-NG",
     )
     args = parser.parse_args()
 
     create_a34(
-        FLATTOP_TURNS,
-        KICK_BOTH_PLANES,
-        MACHINE_DELTAP,
-        NUM_TRACKS,
-        REL_K1_STD_DEV,
-        TRACK_BATCH_SIZE,
+        args.turns,
+        args.kick_both_planes,
+        args.machine_deltap,
+        args.num_tracks,
+        args.rel_k1_std_dev,
+        args.track_batch_size,
         args.xsuite,
     )

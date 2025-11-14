@@ -4,24 +4,15 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from aba_optimiser.config import (
-    ACD_ON,
     CLEANED_FILE,
-    # BPM_START,
-    # BPM_RANGE,
-    # EMINUS_CLEANED_FILE,
-    # EMINUS_NOISY_FILE,
-    # EMINUS_NONOISE_FILE,
-    # EPLUS_NOISY_FILE,
-    # EPLUS_NONOISE_FILE,
-    # KALMAN_FILE,
     NO_NOISE_FILE,
-    # NOISY_FILE,
-    RAMP_UP_TURNS,
 )
 from aba_optimiser.dataframes.utils import select_markers
 from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 from aba_optimiser.plotting.utils import setup_scientific_formatting
 
+ACD_ON = False  # Whether the ACD was used or not (Ignores the ramp up turns)
+RAMP_UP_TURNS = 1000  # Number of turns to ramp up the ACD
 # Extract BPM names
 start_bpm = "BPM.11R4.B1"
 other_bpm = "BPM.12R4.B1"

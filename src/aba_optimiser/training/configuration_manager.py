@@ -9,18 +9,12 @@ import numpy as np
 
 from aba_optimiser.config import (
     BEAM_ENERGY,
-    RUN_ARC_BY_ARC,
-    # USE_NOISY_DATA,
 )
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.workers.arc_by_arc import ArcByArcWorker
-from aba_optimiser.workers.ring import RingWorker
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from aba_optimiser.config import OptSettings
-    from aba_optimiser.workers.base_worker import BaseWorker
 
 
 LOGGER = logging.getLogger(__name__)
@@ -56,7 +50,6 @@ class ConfigurationManager:
         self.knob_names: list[str] = []
         self.elem_spos: np.ndarray = np.array([])
         self.all_bpms: np.ndarray = np.array([])
-        self.Worker: type[BaseWorker] | None = None
         self.initial_strengths: np.ndarray = np.array([])
 
         self.start_bpms = bpm_start_points
@@ -71,8 +64,6 @@ class ConfigurationManager:
         self,
         sequence_file_path: str,
         bad_bpms: list[str] | None,
-        corrector_strengths_file: Path,
-        tune_knobs_file: Path,
         seq_name: str | None = None,
         beam_energy: float = BEAM_ENERGY,
     ) -> None:
@@ -82,10 +73,9 @@ class ConfigurationManager:
             seq_name=seq_name,
             magnet_range=self.magnet_range,
             opt_settings=self.global_config,
-            use_real_strengths=False,
+            corrector_strengths=None,
+            tune_knobs_file=None,
             # discard_mad_output=False,
-            corrector_strengths=corrector_strengths_file,
-            tune_knobs_file=tune_knobs_file,
             bad_bpms=bad_bpms,
             beam_energy=beam_energy,
         )
@@ -96,22 +86,9 @@ class ConfigurationManager:
 
     def determine_worker_and_bpms(self) -> None:
         """Determine the worker type and BPM start points based on the run mode."""
-        if RUN_ARC_BY_ARC:
-            LOGGER.warning(
-                "Arc by arc chosen, ignoring N_RUN_TURNS, OBSERVE_TURNS_FROM, N_COMPARE_TURNS"
-            )
-            for bpm in self.start_bpms:
-                if bpm not in self.all_bpms:
-                    raise ValueError(f"BPM {bpm} not found in the sequence.")
-            self.Worker = ArcByArcWorker
-        else:
-            LOGGER.warning(
-                "Whole ring chosen, BPM start points ignored, taking an even distribution based on NUM_WORKERS"
-            )
-            self.start_bpms, _ = circular_far_samples(
-                self.all_bpms, min(self.global_config.num_workers, len(self.all_bpms))
-            )
-            self.Worker = RingWorker
+        for bpm in self.start_bpms:
+            if bpm not in self.all_bpms:
+                raise ValueError(f"BPM {bpm} not found in the sequence.")
 
     def initialise_knob_strengths(
         self,
@@ -146,12 +123,9 @@ class ConfigurationManager:
 
     def calculate_n_data_points(self) -> dict[str, int]:
         """Calculate number of data points for each BPM start point."""
-        if self.Worker is None:
-            raise ValueError("Worker type must be determined first")
-
         n_data_points = {}
         for bpm_range in self.bpm_ranges:
             n_bpms, _ = self.mad_iface.count_bpms(bpm_range)
-            n_data_points[bpm_range] = self.Worker.get_n_data_points(n_bpms)
+            n_data_points[bpm_range] = ArcByArcWorker.get_n_data_points(n_bpms)
             logging.info(f"{bpm_range}: {n_data_points[bpm_range]} data points")
         return n_data_points

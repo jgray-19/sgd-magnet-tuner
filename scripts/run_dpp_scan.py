@@ -473,11 +473,11 @@ def _run_energy_optimization(
 ) -> dict:
     """Run energy optimization for a single magnet range."""
     try:
-        from aba_optimiser.config import DPP_OPT_SETTINGS
+        from aba_optimiser.config import DPP_OPT_SETTINGS_TEMPLATE
         from aba_optimiser.training.controller import Controller
 
         energy_controller = Controller(
-            DPP_OPT_SETTINGS,
+            DPP_OPT_SETTINGS_TEMPLATE,
             show_plots=False,
             machine_deltap=input_dpp,
             magnet_range=magnet_range,

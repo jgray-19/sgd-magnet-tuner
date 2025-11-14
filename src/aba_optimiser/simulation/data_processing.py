@@ -177,6 +177,8 @@ def process_track(
     track_q: mp.Queue,
     noise_q: mp.Queue,
     cleaned_q: mp.Queue,
+    flattop_turns: int,
+    kick_both_planes: bool,
 ) -> None:
     """
     Process a single MAD tracking result.
@@ -191,11 +193,9 @@ def process_track(
         cleaned_q: Queue for cleaned data
     """
     # Import configuration at runtime to avoid circular imports
-    from aba_optimiser.config import FLATTOP_TURNS, KICK_BOTH_PLANES
-
     # Use the single-writer queue approach for better I/O efficiency
     return process_track_with_queue(
-        ntrk, true_df, track_q, noise_q, cleaned_q, FLATTOP_TURNS, KICK_BOTH_PLANES
+        ntrk, true_df, track_q, noise_q, cleaned_q, flattop_turns, kick_both_planes
     )
 
 

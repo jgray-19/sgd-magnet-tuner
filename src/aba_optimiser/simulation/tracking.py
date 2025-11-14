@@ -384,6 +384,8 @@ def run_parallel_tracking(
                         track_queue,
                         noise_queue,
                         cleaned_queue,
+                        flattop_turns,
+                        kick_both_planes,
                     )
                     for i in range(len(true_dfs))
                 ),

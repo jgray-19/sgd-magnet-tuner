@@ -7,12 +7,7 @@ from multiprocessing import Process
 from typing import TYPE_CHECKING
 
 import numpy as np
-
-from aba_optimiser.config import (
-    HESSIAN_SCRIPT,
-    TRACK_INIT,
-    TRACK_SCRIPT,
-)
+from aba_optimiser.mad.scripts import HESSIAN_SCRIPT, TRACK_INIT, TRACK_SCRIPT
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 
 if TYPE_CHECKING:
@@ -122,12 +117,6 @@ class BaseWorker(Process, ABC):
         self.y_weights = self._normalise_weights(y_weights)
         self.px_weights = self._normalise_weights(px_weights)
         self.py_weights = self._normalise_weights(py_weights)
-
-        # For each particle, weight all the weights by the first BPM weight
-        # self.x_weights = self._adjust_weights(self.x_weights)
-        # self.y_weights = self._adjust_weights(self.y_weights)
-        # self.px_weights = self._adjust_weights(self.px_weights)
-        # self.py_weights = self._adjust_weights(self.py_weights)
 
         # Split init_coords into num_batches batches
         init_coords = np.array_split(init_coords, num_batches)
@@ -282,14 +271,10 @@ end
             magnet_range=self.config.magnet_range,
             bpm_range=bpm_range,
             opt_settings=self.opt_settings,
-            use_real_strengths=True,
             bad_bpms=self.config.bad_bpms,
             corrector_strengths=self.config.corrector_strengths,
             tune_knobs_file=self.config.tune_knobs_file,
             beam_energy=self.config.beam_energy,
-            # discard_mad_output=not LOGGER.isEnabledFor(logging.DEBUG),
-            discard_mad_output=False,
-
         )
         knob_names = mad_iface.knob_names
         if knob_names != list(init_knobs.keys()):

@@ -14,7 +14,7 @@ from turn_by_turn import TbtData, read_tbt
 
 from aba_optimiser.config import (
     CORRECTOR_STRENGTHS,
-    DPP_OPT_SETTINGS,
+    DPP_OPT_SETTINGS_TEMPLATE,
     PROJECT_ROOT,
     TUNE_KNOBS_FILE,
 )
@@ -451,7 +451,7 @@ if __name__ == "__main__":
 
         controller = Controller(
             beam=1,
-            opt_settings=DPP_OPT_SETTINGS,
+            opt_settings=DPP_OPT_SETTINGS_TEMPLATE,
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths_file=None,

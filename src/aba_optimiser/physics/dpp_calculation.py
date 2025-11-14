@@ -42,7 +42,7 @@ def _ensure_twiss(tws: tfs.TfsDataFrame | None, info: bool) -> tfs.TfsDataFrame:
         return tws
     # If no Twiss provided, we provide LHC beam 1 twiss
     mad = OptimisationMadInterface(
-        get_lhc_file_path(beam=1), bpm_pattern="BPM", use_real_strengths=False
+        get_lhc_file_path(beam=1), bpm_pattern="BPM", corrector_strengths=None, tune_knobs_file=None
     )
     tws = mad.run_twiss()
     if info:

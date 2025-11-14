@@ -77,7 +77,8 @@ class PhaseSpaceDiagnostics:
             mad_iface = OptimisationMadInterface(
                 get_lhc_file_path(beam=1),
                 bpm_pattern="BPM",
-                use_real_strengths=False,
+                corrector_strengths=None,
+                tune_knobs_file=None,
             )
             tws = mad_iface.run_twiss()
             self.betax = tws.loc[self.bpm, "beta11"]

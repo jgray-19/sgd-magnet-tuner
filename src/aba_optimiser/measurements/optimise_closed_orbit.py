@@ -369,7 +369,6 @@ def process_single_config(
         gradient_converged_value=1e-6,
         optimiser_type="lbfgs",
         optimise_energy=True,
-        use_off_energy_data=False,
     )
 
     results_arcs, uncs_arcs = optimise_ranges(

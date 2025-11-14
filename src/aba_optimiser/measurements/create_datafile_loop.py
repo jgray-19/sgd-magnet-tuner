@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 from aba_optimiser.config import (
-    DPP_OPT_SETTINGS,
+    DPP_OPT_SETTINGS_TEMPLATE,
     PROJECT_ROOT,
 )
 from aba_optimiser.measurements.create_datafile import (
@@ -253,7 +253,7 @@ def process_single_config(
 
         controller = Controller(
             beam=config.beam,
-            opt_settings=DPP_OPT_SETTINGS,
+            opt_settings=DPP_OPT_SETTINGS_TEMPLATE,
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,

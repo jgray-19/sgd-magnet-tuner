@@ -50,7 +50,8 @@ def setup_and_check_interface(
     """
     interface = OptimisationMadInterface(
         sequence_file=str(sequence_file),
-        use_real_strengths=False,
+        corrector_strengths=None,
+        tune_knobs_file=None,
         discard_mad_output=True,
         magnet_range=magnet_range,
         bpm_range=bpm_range,
@@ -97,7 +98,8 @@ def optimising_interface(
     iface = OptimisationMadInterface(
         sequence_file=str(sequence_file),
         opt_settings=opt_settings,
-        use_real_strengths=False,  # Avoid needing real data files
+        corrector_strengths=None,
+        tune_knobs_file=None,
         discard_mad_output=True,
     )
     yield iface
@@ -123,7 +125,7 @@ class TestOptimisationMadInterfaceInit:
                 "seq_name": seq_name,
             }
         interface = OptimisationMadInterface(
-            sequence_file=str(sequence_file), use_real_strengths=False, **kwargs
+            sequence_file=str(sequence_file), corrector_strengths=None, tune_knobs_file=None, **kwargs
         )
         bpm_pattern = r"^BPM"
         check_interface_basic_init(interface, "py")
@@ -158,7 +160,8 @@ class TestOptimisationMadInterfaceInit:
         """Test that MAD variables are set correctly for default ranges and patterns."""
         interface = OptimisationMadInterface(
             sequence_file=str(sequence_file),
-            use_real_strengths=False,
+            corrector_strengths=None,
+            tune_knobs_file=None,
             discard_mad_output=True,
         )
 
@@ -244,7 +247,8 @@ class TestOptimisationMadInterfaceInit:
         interface = OptimisationMadInterface(
             sequence_file=str(sequence_file),
             opt_settings=opt_settings,
-            use_real_strengths=False,
+            corrector_strengths=None,
+            tune_knobs_file=None,
             discard_mad_output=True,
         )
         check_interface_basic_init(interface, "py")
@@ -279,22 +283,22 @@ class TestOptimisationMadInterfaceInit:
                 )
         cleanup_interface(interface)
 
-    @pytest.mark.parametrize("use_real_strengths", [True, False])
+    @pytest.mark.parametrize("apply_correctors", [True, False])
     def test_with_corrector_settings(
         self,
         sequence_file: Path,
         corrector_file: Path,
         corrector_table,
-        use_real_strengths: bool,
+        apply_correctors: bool,
     ) -> None:
         """Test initialization with different corrector strength settings."""
         interface = OptimisationMadInterface(
             sequence_file=str(sequence_file),
-            use_real_strengths=use_real_strengths,
-            corrector_strengths=corrector_file,
+            corrector_strengths=corrector_file if apply_correctors else None,
+            tune_knobs_file=None,
         )
         # Check that strengths match expectations
-        if use_real_strengths:
+        if apply_correctors:
             check_corrector_strengths(interface, corrector_table)
         else:
             check_corrector_strengths_zero(interface, corrector_table)
@@ -308,7 +312,8 @@ class TestOptimisationMadInterfaceInit:
 
         no_knob_interface = OptimisationMadInterface(
             sequence_file=str(sequence_file),
-            use_real_strengths=False,
+            corrector_strengths=None,
+            tune_knobs_file=None,
         )
         original_mqt_strength = no_knob_interface.mad["MADX['MQT.14R3.B1'].k1"]
 
@@ -351,7 +356,8 @@ class TestOptimisationMadInterfaceInit:
         """Test that bad_bpms are properly unobserved."""
         interface = OptimisationMadInterface(
             sequence_file=str(sequence_file),
-            use_real_strengths=False,
+            corrector_strengths=None,
+            tune_knobs_file=None,
             bad_bpms=bad_bpms,
         )
 

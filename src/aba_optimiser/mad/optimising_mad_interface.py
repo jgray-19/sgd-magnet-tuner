@@ -85,11 +85,10 @@ class OptimisationMadInterface(BaseMadInterface):
         opt_settings: OptSettings = None,
         discard_mad_output: bool = True,
         bpm_pattern: str = BPM_PATTERN,
-        use_real_strengths: bool = True,
         bad_bpms: list[str] | None = None,
         beam_energy: float = BEAM_ENERGY,
-        corrector_strengths: Path = CORRECTOR_STRENGTHS,
-        tune_knobs_file: Path = TUNE_KNOBS_FILE,
+        corrector_strengths: Path | None = CORRECTOR_STRENGTHS,
+        tune_knobs_file: Path | None = TUNE_KNOBS_FILE,
         start_bpm: str | None = None,
         **kwargs,
     ):
@@ -103,12 +102,11 @@ class OptimisationMadInterface(BaseMadInterface):
             opt_settings: Optimization settings for adjustment knobs
             discard_mad_output: Whether to discard MAD-NG output to stdout
             bpm_pattern: Pattern for BPM matching
-            use_real_strengths: Whether to use real corrector/knob strengths
             bad_bpms: List of bad BPMs to exclude from observation
             beam_energy: Beam energy in GeV
-            corrector_strengths: Path to corrector strengths file
+            corrector_strengths: Path to corrector strengths file, or None to skip
             seq_name: Name of the sequence to load
-            tune_knobs_file: Path to tune knobs file
+            tune_knobs_file: Path to tune knobs file, or None to skip
             **kwargs: Additional keyword arguments for MAD initialization
         """
         # Configure MAD output
@@ -154,14 +152,18 @@ class OptimisationMadInterface(BaseMadInterface):
         # Setup optimization-specific functionality
         self._observe_bpms(bad_bpms)
         self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
-        # if opt_settings.only_energy:
-        if use_real_strengths is False:
-            LOGGER.info(
-                "Skipping setting correctors and tune knobs as use_real_strengths is False"
-            )
-        else:
+        
+        # Apply corrector strengths if provided
+        if corrector_strengths is not None:
             self._set_correctors(corrector_strengths)
+        else:
+            LOGGER.info("Skipping corrector strengths (not provided)")
+        
+        # Apply tune knobs if provided
+        if tune_knobs_file is not None:
             self._set_tune_knobs(tune_knobs_file)
+        else:
+            LOGGER.info("Skipping tune knobs (not provided)")
 
         # try:
         #     tws = self.run_twiss()

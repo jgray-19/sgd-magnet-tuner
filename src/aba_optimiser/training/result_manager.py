@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.config import KNOB_TABLE, OUTPUT_KNOBS
 from aba_optimiser.io.utils import save_results, scientific_notation
 from aba_optimiser.plotting.strengths import (
     plot_deltap_comparison,
@@ -33,11 +32,32 @@ class ResultManager:
         elem_spos: np.ndarray,
         opt_settings: OptSettings,
         show_plots: bool = True,
+        output_knobs_path: Path | None = None,
+        knob_table_path: Path | None = None,
     ):
+        """Initialise result manager.
+        
+        Args:
+            knob_names: List of knob names
+            elem_spos: Element s-positions
+            opt_settings: Optimisation settings
+            show_plots: Whether to display plots
+            output_knobs_path: Path to save final knobs (defaults to PROJECT_ROOT/data/final_knobs.txt)
+            knob_table_path: Path to save knob table (defaults to PROJECT_ROOT/data/knob_strengths_table.txt)
+        """
         self.knob_names = knob_names
         self.elem_spos = elem_spos
         self.show_plots = show_plots
         self.opt_settings = opt_settings
+        
+        # Lazy import defaults if not provided
+        if output_knobs_path is None or knob_table_path is None:
+            from aba_optimiser.config import KNOB_TABLE, OUTPUT_KNOBS
+            self.output_knobs_path = output_knobs_path or OUTPUT_KNOBS
+            self.knob_table_path = knob_table_path or KNOB_TABLE
+        else:
+            self.output_knobs_path = output_knobs_path
+            self.knob_table_path = knob_table_path
 
     def save_results(
         self,
@@ -47,7 +67,7 @@ class ResultManager:
     ) -> None:
         """Write final knob strengths and markdown table to file."""
         LOGGER.info("Writing final knob strengths and markdown table...")
-        save_results(self.knob_names, current_knobs, uncertainties, OUTPUT_KNOBS)
+        save_results(self.knob_names, current_knobs, uncertainties, self.output_knobs_path)
 
         # Prepare rows with index, knob, true, final, diff, relative difference, and uncertainty.
         rows = []
@@ -75,7 +95,7 @@ class ResultManager:
         # Order rows by relative difference (descending order)
         rows.sort(key=lambda row: abs(row["reldiff"]), reverse=True)
 
-        with Path(KNOB_TABLE).open("w") as f:
+        with self.knob_table_path.open("w") as f:
             f.write(
                 "| Index |   Knob   |   True   |   Final   |   Diff   | Uncertainty | Relative Diff | Relative Uncertainty |\n"
                 "|-------|----------|----------|----------|----------|-------------|---------------|----------------------|\n"

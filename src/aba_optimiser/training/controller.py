@@ -16,19 +16,7 @@ from pathlib import Path
 import numpy as np
 from tensorboardX import SummaryWriter
 
-from aba_optimiser.config import (
-    BEAM_ENERGY,
-    BPM_END_POINTS,
-    BPM_START_POINTS,
-    CORRECTOR_STRENGTHS,
-    FLATTOP_TURNS,
-    MACHINE_DELTAP,
-    MAGNET_RANGE,
-    NUM_TRACKS,
-    TRUE_STRENGTHS_FILE,
-    TUNE_KNOBS_FILE,
-    OptSettings,
-)
+from aba_optimiser.config import OptSettings
 from aba_optimiser.io.utils import get_lhc_file_path, read_knobs
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.training.configuration_manager import ConfigurationManager
@@ -53,22 +41,22 @@ class Controller:
         self,
         opt_settings: OptSettings,
         sequence_file_path: str | Path,
+        measurement_files: list[str] | str,
+        bpm_start_points: list[str],
+        bpm_end_points: list[str],
+        magnet_range: str,
         show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
-        corrector_file: Path = CORRECTOR_STRENGTHS,
-        tune_knobs_file: Path = TUNE_KNOBS_FILE,
-        true_strengths: Path | dict[str, float] = TRUE_STRENGTHS_FILE,
-        machine_deltap: float = MACHINE_DELTAP,
-        beam_energy: float = BEAM_ENERGY,
-        magnet_range: str = MAGNET_RANGE,
-        bpm_start_points: list[str] = BPM_START_POINTS,
-        bpm_end_points: list[str] = BPM_END_POINTS,
-        measurement_file: str | None = None,
+        corrector_files: list[Path] | Path | None = None,
+        tune_knobs_files: list[Path] | Path | None = None,
+        true_strengths: Path | dict[str, float] | None = None,
+        machine_deltaps: list[float] | float = 0.0,
         bad_bpms: list[str] | None = None,
         first_bpm: str | None = None,
         seq_name: str | None = None,
-        num_tracks: int = NUM_TRACKS,
-        flattop_turns: int = FLATTOP_TURNS,
+        beam_energy: float = 6800.0,
+        num_tracks: int = 3,
+        flattop_turns: int = 6600,
     ):
         """
         Initialise the controller with all required managers.
@@ -78,13 +66,15 @@ class Controller:
             sequence_file_path (str | Path): Path to the sequence file.
             show_plots (bool, optional): Whether to show plots. Defaults to True.
             initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths.
-            true_strengths_file (str | None, optional): Path to true strengths file.
-            machine_deltap (float, optional): Machine delta p.
+            corrector_files (list[Path] | Path, optional): List of corrector strength files or single file.
+            tune_knobs_files (list[Path] | Path, optional): List of tune knob files or single file.
+            true_strengths (Path | dict[str, float], optional): True strengths file or dict.
+            machine_deltaps (list[float] | float, optional): List of machine deltaps or single value.
             beam_energy (float, optional): Beam energy in GeV.
             magnet_range (str, optional): Magnet range.
             bpm_start_points (list[str], optional): BPM start points.
             bpm_end_points (list[str], optional): BPM end points.
-            measurement_file (str | None, optional): Measurement file path.
+            measurement_files (list[str] | str | None, optional): List of measurement files or single file.
             bad_bpms (list[str] | None, optional): List of bad BPMs.
             first_bpm (str | None, optional): First BPM.
             seq_name (str | None, optional): Sequence name.
@@ -98,6 +88,30 @@ class Controller:
         if opt_settings.optimise_bends:
             logger.info("Optimising bends")
         self.opt_settings = dataclasses.replace(opt_settings)
+
+        # Normalise inputs to lists
+        if isinstance(measurement_files, Path | str) or measurement_files is None:
+            measurement_files = [measurement_files]
+        if isinstance(corrector_files, Path | str) or corrector_files is None:
+            corrector_files = [corrector_files]
+        if isinstance(tune_knobs_files, Path | str) or tune_knobs_files is None:
+            tune_knobs_files = [tune_knobs_files]
+        if isinstance(machine_deltaps, float):
+            machine_deltaps = [machine_deltaps]
+
+        # Validate and expand lists
+        num_configs = len(measurement_files)
+        for name, lst in [("corrector_files", corrector_files), ("tune_knobs_files", tune_knobs_files), ("machine_deltaps", machine_deltaps)]:
+            if len(lst) == 1:
+                lst *= num_configs
+            elif len(lst) != num_configs:
+                raise ValueError(f"Number of {name} ({len(lst)}) must match number of measurement files ({num_configs}) or be 1")
+
+        self.measurement_files = measurement_files
+        self.corrector_files = corrector_files
+        self.tune_knobs_files = tune_knobs_files
+        self.machine_deltaps = machine_deltaps
+        self.num_configs = num_configs
 
         # Remove all the bad bpms from the start and end points
         if bad_bpms is not None:
@@ -114,8 +128,8 @@ class Controller:
             seq_name=seq_name,
             bad_bpms=bad_bpms,
             start_bpm=first_bpm,
-            tune_knobs_file=tune_knobs_file,
-            corrector_strengths=corrector_file,
+            tune_knobs_file=None,
+            corrector_strengths=None,
             beam_energy=beam_energy,
         ).all_bpms
         # Initialise managers
@@ -125,8 +139,6 @@ class Controller:
         self.config_manager.setup_mad_interface(
             sequence_file_path,
             bad_bpms,
-            corrector_file,
-            tune_knobs_file,
             seq_name,
             beam_energy,
         )
@@ -135,7 +147,7 @@ class Controller:
         self.data_manager = DataManager(
             self.config_manager.all_bpms,
             opt_settings,
-            measurement_file,
+            measurement_files,
             bpm_order=bpm_order,
             num_tracks=num_tracks,
             flattop_turns=flattop_turns,
@@ -148,42 +160,35 @@ class Controller:
             num_batches=min(self.opt_settings.num_batches, self.data_manager.tracks_per_worker)
         )
 
-        # Determine the exact set of turns needed and load filtered data
-        # needed_turns = None
-        # if RUN_ARC_BY_ARC:
-        #     needed_turns = {
-        #         t for batch in self.data_manager.turn_batches for t in batch
-        #     } | {t + 1 for batch in self.data_manager.turn_batches for t in batch}
-        self.data_manager.load_track_data(
-            # needed_turns=needed_turns,
-            use_off_energy_data=self.opt_settings.use_off_energy_data,
-        )
+        # Load track data from all measurement files
+        self.data_manager.load_track_data()
 
         self.worker_manager = WorkerManager(
-            self.config_manager.Worker,
             self.config_manager.calculate_n_data_points(),
             # Assume the start bpm has is largest vertical kick
             ybpm=magnet_range.split("/")[0],
             magnet_range=magnet_range,
             sequence_file_path=sequence_file_path,
-            corrector_strengths_file=corrector_file,
-            tune_knobs_file=tune_knobs_file,
+            corrector_strengths_files=corrector_files,
+            tune_knobs_files=tune_knobs_files,
             bad_bpms=bad_bpms,
             seq_name=seq_name,
             beam_energy=beam_energy,
+            flattop_turns=flattop_turns,
+            num_tracks=num_tracks,
         )
-        if isinstance(true_strengths, dict):
-            true_strengths = true_strengths.copy()
-        elif true_strengths is None:
+        if true_strengths is None:
             true_strengths = {}
+        elif isinstance(true_strengths, dict):
+            true_strengths = true_strengths.copy()
         elif isinstance(true_strengths, Path):
             true_strengths = read_knobs(true_strengths)
-            true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(machine_deltap)
+            # Use the first machine deltap for true strengths (typically all configs should match)
+            true_strengths["pt"] = 0.0
 
         if "deltap" in true_strengths:
-            true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(
-                true_strengths.pop("deltap")
-            )
+            logger.warning("Ignoring provided 'deltap' in true strengths, can different per measurement file, setting to 0.0")
+            true_strengths["pt"] = 0.0
         # Update bend keys to remove [ABCD] and average over them
         pattern = r"(MB\.)([ABCD])([0-9]+[LR][1-8]\.B[12])\.k0"
         new_true_strengths = {}
@@ -243,9 +248,10 @@ class Controller:
             self.worker_manager.start_workers(
                 self.data_manager.track_data,
                 self.data_manager.turn_batches,
-                self.data_manager.energy_map,
+                self.data_manager.file_map,
                 self.config_manager.bpm_ranges,
                 self.opt_settings,
+                self.machine_deltaps,
             )
 
             # Clean up memory after workers are started

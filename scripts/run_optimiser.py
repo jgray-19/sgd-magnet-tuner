@@ -5,8 +5,8 @@ import logging
 import multiprocessing as mp
 
 from aba_optimiser.config import (
-    DPP_OPT_SETTINGS,
-    QUAD_OPT_SETTINGS,
+    DPP_OPT_SETTINGS_TEMPLATE,
+    QUAD_OPT_SETTINGS_TEMPLATE,
     # SEXT_OPT_SETTINGS
 )
 from aba_optimiser.training.controller import Controller
@@ -24,7 +24,7 @@ if __name__ == "__main__":
     # Step 2: Optimize quadrupoles using energy results as starting point
     logging.info("Starting quadrupole optimization with energy results...")
     quad_controller = Controller(
-        QUAD_OPT_SETTINGS,
+        QUAD_OPT_SETTINGS_TEMPLATE,
         show_plots=True,
         # initial_knob_strengths=energy_knobs
     )
