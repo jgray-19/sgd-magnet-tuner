@@ -152,6 +152,11 @@ class Controller:
             num_tracks=num_tracks,
             flattop_turns=flattop_turns,
         )
+        
+        # Load track data from all measurement files first
+        self.data_manager.load_track_data()
+        
+        # Then prepare turn batches (needs loaded data to identify boundary turns)
         self.data_manager.prepare_turn_batches(self.config_manager)
 
         # Adjust num_batches to not exceed tracks_per_worker for consistency
@@ -159,9 +164,6 @@ class Controller:
             self.opt_settings,
             num_batches=min(self.opt_settings.num_batches, self.data_manager.tracks_per_worker)
         )
-
-        # Load track data from all measurement files
-        self.data_manager.load_track_data()
 
         self.worker_manager = WorkerManager(
             self.config_manager.calculate_n_data_points(),

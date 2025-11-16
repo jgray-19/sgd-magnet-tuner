@@ -42,40 +42,18 @@ class DataManager:
         self.num_tracks = num_tracks
         self.flattop_turns = flattop_turns
 
-        # Available global "turn" ids (now include offsets for multiple files)
-        total_files = len(measurement_files)
-        self.available_turns: list[int] = list(
-            range(1, self.flattop_turns * self.num_tracks * total_files + 1)
-        )
+        # Available turns will be populated after loading track data
+        self.available_turns: list[int] = []
 
         self.turn_batches: list[list[int]] = []
         self.tracks_per_worker: int = 0  # set in prepare_turn_batches
+        self.num_workers: int = 0  # set in prepare_turn_batches
 
         # Track data per measurement file (indexed by file index)
         self.track_data: dict[int, pd.DataFrame] | None = None
         self.file_map: dict[int, int] | None = None  # {turn -> file_index}
 
     # ---------- Internals ----------
-
-    def _get_file_and_bunch_index(self, turn: int) -> tuple[int, int]:
-        """Get the file index and bunch index for a given global turn number.
-        
-        Args:
-            turn (int): Global turn number (1-indexed)
-            
-        Returns:
-            tuple[int, int]: (file_index, bunch_index) where bunch_index is 0-indexed
-        """
-        # Adjust to 0-indexed for calculations
-        turn_0indexed = turn - 1
-        turns_per_file = self.flattop_turns * self.num_tracks
-        file_idx = turn_0indexed // turns_per_file
-        
-        # Within file: determine which bunch (track) this turn belongs to
-        turn_in_file = turn_0indexed % turns_per_file
-        bunch_idx = turn_in_file // self.flattop_turns
-        
-        return file_idx, bunch_idx
 
     def _reduce_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         df["turn"] = df["turn"].astype("int32", copy=False)
@@ -92,9 +70,11 @@ class DataManager:
             filtered_turns = [t - offset for t in needed_turns]
             filters = [("turn", "in", filtered_turns), ("name", "in", self.all_bpms)]
             df = pd.read_parquet(source, columns=cols_to_read, filters=filters)
-            df["turn"] += offset  # Create global ids
         else:
             df = pd.read_parquet(source, columns=cols_to_read)
+        
+        # Always apply offset to create global turn IDs
+        df["turn"] = df["turn"] + offset
 
         missing = [c for c in cols_to_read if c not in df.columns]
         if missing:
@@ -191,6 +171,12 @@ class DataManager:
 
         self.file_map = file_map
 
+        # Populate available_turns from all loaded turns
+        all_turns = set()
+        for turns in file_turn_sets.values():
+            all_turns.update(turns)
+        self.available_turns = sorted(all_turns)
+
         LOGGER.info(
             "Loaded track data: %s",
             ", ".join(
@@ -201,105 +187,91 @@ class DataManager:
 
     def prepare_turn_batches(self, config_manager: ConfigurationManager) -> None:
         """Build the list of turns to be processed and validate availability."""
+        if self.track_data is None:
+            raise ValueError("Track data must be loaded before preparing turn batches. Call load_track_data() first.")
+        
         LOGGER.info("Preparing turn batches for worker distribution")
-
-        # Remove boundary turns from each bunch to ensure loop data availability
-        # First and last turn in each bunch cannot be selected as they need prev/next turns
-        total_files = len(self.measurement_files)
-        turns_to_remove = []
         
-        for file_idx in range(total_files):
-            for bunch_idx in range(self.num_tracks):
-                # Calculate global turn numbers for first and last turn in this bunch
-                base_turn = file_idx * self.flattop_turns * self.num_tracks + bunch_idx * self.flattop_turns + 1
-                first_turn = base_turn  # First turn in bunch (1-indexed)
-                last_turn = base_turn + self.flattop_turns - 1  # Last turn in bunch
-                turns_to_remove.extend([first_turn, last_turn])
+        # Remove boundary turns (first and last of each track)
+        turns_to_remove = set()
+        for file_idx, df in self.track_data.items():
+            file_turns = sorted(df.index.get_level_values('turn').unique())
+            LOGGER.debug(f"File {file_idx} has {len(file_turns)} turns")
+            
+            # Split into tracks and remove boundaries
+            for track_idx in range(0, len(file_turns), self.flattop_turns):
+                track_turns = file_turns[track_idx:track_idx + self.flattop_turns]
+                if len(track_turns) > 1:
+                    turns_to_remove.add(track_turns[0])   # First
+                    turns_to_remove.add(track_turns[-1])  # Last
         
-        # Remove boundary turns
         self.available_turns = [t for t in self.available_turns if t not in turns_to_remove]
+        LOGGER.info(f"Removed {len(turns_to_remove)} boundary turns, {len(self.available_turns)} available")
 
-        num_turns_needed = self.opt_settings.total_tracks
+        # Determine how many batches to create
         num_workers = self.opt_settings.num_workers
-        tracks_per_worker = self.opt_settings.tracks_per_worker
-        LOGGER.debug(
-            "Need %d turns for %d workers with %d tracks each",
-            num_turns_needed,
-            num_workers,
-            tracks_per_worker,
-        )
-
-        # If sextupoles are optimised, we effectively have 3 files worth of turns
-        total_available_turns = len(self.available_turns)
-
-        if total_available_turns < num_turns_needed:
-            raise ValueError(
-                f"Not enough available turns. Need {num_turns_needed}, "
-                f"but found {total_available_turns}."
-            )
-
-        # Cap tracks per worker at configured TRACKS_PER_WORKER
-        self.tracks_per_worker = min(
-            total_available_turns // num_workers,
-            tracks_per_worker,
-        )
-
+        num_files = len(self.track_data)
         num_ranges = len(config_manager.bpm_ranges)
-        if not self.opt_settings.different_turns_per_range:
-            self.tracks_per_worker *= num_ranges
-            num_workers = num_workers // num_ranges
-
-        num_workers = num_workers // 2  # /2 for sdir = +/-1
-        self.tracks_per_worker *= 2
-
-        num_workers = max(1, num_workers)  # Ensure at least one worker
+        tracks_per_worker = self.opt_settings.tracks_per_worker
+        
+        # Start with requested number, but ensure we use all files (for different deltaps)
+        num_batches = max(num_workers, num_files)
+        
+        # Cap by available turns
+        max_batches = len(self.available_turns) // tracks_per_worker
+        num_batches = min(num_batches, max(1, max_batches))
+        
+        # Use configured tracks_per_worker
+        self.tracks_per_worker = tracks_per_worker
+        
+        actual_workers = num_batches * num_ranges * 2
         LOGGER.info(
-            f"Adjusted tracks per worker to {self.tracks_per_worker} "
-            f"and number of workers to {num_workers} "
+            f"Creating {num_batches} batches × {num_ranges} ranges × 2 directions = "
+            f"{actual_workers} workers, {self.tracks_per_worker} turns/worker"
         )
-        if num_workers * num_ranges * 2 > 60:  # * 2 for sdir = +/-1
-            LOGGER.warning(
-                "Total number of workers (%d) exceeds 60, which may lead to resource issues.",
-                num_workers * num_ranges * 2,
-            )
 
-        # Group turns by (file, bunch) and shuffle within groups for variety
-        turns_by_group: dict[tuple[int, int], list[int]] = {}
+        # Organize turns by file, then create batches round-robin
+        turns_by_file: dict[int, list[int]] = {}
         for turn in self.available_turns:
-            file_idx, bunch_idx = self._get_file_and_bunch_index(turn)
-            key = (file_idx, bunch_idx)
-            turns_by_group.setdefault(key, []).append(turn)
+            turns_by_file.setdefault(self.file_map[turn], []).append(turn)
         
-        # Shuffle within each group for varied data
-        for turns_list in turns_by_group.values():
-            random.shuffle(turns_list)
+        for turns in turns_by_file.values():
+            random.shuffle(turns)
         
-        # Distribute turns: fill each batch from one group, cycling through groups
+        # Create batches by round-robin from files
         self.turn_batches = []
-        groups = list(turns_by_group.keys())
-        group_idx = 0
+        file_indices = list(sorted(turns_by_file.keys()))
+        file_idx_pos = 0  # Track which file to take from next
         
-        LOGGER.info("Each worker will process %d turns from %d (file, bunch) groups", 
-                    self.tracks_per_worker, len(groups))
-        
-        for _ in range(num_workers):
-            # Try to get a full batch from current group
-            for _ in range(len(groups)):  # Try all groups
-                if groups[group_idx] in turns_by_group:
-                    turns_list = turns_by_group[groups[group_idx]]
-                    if len(turns_list) >= self.tracks_per_worker:
-                        batch = turns_list[:self.tracks_per_worker]
-                        turns_by_group[groups[group_idx]] = turns_list[self.tracks_per_worker:]
-                        if not turns_by_group[groups[group_idx]]:
-                            del turns_by_group[groups[group_idx]]
-                        self.turn_batches.append(batch)
-                        group_idx = (group_idx + 1) % len(groups)
-                        break
-                group_idx = (group_idx + 1) % len(groups)
-            else:
-                # No group has enough turns left
+        for _ in range(num_batches):
+            # Try each file starting from current position
+            found = False
+            for _ in range(len(file_indices)):
+                if file_idx_pos >= len(file_indices):
+                    file_idx_pos = 0
+                    
+                file_idx = file_indices[file_idx_pos]
+                if file_idx in turns_by_file and len(turns_by_file[file_idx]) >= self.tracks_per_worker:
+                    # Take batch from this file
+                    batch = turns_by_file[file_idx][:self.tracks_per_worker]
+                    turns_by_file[file_idx] = turns_by_file[file_idx][self.tracks_per_worker:]
+                    if not turns_by_file[file_idx]:
+                        del turns_by_file[file_idx]
+                        file_indices.remove(file_idx)
+                    else:
+                        file_idx_pos += 1
+                    self.turn_batches.append(batch)
+                    found = True
+                    break
+                file_idx_pos += 1
+            
+            if not found:
+                LOGGER.warning(f"Only created {len(self.turn_batches)}/{num_batches} batches")
                 break
+        
+        self.num_workers = len(self.turn_batches)
+        LOGGER.info(f"Created {self.num_workers} batches from {len(self.track_data)} files")
 
     def get_total_turns(self) -> int:
         """Calculate total number of turns to process."""
-        return self.opt_settings.num_workers * self.tracks_per_worker
+        return self.num_workers * self.tracks_per_worker

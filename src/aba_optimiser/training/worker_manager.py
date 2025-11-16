@@ -80,15 +80,6 @@ class WorkerManager:
         self.flattop_turns = flattop_turns
         self.num_tracks = num_tracks
 
-    def _get_file_and_bunch_index(self, turn: int) -> tuple[int, int]:
-        """Get file and bunch index for a turn."""
-        turn_0indexed = turn - 1
-        turns_per_file = self.flattop_turns * self.num_tracks
-        file_idx = turn_0indexed // turns_per_file
-        turn_in_file = turn_0indexed % turns_per_file
-        bunch_idx = turn_in_file // self.flattop_turns
-        return file_idx, bunch_idx
-
     def _compute_pt(self, file_idx: int, machine_deltaps: list[float]) -> float:
         """Compute transverse momentum based on file index."""
         return dp2pt(machine_deltaps[file_idx], PARTICLE_MASS, self.beam_energy)
@@ -125,6 +116,7 @@ class WorkerManager:
         # Precompute arrays once per file for memory efficiency
         arrays_cache = {idx: self._extract_arrays(df) for idx, df in track_data.items()}
         
+        LOGGER.info(f"Creating worker payloads: {len(bpm_ranges)} BPM ranges x {len(turn_batches)} batches x 2 directions")
         for sdir in [1, -1]:
             for bpm_i, bpm_range in enumerate(bpm_ranges):
                 start_bpm, end_bpm = bpm_range.split("/")
@@ -132,12 +124,13 @@ class WorkerManager:
                     if opt_settings.different_turns_per_range and batch_idx % len(bpm_ranges) != bpm_i:
                         continue
 
-                    assert turn_batch, f"Empty batch {batch_idx} for {bpm_range}"
+                    if not turn_batch:
+                        raise ValueError(f"Empty batch {batch_idx} for {bpm_range}")
                     
-                    # Validate all turns from same (file, bunch)
-                    groups = {self._get_file_and_bunch_index(t) for t in turn_batch}
-                    if len(groups) > 1:
-                        raise ValueError(f"Batch {batch_idx} mixes groups {groups}")
+                    # All turns must be from same file
+                    primary_file_idx = file_turn_map[turn_batch[0]]
+                    if any(file_turn_map[t] != primary_file_idx for t in turn_batch):
+                        raise ValueError(f"Batch {batch_idx} has turns from multiple files")
 
                     # Create payload arrays
                     pos, mom, pos_var, mom_var, init_coords, pts = self._make_worker_payload(
@@ -149,6 +142,14 @@ class WorkerManager:
                         arr.setflags(write=False)
 
                     primary_file_idx = file_turn_map[turn_batch[0]]
+                    if any(file_turn_map[t] != primary_file_idx for t in turn_batch):
+                        raise ValueError(f"Batch {batch_idx} has turns from multiple files")
+                    
+                    LOGGER.debug(
+                        f"Worker {len(payloads)}: file={primary_file_idx}, "
+                        f"range={bpm_range}, sdir={sdir}, turns={len(turn_batch)}"
+                    )
+                    
                     payloads.append((
                         WorkerData(
                             position_comparisons=pos,
@@ -172,6 +173,26 @@ class WorkerManager:
                         ),
                         batch_idx
                     ))
+                    
+        # Log summary of worker file assignments
+        file_usage = {}
+        for payload_data, payload_config, batch_idx in payloads:
+            file_idx = self.corrector_strengths_files.index(payload_config.corrector_strengths)
+            file_usage[file_idx] = file_usage.get(file_idx, 0) + 1
+        
+        LOGGER.info(
+            f"Created {len(payloads)} workers using files: " +
+            ", ".join(f"file_{idx}={count} workers" for idx, count in sorted(file_usage.items()))
+        )
+        
+        # Verify all files are used if we have enough batches
+        num_files = len(self.corrector_strengths_files)
+        if len(file_usage) < num_files:
+            LOGGER.warning(
+                f"Only {len(file_usage)}/{num_files} measurement files are being used by workers! "
+                f"This may lead to poor optimization if different files have different deltap values."
+            )
+        
         return payloads
 
     def _extract_arrays(self, df: pd.DataFrame) -> dict[str, np.ndarray]:
@@ -281,6 +302,7 @@ class WorkerManager:
         payloads = self.create_worker_payloads(
             track_data, turn_batches, file_turn_map, bpm_ranges, machine_deltaps, opt_settings
         )
+        LOGGER.info(f"Starting {len(payloads)} workers...")
 
         for data, config, worker_id in payloads:
             parent, child = mp.Pipe()
