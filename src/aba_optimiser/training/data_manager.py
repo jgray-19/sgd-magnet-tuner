@@ -214,6 +214,20 @@ class DataManager:
         num_ranges = len(config_manager.bpm_ranges)
         tracks_per_worker = self.opt_settings.tracks_per_worker
         
+        # Check if we have enough turns
+        if len(self.available_turns) == 0:
+            raise ValueError(
+                "No turns available after removing boundary turns. "
+                "Check that your flattop_turns setting leaves at least one turn per track."
+            )
+        
+        if len(self.available_turns) < tracks_per_worker:
+            LOGGER.warning(
+                f"Only {len(self.available_turns)} turns available, but tracks_per_worker={tracks_per_worker}. "
+                f"Reducing tracks_per_worker to {len(self.available_turns)}."
+            )
+            tracks_per_worker = len(self.available_turns)
+        
         # Start with requested number, but ensure we use all files (for different deltaps)
         num_batches = max(num_workers, num_files)
         
@@ -221,7 +235,7 @@ class DataManager:
         max_batches = len(self.available_turns) // tracks_per_worker
         num_batches = min(num_batches, max(1, max_batches))
         
-        # Use configured tracks_per_worker
+        # Use configured or adjusted tracks_per_worker
         self.tracks_per_worker = tracks_per_worker
         
         actual_workers = num_batches * num_ranges * 2
@@ -268,6 +282,13 @@ class DataManager:
             if not found:
                 LOGGER.warning(f"Only created {len(self.turn_batches)}/{num_batches} batches")
                 break
+        
+        if len(self.turn_batches) == 0:
+            raise ValueError(
+                f"Failed to create any batches. Available turns: {len(self.available_turns)}, "
+                f"required tracks_per_worker: {self.tracks_per_worker}. "
+                "Consider reducing tracks_per_worker or increasing flattop_turns."
+            )
         
         self.num_workers = len(self.turn_batches)
         LOGGER.info(f"Created {self.num_workers} batches from {len(self.track_data)} files")

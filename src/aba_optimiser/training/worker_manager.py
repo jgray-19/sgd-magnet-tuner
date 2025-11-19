@@ -171,13 +171,12 @@ class WorkerManager:
                             bad_bpms=self.bad_bpms,
                             seq_name=self.seq_name
                         ),
-                        batch_idx
+                        primary_file_idx
                     ))
                     
         # Log summary of worker file assignments
         file_usage = {}
-        for payload_data, payload_config, batch_idx in payloads:
-            file_idx = self.corrector_strengths_files.index(payload_config.corrector_strengths)
+        for _, _, file_idx in payloads:
             file_usage[file_idx] = file_usage.get(file_idx, 0) + 1
         
         LOGGER.info(
@@ -249,7 +248,15 @@ class WorkerManager:
                     LOGGER.warning(f"Reversed init turn {turn} -> {init_turn}")
 
             init_pos = self._get_pos(df, init_turn, init_bpm)
-            init_coords[i, :] = [arr_x[init_pos], arr_px[init_pos], arr_y[init_pos], arr_py[init_pos], 0.0, pts[i]]
+            
+            # Extract kick plane and zero out non-kicked planes in initial conditions
+            kick_plane = df.iloc[init_pos]["kick_plane"]
+            x_val = arr_x[init_pos] if "x" in kick_plane else 0.0
+            px_val = arr_px[init_pos] if "x" in kick_plane else 0.0
+            y_val = arr_y[init_pos] if "y" in kick_plane else 0.0
+            py_val = arr_py[init_pos] if "y" in kick_plane else 0.0
+            
+            init_coords[i, :] = [x_val, px_val, y_val, py_val, 0.0, pts[i]]
 
             # Extract data slice
             sl = slice(init_pos, init_pos - n_data_points, -1) if sdir == -1 else slice(init_pos, init_pos + n_data_points)
@@ -304,7 +311,7 @@ class WorkerManager:
         )
         LOGGER.info(f"Starting {len(payloads)} workers...")
 
-        for data, config, worker_id in payloads:
+        for worker_id, (data, config, _file_idx) in enumerate(payloads):
             parent, child = mp.Pipe()
             w = ArcByArcWorker(child, worker_id, data, config, opt_settings)
             w.start()

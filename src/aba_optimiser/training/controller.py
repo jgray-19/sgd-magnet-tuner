@@ -188,9 +188,12 @@ class Controller:
             # Use the first machine deltap for true strengths (typically all configs should match)
             true_strengths["pt"] = 0.0
 
-        if "deltap" in true_strengths:
+        if "deltap" in true_strengths and len(measurement_files) > 1:
             logger.warning("Ignoring provided 'deltap' in true strengths, can different per measurement file, setting to 0.0")
             true_strengths["pt"] = 0.0
+        elif "deltap" in true_strengths:
+            true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(true_strengths.pop("deltap"))
+
         # Update bend keys to remove [ABCD] and average over them
         pattern = r"(MB\.)([ABCD])([0-9]+[LR][1-8]\.B[12])\.k0"
         new_true_strengths = {}
@@ -215,6 +218,7 @@ class Controller:
                 true_strengths, initial_knob_strengths
             )
         )
+
         if not true_strengths:
             # Set the true strengths to the initial strengths if not provided
             self.filtered_true_strengths = self.initial_knobs.copy()

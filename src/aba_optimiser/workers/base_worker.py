@@ -33,7 +33,7 @@ class WorkerData:
     momentum_variances: (
         np.ndarray
     )  # Shape: (n_turns, n_data_points, 2) - [var_px, var_py]
-    init_coords: np.ndarray
+    init_coords: np.ndarray  # Non-kicked planes are zeroed out
     init_pts: np.ndarray
 
 
@@ -413,13 +413,14 @@ end
         gy = np.einsum("pkm,pm->k", dy_dk, wy * residual_y)
         gpy = np.einsum("pkm,pm->k", dpy_dk, wpy * residual_py)
         loss = (
-            np.sum(wy * residual_y**2)
-            + np.sum(wpy * residual_py**2)
-            + np.sum(wx * residual_x**2)
+            np.sum(wx * residual_x**2)
             + np.sum(wpx * residual_px**2)
+            + np.sum(wy * residual_y**2)
+            + np.sum(wpy * residual_py**2)
         )
 
         grad = 2.0 * (gx + gy + gpx + gpy)
+        # grad = 2.0 * (gy + gpy)
         return grad, loss
 
     def run(self) -> None:
