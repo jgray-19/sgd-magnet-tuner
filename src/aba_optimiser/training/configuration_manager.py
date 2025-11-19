@@ -75,7 +75,6 @@ class ConfigurationManager:
             opt_settings=self.global_config,
             corrector_strengths=None,
             tune_knobs_file=None,
-            # discard_mad_output=False,
             bad_bpms=bad_bpms,
             beam_energy=beam_energy,
         )

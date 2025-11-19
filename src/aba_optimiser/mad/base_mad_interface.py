@@ -65,6 +65,7 @@ function unshush()
 end
 """
 
+
 class BaseMadInterface:
     """
     Base class for MAD-NG interfaces providing core functionality.
@@ -84,7 +85,6 @@ class BaseMadInterface:
         logger.debug("Initialised base MAD interface")
         self.py_name = self.mad.py_name
         self.mad.send(shushing_script)
-
 
     def load_sequence(self, sequence_file: str | Path, seq_name: str) -> None:
         """
@@ -397,5 +397,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
 
     def __del__(self) -> None:
         """Clean up the MAD-NG session on object destruction."""
+        # Tell MAD to to shush when deleting to avoid noisy output
+        self.mad.send("shush()")
         if hasattr(self, "mad"):
             del self.mad

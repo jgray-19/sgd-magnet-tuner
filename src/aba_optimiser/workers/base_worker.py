@@ -7,8 +7,9 @@ from multiprocessing import Process
 from typing import TYPE_CHECKING
 
 import numpy as np
-from aba_optimiser.mad.scripts import HESSIAN_SCRIPT, TRACK_INIT, TRACK_SCRIPT
+
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
+from aba_optimiser.mad.scripts import HESSIAN_SCRIPT, TRACK_INIT, TRACK_SCRIPT
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection

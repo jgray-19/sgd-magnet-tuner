@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -17,6 +16,8 @@ from aba_optimiser.plotting.strengths import (
 from aba_optimiser.plotting.utils import show_plots
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from aba_optimiser.config import OptSettings
 
 
@@ -36,7 +37,7 @@ class ResultManager:
         knob_table_path: Path | None = None,
     ):
         """Initialise result manager.
-        
+
         Args:
             knob_names: List of knob names
             elem_spos: Element s-positions
@@ -49,10 +50,11 @@ class ResultManager:
         self.elem_spos = elem_spos
         self.show_plots = show_plots
         self.opt_settings = opt_settings
-        
+
         # Lazy import defaults if not provided
         if output_knobs_path is None or knob_table_path is None:
             from aba_optimiser.config import KNOB_TABLE, OUTPUT_KNOBS
+
             self.output_knobs_path = output_knobs_path or OUTPUT_KNOBS
             self.knob_table_path = knob_table_path or KNOB_TABLE
         else:
@@ -67,7 +69,9 @@ class ResultManager:
     ) -> None:
         """Write final knob strengths and markdown table to file."""
         LOGGER.info("Writing final knob strengths and markdown table...")
-        save_results(self.knob_names, current_knobs, uncertainties, self.output_knobs_path)
+        save_results(
+            self.knob_names, current_knobs, uncertainties, self.output_knobs_path
+        )
 
         # Prepare rows with index, knob, true, final, diff, relative difference, and uncertainty.
         rows = []
@@ -128,16 +132,16 @@ class ResultManager:
             quad_unc = quad_unc[:-1]  # Remove uncertainty for deltap
 
         magnet_names = [knob[:-3] for knob in knob_names]
-        initial_vals = np.array(
-            [initial_strengths[i] for i in range(len(knob_names))]
-        )
+        initial_vals = np.array([initial_strengths[i] for i in range(len(knob_names))])
         final_vals = np.array([current_knobs[k] for k in knob_names])
         true_vals = np.array([true_strengths.get(k, np.nan) for k in knob_names])
 
         save_prefix = "plots/"
         show_errorbars = True
 
-        if self.opt_settings.optimise_quadrupoles or self.opt_settings.optimise_bends:  # Relative difference comparison
+        if (
+            self.opt_settings.optimise_quadrupoles or self.opt_settings.optimise_bends
+        ):  # Relative difference comparison
             plot_strengths_comparison(
                 magnet_names,
                 final_vals,
@@ -168,6 +172,6 @@ class ResultManager:
                 current_knobs["deltap"],
                 uncertainties[-1],
             )
-        
+
         if self.show_plots:
             show_plots()

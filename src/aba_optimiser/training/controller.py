@@ -12,11 +12,11 @@ import random
 import re
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from tensorboardX import SummaryWriter
 
-from aba_optimiser.config import OptSettings
 from aba_optimiser.io.utils import get_lhc_file_path, read_knobs
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.training.configuration_manager import ConfigurationManager
@@ -24,6 +24,9 @@ from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.optimisation_loop import OptimisationLoop
 from aba_optimiser.training.result_manager import ResultManager
 from aba_optimiser.training.worker_manager import WorkerManager
+
+if TYPE_CHECKING:
+    from aba_optimiser.config import OptSettings
 
 logger = logging.getLogger(__name__)
 random.seed(42)  # For reproducibility
@@ -96,16 +99,22 @@ class Controller:
             corrector_files = [corrector_files]
         if isinstance(tune_knobs_files, Path | str) or tune_knobs_files is None:
             tune_knobs_files = [tune_knobs_files]
-        if isinstance(machine_deltaps, float):
+        if isinstance(machine_deltaps, int | float):
             machine_deltaps = [machine_deltaps]
 
         # Validate and expand lists
         num_configs = len(measurement_files)
-        for name, lst in [("corrector_files", corrector_files), ("tune_knobs_files", tune_knobs_files), ("machine_deltaps", machine_deltaps)]:
+        for name, lst in [
+            ("corrector_files", corrector_files),
+            ("tune_knobs_files", tune_knobs_files),
+            ("machine_deltaps", machine_deltaps),
+        ]:
             if len(lst) == 1:
                 lst *= num_configs
             elif len(lst) != num_configs:
-                raise ValueError(f"Number of {name} ({len(lst)}) must match number of measurement files ({num_configs}) or be 1")
+                raise ValueError(
+                    f"Number of {name} ({len(lst)}) must match number of measurement files ({num_configs}) or be 1"
+                )
 
         self.measurement_files = measurement_files
         self.corrector_files = corrector_files
@@ -152,17 +161,19 @@ class Controller:
             num_tracks=num_tracks,
             flattop_turns=flattop_turns,
         )
-        
+
         # Load track data from all measurement files first
         self.data_manager.load_track_data()
-        
+
         # Then prepare turn batches (needs loaded data to identify boundary turns)
         self.data_manager.prepare_turn_batches(self.config_manager)
 
         # Adjust num_batches to not exceed tracks_per_worker for consistency
         self.opt_settings = dataclasses.replace(
             self.opt_settings,
-            num_batches=min(self.opt_settings.num_batches, self.data_manager.tracks_per_worker)
+            num_batches=min(
+                self.opt_settings.num_batches, self.data_manager.tracks_per_worker
+            ),
         )
 
         self.worker_manager = WorkerManager(
@@ -189,10 +200,14 @@ class Controller:
             true_strengths["pt"] = 0.0
 
         if "deltap" in true_strengths and len(measurement_files) > 1:
-            logger.warning("Ignoring provided 'deltap' in true strengths, can different per measurement file, setting to 0.0")
+            logger.warning(
+                "Ignoring provided 'deltap' in true strengths, can different per measurement file, setting to 0.0"
+            )
             true_strengths["pt"] = 0.0
         elif "deltap" in true_strengths:
-            true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(true_strengths.pop("deltap"))
+            true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(
+                true_strengths.pop("deltap")
+            )
 
         # Update bend keys to remove [ABCD] and average over them
         pattern = r"(MB\.)([ABCD])([0-9]+[LR][1-8]\.B[12])\.k0"
@@ -206,7 +221,10 @@ class Controller:
                 new_true_strengths[new_key].append(value)
             else:
                 new_true_strengths[key] = value
-        true_strengths = {k: np.mean(v) if isinstance(v, list) else v for k, v in new_true_strengths.items()}
+        true_strengths = {
+            k: np.mean(v) if isinstance(v, list) else v
+            for k, v in new_true_strengths.items()
+        }
 
         # Initialise knobs
         if initial_knob_strengths is not None and "deltap" in initial_knob_strengths:
@@ -236,7 +254,7 @@ class Controller:
         if self.opt_settings.optimise_energy:
             deltap_knob_names = deltap_knob_names + ["deltap"]
             deltap_knob_names.remove("pt")
-    
+
         self.result_manager = ResultManager(
             deltap_knob_names,
             self.config_manager.elem_spos,
@@ -342,22 +360,72 @@ class LHCController(Controller):
     LHC-specific controller that automatically sets sequence file path and first BPM based on beam number.
     """
 
-    def __init__(self, beam: int, **kwargs):
+    def __init__(
+        self,
+        beam: int,
+        opt_settings: OptSettings,
+        measurement_files: list[str] | str,
+        bpm_start_points: list[str],
+        bpm_end_points: list[str],
+        magnet_range: str,
+        sequence_path: Path | None = None,
+        show_plots: bool = True,
+        initial_knob_strengths: dict[str, float] | None = None,
+        corrector_files: list[Path] | Path | None = None,
+        tune_knobs_files: list[Path] | Path | None = None,
+        true_strengths: Path | dict[str, float] | None = None,
+        machine_deltaps: list[float] | float = 0.0,
+        bad_bpms: list[str] | None = None,
+        beam_energy: float = 6800.0,
+        num_tracks: int = 3,
+        flattop_turns: int = 6600,
+    ):
         """
         Initialise the LHC controller with beam number and other parameters.
 
         Args:
             beam (int): The beam number (1 or 2).
-            **kwargs: Additional keyword arguments passed to the parent Controller class.
-                See Controller.__init__ for the full list of available parameters.
+            opt_settings (OptSettings): Optimisation settings.
+            measurement_files (list[str] | str): List of measurement files or single file.
+            bpm_start_points (list[str]): BPM start points.
+            bpm_end_points (list[str]): BPM end points.
+            magnet_range (str): Magnet range.
+            sequence_path (Path | None, optional): Path to the sequence file. If None, uses default LHC file.
+            show_plots (bool, optional): Whether to show plots. Defaults to True.
+            initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths.
+            corrector_files (list[Path] | Path | None, optional): List of corrector strength files or single file.
+            tune_knobs_files (list[Path] | Path | None, optional): List of tune knob files or single file.
+            true_strengths (Path | dict[str, float] | None, optional): True strengths file or dict.
+            machine_deltaps (list[float] | float, optional): List of machine deltaps or single value.
+            bad_bpms (list[str] | None, optional): List of bad BPMs.
+            beam_energy (float, optional): Beam energy in GeV. Defaults to 6800.0.
+            num_tracks (int, optional): Number of tracks per measurement file. Defaults to 3.
+            flattop_turns (int, optional): Number of turns on the flat top. Defaults to 6600.
         """
-        sequence_file_path = get_lhc_file_path(beam)
+        if sequence_path is None:
+            sequence_file_path = get_lhc_file_path(beam)
+        else:
+            sequence_file_path = sequence_path
         first_bpm = "BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2"
         seq_name = f"lhcb{beam}"
 
         super().__init__(
+            opt_settings=opt_settings,
             sequence_file_path=sequence_file_path,
+            measurement_files=measurement_files,
+            bpm_start_points=bpm_start_points,
+            bpm_end_points=bpm_end_points,
+            magnet_range=magnet_range,
+            show_plots=show_plots,
+            initial_knob_strengths=initial_knob_strengths,
+            corrector_files=corrector_files,
+            tune_knobs_files=tune_knobs_files,
+            true_strengths=true_strengths,
+            machine_deltaps=machine_deltaps,
+            bad_bpms=bad_bpms,
             first_bpm=first_bpm,
             seq_name=seq_name,
-            **kwargs,
+            beam_energy=beam_energy,
+            num_tracks=num_tracks,
+            flattop_turns=flattop_turns,
         )

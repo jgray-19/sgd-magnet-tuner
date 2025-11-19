@@ -281,24 +281,30 @@ def save_online_knobs(
         from nxcals.spark_session_builder import get_or_create
         from pylhc import corrector_extraction, mqt_extraction
     except ImportError as e:
-        raise ImportError("nxcals and pylhc are required for save_online_knobs but are not installed.") from e
-    
+        raise ImportError(
+            "nxcals and pylhc are required for save_online_knobs but are not installed."
+        ) from e
+
     spark = get_or_create()
+    mq_results = mqt_extraction.get_mq_vals(spark, meas_time, beam)
     mqt_results = mqt_extraction.get_mqt_vals(spark, meas_time, beam)
     ms_results = mqt_extraction.get_ms_vals(spark, meas_time, beam)
-    # mqs_results = mqt_extraction.get_mqs_vals(spark, meas_time, beam)
+    mb_results = mqt_extraction.get_mb_vals(spark, meas_time, beam)
     corrector_results = corrector_extraction.get_mcb_vals(spark, meas_time, beam)
 
     mqt_knobs = build_dict_from_nxcal_result(mqt_results)
     ms_knobs = build_dict_from_nxcal_result(ms_results)
+    mb_knobs = build_dict_from_nxcal_result(mb_results)
+    mq_knobs = build_dict_from_nxcal_result(mq_results)
     corrector_knobs = build_dict_from_nxcal_result(corrector_results)
+
     if tune_knobs_file is None:
         tune_knobs_file = TUNE_KNOBS_FILE
     if corrector_knobs_file is None:
         corrector_knobs_file = CORRECTOR_STRENGTHS
 
-    ms_and_mqt_knobs = {**mqt_knobs, **ms_knobs}
-    save_knobs(ms_and_mqt_knobs, tune_knobs_file)
+    main_magnet_knobs = {**mqt_knobs, **ms_knobs, **mb_knobs, **mq_knobs}
+    save_knobs(main_magnet_knobs, tune_knobs_file)
     save_knobs(corrector_knobs, corrector_knobs_file)
 
 
@@ -308,9 +314,11 @@ def process_measurements(
     model_dir: str,
     beam: int,
     filename: str | None = "pz_data.parquet",
+    bad_bpms: list[str] | None = None,
 ) -> tuple[pd.DataFrame, list[str], Path]:
     """Process measurement files to compute pz data and identify bad BPMs."""
-    bad_bpms = run_analysis(analysis_dir, model_dir, files, beam)
+    if bad_bpms is None:
+        bad_bpms = run_analysis(analysis_dir, model_dir, files, beam)
 
     data = load_files(files)
     combined = convert_measurements(data, bad_bpms)
@@ -350,7 +358,6 @@ def process_measurements(
 
     mad_iface = OptimisationMadInterface(
         get_lhc_file_path(beam),
-        discard_mad_output=False,
     )
     all_bpms = set(mad_iface.all_bpms)
     del mad_iface

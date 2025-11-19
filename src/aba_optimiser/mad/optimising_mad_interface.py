@@ -83,7 +83,7 @@ class OptimisationMadInterface(BaseMadInterface):
         magnet_range: str = "$start/$end",
         bpm_range: str | None = None,
         opt_settings: OptSettings = None,
-        discard_mad_output: bool = True,
+        discard_mad_output: bool = False,
         bpm_pattern: str = BPM_PATTERN,
         bad_bpms: list[str] | None = None,
         beam_energy: float = BEAM_ENERGY,
@@ -152,13 +152,13 @@ class OptimisationMadInterface(BaseMadInterface):
         # Setup optimization-specific functionality
         self._observe_bpms(bad_bpms)
         self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
-        
+
         # Apply corrector strengths if provided
         if corrector_strengths is not None:
             self._set_correctors(corrector_strengths)
         else:
             LOGGER.info("Skipping corrector strengths (not provided)")
-        
+
         # Apply tune knobs if provided
         if tune_knobs_file is not None:
             self._set_tune_knobs(tune_knobs_file)
@@ -232,8 +232,8 @@ class OptimisationMadInterface(BaseMadInterface):
         self.mad.send(f"{self.py_name}:send(true)")
         assert self.mad.recv(), "Failed to set tune knobs"
 
-        LOGGER.info(f"Previous tune knob values: {prev}")
-        LOGGER.info(f"Set tune knobs from {tune_knobs_file}: {tune_knobs}")
+        LOGGER.debug(f"Previous tune knob values: {prev}")
+        LOGGER.debug(f"Set tune knobs from {tune_knobs_file}: {len(tune_knobs)}")
 
     def _make_adj_knobs(self, opt_settings: OptSettings) -> None:
         """
@@ -255,7 +255,7 @@ class OptimisationMadInterface(BaseMadInterface):
 
             loop_code = MAKE_KNOBS_LOOP_MAD.format(element_condition=element_condition)
             mad_code += loop_code
-        
+
         if opt_settings.optimise_energy:
             mad_code += 'table.insert(knob_names, "pt")\n'
 

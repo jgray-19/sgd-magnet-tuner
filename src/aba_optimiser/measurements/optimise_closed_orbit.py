@@ -75,16 +75,16 @@ def optimise_ranges(
         controller = Controller(
             beam=beam,
             opt_settings=co_settings,
-            corrector_file=corrector_knobs_file,
-            tune_knobs_file=tune_knobs_file,
+            measurement_files=measurement_file,
+            corrector_files=corrector_knobs_file,
+            tune_knobs_files=tune_knobs_file,
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,
-            machine_deltap=0,
+            machine_deltaps=0,
             magnet_range=range_config.magnet_ranges[i],
             bpm_start_points=range_config.bpm_starts[i],
             bpm_end_points=range_config.bpm_end_points[i],
-            measurement_file=measurement_file,
             bad_bpms=bad_bpms,
             num_tracks=1,
             flattop_turns=3,
@@ -97,6 +97,7 @@ def optimise_ranges(
         e_meas = energy * (1 + fitted_deltap)
         deltap_wrt_6800 = (e_meas - e_ref) / e_ref
         results.append(deltap_wrt_6800)
+        # results.append(fitted_deltap)
         uncertainties.append(uncs["deltap"])  # Assuming uncs is a dict with 'deltap'
         logger.info(f"{range_type.capitalize()} {i + 1}: deltap = {results[-1]}")
         logger.info(
@@ -129,10 +130,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             arc_config=arc_config_b1,
             folder=folder,
             name_prefix=name_prefix,
-            times=[
-                "07_53_05_820",
-                "07_54_13_858",
-            ],
+            times=["07_53_05_820", "07_54_13_858"],
             title="0",
         ),
         MeasurementConfig(
@@ -141,10 +139,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             arc_config=arc_config_b1,
             folder=folder,
             name_prefix=name_prefix,
-            times=[
-                "08_08_02_826",
-                "08_09_11_940",
-            ],
+            times=["08_08_02_826", "08_09_11_940"],
             title="0p2",
         ),
         MeasurementConfig(
@@ -153,10 +148,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             arc_config=arc_config_b1,
             folder=folder,
             name_prefix=name_prefix,
-            times=[
-                "08_11_13_745",
-                "08_12_25_817",
-            ],
+            times=["08_11_13_745", "08_12_25_817"],
             title="0p1",
         ),
         MeasurementConfig(
@@ -165,10 +157,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             arc_config=arc_config_b1,
             folder=folder,
             name_prefix=name_prefix,
-            times=[
-                "08_18_09_980",
-                "08_19_16_847",
-            ],
+            times=["08_18_09_980", "08_19_16_847"],
             title="m0p1",
         ),
         MeasurementConfig(
@@ -177,10 +166,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             arc_config=arc_config_b1,
             folder=folder,
             name_prefix=name_prefix,
-            times=[
-                "08_23_20_980",
-                "08_24_32_020",
-            ],
+            times=["08_23_20_980", "08_24_32_020"],
             title="m0p2",
         ),
     ]
@@ -213,7 +199,8 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             arc_config=arc_config_b2,
             folder=folder,
             name_prefix=name_prefix,
-            times=["07_35_27_940", "07_36_39_380", "07_38_44_035"],
+            # times=["07_35_27_940", "07_36_39_380", "07_38_44_035"],
+            times=["07_36_39_380", "07_38_44_035"],
             title="0",
         ),
         MeasurementConfig(
@@ -231,7 +218,8 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             arc_config=arc_config_b2,
             folder=folder,
             name_prefix=name_prefix,
-            times=["08_04_55_798", "08_06_06_900", "08_07_13_900"],
+            # times=["08_04_55_798", "08_06_06_900", "08_07_13_900"],
+            times=["08_06_06_900", "08_07_13_900"],
             title="0p1",
         ),
         MeasurementConfig(
@@ -256,7 +244,7 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
 
 
 def process_single_config(
-    config: MeasurementConfig, temp_analysis_dir: Path, date: str
+    config: MeasurementConfig, temp_analysis_dir: Path, date: str, skip_reload: bool
 ) -> None:
     """Process a single measurement configuration."""
     results_dir = PROJECT_ROOT / f"b{config.beam}co_results"
@@ -267,7 +255,11 @@ def process_single_config(
     # Delete temp_analysis_dir if it exists
     temp_analysis_dir.mkdir(exist_ok=True)
 
-    # Generate start_str from date and earliest time
+    bad_bpms_file = results_dir / f"bad_bpms_{config.title}.txt"
+    measurement_filename = "pz_data.parquet"
+    measurement_file = temp_analysis_dir / measurement_filename
+
+    # Compute meas_time always
     if not config.times:
         logger.warning(f"No times specified for config {config.title}, skipping.")
         return
@@ -278,18 +270,24 @@ def process_single_config(
 
     tz = ZoneInfo("UTC")
     meas_time = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz)
-    save_online_knobs(
-        meas_time,
-        beam=config.beam,
-        tune_knobs_file=tune_knobs_file,
-        corrector_knobs_file=corrector_knobs_file,
-    )
-    # Get beam energy from NXCALS
+
+    # Get beam energy from NXCALS always
     spark = get_or_create()
     energy, _ = get_energy(spark, meas_time)
-    measurement_filename = "pz_data.parquet"
-    measurement_file = temp_analysis_dir / measurement_filename
-    bad_bpms_file = temp_analysis_dir / "bad_bpms.txt"
+
+    bad_bpms: list[str] | None = None
+    if skip_reload:
+        # Read the bad bpms from the file
+        with bad_bpms_file.open("r") as f:
+            bad_bpms = [line.strip() for line in f.readlines()]
+
+    if not skip_reload:
+        save_online_knobs(
+            meas_time,
+            beam=config.beam,
+            tune_knobs_file=tune_knobs_file,
+            corrector_knobs_file=corrector_knobs_file,
+        )
 
     # Generate files from times
     files = [
@@ -303,6 +301,7 @@ def process_single_config(
         config.model_dir,
         beam=config.beam,
         filename=None,
+        bad_bpms=bad_bpms,
     )
     file_path = ana_dir / measurement_filename
 
@@ -347,14 +346,11 @@ def process_single_config(
     # Overwrite the measurement file
     new_df.to_parquet(file_path)
 
-    # Save the bad bpms to a file
-    with bad_bpms_file.open("w") as f:
-        for bpm in bad_bpms:
-            f.write(f"{bpm}\n")
-
-    # Read the bad bpms from the file
-    with bad_bpms_file.open("r") as f:
-        bad_bpms = [line.strip() for line in f.readlines()]
+    if not skip_reload:
+        # Save the bad bpms to a file
+        with bad_bpms_file.open("w") as f:
+            for bpm in bad_bpms:
+                f.write(f"{bpm}\n")
 
     co_settings = OptSettings(
         max_epochs=1000,
@@ -428,6 +424,11 @@ def main():
     parser.add_argument(
         "--beam", type=int, choices=[1, 2], help="Beam number 1 or 2", default=2
     )
+    parser.add_argument(
+        "--skip-reload",
+        action="store_true",
+        help="Skip reloading strengths from LSA and redoing analysis",
+    )
     args = parser.parse_args()
 
     # Define date
@@ -447,10 +448,11 @@ def main():
 
     # Process each configuration
     for config in configs:
-        process_single_config(config, temp_analysis_dir, date)
+        process_single_config(config, temp_analysis_dir, date, args.skip_reload)
 
-    # Delete temp_analysis_dir
-    shutil.rmtree(temp_analysis_dir)
+    # Delete temp_analysis_dir if not skipping reload
+    if not args.skip_reload:
+        shutil.rmtree(temp_analysis_dir)
 
 
 if __name__ == "__main__":

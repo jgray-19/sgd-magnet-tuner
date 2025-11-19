@@ -23,14 +23,15 @@ call, file = 'acc-models-lhc/lhcb4.seq';
 option, echo;  ! re-enable output to see the optics settings
 
 ! ---- Call optics and other modifiers ----
-call, file = 'acc-models-lhc/operation/optics/R2025aRP_A30cmC30cmA10mL200cm_Flat.madx'; !@modifier
+call, file = 'acc-models-lhc/operation/optics/R2025aRP_A12cmC12cmA10mL200cm_Flat.madx'; !@modifier
+! call, file = 'acc-models-lhc/operation/optics/R2025aRP_A30cmC30cmA10mL200cm_Flat.madx'; !@modifier
 
 ! ----- Remove IR symmetry definitions -----
 
 call, file="acc-models-lhc/toolkit/remove-triplet-symmetry-knob.madx"; ! removes 'ktqx.r1 := -ktqx.l1'-type issues
 
 ! ----- Finalize Sequence -----
-exec, cycle_sequences();
+! exec, cycle_sequences();
 set, format="-.16e";
 use, sequence = LHCB2;
 exec, match_tunes(0.28, 0.31, 2);
