@@ -6,6 +6,7 @@ import logging
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from omc3.optics_measurements.constants import BETA_NAME, DISPERSION_NAME, ORBIT_NAME
@@ -15,6 +16,9 @@ from aba_optimiser.training.base_controller import BaseController, LHCController
 from aba_optimiser.training.utils import extract_bpm_range_data, find_common_bpms, load_tfs_files
 from aba_optimiser.training.worker_lifecycle import WorkerLifecycleManager
 from aba_optimiser.workers import OpticsData, OpticsWorker, WorkerConfig
+
+if TYPE_CHECKING:
+    from aba_optimiser.training.controller_config import BPMConfig, SequenceConfig
 
 X = "x"
 Y = "y"
@@ -33,41 +37,29 @@ class OpticsController(BaseController):
 
     def __init__(
         self,
-        sequence_file_path: str | Path,
+        sequence_config: SequenceConfig,
         optics_folder: str | Path,
-        bpm_start_points: list[str],
-        bpm_end_points: list[str],
-        magnet_range: str,
+        bpm_config: BPMConfig,
         optimiser_config: OptimiserConfig,
         show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
         corrector_file: Path | None = None,
         tune_knobs_file: Path | None = None,
         true_strengths: Path | dict[str, float] | None = None,
-        bad_bpms: list[str] | None = None,
-        first_bpm: str | None = None,
-        seq_name: str | None = None,
-        beam_energy: float = 6800.0,
     ):
         """
         Initialise the optics controller.
 
         Args:
-            sequence_file_path (str | Path): Path to the sequence file
+            sequence_config (SequenceConfig): Sequence and beam configuration
             optics_folder (str | Path): Path to folder containing beta_phase_x.tfs and beta_phase_y.tfs
-            bpm_start_points (list[str]): Start BPMs for each range
-            bpm_end_points (list[str]): End BPMs for each range
-            magnet_range (str): Magnet range specification
+            bpm_config (BPMConfig): BPM range configuration
             optimiser_config (OptimiserConfig): Gradient descent optimiser configuration
             show_plots (bool, optional): Whether to show plots. Defaults to True
             initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths
             corrector_file (Path | None, optional): Corrector strength file
             tune_knobs_file (Path | None, optional): Tune knob file
             true_strengths (Path | dict[str, float] | None, optional): True strengths
-            bad_bpms (list[str] | None, optional): List of bad BPMs
-            first_bpm (str | None, optional): First BPM
-            seq_name (str | None, optional): Sequence name
-            beam_energy (float, optional): Beam energy in GeV. Defaults to 6800.0
         """
         logger.info("Optimising quadrupoles for beta functions")
 
@@ -85,38 +77,43 @@ class OpticsController(BaseController):
         super().__init__(
             optimiser_config=optimiser_config,
             simulation_config=simulation_config,
-            sequence_file_path=sequence_file_path,
-            magnet_range=magnet_range,
-            bpm_start_points=bpm_start_points,
-            bpm_end_points=bpm_end_points,
+            sequence_file_path=sequence_config.sequence_file_path,
+            magnet_range=sequence_config.magnet_range,
+            bpm_start_points=bpm_config.start_points,
+            bpm_end_points=bpm_config.end_points,
             show_plots=show_plots,
             initial_knob_strengths=initial_knob_strengths,
             true_strengths=true_strengths,
-            bad_bpms=bad_bpms,
-            first_bpm=first_bpm,
-            seq_name=seq_name,
-            beam_energy=beam_energy,
+            bad_bpms=sequence_config.bad_bpms,
+            first_bpm=sequence_config.first_bpm,
+            seq_name=sequence_config.seq_name,
+            beam_energy=sequence_config.beam_energy,
         )
+
+        # Store optics-specific attributes
+        self.optics_folder = Path(optics_folder)
+        self.corrector_file = corrector_file
+        self.tune_knobs_file = tune_knobs_file
 
         # Create optics-specific worker payloads
         optics_path = Path(optics_folder)
         template_config = WorkerConfig(
             start_bpm="TEMP",
             end_bpm="TEMP",
-            magnet_range=magnet_range,
-            sequence_file_path=str(sequence_file_path),
+            magnet_range=sequence_config.magnet_range,
+            sequence_file_path=str(sequence_config.sequence_file_path),
             corrector_strengths=corrector_file,
             tune_knobs_file=tune_knobs_file,
-            beam_energy=beam_energy,
+            beam_energy=sequence_config.beam_energy,
             sdir=np.nan,
-            bad_bpms=bad_bpms,
-            seq_name=seq_name,
+            bad_bpms=sequence_config.bad_bpms,
+            seq_name=sequence_config.seq_name,
         )
 
         self.worker_payloads = create_worker_payloads(
             optics_path,
             self.config_manager.bpm_ranges,
-            bad_bpms,
+            sequence_config.bad_bpms,
             template_config,
         )
 
@@ -254,8 +251,7 @@ class LHCOpticsController(LHCControllerMixin, OpticsController):
         self,
         beam: int,
         optics_folder: str | Path,
-        bpm_start_points: list[str],
-        bpm_end_points: list[str],
+        bpm_config: BPMConfig,
         magnet_range: str,
         optimiser_config: OptimiserConfig,
         sequence_path: Path | None = None,
@@ -273,8 +269,7 @@ class LHCOpticsController(LHCControllerMixin, OpticsController):
         Args:
             beam (int): The beam number (1 or 2)
             optics_folder (str | Path): Path to folder containing beta_phase_x.tfs and beta_phase_y.tfs
-            bpm_start_points (list[str]): Start BPMs for each range
-            bpm_end_points (list[str]): End BPMs for each range
+            bpm_config (BPMConfig): BPM range configuration
             magnet_range (str): Magnet range specification
             optimiser_config (OptimiserConfig): Gradient descent optimiser configuration
             sequence_path (Path | None, optional): Path to sequence file. If None, uses default
@@ -286,23 +281,23 @@ class LHCOpticsController(LHCControllerMixin, OpticsController):
             bad_bpms (list[str] | None, optional): List of bad BPMs
             beam_energy (float, optional): Beam energy in GeV. Defaults to 6800.0
         """
-        # Get LHC-specific configuration
-        lhc_config = self.get_lhc_config(beam, sequence_path)
+        # Create SequenceConfig using mixin helper
+        sequence_config = self.create_sequence_config(
+            beam=beam,
+            magnet_range=magnet_range,
+            sequence_path=sequence_path,
+            bad_bpms=bad_bpms,
+            beam_energy=beam_energy,
+        )
 
         super().__init__(
-            sequence_file_path=lhc_config["sequence_file_path"],
+            sequence_config=sequence_config,
             optics_folder=optics_folder,
-            bpm_start_points=bpm_start_points,
-            bpm_end_points=bpm_end_points,
-            magnet_range=magnet_range,
+            bpm_config=bpm_config,
             optimiser_config=optimiser_config,
             show_plots=show_plots,
             initial_knob_strengths=initial_knob_strengths,
             corrector_file=corrector_file,
             tune_knobs_file=tune_knobs_file,
             true_strengths=true_strengths,
-            bad_bpms=bad_bpms,
-            first_bpm=lhc_config["first_bpm"],
-            seq_name=lhc_config["seq_name"],
-            beam_energy=beam_energy,
         )

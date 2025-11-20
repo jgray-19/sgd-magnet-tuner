@@ -20,7 +20,13 @@ from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.simulation.optics import perform_orbit_correction
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.xsuite.xsuite_tools import initialise_env, insert_particle_monitors_at_pattern, line_to_dataframes, run_tracking
+from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig, SequenceConfig
+from aba_optimiser.xsuite.xsuite_tools import (
+    initialise_env,
+    insert_particle_monitors_at_pattern,
+    line_to_dataframes,
+    run_tracking,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -143,7 +149,11 @@ py:send(new_magnet_values, true)
 
     if average_closed_orbit:
         # Compute averages per BPM
-        averaged = df.groupby("name")[["x", "px", "y", "py", "var_x", "var_y", "var_px", "var_py"]].mean().reset_index()
+        averaged = (
+            df.groupby("name")[["x", "px", "y", "py", "var_x", "var_y", "var_px", "var_py"]]
+            .mean()
+            .reset_index()
+        )
         # Create new DataFrame with 3 turns, each with averaged values
         new_rows = []
         for turn in [1, 2, 3]:
@@ -297,20 +307,33 @@ def test_controller_energy_opt(
         "BPM.11L3.B1",
     ]
 
-    ctrl = Controller(
-        optimiser_config=optimiser_config,
-        simulation_config=simulation_config,
+    sequence_config = SequenceConfig(
         sequence_file_path=sequence_file,
-        show_plots=False,
         magnet_range=magnet_range,
-        bpm_start_points=bpm_start_points,
-        bpm_end_points=bpm_end_points,
+        beam_energy=6800,
+    )
+
+    measurement_config = MeasurementConfig(
         measurement_files=off_dpp_path,
-        true_strengths=None,
         corrector_files=corrector_file,
         tune_knobs_files=tune_knobs_file,
         flattop_turns=flattop_turns,
         num_tracks=1,
+    )
+
+    bpm_config = BPMConfig(
+        start_points=bpm_start_points,
+        end_points=bpm_end_points,
+    )
+
+    ctrl = Controller(
+        optimiser_config=optimiser_config,
+        simulation_config=simulation_config,
+        sequence_config=sequence_config,
+        measurement_config=measurement_config,
+        bpm_config=bpm_config,
+        show_plots=False,
+        true_strengths=None,
     )
 
     estimate, unc = ctrl.run()  # Ensure that run works without errors
@@ -355,25 +378,44 @@ def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path) -> None:
     simulation_config = _make_simulation_config_quad()
     true_values = magnet_strengths.copy()
 
-    ctrl = Controller(
-        optimiser_config=optimiser_config,
-        simulation_config=simulation_config,
+    sequence_config = SequenceConfig(
         sequence_file_path=sequence_file,
-        show_plots=False,
         magnet_range=magnet_range,
-        bpm_start_points=bpm_start_points,
-        bpm_end_points=bpm_end_points,
+        beam_energy=6800,
+    )
+
+    measurement_config = MeasurementConfig(
         measurement_files=off_magnet_path,
-        true_strengths=true_values,
         corrector_files=corrector_file,
         tune_knobs_files=tune_knobs_file,
         flattop_turns=flattop_turns,
         num_tracks=1,
     )
+
+    bpm_config = BPMConfig(
+        start_points=bpm_start_points,
+        end_points=bpm_end_points,
+    )
+
+    ctrl = Controller(
+        optimiser_config=optimiser_config,
+        simulation_config=simulation_config,
+        sequence_config=sequence_config,
+        measurement_config=measurement_config,
+        bpm_config=bpm_config,
+        show_plots=False,
+        true_strengths=true_values,
+    )
     estimate, unc = ctrl.run()
     for magnet, value in estimate.items():
-        rel_diff = abs(value - true_values[magnet]) / abs(true_values[magnet]) if true_values[magnet] != 0 else abs(value)
-        assert rel_diff < 1e-8, f"Magnet {magnet}: FAIL, estimated {value}, true {true_values[magnet]}, rel diff {rel_diff}"
+        rel_diff = (
+            abs(value - true_values[magnet]) / abs(true_values[magnet])
+            if true_values[magnet] != 0
+            else abs(value)
+        )
+        assert rel_diff < 1e-8, (
+            f"Magnet {magnet}: FAIL, estimated {value}, true {true_values[magnet]}, rel diff {rel_diff}"
+        )
 
 
 @pytest.mark.slow
@@ -452,13 +494,21 @@ def test_controller_quad_opt_all_arcs_beta_beating(tmp_dir: Path, sequence_file:
     logger.info("Calculating beta beating BEFORE optimization")
     mad_perturbed.set_magnet_strengths(all_perturbed_strengths)
     perturbed_tws = mad_perturbed.run_twiss(deltap=deltap)
-    beta11_beat_before = (perturbed_tws["beta11"] - reference_tws["beta11"]) / reference_tws["beta11"]
-    beta22_beat_before = (perturbed_tws["beta22"] - reference_tws["beta22"]) / reference_tws["beta22"]
+    beta11_beat_before = (perturbed_tws["beta11"] - reference_tws["beta11"]) / reference_tws[
+        "beta11"
+    ]
+    beta22_beat_before = (perturbed_tws["beta22"] - reference_tws["beta22"]) / reference_tws[
+        "beta22"
+    ]
     rms_before = np.sqrt((beta11_beat_before**2 + beta22_beat_before**2).mean())
 
     logger.info(f"RMS beta beating BEFORE optimization: {rms_before * 100:.4f}%")
-    logger.info(f"Beta11 beating: mean={beta11_beat_before.mean() * 100:.4f}%, std={beta11_beat_before.std() * 100:.4f}%")
-    logger.info(f"Beta22 beating: mean={beta22_beat_before.mean() * 100:.4f}%, std={beta22_beat_before.std() * 100:.4f}%")
+    logger.info(
+        f"Beta11 beating: mean={beta11_beat_before.mean() * 100:.4f}%, std={beta11_beat_before.std() * 100:.4f}%"
+    )
+    logger.info(
+        f"Beta22 beating: mean={beta22_beat_before.mean() * 100:.4f}%, std={beta22_beat_before.std() * 100:.4f}%"
+    )
 
     # Now optimise each arc and collect optimised strengths
     logger.info("\n=== Starting optimization for all arcs ===")
@@ -476,21 +526,33 @@ def test_controller_quad_opt_all_arcs_beta_beating(tmp_dir: Path, sequence_file:
         logger.info(f"Arc {arc_idx + 1}")
 
         # Run optimization using the shared tracking data
-        ctrl = Controller(
-            optimiser_config=optimiser_config,
-            simulation_config=simulation_config,
+        sequence_config = SequenceConfig(
             sequence_file_path=sequence_file,
-            show_plots=False,
             magnet_range=magnet_range,
-            bpm_start_points=bpm_start_points,
-            bpm_end_points=bpm_end_points,
+            beam_energy=6800,
+        )
+
+        measurement_config = MeasurementConfig(
             measurement_files=off_magnet_path,
-            true_strengths=perturbed_energy.copy(),
-            # corrector_files=corrector_file,
             corrector_files=empty_corrector_file,
             tune_knobs_files=tune_knobs_file,
             flattop_turns=flattop_turns,
             num_tracks=1,
+        )
+
+        bpm_config = BPMConfig(
+            start_points=bpm_start_points,
+            end_points=bpm_end_points,
+        )
+
+        ctrl = Controller(
+            optimiser_config=optimiser_config,
+            simulation_config=simulation_config,
+            sequence_config=sequence_config,
+            measurement_config=measurement_config,
+            bpm_config=bpm_config,
+            show_plots=False,
+            true_strengths=perturbed_energy.copy(),
         )
         estimate_energy, unc = ctrl.run()
         optimised_deltaps.append(estimate_energy["deltap"])
@@ -505,22 +567,23 @@ def test_controller_quad_opt_all_arcs_beta_beating(tmp_dir: Path, sequence_file:
             optimise_energy=True,
             optimise_quadrupoles=True,
         )
-        ctrl = Controller(
-            optimiser_config=quad_optimiser_config,
-            simulation_config=quad_simulation_config,
-            initial_knob_strengths=estimate_energy,
-            sequence_file_path=sequence_file,
-            show_plots=False,
-            magnet_range=magnet_range,
-            bpm_start_points=bpm_start_points,
-            bpm_end_points=bpm_end_points,
+        measurement_config_quad = MeasurementConfig(
             measurement_files=off_magnet_path,
-            true_strengths=perturbed_energy.copy(),
-            # corrector_files=corrector_file,
             corrector_files=empty_corrector_file,
             tune_knobs_files=tune_knobs_file,
             flattop_turns=flattop_turns,
             num_tracks=1,
+        )
+
+        ctrl = Controller(
+            optimiser_config=quad_optimiser_config,
+            simulation_config=quad_simulation_config,
+            initial_knob_strengths=estimate_energy,
+            sequence_config=sequence_config,
+            measurement_config=measurement_config_quad,
+            bpm_config=bpm_config,
+            show_plots=False,
+            true_strengths=perturbed_energy.copy(),
         )
         estimate, unc = ctrl.run()
         plt.close("all")  # Close any plots to save memory
@@ -550,13 +613,21 @@ def test_controller_quad_opt_all_arcs_beta_beating(tmp_dir: Path, sequence_file:
     # Calculate beta beating AFTER optimization (optimised vs reference)
     logger.info("Calculating beta beating AFTER optimization")
     optimised_tws = mad_optimised.run_twiss(deltap=optimised_deltap)
-    beta11_beat_after = (perturbed_tws["beta11"] - optimised_tws["beta11"]) / optimised_tws["beta11"]
-    beta22_beat_after = (perturbed_tws["beta22"] - optimised_tws["beta22"]) / optimised_tws["beta22"]
+    beta11_beat_after = (perturbed_tws["beta11"] - optimised_tws["beta11"]) / optimised_tws[
+        "beta11"
+    ]
+    beta22_beat_after = (perturbed_tws["beta22"] - optimised_tws["beta22"]) / optimised_tws[
+        "beta22"
+    ]
     rms_after = np.sqrt((beta11_beat_after**2 + beta22_beat_after**2).mean())
 
     logger.info(f"RMS beta beating AFTER optimization: {rms_after * 100:.4f}%")
-    logger.info(f"Beta11 beating: mean={beta11_beat_after.mean() * 100:.4f}%, std={beta11_beat_after.std() * 100:.4f}%")
-    logger.info(f"Beta22 beating: mean={beta22_beat_after.mean() * 100:.4f}%, std={beta22_beat_after.std() * 100:.4f}%")
+    logger.info(
+        f"Beta11 beating: mean={beta11_beat_after.mean() * 100:.4f}%, std={beta11_beat_after.std() * 100:.4f}%"
+    )
+    logger.info(
+        f"Beta22 beating: mean={beta22_beat_after.mean() * 100:.4f}%, std={beta22_beat_after.std() * 100:.4f}%"
+    )
 
     # Summary
     logger.info("\n=== Beta Beating Summary ===")
@@ -610,10 +681,14 @@ def test_controller_quad_opt_all_arcs_beta_beating(tmp_dir: Path, sequence_file:
     plt.show()
 
     # Assertions
-    assert rms_after < rms_before, f"Beta beating did not improve! Before: {rms_before * 100:.4f}%, After: {rms_after * 100:.4f}%"
+    assert rms_after < rms_before, (
+        f"Beta beating did not improve! Before: {rms_before * 100:.4f}%, After: {rms_after * 100:.4f}%"
+    )
 
     # Check that we're approaching zero (at least 50% improvement)
     improvement_ratio = (rms_before - rms_after) / rms_before
-    assert improvement_ratio > 0.5, f"Insufficient improvement: only {improvement_ratio * 100:.2f}% (expected > 50%)"
+    assert improvement_ratio > 0.5, (
+        f"Insufficient improvement: only {improvement_ratio * 100:.2f}% (expected > 50%)"
+    )
 
     logger.info("Test passed: Beta beating improved significantly after optimization!")

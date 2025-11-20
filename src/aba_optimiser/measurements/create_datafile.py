@@ -12,12 +12,22 @@ import tfs
 from omc3.hole_in_one import hole_in_one_entrypoint
 from turn_by_turn import TbtData, read_tbt
 
-from aba_optimiser.config import CORRECTOR_STRENGTHS, DPP_OPTIMISER_CONFIG, DPP_SIMULATION_CONFIG, PROJECT_ROOT, TUNE_KNOBS_FILE
+from aba_optimiser.config import (
+    CORRECTOR_STRENGTHS,
+    DPP_OPTIMISER_CONFIG,
+    DPP_SIMULATION_CONFIG,
+    PROJECT_ROOT,
+    TUNE_KNOBS_FILE,
+)
 from aba_optimiser.filtering.svd import svd_clean_measurements
 from aba_optimiser.io.utils import get_lhc_file_path, save_knobs
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.momentum_recon.transverse import calculate_pz
 from aba_optimiser.training.controller import LHCController as Controller
+from aba_optimiser.training.controller_helpers import (
+    create_arc_bpm_config,
+    create_arc_measurement_config,
+)
 
 if TYPE_CHECKING:
     try:
@@ -39,7 +49,9 @@ def load_files(files: list[str | Path]) -> TbtData:
     return measurements
 
 
-def convert_measurements(measurements: list[TbtData], bad_bpms: list[str] = []) -> list[pd.DataFrame]:
+def convert_measurements(
+    measurements: list[TbtData], bad_bpms: list[str] = []
+) -> list[pd.DataFrame]:
     """Combine multiple TbtData objects into a single DataFrame.
 
     In each turn by turn object, there exists a list stored in the `matrices` attribute.
@@ -64,7 +76,9 @@ def convert_measurements(measurements: list[TbtData], bad_bpms: list[str] = []) 
             df_x.columns = df_x.columns + turn_offset
             df_y.columns = df_y.columns + turn_offset
             df_combined = df_x.reset_index().melt(id_vars="name", var_name="turn", value_name="x")
-            df_combined["y"] = df_y.reset_index().melt(id_vars="name", var_name="turn", value_name="y")["y"]
+            df_combined["y"] = df_y.reset_index().melt(
+                id_vars="name", var_name="turn", value_name="y"
+            )["y"]
             df_combined["x"] = df_combined["x"] / 1000
             df_combined["y"] = df_combined["y"] / 1000
             df_combined["kick_plane"] = "xy"
@@ -142,14 +156,20 @@ def compute_vars_from_known_noise(combined: pd.DataFrame, bad_bpms: list[str]) -
             return float("inf")
         return val
 
-    combined["var_x"] = combined["name"].apply(lambda bpm: get_variance(bpm, noise_dict_x, type_means_x))
-    combined["var_y"] = combined["name"].apply(lambda bpm: get_variance(bpm, noise_dict_y, type_means_y))
+    combined["var_x"] = combined["name"].apply(
+        lambda bpm: get_variance(bpm, noise_dict_x, type_means_x)
+    )
+    combined["var_y"] = combined["name"].apply(
+        lambda bpm: get_variance(bpm, noise_dict_y, type_means_y)
+    )
     combined.loc[combined["name"].isin(bad_bpms), "var_x"] = float("inf")
     combined.loc[combined["name"].isin(bad_bpms), "var_y"] = float("inf")
     return combined
 
 
-def run_analysis(analysis_dir: str | Path, model_dir: str | Path, files: list[str | Path], beam: int) -> list[str]:
+def run_analysis(
+    analysis_dir: str | Path, model_dir: str | Path, files: list[str | Path], beam: int
+) -> list[str]:
     """Load, combine, and process data from multiple files."""
     analysis_dir = Path(analysis_dir)
     analysis_dir.mkdir(parents=True, exist_ok=True)
@@ -182,7 +202,11 @@ def run_analysis(analysis_dir: str | Path, model_dir: str | Path, files: list[st
         clean=True,
     )
 
-    analysed_files = [analysis_dir / "lin_files" / f"{f.name}_bunchID{bunch_id}" for f in files for bunch_id in bunches]
+    analysed_files = [
+        analysis_dir / "lin_files" / f"{f.name}_bunchID{bunch_id}"
+        for f in files
+        for bunch_id in bunches
+    ]
 
     hole_in_one_entrypoint(
         optics=True,
@@ -248,7 +272,9 @@ def save_online_knobs(
         from nxcals.spark_session_builder import get_or_create
         from pylhc import corrector_extraction, mqt_extraction
     except ImportError as e:
-        raise ImportError("nxcals and pylhc are required for save_online_knobs but are not installed.") from e
+        raise ImportError(
+            "nxcals and pylhc are required for save_online_knobs but are not installed."
+        ) from e
 
     spark = get_or_create()
     mq_results = mqt_extraction.get_mq_vals(spark, meas_time, beam)
@@ -395,7 +421,9 @@ if __name__ == "__main__":
     measurement_file = analysis_dir / measurement_filename
     bad_bpms_file = analysis_dir / "bad_bpms.txt"
 
-    pzs, bad_bpms, _ = process_measurements(files, analysis_dir, model_dir, beam=1, filename=measurement_filename)
+    pzs, bad_bpms, _ = process_measurements(
+        files, analysis_dir, model_dir, beam=1, filename=measurement_filename
+    )
 
     # save the bad bpms to a file
     with bad_bpms_file.open("w") as f:
@@ -417,16 +445,14 @@ if __name__ == "__main__":
 
         controller = Controller(
             beam=1,
+            measurement_config=create_arc_measurement_config(measurement_file),
+            bpm_config=create_arc_bpm_config(BPM_STARTS[arc], BPM_END_POINTS[arc]),
+            magnet_range=MAGNET_RANGES[arc],
             optimiser_config=DPP_OPTIMISER_CONFIG,
             simulation_config=DPP_SIMULATION_CONFIG,
             show_plots=False,
             initial_knob_strengths=None,
-            true_strengths_file=None,
-            machine_deltap=0,
-            magnet_range=MAGNET_RANGES[arc],
-            bpm_start_points=BPM_STARTS[arc],
-            bpm_end_points=BPM_END_POINTS[arc],
-            measurement_file=measurement_file,
+            true_strengths=None,
             bad_bpms=bad_bpms,
         )
         final_knobs, uncs = controller.run()

@@ -16,6 +16,7 @@ from aba_optimiser.config import BEND_ERROR_FILE, QUAD_OPTIMISER_CONFIG, Optimis
 from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 from aba_optimiser.simulation.optics import perform_orbit_correction
+from aba_optimiser.training.controller_config import BPMConfig, SequenceConfig
 from aba_optimiser.training_optics import OpticsController
 from aba_optimiser.xsuite.xsuite_tools import (
     initialise_env,
@@ -222,18 +223,26 @@ def test_controller_opt(
         gradient_converged_value=1e-4,
     )
 
-    ctrl = OpticsController(
+    sequence_config = SequenceConfig(
         sequence_file_path=sequence_file,
-        optics_folder=analysis_dir,
-        bpm_start_points=bpm_start_points,
-        bpm_end_points=bpm_end_points,
         magnet_range=magnet_range,
+        seq_name="lhcb1",
+    )
+
+    bpm_config = BPMConfig(
+        start_points=bpm_start_points,
+        end_points=bpm_end_points,
+    )
+
+    ctrl = OpticsController(
+        sequence_config=sequence_config,
+        optics_folder=analysis_dir,
+        bpm_config=bpm_config,
         optimiser_config=optimiser_config,
         show_plots=True,
         corrector_file=corrector_file,
         tune_knobs_file=tune_knobs_file,
         true_strengths=magnet_strengths,
-        seq_name="lhcb1",
     )
 
     estimate, unc = ctrl.run()

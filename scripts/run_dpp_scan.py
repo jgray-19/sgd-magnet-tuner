@@ -79,7 +79,9 @@ class ScanConfig:
 
 def compute_weighted_mean_and_std(vals: list[float], uncs: list[float]) -> tuple[float, float]:
     """Compute weighted mean and standard deviation from values and uncertainties."""
-    valid_indices = [i for i in range(len(vals)) if not (np.isnan(vals[i]) or np.isnan(uncs[i]) or uncs[i] <= 0)]
+    valid_indices = [
+        i for i in range(len(vals)) if not (np.isnan(vals[i]) or np.isnan(uncs[i]) or uncs[i] <= 0)
+    ]
     if not valid_indices:
         return float("nan"), float("nan")
 
@@ -136,7 +138,9 @@ def compute_outlier_removed_stats(
         extracted_values = record.get("per_repeat_extracted", [])
         # Filter out NaN and outlier values
         valid_values = [
-            value for value_idx, value in enumerate(extracted_values) if not np.isnan(value) and (record_idx, value_idx) not in outlier_positions
+            value
+            for value_idx, value in enumerate(extracted_values)
+            if not np.isnan(value) and (record_idx, value_idx) not in outlier_positions
         ]
         if valid_values:
             mean_val = np.mean(valid_values)
@@ -281,7 +285,9 @@ def _plot_dpp_scan(
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments for the dpp scan script."""
-    parser = argparse.ArgumentParser(description="Run dpp scan using create_a34 and energy optimiser")
+    parser = argparse.ArgumentParser(
+        description="Run dpp scan using create_a34 and energy optimiser"
+    )
     parser.add_argument("--out", default="plots/dpp_scan.png", help="Output plot path")
     parser.add_argument(
         "--from-pickle",
@@ -318,8 +324,12 @@ def handle_pickle_mode(args: argparse.Namespace) -> None:
     if records and any("per_repeat_extracted" in rec for rec in records):
         outlier_removed_means, outlier_removed_stds = compute_outlier_removed_stats(records)
         if outlier_removed_means:
-            outlier_plot_path = Path(args.out).parent / (Path(args.out).stem + "_outliers_removed.png")
-            plot_results_outlier_removed(xs, outlier_removed_means, outlier_removed_stds, outlier_plot_path)
+            outlier_plot_path = Path(args.out).parent / (
+                Path(args.out).stem + "_outliers_removed.png"
+            )
+            plot_results_outlier_removed(
+                xs, outlier_removed_means, outlier_removed_stds, outlier_plot_path
+            )
 
 
 def load_checkpoint(pickle_path: Path) -> dict[float, ScanResult]:
@@ -377,7 +387,9 @@ def run_single_dpp_scan(config: ScanConfig, input_dpp: float) -> ScanResult:
     # Run energy optimization for each magnet range
     for rep, magnet_range in enumerate(config.magnet_ranges):
         logger.debug(f"Repeat {rep + 1}/{len(config.magnet_ranges)} for input_dpp={input_dpp}")
-        result = _run_energy_optimization(input_dpp, magnet_range, config.bpm_starts[rep], config.bpm_end_points[rep])
+        result = _run_energy_optimization(
+            input_dpp, magnet_range, config.bpm_starts[rep], config.bpm_end_points[rep]
+        )
         per_repeat_values.append(result["value"])
         per_repeat_uncertainties.append(result["uncertainty"])
         per_repeat_raw_data.append(result["raw_data"])
@@ -439,15 +451,36 @@ def _run_energy_optimization(
     try:
         from aba_optimiser.config import DPP_OPTIMISER_CONFIG, DPP_SIMULATION_CONFIG
         from aba_optimiser.training.controller import Controller
+        from aba_optimiser.training.controller_config import (
+            BPMConfig,
+            MeasurementConfig,
+            SequenceConfig,
+        )
+
+        # Create config objects (note: this uses Controller directly, not LHCController)
+        # You'll need to provide actual values for sequence_file_path, measurement_files, etc.
+        sequence_config = SequenceConfig(
+            sequence_file_path="path/to/sequence",  # TODO: Provide actual sequence file
+            magnet_range=magnet_range,
+        )
+
+        measurement_config = MeasurementConfig(
+            measurement_files="path/to/measurements",  # TODO: Provide actual measurement files
+            machine_deltaps=input_dpp,
+        )
+
+        bpm_config = BPMConfig(
+            start_points=bpm_starts,
+            end_points=bpm_end_points,
+        )
 
         energy_controller = Controller(
             optimiser_config=DPP_OPTIMISER_CONFIG,
             simulation_config=DPP_SIMULATION_CONFIG,
+            sequence_config=sequence_config,
+            measurement_config=measurement_config,
+            bpm_config=bpm_config,
             show_plots=False,
-            machine_deltap=input_dpp,
-            magnet_range=magnet_range,
-            bpm_start_points=bpm_starts,
-            bpm_end_points=bpm_end_points,
         )
         energy_res, uncertainties = energy_controller.run()
         logger.debug("Energy optimiser result: deltap=%.6e", energy_res["deltap"])
@@ -557,7 +590,9 @@ def run_scan(args: argparse.Namespace, config: ScanConfig) -> list[ScanResult]:
     return sorted(final_results, key=lambda r: r.input_dpp)
 
 
-def merge_results_with_prior(results: list[ScanResult], prior_results: dict[float, ScanResult]) -> list[ScanResult]:
+def merge_results_with_prior(
+    results: list[ScanResult], prior_results: dict[float, ScanResult]
+) -> list[ScanResult]:
     """Merge current results with prior checkpoint results."""
     combined = {r.input_dpp: r for r in results}
     for dpp, result in prior_results.items():
@@ -607,7 +642,9 @@ def process_results(results: list[ScanResult], args: argparse.Namespace):
 
     if outlier_removed_means:
         outlier_plot_path = Path(args.out).parent / (Path(args.out).stem + "_outliers_removed.png")
-        plot_results_outlier_removed(xs, outlier_removed_means, outlier_removed_stds, outlier_plot_path)
+        plot_results_outlier_removed(
+            xs, outlier_removed_means, outlier_removed_stds, outlier_plot_path
+        )
 
 
 def result_to_dict(result: ScanResult) -> dict:

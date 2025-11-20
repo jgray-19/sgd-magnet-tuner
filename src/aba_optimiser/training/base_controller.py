@@ -167,3 +167,36 @@ class LHCControllerMixin:
             "first_bpm": first_bpm,
             "seq_name": seq_name,
         }
+
+    @staticmethod
+    def create_sequence_config(
+        beam: int,
+        magnet_range: str,
+        sequence_path: Path | None = None,
+        bad_bpms: list[str] | None = None,
+        beam_energy: float = 6800.0,
+    ):
+        """Create a SequenceConfig for LHC beam.
+
+        Args:
+            beam: Beam number (1 or 2)
+            magnet_range: Magnet range specification
+            sequence_path: Optional custom sequence path
+            bad_bpms: List of bad BPMs to exclude
+            beam_energy: Beam energy in GeV
+
+        Returns:
+            SequenceConfig configured for the specified LHC beam
+        """
+        from aba_optimiser.training.controller_config import SequenceConfig
+
+        lhc_config = LHCControllerMixin.get_lhc_config(beam, sequence_path)
+
+        return SequenceConfig(
+            sequence_file_path=lhc_config["sequence_file_path"],
+            magnet_range=magnet_range,
+            first_bpm=lhc_config["first_bpm"],
+            seq_name=lhc_config["seq_name"],
+            beam_energy=beam_energy,
+            bad_bpms=bad_bpms,
+        )

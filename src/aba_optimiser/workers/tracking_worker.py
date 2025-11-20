@@ -269,7 +269,7 @@ class TrackingWorker(AbstractWorker[TrackingData]):
             mad: MAD-NG interface object
         """
         # Remove "pt" from knob names if present (handled separately)
-        knob_names = mad["knob_names"]
+        knob_names = list(mad["knob_names"])
         if "pt" in knob_names:
             knob_names.remove("pt")
             mad["knob_names"] = knob_names

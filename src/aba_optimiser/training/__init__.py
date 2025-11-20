@@ -7,6 +7,11 @@ and checkpointing for the optimisation workflow.
 from aba_optimiser.training.base_controller import BaseController, LHCControllerMixin
 from aba_optimiser.training.configuration_manager import ConfigurationManager
 from aba_optimiser.training.controller import Controller, LHCController
+from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig, SequenceConfig
+from aba_optimiser.training.controller_helpers import (
+    create_arc_bpm_config,
+    create_arc_measurement_config,
+)
 from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.optimisation_loop import OptimisationLoop
 from aba_optimiser.training.result_manager import ResultManager
@@ -27,6 +32,11 @@ __all__ = [
     "ConfigurationManager",
     "Controller",
     "LHCController",
+    "BPMConfig",
+    "MeasurementConfig",
+    "SequenceConfig",
+    "create_arc_bpm_config",
+    "create_arc_measurement_config",
     "DataManager",
     "OptimisationLoop",
     "ResultManager",

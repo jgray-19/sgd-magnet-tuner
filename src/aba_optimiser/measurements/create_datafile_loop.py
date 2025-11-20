@@ -13,12 +13,16 @@ import numpy as np
 from aba_optimiser.config import DPP_OPTIMISER_CONFIG, DPP_SIMULATION_CONFIG, PROJECT_ROOT
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.training.controller import LHCController as Controller
+from aba_optimiser.training.controller_helpers import (
+    create_arc_bpm_config,
+    create_arc_measurement_config,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class MeasurementConfig:
+class MeasurementSetupConfig:
     beam: int
     model_dir: str
     magnet_ranges: list[str]
@@ -30,15 +34,17 @@ class MeasurementConfig:
     title: str
 
 
-def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfig]:
+def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementSetupConfig]:
     """Create measurement configurations for beam 1."""
     model_dir_b1 = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB1/Models/2025-11-07_B1_12cm_right_knobs/"
     magnet_ranges_b1 = [f"BPM.9R{s}.B1/BPM.9L{s % 8 + 1}.B1" for s in range(1, 9)]
     bpm_starts_b1 = [[f"BPM.{i}R{s}.B1" for i in [9, 10, 11, 12, 13]] for s in range(1, 9)]
-    bpm_end_points_b1 = [[f"BPM.{i}L{s % 8 + 1}.B1" for i in [9, 10, 11, 12, 13]] for s in range(1, 9)]
+    bpm_end_points_b1 = [
+        [f"BPM.{i}L{s % 8 + 1}.B1" for i in [9, 10, 11, 12, 13]] for s in range(1, 9)
+    ]
 
     return [
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=1,
             model_dir=model_dir_b1,
             magnet_ranges=magnet_ranges_b1,
@@ -52,7 +58,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             ],
             title="0",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=1,
             model_dir=model_dir_b1,
             magnet_ranges=magnet_ranges_b1,
@@ -66,7 +72,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             ],
             title="0p2",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=1,
             model_dir=model_dir_b1,
             magnet_ranges=magnet_ranges_b1,
@@ -80,7 +86,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             ],
             title="0p1",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=1,
             model_dir=model_dir_b1,
             magnet_ranges=magnet_ranges_b1,
@@ -94,7 +100,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             ],
             title="m0p1",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=1,
             model_dir=model_dir_b1,
             magnet_ranges=magnet_ranges_b1,
@@ -111,15 +117,19 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
     ]
 
 
-def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfig]:
+def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementSetupConfig]:
     """Create measurement configurations for beam 2."""
-    model_dir_b2 = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB2/Models/2025-11-07_B2_12cm"
+    model_dir_b2 = (
+        "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB2/Models/2025-11-07_B2_12cm"
+    )
     magnet_ranges_b2 = [f"BPM.9L{i}.B2/BPM.9R{(i - 2) % 8 + 1}.B2" for i in range(8, 0, -1)]
     bpm_starts_b2 = [[f"BPM.{i}L{s}.B2" for i in range(9, 14)] for s in range(8, 0, -1)]
-    bpm_end_points_b2 = [[f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 14)] for s in range(8, 0, -1)]
+    bpm_end_points_b2 = [
+        [f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 14)] for s in range(8, 0, -1)
+    ]
 
     return [
-        # MeasurementConfig(
+        # MeasurementSetupConfig(
         #     beam=2,
         #     model_dir=model_dir_b2,
         #     magnet_ranges=magnet_ranges_b2,
@@ -130,7 +140,7 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
         #     times=["07_35_27_940", "07_36_39_380", "07_38_44_035"],
         #     title="0",
         # ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=2,
             model_dir=model_dir_b2,
             magnet_ranges=magnet_ranges_b2,
@@ -141,7 +151,7 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             times=["07_57_30_885", "08_00_44_900"],
             title="0p2",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=2,
             model_dir=model_dir_b2,
             magnet_ranges=magnet_ranges_b2,
@@ -152,7 +162,7 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             times=["08_04_55_798", "08_06_06_900", "08_07_13_900"],
             title="0p1",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=2,
             model_dir=model_dir_b2,
             magnet_ranges=magnet_ranges_b2,
@@ -163,7 +173,7 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             times=["08_15_06_860", "08_16_13_980"],
             title="m0p1",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=2,
             model_dir=model_dir_b2,
             magnet_ranges=magnet_ranges_b2,
@@ -177,7 +187,9 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
     ]
 
 
-def process_single_config(config: MeasurementConfig, temp_analysis_dir: Path, date: str) -> None:
+def process_single_config(
+    config: MeasurementSetupConfig, temp_analysis_dir: Path, date: str
+) -> None:
     """Process a single measurement configuration."""
     results_dir = PROJECT_ROOT / f"b{config.beam}_results"
     results_dir.mkdir(exist_ok=True)
@@ -234,19 +246,19 @@ def process_single_config(config: MeasurementConfig, temp_analysis_dir: Path, da
 
         controller = Controller(
             beam=config.beam,
+            measurement_config=create_arc_measurement_config(
+                measurement_file,
+                num_tracks=len(config.times),
+                flattop_turns=6600,
+            ),
+            bpm_config=create_arc_bpm_config(config.bpm_starts[arc], config.bpm_end_points[arc]),
+            magnet_range=config.magnet_ranges[arc],
             optimiser_config=DPP_OPTIMISER_CONFIG,
             simulation_config=DPP_SIMULATION_CONFIG,
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,
-            machine_deltap=0,
-            magnet_range=config.magnet_ranges[arc],
-            bpm_start_points=config.bpm_starts[arc],
-            bpm_end_points=config.bpm_end_points[arc],
-            measurement_file=measurement_file,
             bad_bpms=bad_bpms,
-            num_tracks=len(config.times),
-            flattop_turns=6600,
         )
         final_knobs, uncs = controller.run()
         results.append(final_knobs["deltap"])

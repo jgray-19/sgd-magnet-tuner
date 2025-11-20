@@ -16,6 +16,10 @@ from pylhc.nxcal_knobs import get_energy
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.training.controller import LHCController as Controller
+from aba_optimiser.training.controller_helpers import (
+    create_arc_bpm_config,
+    create_arc_measurement_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +32,7 @@ class RangeConfig:
 
 
 @dataclass
-class MeasurementConfig:
+class MeasurementSetupConfig:
     beam: int
     model_dir: str
     arc_config: RangeConfig
@@ -70,21 +74,23 @@ def optimise_ranges(
 
         controller = Controller(
             beam=beam,
+            measurement_config=create_arc_measurement_config(
+                measurement_file,
+                num_tracks=1,
+                flattop_turns=3,
+                corrector_files=corrector_knobs_file,
+                tune_knobs_files=tune_knobs_file,
+            ),
+            bpm_config=create_arc_bpm_config(
+                range_config.bpm_starts[i], range_config.bpm_end_points[i]
+            ),
+            magnet_range=range_config.magnet_ranges[i],
             optimiser_config=optimiser_config,
             simulation_config=simulation_config,
-            measurement_files=measurement_file,
-            corrector_files=corrector_knobs_file,
-            tune_knobs_files=tune_knobs_file,
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,
-            machine_deltaps=0,
-            magnet_range=range_config.magnet_ranges[i],
-            bpm_start_points=range_config.bpm_starts[i],
-            bpm_end_points=range_config.bpm_end_points[i],
             bad_bpms=bad_bpms,
-            num_tracks=1,
-            flattop_turns=3,
             beam_energy=energy,
         )
         final_knobs, uncs = controller.run()
@@ -101,12 +107,14 @@ def optimise_ranges(
     return results, uncertainties
 
 
-def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfig]:
+def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementSetupConfig]:
     """Create measurement configurations for beam 1."""
     model_dir_b1 = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB1/Models/2025-11-07_B1_12cm_right_knobs/"
     arc_magnet_ranges_b1 = [f"BPM.9R{s}.B1/BPM.9L{s % 8 + 1}.B1" for s in range(1, 9)]
     arc_bpm_starts_b1 = [[f"BPM.{i}R{s}.B1" for i in range(9, 35, 3)] for s in range(1, 9)]
-    arc_bpm_end_points_b1 = [[f"BPM.{i}L{s % 8 + 1}.B1" for i in range(9, 34, 3)] for s in range(1, 9)]
+    arc_bpm_end_points_b1 = [
+        [f"BPM.{i}L{s % 8 + 1}.B1" for i in range(9, 34, 3)] for s in range(1, 9)
+    ]
 
     arc_config_b1 = RangeConfig(
         magnet_ranges=arc_magnet_ranges_b1,
@@ -115,7 +123,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
     )
 
     return [
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=1,
             model_dir=model_dir_b1,
             arc_config=arc_config_b1,
@@ -124,7 +132,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             times=["07_53_05_820", "07_54_13_858"],
             title="0",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=1,
             model_dir=model_dir_b1,
             arc_config=arc_config_b1,
@@ -133,7 +141,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             times=["08_08_02_826", "08_09_11_940"],
             title="0p2",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=1,
             model_dir=model_dir_b1,
             arc_config=arc_config_b1,
@@ -142,7 +150,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             times=["08_11_13_745", "08_12_25_817"],
             title="0p1",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=1,
             model_dir=model_dir_b1,
             arc_config=arc_config_b1,
@@ -151,7 +159,7 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             times=["08_18_09_980", "08_19_16_847"],
             title="m0p1",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=1,
             model_dir=model_dir_b1,
             arc_config=arc_config_b1,
@@ -163,13 +171,17 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
     ]
 
 
-def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfig]:
+def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementSetupConfig]:
     """Create measurement configurations for beam 2."""
-    model_dir_b2 = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB2/Models/2025-11-07_B2_12cm"
+    model_dir_b2 = (
+        "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB2/Models/2025-11-07_B2_12cm"
+    )
     # Arc settings
     arc_magnet_ranges_b2 = [f"BPM.9L{s}.B2/BPM.9R{(s - 2) % 8 + 1}.B2" for s in range(8, 0, -1)]
     arc_bpm_starts_b2 = [[f"BPM.{i}L{s}.B2" for i in range(9, 34, 3)] for s in range(8, 0, -1)]
-    arc_bpm_end_points_b2 = [[f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 35, 3)] for s in range(8, 0, -1)]
+    arc_bpm_end_points_b2 = [
+        [f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 35, 3)] for s in range(8, 0, -1)
+    ]
     arc_config_b2 = RangeConfig(
         magnet_ranges=arc_magnet_ranges_b2,
         bpm_starts=arc_bpm_starts_b2,
@@ -177,7 +189,7 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
     )
 
     return [
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=2,
             model_dir=model_dir_b2,
             arc_config=arc_config_b2,
@@ -187,7 +199,7 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             times=["07_36_39_380", "07_38_44_035"],
             title="0",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=2,
             model_dir=model_dir_b2,
             arc_config=arc_config_b2,
@@ -196,7 +208,7 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             times=["07_57_30_885", "08_00_44_900"],
             title="0p2",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=2,
             model_dir=model_dir_b2,
             arc_config=arc_config_b2,
@@ -206,7 +218,7 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             times=["08_06_06_900", "08_07_13_900"],
             title="0p1",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=2,
             model_dir=model_dir_b2,
             arc_config=arc_config_b2,
@@ -215,7 +227,7 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
             times=["08_15_06_860", "08_16_13_980"],
             title="m0p1",
         ),
-        MeasurementConfig(
+        MeasurementSetupConfig(
             beam=2,
             model_dir=model_dir_b2,
             arc_config=arc_config_b2,
@@ -227,7 +239,9 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
     ]
 
 
-def process_single_config(config: MeasurementConfig, temp_analysis_dir: Path, date: str, skip_reload: bool) -> None:
+def process_single_config(
+    config: MeasurementSetupConfig, temp_analysis_dir: Path, date: str, skip_reload: bool
+) -> None:
     """Process a single measurement configuration."""
     results_dir = PROJECT_ROOT / f"b{config.beam}co_results"
     tune_knobs_file = results_dir / f"tune_knobs_{config.title}.txt"
@@ -285,7 +299,11 @@ def process_single_config(config: MeasurementConfig, temp_analysis_dir: Path, da
     file_path = ana_dir / measurement_filename
 
     # Compute averages per BPM
-    averaged = pzs.groupby("name")[["x", "px", "y", "py", "var_x", "var_y", "var_px", "var_py"]].mean().reset_index()
+    averaged = (
+        pzs.groupby("name")[["x", "px", "y", "py", "var_x", "var_y", "var_px", "var_py"]]
+        .mean()
+        .reset_index()
+    )
     print(
         averaged["var_x"].describe(),
         averaged["var_y"].describe(),
@@ -369,7 +387,9 @@ def process_single_config(config: MeasurementConfig, temp_analysis_dir: Path, da
         mean_arcs = weighted_mean(results_arcs, uncs_arcs)
     except ValueError:
         mean_arcs = float(np.mean(results_arcs))
-        logger.warning("Falling back to unweighted mean for arcs due to non-positive uncertainties.")
+        logger.warning(
+            "Falling back to unweighted mean for arcs due to non-positive uncertainties."
+        )
     logger.info(f"Weighted mean deltap arcs: {mean_arcs}")
     logger.info(f"Std dev of deltap arcs: {np.std(results_arcs)}")
 
