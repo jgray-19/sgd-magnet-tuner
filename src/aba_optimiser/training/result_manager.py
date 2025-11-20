@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from aba_optimiser.io.utils import save_results, scientific_notation
-from aba_optimiser.plotting.strengths import plot_deltap_comparison, plot_strengths_comparison, plot_strengths_vs_position
+from aba_optimiser.plotting.strengths import (
+    plot_deltap_comparison,
+    plot_strengths_comparison,
+    plot_strengths_vs_position,
+)
 from aba_optimiser.plotting.utils import show_plots
 
 if TYPE_CHECKING:
@@ -131,7 +135,9 @@ class ResultManager:
         save_prefix = "plots/"
         show_errorbars = True
 
-        if self.simulation_config.optimise_quadrupoles or self.simulation_config.optimise_bends:  # Relative difference comparison
+        if (
+            self.simulation_config.optimise_quadrupoles or self.simulation_config.optimise_bends
+        ):  # Relative difference comparison
             plot_strengths_comparison(
                 magnet_names,
                 final_vals,
