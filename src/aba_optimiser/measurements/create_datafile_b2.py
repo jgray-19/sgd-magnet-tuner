@@ -5,14 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from aba_optimiser.config import (
-    DPP_OPT_SETTINGS_TEMPLATE,
-    PROJECT_ROOT,
-)
-from aba_optimiser.measurements.create_datafile import (
-    process_measurements,
-    save_online_knobs,
-)
+from aba_optimiser.config import DPP_OPTIMISER_CONFIG, DPP_SIMULATION_CONFIG, PROJECT_ROOT
+from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.training.controller import LHCController as Controller
 
 logger = logging.getLogger(__name__)
@@ -23,18 +17,12 @@ if __name__ == "__main__":
     analysis_dir = PROJECT_ROOT / "analysis_b2"
     # analysis_dir = PROJECT_ROOT / "analysis_trim_b2"
     model_dir = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB2/Models/2025_LHCB2_0p18m"
-    MAGNET_RANGES = [
-        f"BPM.9L{i}.B2/BPM.9R{(i - 2) % 8 + 1}.B2" for i in range(8, 0, -1)
-    ]
+    MAGNET_RANGES = [f"BPM.9L{i}.B2/BPM.9R{(i - 2) % 8 + 1}.B2" for i in range(8, 0, -1)]
 
     BPM_STARTS = [[f"BPM.{i}L{s}.B2" for i in range(9, 14)] for s in range(8, 0, -1)]
-    BPM_END_POINTS = [
-        [f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 14)] for s in range(8, 0, -1)
-    ]
+    BPM_END_POINTS = [[f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 14)] for s in range(8, 0, -1)]
 
-    folder = Path(
-        "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB2/Measurements/"
-    )
+    folder = Path("/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB2/Measurements/")
     name_prefix = "Beam2@BunchTurn@2025_04_09@"
     times = [
         "18_48_02_383",
@@ -84,7 +72,8 @@ if __name__ == "__main__":
 
         controller = Controller(
             beam=2,
-            opt_settings=DPP_OPT_SETTINGS_TEMPLATE,
+            optimiser_config=DPP_OPTIMISER_CONFIG,
+            simulation_config=DPP_SIMULATION_CONFIG,
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths_file=None,

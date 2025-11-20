@@ -30,7 +30,7 @@ call, file = 'acc-models-lhc/operation/optics/R2025aRP_A12cmC12cmA10mL200cm_Flat
 
 call, file="acc-models-lhc/toolkit/remove-triplet-symmetry-knob.madx"; ! removes 'ktqx.r1 := -ktqx.l1'-type issues
 
-! ----- Finalize Sequence -----
+! ----- Finalise Sequence -----
 ! exec, cycle_sequences();
 set, format="-.16e";
 use, sequence = LHCB2;

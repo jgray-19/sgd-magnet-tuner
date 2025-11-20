@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from tensorboardX import SummaryWriter
 
-    from aba_optimiser.config import OptSettings
+    from aba_optimiser.config import OptimiserConfig, SimulationConfig
 
 LOGGER = logging.getLogger(__name__)
 
@@ -31,33 +31,36 @@ class OptimisationLoop:
         initial_strengths: np.ndarray,
         knob_names: list[str],
         true_strengths: dict[str, float],
-        opt_settings: OptSettings,
-        optimiser_type: str = "adam",
+        optimiser_config: OptimiserConfig,
+        simulation_config: SimulationConfig,
+        optimiser_type: str | None = None,
     ):
         self.knob_names = knob_names
         self.true_strengths = true_strengths
         self.use_true_strengths = len(true_strengths) > 0
         self.smoothed_grad_norm: float | None = None
-        self.grad_norm_alpha = opt_settings.grad_norm_alpha
+        self.grad_norm_alpha = optimiser_config.grad_norm_alpha
 
-        self.max_epochs = opt_settings.max_epochs
-        self.gradient_converged_value = opt_settings.gradient_converged_value
+        self.max_epochs = optimiser_config.max_epochs
+        self.gradient_converged_value = optimiser_config.gradient_converged_value
 
         # Initialise optimiser
-        self._init_optimiser(initial_strengths.shape, optimiser_type)
+        opt_type = optimiser_type if optimiser_type is not None else optimiser_config.optimiser_type
+        self._init_optimiser(initial_strengths.shape, opt_type)
 
         # Initialise scheduler
-        # Build scheduler using opt_settings values (avoid calling LRScheduler without args)
         self.scheduler = LRScheduler(
-            warmup_epochs=opt_settings.warmup_epochs,
-            decay_epochs=opt_settings.decay_epochs,
-            start_lr=opt_settings.warmup_lr_start,
-            max_lr=opt_settings.max_lr,
-            min_lr=opt_settings.min_lr,
+            warmup_epochs=optimiser_config.warmup_epochs,
+            decay_epochs=optimiser_config.decay_epochs,
+            start_lr=optimiser_config.warmup_lr_start,
+            max_lr=optimiser_config.max_lr,
+            min_lr=optimiser_config.min_lr,
         )
 
-        self.some_magnets = opt_settings.optimise_quadrupoles or opt_settings.optimise_bends
-        self.num_batches = opt_settings.num_batches
+        self.some_magnets = (
+            simulation_config.optimise_quadrupoles or simulation_config.optimise_bends
+        )
+        self.num_batches = simulation_config.num_batches
 
     def _init_optimiser(self, shape: tuple, optimiser_type: str) -> None:
         """Initialise the optimiser based on type."""
@@ -136,25 +139,19 @@ class OptimisationLoop:
 
             if self.smoothed_grad_norm < self.gradient_converged_value:
                 LOGGER.info(
-                    f"\nGradient norm below threshold: {self.smoothed_grad_norm:.3e}. "
-                    f"Stopping early at epoch {epoch}."
+                    f"\nGradient norm below threshold: {self.smoothed_grad_norm:.3e}. Stopping early at epoch {epoch}."
                 )
                 break
             if (
-                sum(abs(current_knobs[k] - prev_knobs[k]) for k in self.knob_names)
-                < 1e-11
+                sum(abs(current_knobs[k] - prev_knobs[k]) for k in self.knob_names) < 1e-11
                 and epoch > 10
             ):
-                LOGGER.info(
-                    f"\nKnob updates below threshold. Stopping early at epoch {epoch}."
-                )
+                LOGGER.info(f"\nKnob updates below threshold. Stopping early at epoch {epoch}.")
                 break
 
         return current_knobs
 
-    def _collect_batch_results(
-        self, parent_conns: list[Connection]
-    ) -> tuple[float, np.ndarray]:
+    def _collect_batch_results(self, parent_conns: list[Connection]) -> tuple[float, np.ndarray]:
         """Collect results from all workers for a batch."""
         total_loss = 0.0
         agg_grad: None | np.ndarray = None
@@ -198,9 +195,7 @@ class OptimisationLoop:
         writer.add_scalar("grad_norm", grad_norm, epoch)
 
         if self.use_true_strengths:
-            true_diff = [
-                abs(current_knobs[k] - self.true_strengths[k]) for k in self.knob_names
-            ]
+            true_diff = [abs(current_knobs[k] - self.true_strengths[k]) for k in self.knob_names]
             rel_diff = [
                 diff / abs(self.true_strengths[k]) if self.true_strengths[k] != 0 else 0
                 for k, diff in zip(self.knob_names, true_diff)
@@ -212,14 +207,11 @@ class OptimisationLoop:
             writer.add_scalar("true_diff", sum_true_diff, epoch)
             writer.add_scalar("rel_diff", sum_rel_diff, epoch)
         else:
-            writer.add_scalar(
-                "avg_knob_value", np.mean(list(current_knobs.values())), epoch
-            )
+            writer.add_scalar("avg_knob_value", np.mean(list(current_knobs.values())), epoch)
 
         if self.some_magnets and self.use_true_strengths:
             true_middle_diff = [
-                abs(current_knobs[k] - self.true_strengths[k])
-                for k in self.knob_names[5:-5]
+                abs(current_knobs[k] - self.true_strengths[k]) for k in self.knob_names[5:-5]
             ]
             rel_middle_diff = [
                 diff / abs(self.true_strengths[k]) if self.true_strengths[k] != 0 else 0

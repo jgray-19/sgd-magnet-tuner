@@ -10,14 +10,8 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 
-from aba_optimiser.config import (
-    DPP_OPT_SETTINGS_TEMPLATE,
-    PROJECT_ROOT,
-)
-from aba_optimiser.measurements.create_datafile import (
-    process_measurements,
-    save_online_knobs,
-)
+from aba_optimiser.config import DPP_OPTIMISER_CONFIG, DPP_SIMULATION_CONFIG, PROJECT_ROOT
+from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.training.controller import LHCController as Controller
 
 logger = logging.getLogger(__name__)
@@ -40,12 +34,8 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
     """Create measurement configurations for beam 1."""
     model_dir_b1 = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB1/Models/2025-11-07_B1_12cm_right_knobs/"
     magnet_ranges_b1 = [f"BPM.9R{s}.B1/BPM.9L{s % 8 + 1}.B1" for s in range(1, 9)]
-    bpm_starts_b1 = [
-        [f"BPM.{i}R{s}.B1" for i in [9, 10, 11, 12, 13]] for s in range(1, 9)
-    ]
-    bpm_end_points_b1 = [
-        [f"BPM.{i}L{s % 8 + 1}.B1" for i in [9, 10, 11, 12, 13]] for s in range(1, 9)
-    ]
+    bpm_starts_b1 = [[f"BPM.{i}R{s}.B1" for i in [9, 10, 11, 12, 13]] for s in range(1, 9)]
+    bpm_end_points_b1 = [[f"BPM.{i}L{s % 8 + 1}.B1" for i in [9, 10, 11, 12, 13]] for s in range(1, 9)]
 
     return [
         MeasurementConfig(
@@ -124,13 +114,9 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
 def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfig]:
     """Create measurement configurations for beam 2."""
     model_dir_b2 = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB2/Models/2025-11-07_B2_12cm"
-    magnet_ranges_b2 = [
-        f"BPM.9L{i}.B2/BPM.9R{(i - 2) % 8 + 1}.B2" for i in range(8, 0, -1)
-    ]
+    magnet_ranges_b2 = [f"BPM.9L{i}.B2/BPM.9R{(i - 2) % 8 + 1}.B2" for i in range(8, 0, -1)]
     bpm_starts_b2 = [[f"BPM.{i}L{s}.B2" for i in range(9, 14)] for s in range(8, 0, -1)]
-    bpm_end_points_b2 = [
-        [f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 14)] for s in range(8, 0, -1)
-    ]
+    bpm_end_points_b2 = [[f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 14)] for s in range(8, 0, -1)]
 
     return [
         # MeasurementConfig(
@@ -191,9 +177,7 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
     ]
 
 
-def process_single_config(
-    config: MeasurementConfig, temp_analysis_dir: Path, date: str
-) -> None:
+def process_single_config(config: MeasurementConfig, temp_analysis_dir: Path, date: str) -> None:
     """Process a single measurement configuration."""
     results_dir = PROJECT_ROOT / f"b{config.beam}_results"
     results_dir.mkdir(exist_ok=True)
@@ -220,10 +204,7 @@ def process_single_config(
     bad_bpms_file = temp_analysis_dir / "bad_bpms.txt"
 
     # Generate files from times
-    files = [
-        Path(f"{config.folder}/{config.name_prefix}{time}.sdds")
-        for time in config.times
-    ]
+    files = [Path(f"{config.folder}/{config.name_prefix}{time}.sdds") for time in config.times]
 
     pzs, bad_bpms, _ = process_measurements(
         files,
@@ -253,7 +234,8 @@ def process_single_config(
 
         controller = Controller(
             beam=config.beam,
-            opt_settings=DPP_OPT_SETTINGS_TEMPLATE,
+            optimiser_config=DPP_OPTIMISER_CONFIG,
+            simulation_config=DPP_SIMULATION_CONFIG,
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,

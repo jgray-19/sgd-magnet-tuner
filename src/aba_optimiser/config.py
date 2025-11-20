@@ -17,54 +17,68 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class OptSettings:
-    """Settings for optimisation simulations."""
+class OptimiserConfig:
+    """Configuration for gradient descent optimiser algorithms.
+
+    Controls learning rates, convergence criteria, and optimiser type
+    for the gradient descent training process.
+    """
 
     max_epochs: int
-    tracks_per_worker: int
-    num_workers: int
-    num_batches: int
     warmup_epochs: int
     warmup_lr_start: float
     max_lr: float
     min_lr: float
     gradient_converged_value: float
     optimiser_type: str = field(default="adam")  # Options: "adam", "amsgrad", "lbfgs"
-    total_tracks: int = field(init=False)
+
+    # Gradient smoothing for loss tracking
+    grad_norm_alpha: float = field(default=0.4)
+
+    # Computed fields
     decay_epochs: int = field(init=False)
 
+    def __post_init__(self):
+        self.decay_epochs = self.max_epochs - self.warmup_epochs
+
+
+@dataclass
+class SimulationConfig:
+    """Configuration for simulation and worker process settings.
+
+    Controls parallel worker distribution, tracking data, and which
+    physical parameters (energy, quadrupoles, bends) to optimise.
+    """
+
+    tracks_per_worker: int
+    num_workers: int
+    num_batches: int
+
+    # Which parameters to optimise
     optimise_energy: bool = field(default=True)
     optimise_quadrupoles: bool = field(default=False)
     optimise_bends: bool = field(default=False)
-    
-    # Gradient smoothing for loss tracking
-    grad_norm_alpha: float = field(default=0.4)
-    
+
     # Worker mode: arc-by-arc vs whole ring
     run_arc_by_arc: bool = field(default=True)
-    
+
     # Whether to use different turns for each BPM range
     different_turns_per_range: bool = field(default=False)
 
+    # Computed fields
+    total_tracks: int = field(init=False)
+
     def __post_init__(self):
         self.total_tracks = self.tracks_per_worker * self.num_workers
-        self.decay_epochs = self.max_epochs - self.warmup_epochs
 
 
 # In the future, mode needs to be removed, instead it needs to be a flexible code that can set which parameters will be optimised on the fly.
 # This includes bends, quadrupoles and energy.
 
-# Simulation parameters for dp/p optimisation
-DPP_OPT_SETTINGS_TEMPLATE = OptSettings(
+# Optimiser configuration for dp/p optimisation
+DPP_OPTIMISER_CONFIG = OptimiserConfig(
     # max_epochs=400,
     max_epochs=150,
-    # For pre trimmed data
-    # tracks_per_worker=447,
-    # num_workers=59,
-    # For post trimmed data
-    tracks_per_worker=219,
-    num_workers=60,
-    num_batches=20,
     warmup_epochs=1,
     # num_batches=10,
     # warmup_epochs=2,
@@ -80,17 +94,25 @@ DPP_OPT_SETTINGS_TEMPLATE = OptSettings(
     gradient_converged_value=3e-7,
     optimiser_type="adam",
     # optimiser_type="lbfgs",
-    optimise_energy=True,
 )
 
-# Simulation parameters for quadrupole optimisation
-QUAD_OPT_SETTINGS_TEMPLATE = OptSettings(
-    max_epochs=5000,
-    tracks_per_worker=133,
+# Simulation configuration for dp/p optimisation
+DPP_SIMULATION_CONFIG = SimulationConfig(
+    # For pre trimmed data
+    # tracks_per_worker=447,
+    # num_workers=59,
+    # For post trimmed data
+    tracks_per_worker=219,
     num_workers=60,
-    # num_workers=1,
-    # num_batches=1,
-    num_batches=10,
+    num_batches=20,
+    optimise_energy=True,
+    optimise_quadrupoles=False,
+    optimise_bends=False,
+)
+
+# Optimiser configuration for quadrupole optimisation
+QUAD_OPTIMISER_CONFIG = OptimiserConfig(
+    max_epochs=5000,
     # Adam settings
     warmup_epochs=100,
     warmup_lr_start=2e-8,
@@ -103,10 +125,20 @@ QUAD_OPT_SETTINGS_TEMPLATE = OptSettings(
     # min_lr=5e-2,
     # Rest
     gradient_converged_value=1e-9,
-    optimise_energy=False,
-    optimise_quadrupoles=True,
     optimiser_type="adam",
     # optimiser_type="lbfgs",
+)
+
+# Simulation configuration for quadrupole optimisation
+QUAD_SIMULATION_CONFIG = SimulationConfig(
+    tracks_per_worker=133,
+    num_workers=60,
+    # num_workers=1,
+    # num_batches=1,
+    num_batches=10,
+    optimise_energy=False,
+    optimise_quadrupoles=True,
+    optimise_bends=False,
 )
 
 # =============================================================================

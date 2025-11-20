@@ -110,9 +110,7 @@ class BaseMadInterface:
             particle: Particle type (default: proton)
         """
         logger.info(f"Setting beam: particle={particle}, energy={beam_energy:.15e} GeV")
-        self.mad.send(
-            f'loaded_sequence.beam = beam {{ particle = "{particle}", energy = {beam_energy:.15e} }}'
-        )
+        self.mad.send(f'loaded_sequence.beam = beam {{ particle = "{particle}", energy = {beam_energy:.15e} }}')
 
     def observe_elements(self, pattern: str = "BPM") -> None:
         """
@@ -155,9 +153,7 @@ loaded_sequence:deselect(observed, {{pattern="{elem}"}})
         else:
             self.mad.send(f"loaded_sequence:cycle('{marker_name}')")
 
-    def install_marker(
-        self, element_name: str, marker_name: str = None, offset: float = -1e-10
-    ) -> str:
+    def install_marker(self, element_name: str, marker_name: str = None, offset: float = -1e-10) -> str:
         """
         Install a marker element near an existing element.
 
@@ -197,9 +193,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
             twiss_kwargs["observe"] = 1  # Default to no observation if not set
 
         try:
-            self.mad["tws", "flw"] = self.mad.twiss(
-                sequence="loaded_sequence", **twiss_kwargs
-            )
+            self.mad["tws", "flw"] = self.mad.twiss(sequence="loaded_sequence", **twiss_kwargs)
         except ValueError as e:
             logger.error(f"Error during twiss calculation: {e}")
             raise RuntimeError("Twiss failed - check MAD output for details") from e
@@ -253,9 +247,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
         variables_to_set = {}
         for name, strength in strengths.items():
             if not any(suffix in name for suffix in suffixes):
-                raise ValueError(
-                    f"Magnet name '{name}' must end with one of {suffixes}"
-                )
+                raise ValueError(f"Magnet name '{name}' must end with one of {suffixes}")
             magnet_name, var = name.rsplit(".", 1)
             variables_to_set[f"MADX['{magnet_name}'].{var}"] = strength
 
@@ -289,14 +281,10 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
             if kind in mappings:
                 for attr, col in mappings[kind]:
                     if col in row.index:
-                        self.mad.send(
-                            f"loaded_sequence['{ename}'].{attr} = {self.py_name}:recv()"
-                        )
+                        self.mad.send(f"loaded_sequence['{ename}'].{attr} = {self.py_name}:recv()")
                         self.mad.send(row[col])
                     else:
-                        logger.warning(
-                            f"Column '{col}' not found in corrector table for element {ename}"
-                        )
+                        logger.warning(f"Column '{col}' not found in corrector table for element {ename}")
             else:
                 logger.warning(f"Element {ename} has unknown kind '{kind}'")
 
@@ -381,23 +369,19 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
 
     def pt2dp(self, pt: float) -> float:
         """Convert transverse momentum to delta p/p."""
-        self.mad.send(
-            f"{self.py_name}:send(MAD.gphys.pt2dp({self.py_name}:recv(), loaded_sequence.beam.beta))"
-        )
+        self.mad.send(f"{self.py_name}:send(MAD.gphys.pt2dp({self.py_name}:recv(), loaded_sequence.beam.beta))")
         self.mad.send(pt)
         return self.mad.recv()
 
     def dp2pt(self, dp: float) -> float:
         """Convert delta p/p to transverse momentum."""
-        self.mad.send(
-            f"{self.py_name}:send(MAD.gphys.dp2pt({self.py_name}:recv(), loaded_sequence.beam.beta))"
-        )
+        self.mad.send(f"{self.py_name}:send(MAD.gphys.dp2pt({self.py_name}:recv(), loaded_sequence.beam.beta))")
         self.mad.send(dp)
         return self.mad.recv()
 
     def __del__(self) -> None:
         """Clean up the MAD-NG session on object destruction."""
         # Tell MAD to to shush when deleting to avoid noisy output
-        self.mad.send("shush()")
+        # self.mad.send("shush()")
         if hasattr(self, "mad"):
             del self.mad

@@ -46,9 +46,7 @@ SCAN_RANGE_MAX = 2e-4
 MAGNET_RANGES = [f"BPM.9R{s}.B1/BPM.9L{s % 8 + 1}.B1" for s in range(1, 9)]
 
 BPM_STARTS = [[f"BPM.{i}R{s}.B1" for i in [9, 10, 11, 12, 13]] for s in range(1, 9)]
-BPM_END_POINTS = [
-    [f"BPM.{i}L{s % 8 + 1}.B1" for i in [9, 10, 11, 12, 13]] for s in range(1, 9)
-]
+BPM_END_POINTS = [[f"BPM.{i}L{s % 8 + 1}.B1" for i in [9, 10, 11, 12, 13]] for s in range(1, 9)]
 
 
 @dataclass
@@ -79,15 +77,9 @@ class ScanConfig:
     bpm_end_points: list[list[str]]
 
 
-def compute_weighted_mean_and_std(
-    vals: list[float], uncs: list[float]
-) -> tuple[float, float]:
+def compute_weighted_mean_and_std(vals: list[float], uncs: list[float]) -> tuple[float, float]:
     """Compute weighted mean and standard deviation from values and uncertainties."""
-    valid_indices = [
-        i
-        for i in range(len(vals))
-        if not (np.isnan(vals[i]) or np.isnan(uncs[i]) or uncs[i] <= 0)
-    ]
+    valid_indices = [i for i in range(len(vals)) if not (np.isnan(vals[i]) or np.isnan(uncs[i]) or uncs[i] <= 0)]
     if not valid_indices:
         return float("nan"), float("nan")
 
@@ -129,9 +121,7 @@ def compute_outlier_removed_stats(
     # Compute z-scores and identify outliers
     z_scores = (values - global_mean) / global_std
     outlier_mask = np.abs(z_scores) > Z_SCORE_THRESHOLD
-    logger.info(
-        f"Found {np.sum(outlier_mask)} outliers out of {len(values)} total points"
-    )
+    logger.info(f"Found {np.sum(outlier_mask)} outliers out of {len(values)} total points")
 
     # Collect positions of outliers: set of (record_idx, value_idx)
     outlier_positions = set()
@@ -146,9 +136,7 @@ def compute_outlier_removed_stats(
         extracted_values = record.get("per_repeat_extracted", [])
         # Filter out NaN and outlier values
         valid_values = [
-            value
-            for value_idx, value in enumerate(extracted_values)
-            if not np.isnan(value) and (record_idx, value_idx) not in outlier_positions
+            value for value_idx, value in enumerate(extracted_values) if not np.isnan(value) and (record_idx, value_idx) not in outlier_positions
         ]
         if valid_values:
             mean_val = np.mean(valid_values)
@@ -224,12 +212,8 @@ def plot_results(x: list[float], y: list[float], yerr: list[float], out_path: Pa
     _plot_dpp_scan(x, y, yerr, out_path, "#1f77b4", "Calculated dpp from DLMN")
 
 
-def plot_results_outlier_removed(
-    x: list[float], y: list[float], yerr: list[float], out_path: Path
-):
-    _plot_dpp_scan(
-        x, y, yerr, out_path, "#dc143c", "Calculated dpp from DLMN (outliers removed)"
-    )
+def plot_results_outlier_removed(x: list[float], y: list[float], yerr: list[float], out_path: Path):
+    _plot_dpp_scan(x, y, yerr, out_path, "#dc143c", "Calculated dpp from DLMN (outliers removed)")
 
 
 def _plot_dpp_scan(
@@ -297,9 +281,7 @@ def _plot_dpp_scan(
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments for the dpp scan script."""
-    parser = argparse.ArgumentParser(
-        description="Run dpp scan using create_a34 and energy optimiser"
-    )
+    parser = argparse.ArgumentParser(description="Run dpp scan using create_a34 and energy optimiser")
     parser.add_argument("--out", default="plots/dpp_scan.png", help="Output plot path")
     parser.add_argument(
         "--from-pickle",
@@ -334,16 +316,10 @@ def handle_pickle_mode(args: argparse.Namespace) -> None:
 
     # Perform outlier analysis if data available
     if records and any("per_repeat_extracted" in rec for rec in records):
-        outlier_removed_means, outlier_removed_stds = compute_outlier_removed_stats(
-            records
-        )
+        outlier_removed_means, outlier_removed_stds = compute_outlier_removed_stats(records)
         if outlier_removed_means:
-            outlier_plot_path = Path(args.out).parent / (
-                Path(args.out).stem + "_outliers_removed.png"
-            )
-            plot_results_outlier_removed(
-                xs, outlier_removed_means, outlier_removed_stds, outlier_plot_path
-            )
+            outlier_plot_path = Path(args.out).parent / (Path(args.out).stem + "_outliers_removed.png")
+            plot_results_outlier_removed(xs, outlier_removed_means, outlier_removed_stds, outlier_plot_path)
 
 
 def load_checkpoint(pickle_path: Path) -> dict[float, ScanResult]:
@@ -364,13 +340,9 @@ def load_checkpoint(pickle_path: Path) -> dict[float, ScanResult]:
                         mean=rec.get("mean", float("nan")),
                         std=rec.get("std", float("nan")),
                     )
-            logger.info(
-                "Loaded checkpoint with %d inputs from %s", len(prior_map), pickle_path
-            )
+            logger.info("Loaded checkpoint with %d inputs from %s", len(prior_map), pickle_path)
         except (FileNotFoundError, RuntimeError):
-            logger.exception(
-                "Failed to load checkpoint from %s; starting fresh", pickle_path
-            )
+            logger.exception("Failed to load checkpoint from %s; starting fresh", pickle_path)
     return prior_map
 
 
@@ -404,24 +376,16 @@ def run_single_dpp_scan(config: ScanConfig, input_dpp: float) -> ScanResult:
 
     # Run energy optimization for each magnet range
     for rep, magnet_range in enumerate(config.magnet_ranges):
-        logger.debug(
-            f"Repeat {rep + 1}/{len(config.magnet_ranges)} for input_dpp={input_dpp}"
-        )
-        result = _run_energy_optimization(
-            input_dpp, magnet_range, config.bpm_starts[rep], config.bpm_end_points[rep]
-        )
+        logger.debug(f"Repeat {rep + 1}/{len(config.magnet_ranges)} for input_dpp={input_dpp}")
+        result = _run_energy_optimization(input_dpp, magnet_range, config.bpm_starts[rep], config.bpm_end_points[rep])
         per_repeat_values.append(result["value"])
         per_repeat_uncertainties.append(result["uncertainty"])
         per_repeat_raw_data.append(result["raw_data"])
 
     # Compute weighted mean and uncertainty as std across arcs
-    mean_val, std_val = compute_weighted_mean_and_std(
-        per_repeat_values, per_repeat_uncertainties
-    )
+    mean_val, std_val = compute_weighted_mean_and_std(per_repeat_values, per_repeat_uncertainties)
 
-    logger.info(
-        f"Completed scan for input_dpp={input_dpp}: mean={mean_val:.6e}, std={std_val:.6e}"
-    )
+    logger.info(f"Completed scan for input_dpp={input_dpp}: mean={mean_val:.6e}, std={std_val:.6e}")
     return ScanResult(
         input_dpp=input_dpp,
         per_repeat_raw_data=per_repeat_raw_data,
@@ -473,11 +437,12 @@ def _run_energy_optimization(
 ) -> dict:
     """Run energy optimization for a single magnet range."""
     try:
-        from aba_optimiser.config import DPP_OPT_SETTINGS_TEMPLATE
+        from aba_optimiser.config import DPP_OPTIMISER_CONFIG, DPP_SIMULATION_CONFIG
         from aba_optimiser.training.controller import Controller
 
         energy_controller = Controller(
-            DPP_OPT_SETTINGS_TEMPLATE,
+            optimiser_config=DPP_OPTIMISER_CONFIG,
+            simulation_config=DPP_SIMULATION_CONFIG,
             show_plots=False,
             machine_deltap=input_dpp,
             magnet_range=magnet_range,
@@ -525,9 +490,7 @@ def setup_logging():
 
 def create_scan_config() -> ScanConfig:
     """Create the scan configuration."""
-    input_dpp_values = np.linspace(
-        SCAN_RANGE_MIN, SCAN_RANGE_MAX, NUM_SCAN_POINTS
-    ).tolist()
+    input_dpp_values = np.linspace(SCAN_RANGE_MIN, SCAN_RANGE_MAX, NUM_SCAN_POINTS).tolist()
 
     return ScanConfig(
         input_dpp_values=input_dpp_values,
@@ -594,9 +557,7 @@ def run_scan(args: argparse.Namespace, config: ScanConfig) -> list[ScanResult]:
     return sorted(final_results, key=lambda r: r.input_dpp)
 
 
-def merge_results_with_prior(
-    results: list[ScanResult], prior_results: dict[float, ScanResult]
-) -> list[ScanResult]:
+def merge_results_with_prior(results: list[ScanResult], prior_results: dict[float, ScanResult]) -> list[ScanResult]:
     """Merge current results with prior checkpoint results."""
     combined = {r.input_dpp: r for r in results}
     for dpp, result in prior_results.items():
@@ -620,9 +581,7 @@ def save_checkpoint(
         combined_list = [combined[dpp] for dpp in sorted(combined.keys())]
         with pickle_path.open("wb") as f:
             pickle.dump(combined_list, f)
-        logger.info(
-            "Checkpoint saved to %s (%d points)", pickle_path, len(combined_list)
-        )
+        logger.info("Checkpoint saved to %s (%d points)", pickle_path, len(combined_list))
     except (OSError, pickle.PicklingError) as e:
         logger.exception("Failed to save checkpoint to %s: %s", pickle_path, e)
 
@@ -633,9 +592,7 @@ def process_results(results: list[ScanResult], args: argparse.Namespace):
     raw_results = [result_to_dict(r) for r in results]
 
     # Perform outlier analysis
-    outlier_removed_means, outlier_removed_stds = compute_outlier_removed_stats(
-        raw_results
-    )
+    outlier_removed_means, outlier_removed_stds = compute_outlier_removed_stats(raw_results)
 
     # Extract data for plotting
     xs = [r.input_dpp for r in results]
@@ -649,12 +606,8 @@ def process_results(results: list[ScanResult], args: argparse.Namespace):
     plot_results(xs, means, stds, Path(args.out))
 
     if outlier_removed_means:
-        outlier_plot_path = Path(args.out).parent / (
-            Path(args.out).stem + "_outliers_removed.png"
-        )
-        plot_results_outlier_removed(
-            xs, outlier_removed_means, outlier_removed_stds, outlier_plot_path
-        )
+        outlier_plot_path = Path(args.out).parent / (Path(args.out).stem + "_outliers_removed.png")
+        plot_results_outlier_removed(xs, outlier_removed_means, outlier_removed_stds, outlier_plot_path)
 
 
 def result_to_dict(result: ScanResult) -> dict:

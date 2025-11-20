@@ -7,22 +7,18 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.config import (
-    BEAM_ENERGY,
-)
+from aba_optimiser.config import BEAM_ENERGY
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.workers.arc_by_arc import ArcByArcWorker
 
 if TYPE_CHECKING:
-    from aba_optimiser.config import OptSettings
+    from aba_optimiser.config import SimulationConfig
 
 
 LOGGER = logging.getLogger(__name__)
 
 
-def circular_far_samples(
-    arr: np.ndarray, k: int, start_offset: int = 0
-) -> tuple[np.ndarray, np.ndarray]:
+def circular_far_samples(arr: np.ndarray, k: int, start_offset: int = 0) -> tuple[np.ndarray, np.ndarray]:
     """
     Pick k indices as far apart as possible on a circular array.
     k must be <= len(arr). start_offset rotates the selection.
@@ -41,7 +37,7 @@ class ConfigurationManager:
 
     def __init__(
         self,
-        opt_settings: OptSettings,
+        simulation_config: SimulationConfig,
         magnet_range: str,
         bpm_start_points: list[str],
         bpm_end_points: list[str],
@@ -55,14 +51,13 @@ class ConfigurationManager:
         self.start_bpms = bpm_start_points
         self.end_bpms = bpm_end_points
         self.magnet_range = magnet_range
-        self.global_config = opt_settings
-        self.bpm_ranges = [
-            s + "/" + e for s in bpm_start_points for e in bpm_end_points
-        ]
+        self.simulation_config = simulation_config
+        self.bpm_ranges = [s + "/" + e for s in bpm_start_points for e in bpm_end_points]
 
     def setup_mad_interface(
         self,
         sequence_file_path: str,
+        first_bpm: str,
         bad_bpms: list[str] | None,
         seq_name: str | None = None,
         beam_energy: float = BEAM_ENERGY,
@@ -71,8 +66,9 @@ class ConfigurationManager:
         self.mad_iface = OptimisationMadInterface(
             sequence_file_path,
             seq_name=seq_name,
+            start_bpm=first_bpm,
             magnet_range=self.magnet_range,
-            opt_settings=self.global_config,
+            simulation_config=self.simulation_config,
             corrector_strengths=None,
             tune_knobs_file=None,
             bad_bpms=bad_bpms,
@@ -83,7 +79,7 @@ class ConfigurationManager:
         self.elem_spos = self.mad_iface.elem_spos
         self.all_bpms = self.mad_iface.all_bpms
 
-    def determine_worker_and_bpms(self) -> None:
+    def check_worker_and_bpms(self) -> None:
         """Determine the worker type and BPM start points based on the run mode."""
         for bpm in self.start_bpms:
             if bpm not in self.all_bpms:
@@ -100,9 +96,7 @@ class ConfigurationManager:
 
         if provided_initial_knobs is not None:
             # Use provided initial knobs where available, fill missing ones from MAD
-            LOGGER.info(
-                "Using provided initial knob strengths from previous optimization"
-            )
+            LOGGER.info("Using provided initial knob strengths from previous optimization")
             # First get the default MAD values for all knobs
             self.mad_iface.update_knob_values(provided_initial_knobs)
         initial_strengths = self.mad_iface.receive_knob_values()
@@ -115,9 +109,7 @@ class ConfigurationManager:
             LOGGER.warning("No true strengths provided, skipping filtering")
             filtered_true_strengths = {}
         else:
-            filtered_true_strengths = {
-                knob: true_strengths[knob] for knob in self.knob_names
-            }
+            filtered_true_strengths = {knob: true_strengths[knob] for knob in self.knob_names}
         return current_knobs, filtered_true_strengths
 
     def calculate_n_data_points(self) -> dict[str, int]:

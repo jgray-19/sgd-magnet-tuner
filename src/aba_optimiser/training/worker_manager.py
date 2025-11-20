@@ -14,12 +14,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.config import (
-    PARTICLE_MASS,
-)
+from aba_optimiser.config import PARTICLE_MASS
 from aba_optimiser.physics.deltap import dp2pt
-from aba_optimiser.workers.base_worker import WorkerConfig, WorkerData
 from aba_optimiser.workers.arc_by_arc import ArcByArcWorker
+from aba_optimiser.workers.base_worker import WorkerConfig, WorkerData
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -27,7 +25,7 @@ if TYPE_CHECKING:
 
     import pandas as pd
 
-    from aba_optimiser.config import OptSettings
+    from aba_optimiser.config import SimulationConfig
 
 
 LOGGER = logging.getLogger(__name__)
@@ -91,7 +89,7 @@ class WorkerManager:
         file_turn_map: dict[int, int],
         bpm_ranges: list[str],
         machine_deltaps: list[float],
-        opt_settings: OptSettings,
+        simulation_config: SimulationConfig,
     ) -> list[tuple[WorkerData, WorkerConfig, int]]:
         """Create payloads for all workers.
 
@@ -101,7 +99,7 @@ class WorkerManager:
             file_turn_map (dict[int, int]): Mapping from turn numbers to file indices
             bpm_ranges (list[str]): List of BPM ranges
             machine_deltaps (list[float]): List of machine deltaps corresponding to each file
-            opt_settings (OptSettings): Optimisation settings containing configuration flags
+            simulation_config (SimulationConfig): Simulation configuration containing optimization flags
 
         Returns:
             list[tuple[WorkerData, WorkerConfig, int]]: List of tuples containing:
@@ -112,21 +110,26 @@ class WorkerManager:
         Raises:
             AssertionError: If a turn batch is empty
         """
-        payloads = []
+        payloads: list[tuple[WorkerData, WorkerConfig, int]] = []
         # Precompute arrays once per file for memory efficiency
         arrays_cache = {idx: self._extract_arrays(df) for idx, df in track_data.items()}
-        
-        LOGGER.info(f"Creating worker payloads: {len(bpm_ranges)} BPM ranges x {len(turn_batches)} batches x 2 directions")
+
+        LOGGER.info(
+            f"Creating worker payloads: {len(bpm_ranges)} BPM ranges x {len(turn_batches)} batches x 2 directions"
+        )
         for sdir in [1, -1]:
             for bpm_i, bpm_range in enumerate(bpm_ranges):
                 start_bpm, end_bpm = bpm_range.split("/")
                 for batch_idx, turn_batch in enumerate(turn_batches):
-                    if opt_settings.different_turns_per_range and batch_idx % len(bpm_ranges) != bpm_i:
+                    if (
+                        simulation_config.different_turns_per_range
+                        and batch_idx % len(bpm_ranges) != bpm_i
+                    ):
                         continue
 
                     if not turn_batch:
                         raise ValueError(f"Empty batch {batch_idx} for {bpm_range}")
-                    
+
                     # All turns must be from same file
                     primary_file_idx = file_turn_map[turn_batch[0]]
                     if any(file_turn_map[t] != primary_file_idx for t in turn_batch):
@@ -134,8 +137,14 @@ class WorkerManager:
 
                     # Create payload arrays
                     pos, mom, pos_var, mom_var, init_coords, pts = self._make_worker_payload(
-                        turn_batch, file_turn_map, start_bpm, end_bpm,
-                        self.n_data_points[bpm_range], sdir, machine_deltaps, arrays_cache
+                        turn_batch,
+                        file_turn_map,
+                        start_bpm,
+                        end_bpm,
+                        self.n_data_points[bpm_range],
+                        sdir,
+                        machine_deltaps,
+                        arrays_cache,
                     )
 
                     for arr in (pos, mom, pos_var, mom_var):
@@ -144,46 +153,43 @@ class WorkerManager:
                     primary_file_idx = file_turn_map[turn_batch[0]]
                     if any(file_turn_map[t] != primary_file_idx for t in turn_batch):
                         raise ValueError(f"Batch {batch_idx} has turns from multiple files")
-                    
+
                     LOGGER.debug(
-                        f"Worker {len(payloads)}: file={primary_file_idx}, "
-                        f"range={bpm_range}, sdir={sdir}, turns={len(turn_batch)}"
+                        f"Worker {len(payloads)}: file={primary_file_idx}, range={bpm_range}, sdir={sdir}, turns={len(turn_batch)}"
                     )
-                    
-                    payloads.append((
-                        WorkerData(
-                            position_comparisons=pos,
-                            momentum_comparisons=mom,
-                            position_variances=pos_var,
-                            momentum_variances=mom_var,
-                            init_coords=init_coords,
-                            init_pts=pts
-                        ),
-                        WorkerConfig(
-                            start_bpm=start_bpm,
-                            end_bpm=end_bpm,
-                            magnet_range=self.magnet_range,
-                            sequence_file_path=self.sequence_file_path,
-                            corrector_strengths=self.corrector_strengths_files[primary_file_idx],
-                            tune_knobs_file=self.tune_knobs_files[primary_file_idx],
-                            beam_energy=self.beam_energy,
-                            sdir=sdir,
-                            bad_bpms=self.bad_bpms,
-                            seq_name=self.seq_name
-                        ),
-                        primary_file_idx
-                    ))
-                    
+                    data = WorkerData(
+                        position_comparisons=pos,
+                        momentum_comparisons=mom,
+                        position_variances=pos_var,
+                        momentum_variances=mom_var,
+                        init_coords=init_coords,
+                        init_pts=pts,
+                    )
+                    config = WorkerConfig(
+                        start_bpm=start_bpm,
+                        end_bpm=end_bpm,
+                        magnet_range=self.magnet_range,
+                        sequence_file_path=self.sequence_file_path,
+                        corrector_strengths=self.corrector_strengths_files[primary_file_idx],
+                        tune_knobs_file=self.tune_knobs_files[primary_file_idx],
+                        beam_energy=self.beam_energy,
+                        sdir=sdir,
+                        bad_bpms=self.bad_bpms,
+                        seq_name=self.seq_name,
+                    )
+
+                    payloads.append((data, config, primary_file_idx))
+
         # Log summary of worker file assignments
         file_usage = {}
         for _, _, file_idx in payloads:
             file_usage[file_idx] = file_usage.get(file_idx, 0) + 1
-        
+
         LOGGER.info(
-            f"Created {len(payloads)} workers using files: " +
-            ", ".join(f"file_{idx}={count} workers" for idx, count in sorted(file_usage.items()))
+            f"Created {len(payloads)} workers using files: "
+            + ", ".join(f"file_{idx}={count} workers" for idx, count in sorted(file_usage.items()))
         )
-        
+
         # Verify all files are used if we have enough batches
         num_files = len(self.corrector_strengths_files)
         if len(file_usage) < num_files:
@@ -191,7 +197,7 @@ class WorkerManager:
                 f"Only {len(file_usage)}/{num_files} measurement files are being used by workers! "
                 f"This may lead to poor optimization if different files have different deltap values."
             )
-        
+
         return payloads
 
     def _extract_arrays(self, df: pd.DataFrame) -> dict[str, np.ndarray]:
@@ -234,7 +240,12 @@ class WorkerManager:
             cache = arrays_cache[file_idx]
             df = cache["df"]
             arr_x, arr_y, arr_px, arr_py = cache["x"], cache["y"], cache["px"], cache["py"]
-            arr_vx, arr_vy, arr_vpx, arr_vpy = cache["var_x"], cache["var_y"], cache["var_px"], cache["var_py"]
+            arr_vx, arr_vy, arr_vpx, arr_vpy = (
+                cache["var_x"],
+                cache["var_y"],
+                cache["var_px"],
+                cache["var_py"],
+            )
 
             pts[i] = self._compute_pt(file_idx, machine_deltaps)
 
@@ -248,18 +259,22 @@ class WorkerManager:
                     LOGGER.warning(f"Reversed init turn {turn} -> {init_turn}")
 
             init_pos = self._get_pos(df, init_turn, init_bpm)
-            
+
             # Extract kick plane and zero out non-kicked planes in initial conditions
             kick_plane = df.iloc[init_pos]["kick_plane"]
             x_val = arr_x[init_pos] if "x" in kick_plane else 0.0
             px_val = arr_px[init_pos] if "x" in kick_plane else 0.0
             y_val = arr_y[init_pos] if "y" in kick_plane else 0.0
             py_val = arr_py[init_pos] if "y" in kick_plane else 0.0
-            
+
             init_coords[i, :] = [x_val, px_val, y_val, py_val, 0.0, pts[i]]
 
             # Extract data slice
-            sl = slice(init_pos, init_pos - n_data_points, -1) if sdir == -1 else slice(init_pos, init_pos + n_data_points)
+            sl = (
+                slice(init_pos, init_pos - n_data_points, -1)
+                if sdir == -1
+                else slice(init_pos, init_pos + n_data_points)
+            )
             pos[i, :, 0], pos[i, :, 1] = arr_x[sl], arr_y[sl]
             mom[i, :, 0], mom[i, :, 1] = arr_px[sl], arr_py[sl]
             pos_var[i, :, 0], pos_var[i, :, 1] = arr_vx[sl], arr_vy[sl]
@@ -288,7 +303,7 @@ class WorkerManager:
         turn_batches: list[list[int]],
         file_turn_map: dict[int, int],
         bpm_ranges: list[str],
-        opt_settings: OptSettings,
+        simulation_config: SimulationConfig,
         machine_deltaps: list[float],
     ):
         """Start worker processes and return their parent connections.
@@ -298,7 +313,7 @@ class WorkerManager:
             turn_batches (list[list[int]]): List of turn batches for worker distribution
             file_turn_map (dict[int, int]): Mapping from turn numbers to file indices
             bpm_ranges (list[str]): List of BPM ranges
-            opt_settings (OptSettings): Optimisation settings
+            simulation_config (SimulationConfig): Simulation configuration
             machine_deltaps (list[float]): List of machine deltaps corresponding to each file
 
         Note:
@@ -307,13 +322,13 @@ class WorkerManager:
             connections to communicate with workers.
         """
         payloads = self.create_worker_payloads(
-            track_data, turn_batches, file_turn_map, bpm_ranges, machine_deltaps, opt_settings
+            track_data, turn_batches, file_turn_map, bpm_ranges, machine_deltaps, simulation_config
         )
         LOGGER.info(f"Starting {len(payloads)} workers...")
 
         for worker_id, (data, config, _file_idx) in enumerate(payloads):
             parent, child = mp.Pipe()
-            w = ArcByArcWorker(child, worker_id, data, config, opt_settings)
+            w = ArcByArcWorker(child, worker_id, data, config, simulation_config)
             w.start()
             self.parent_conns.append(parent)
             self.workers.append(w)
@@ -340,7 +355,16 @@ class WorkerManager:
 
         return total_loss / total_turns, agg_grad.flatten() / total_turns
 
-    def terminate_workers(self) -> np.ndarray:
+    def terminate_workers(self) -> None:
+        """Terminate all workers and clean up processes."""
+        LOGGER.info("Terminating workers...")
+        for conn in self.parent_conns:
+            conn.send((None, None))
+
+        for w in self.workers:
+            w.join()
+
+    def termination_and_hessian(self) -> np.ndarray:
         """Terminate all workers and collect final Hessian information.
 
         Returns:
@@ -353,9 +377,9 @@ class WorkerManager:
         LOGGER.info("Terminating workers...")
         for conn in self.parent_conns:
             conn.send((None, None))
-        
+
         hessians = [conn.recv() for conn in self.parent_conns]
         for w in self.workers:
             w.join()
-        
+
         return sum(hessians)

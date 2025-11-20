@@ -18,7 +18,6 @@ import numpy as np
 from tensorboardX import SummaryWriter
 
 from aba_optimiser.io.utils import get_lhc_file_path, read_knobs
-from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.training.configuration_manager import ConfigurationManager
 from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.optimisation_loop import OptimisationLoop
@@ -26,7 +25,7 @@ from aba_optimiser.training.result_manager import ResultManager
 from aba_optimiser.training.worker_manager import WorkerManager
 
 if TYPE_CHECKING:
-    from aba_optimiser.config import OptSettings
+    from aba_optimiser.config import OptimiserConfig, SimulationConfig
 
 logger = logging.getLogger(__name__)
 random.seed(42)  # For reproducibility
@@ -42,7 +41,8 @@ class Controller:
 
     def __init__(
         self,
-        opt_settings: OptSettings,
+        optimiser_config: OptimiserConfig,
+        simulation_config: SimulationConfig,
         sequence_file_path: str | Path,
         measurement_files: list[str] | str,
         bpm_start_points: list[str],
@@ -65,7 +65,8 @@ class Controller:
         Initialise the controller with all required managers.
 
         Args:
-            opt_settings (OptSettings): Optimisation settings.
+            optimiser_config (OptimiserConfig): Gradient descent optimiser configuration.
+            simulation_config (SimulationConfig): Simulation and worker configuration.
             sequence_file_path (str | Path): Path to the sequence file.
             show_plots (bool, optional): Whether to show plots. Defaults to True.
             initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths.
@@ -86,11 +87,12 @@ class Controller:
         """
 
         logger.info("Optimising energy")
-        if opt_settings.optimise_quadrupoles:
+        if simulation_config.optimise_quadrupoles:
             logger.info("Optimising quadrupoles")
-        if opt_settings.optimise_bends:
+        if simulation_config.optimise_bends:
             logger.info("Optimising bends")
-        self.opt_settings = dataclasses.replace(opt_settings)
+        self.optimiser_config = dataclasses.replace(optimiser_config)
+        self.simulation_config = dataclasses.replace(simulation_config)
 
         # Normalise inputs to lists
         if isinstance(measurement_files, Path | str) or measurement_files is None:
@@ -132,32 +134,23 @@ class Controller:
                     bpm_end_points.remove(bpm)
                     logger.warning(f"Removed bad BPM {bpm} from end points")
 
-        bpm_order = OptimisationMadInterface(
-            sequence_file_path,
-            seq_name=seq_name,
-            bad_bpms=bad_bpms,
-            start_bpm=first_bpm,
-            tune_knobs_file=None,
-            corrector_strengths=None,
-            beam_energy=beam_energy,
-        ).all_bpms
         # Initialise managers
         self.config_manager = ConfigurationManager(
-            opt_settings, magnet_range, bpm_start_points, bpm_end_points
+            simulation_config, magnet_range, bpm_start_points, bpm_end_points
         )
         self.config_manager.setup_mad_interface(
             sequence_file_path,
+            first_bpm,
             bad_bpms,
             seq_name,
             beam_energy,
         )
-        self.config_manager.determine_worker_and_bpms()
+        self.config_manager.check_worker_and_bpms()
 
         self.data_manager = DataManager(
             self.config_manager.all_bpms,
-            opt_settings,
+            simulation_config,
             measurement_files,
-            bpm_order=bpm_order,
             num_tracks=num_tracks,
             flattop_turns=flattop_turns,
         )
@@ -169,10 +162,10 @@ class Controller:
         self.data_manager.prepare_turn_batches(self.config_manager)
 
         # Adjust num_batches to not exceed tracks_per_worker for consistency
-        self.opt_settings = dataclasses.replace(
-            self.opt_settings,
+        self.simulation_config = dataclasses.replace(
+            self.simulation_config,
             num_batches=min(
-                self.opt_settings.num_batches, self.data_manager.tracks_per_worker
+                self.simulation_config.num_batches, self.data_manager.tracks_per_worker
             ),
         )
 
@@ -205,9 +198,7 @@ class Controller:
             )
             true_strengths["pt"] = 0.0
         elif "deltap" in true_strengths:
-            true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(
-                true_strengths.pop("deltap")
-            )
+            true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(true_strengths.pop("deltap"))
 
         # Update bend keys to remove [ABCD] and average over them
         pattern = r"(MB\.)([ABCD])([0-9]+[LR][1-8]\.B[12])\.k0"
@@ -222,8 +213,7 @@ class Controller:
             else:
                 new_true_strengths[key] = value
         true_strengths = {
-            k: np.mean(v) if isinstance(v, list) else v
-            for k, v in new_true_strengths.items()
+            k: np.mean(v) if isinstance(v, list) else v for k, v in new_true_strengths.items()
         }
 
         # Initialise knobs
@@ -232,9 +222,7 @@ class Controller:
                 initial_knob_strengths.pop("deltap")
             )
         self.initial_knobs, self.filtered_true_strengths = (
-            self.config_manager.initialise_knob_strengths(
-                true_strengths, initial_knob_strengths
-            )
+            self.config_manager.initialise_knob_strengths(true_strengths, initial_knob_strengths)
         )
 
         if not true_strengths:
@@ -246,12 +234,12 @@ class Controller:
             self.config_manager.initial_strengths,
             self.config_manager.knob_names,
             self.filtered_true_strengths,
-            self.opt_settings,
-            optimiser_type=self.opt_settings.optimiser_type,
+            self.optimiser_config,
+            self.simulation_config,
         )
         # Replace "pt" with "deltap" in the result manager if optimising energy
         deltap_knob_names = self.config_manager.knob_names
-        if self.opt_settings.optimise_energy:
+        if self.simulation_config.optimise_energy:
             deltap_knob_names = deltap_knob_names + ["deltap"]
             deltap_knob_names.remove("pt")
 
@@ -259,7 +247,7 @@ class Controller:
             deltap_knob_names,
             self.config_manager.elem_spos,
             show_plots=show_plots,
-            opt_settings=self.opt_settings,
+            simulation_config=self.simulation_config,
         )
 
     def run(self) -> tuple[dict[str, float], dict[str, float]]:
@@ -274,7 +262,7 @@ class Controller:
                 self.data_manager.turn_batches,
                 self.data_manager.file_map,
                 self.config_manager.bpm_ranges,
-                self.opt_settings,
+                self.simulation_config,
                 self.machine_deltaps,
             )
 
@@ -289,12 +277,10 @@ class Controller:
                 total_turns,
             )
         except KeyboardInterrupt:
-            logger.warning(
-                "\nKeyboardInterrupt detected. Terminating early and writing results."
-            )
+            logger.warning("\nKeyboardInterrupt detected. Terminating early and writing results.")
             self.final_knobs = self.initial_knobs
         finally:
-            total_hessian = self.worker_manager.terminate_workers()
+            total_hessian = self.worker_manager.termination_and_hessian()
         uncertainties = self._save_results(total_hessian, writer)
         uncertainties = dict(zip(self.final_knobs.keys(), uncertainties))
 
@@ -311,14 +297,10 @@ class Controller:
         gc.collect()
 
     def _convert_pt2dp(self, uncertainties: np.ndarray):
-        self.final_knobs["deltap"] = self.config_manager.mad_iface.pt2dp(
-            self.final_knobs.pop("pt")
-        )
+        self.final_knobs["deltap"] = self.config_manager.mad_iface.pt2dp(self.final_knobs.pop("pt"))
         if "pt" in self.config_manager.initial_strengths:
-            self.filtered_true_strengths["deltap"] = (
-                self.config_manager.mad_iface.pt2dp(
-                    self.filtered_true_strengths.pop("pt")
-                )
+            self.filtered_true_strengths["deltap"] = self.config_manager.mad_iface.pt2dp(
+                self.filtered_true_strengths.pop("pt")
             )
 
         uncertainties[-1] = self.config_manager.mad_iface.pt2dp(uncertainties[-1])
@@ -363,11 +345,12 @@ class LHCController(Controller):
     def __init__(
         self,
         beam: int,
-        opt_settings: OptSettings,
         measurement_files: list[str] | str,
         bpm_start_points: list[str],
         bpm_end_points: list[str],
         magnet_range: str,
+        optimiser_config: OptimiserConfig,
+        simulation_config: SimulationConfig,
         sequence_path: Path | None = None,
         show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
@@ -385,11 +368,12 @@ class LHCController(Controller):
 
         Args:
             beam (int): The beam number (1 or 2).
-            opt_settings (OptSettings): Optimisation settings.
             measurement_files (list[str] | str): List of measurement files or single file.
             bpm_start_points (list[str]): BPM start points.
             bpm_end_points (list[str]): BPM end points.
             magnet_range (str): Magnet range.
+            optimiser_config (OptimiserConfig): Optimiser configuration.
+            simulation_config (SimulationConfig): Simulation configuration.
             sequence_path (Path | None, optional): Path to the sequence file. If None, uses default LHC file.
             show_plots (bool, optional): Whether to show plots. Defaults to True.
             initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths.
@@ -402,15 +386,13 @@ class LHCController(Controller):
             num_tracks (int, optional): Number of tracks per measurement file. Defaults to 3.
             flattop_turns (int, optional): Number of turns on the flat top. Defaults to 6600.
         """
-        if sequence_path is None:
-            sequence_file_path = get_lhc_file_path(beam)
-        else:
-            sequence_file_path = sequence_path
+        sequence_file_path = get_lhc_file_path(beam) if sequence_path is None else sequence_path
         first_bpm = "BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2"
         seq_name = f"lhcb{beam}"
 
         super().__init__(
-            opt_settings=opt_settings,
+            optimiser_config=optimiser_config,
+            simulation_config=simulation_config,
             sequence_file_path=sequence_file_path,
             measurement_files=measurement_files,
             bpm_start_points=bpm_start_points,

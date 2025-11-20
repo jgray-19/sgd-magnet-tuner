@@ -119,7 +119,7 @@ local tbl = twiss { sequence=loaded_sequence, deltap=machine_deltap }
 
 ! Increase file numerical formatting
 local fmt = option.numfmt ; option.numfmt = "% -.16e"
-correct { sequence=loaded_sequence, model=tbl, method="micado", info=1 } :write(correct_file)
+correct { sequence=loaded_sequence, model=tbl, method="micado", info=1, plane="x" } :write(correct_file)
 option.numfmt = fmt ! restore formatting
 
 io.write("*** rematching tunes for off-momentum twiss\n")

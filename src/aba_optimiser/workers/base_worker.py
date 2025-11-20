@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
     from pymadng import MAD
 
-    from aba_optimiser.config import OptSettings
+    from aba_optimiser.config import SimulationConfig
 
 LOGGER = logging.getLogger(__name__)
 
@@ -28,12 +28,8 @@ class WorkerData:
 
     position_comparisons: np.ndarray  # Shape: (n_turns, n_data_points, 2) - [x, y]
     momentum_comparisons: np.ndarray  # Shape: (n_turns, n_data_points, 2) - [px, py]
-    position_variances: (
-        np.ndarray
-    )  # Shape: (n_turns, n_data_points, 2) - [var_x, var_y]
-    momentum_variances: (
-        np.ndarray
-    )  # Shape: (n_turns, n_data_points, 2) - [var_px, var_py]
+    position_variances: np.ndarray  # Shape: (n_turns, n_data_points, 2) - [var_x, var_y]
+    momentum_variances: np.ndarray  # Shape: (n_turns, n_data_points, 2) - [var_px, var_py]
     init_coords: np.ndarray  # Non-kicked planes are zeroed out
     init_pts: np.ndarray
 
@@ -67,7 +63,7 @@ class BaseWorker(Process, ABC):
         worker_id: int,
         data: WorkerData,
         config: WorkerConfig,
-        opt_settings: OptSettings,
+        simulation_config: SimulationConfig,
     ) -> None:
         """
         Constructor that accepts grouped data and config parameters for cleaner code.
@@ -80,7 +76,7 @@ class BaseWorker(Process, ABC):
             f"Initialising worker {worker_id} for BPM {config.start_bpm} with {len(data.init_coords)} particles"
         )
 
-        num_batches = opt_settings.num_batches
+        num_batches = simulation_config.num_batches
 
         # reduce data to be divisible by num_batches
         n_init = len(data.init_coords) - (len(data.init_coords) % num_batches)
@@ -132,7 +128,7 @@ class BaseWorker(Process, ABC):
 
         self.config = config
         self.num_batches = num_batches
-        self.opt_settings = opt_settings
+        self.simulation_config = simulation_config
 
         self.init_pts = data.init_pts
         self._split_data_to_batches()
@@ -206,27 +202,17 @@ class BaseWorker(Process, ABC):
         into self.num_batches batches, producing arrays of shape (batch_size, n_data_points).
         Also split the initial conditions into N batches.
         """
-        self.x_comparisons = np.array_split(
-            self.x_comparisons, self.num_batches, axis=0
-        )
-
-        self.y_comparisons = np.array_split(
-            self.y_comparisons, self.num_batches, axis=0
-        )
-        self.px_comparisons = np.array_split(
-            self.px_comparisons, self.num_batches, axis=0
-        )
-        self.py_comparisons = np.array_split(
-            self.py_comparisons, self.num_batches, axis=0
-        )
+        self.x_comparisons = np.array_split(self.x_comparisons, self.num_batches, axis=0)
+        self.y_comparisons = np.array_split(self.y_comparisons, self.num_batches, axis=0)
+        self.px_comparisons = np.array_split(self.px_comparisons, self.num_batches, axis=0)
+        self.py_comparisons = np.array_split(self.py_comparisons, self.num_batches, axis=0)
         self.x_weights = np.array_split(self.x_weights, self.num_batches, axis=0)
         self.y_weights = np.array_split(self.y_weights, self.num_batches, axis=0)
         self.px_weights = np.array_split(self.px_weights, self.num_batches, axis=0)
         self.py_weights = np.array_split(self.py_weights, self.num_batches, axis=0)
 
         self.init_pts = [
-            arr.tolist()
-            for arr in np.array_split(self.init_pts, self.num_batches, axis=0)
+            arr.tolist() for arr in np.array_split(self.init_pts, self.num_batches, axis=0)
         ]
 
     def send_initial_conditions(self, mad: MAD) -> None:
@@ -271,7 +257,7 @@ end
             seq_name=self.config.seq_name,
             magnet_range=self.config.magnet_range,
             bpm_range=bpm_range,
-            opt_settings=self.opt_settings,
+            simulation_config=self.simulation_config,
             bad_bpms=self.config.bad_bpms,
             corrector_strengths=self.config.corrector_strengths,
             tune_knobs_file=self.config.tune_knobs_file,
@@ -293,7 +279,7 @@ end
         mad["num_batches"] = self.num_batches
         mad["nbpms"] = mad_iface.nbpms
         mad["sdir"] = self.config.sdir
-        mad["optimise_energy"] = self.opt_settings.optimise_energy
+        mad["optimise_energy"] = self.simulation_config.optimise_energy
 
         # Import required MAD-NG modules
         mad.load("MAD", "damap", "matrix", "vector")
@@ -359,9 +345,7 @@ end
         machine_pt = knob_updates.pop("pt", 0.0)
 
         # Prepare MAD commands to update knob values in the sequence
-        update_commands = [
-            f"MADX['{name}']:set0({val:.15e})" for name, val in knob_updates.items()
-        ]
+        update_commands = [f"MADX['{name}']:set0({val:.15e})" for name, val in knob_updates.items()]
 
         # Send updates, batch index (adjusted for Lua's 1-based indexing), and energy deviation to MAD
         mad.send("\n".join(update_commands))
@@ -469,3 +453,4 @@ weights_py = python:recv()
         mad.send(HESSIAN_SCRIPT.read_text())
         h_part = mad.recv()
         self.conn.send(h_part)  # shape (n_knobs, n_knobs)
+        del mad

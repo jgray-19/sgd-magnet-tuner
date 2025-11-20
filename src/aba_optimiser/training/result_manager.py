@@ -8,17 +8,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from aba_optimiser.io.utils import save_results, scientific_notation
-from aba_optimiser.plotting.strengths import (
-    plot_deltap_comparison,
-    plot_strengths_comparison,
-    plot_strengths_vs_position,
-)
+from aba_optimiser.plotting.strengths import plot_deltap_comparison, plot_strengths_comparison, plot_strengths_vs_position
 from aba_optimiser.plotting.utils import show_plots
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from aba_optimiser.config import OptSettings
+    from aba_optimiser.config import SimulationConfig
 
 
 LOGGER = logging.getLogger(__name__)
@@ -31,7 +27,7 @@ class ResultManager:
         self,
         knob_names: list[str],
         elem_spos: np.ndarray,
-        opt_settings: OptSettings,
+        simulation_config: SimulationConfig,
         show_plots: bool = True,
         output_knobs_path: Path | None = None,
         knob_table_path: Path | None = None,
@@ -41,7 +37,7 @@ class ResultManager:
         Args:
             knob_names: List of knob names
             elem_spos: Element s-positions
-            opt_settings: Optimisation settings
+            simulation_config: Simulation configuration settings
             show_plots: Whether to display plots
             output_knobs_path: Path to save final knobs (defaults to PROJECT_ROOT/data/final_knobs.txt)
             knob_table_path: Path to save knob table (defaults to PROJECT_ROOT/data/knob_strengths_table.txt)
@@ -49,7 +45,7 @@ class ResultManager:
         self.knob_names = knob_names
         self.elem_spos = elem_spos
         self.show_plots = show_plots
-        self.opt_settings = opt_settings
+        self.simulation_config = simulation_config
 
         # Lazy import defaults if not provided
         if output_knobs_path is None or knob_table_path is None:
@@ -69,9 +65,7 @@ class ResultManager:
     ) -> None:
         """Write final knob strengths and markdown table to file."""
         LOGGER.info("Writing final knob strengths and markdown table...")
-        save_results(
-            self.knob_names, current_knobs, uncertainties, self.output_knobs_path
-        )
+        save_results(self.knob_names, current_knobs, uncertainties, self.output_knobs_path)
 
         # Prepare rows with index, knob, true, final, diff, relative difference, and uncertainty.
         rows = []
@@ -90,9 +84,7 @@ class ResultManager:
                     "diff": diff,
                     "reldiff": rel_diff,
                     "uncertainty": uncertainty_val,
-                    "rel_uncertainty": uncertainty_val / abs(true_val)
-                    if true_val != 0
-                    else 0,
+                    "rel_uncertainty": uncertainty_val / abs(true_val) if true_val != 0 else 0,
                 }
             )
 
@@ -127,7 +119,7 @@ class ResultManager:
         LOGGER.info("Generating plots...")
         quad_unc = uncertainties.copy()
         knob_names = self.knob_names.copy()
-        if self.opt_settings.optimise_energy:
+        if self.simulation_config.optimise_energy:
             knob_names.remove("deltap")
             quad_unc = quad_unc[:-1]  # Remove uncertainty for deltap
 
@@ -139,9 +131,7 @@ class ResultManager:
         save_prefix = "plots/"
         show_errorbars = True
 
-        if (
-            self.opt_settings.optimise_quadrupoles or self.opt_settings.optimise_bends
-        ):  # Relative difference comparison
+        if self.simulation_config.optimise_quadrupoles or self.simulation_config.optimise_bends:  # Relative difference comparison
             plot_strengths_comparison(
                 magnet_names,
                 final_vals,

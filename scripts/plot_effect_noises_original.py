@@ -21,18 +21,9 @@ import numpy as np
 from pymadng import MAD
 from tqdm.contrib.concurrent import process_map
 
-from aba_optimiser.config import (
-    BEAM_ENERGY,
-    LHCB1_SEQ_NAME,
-    MAGNET_RANGE,
-    REL_K1_STD_DEV,
-)
+from aba_optimiser.config import BEAM_ENERGY, LHCB1_SEQ_NAME, MAGNET_RANGE, REL_K1_STD_DEV
 from aba_optimiser.io.utils import get_lhc_file_path
-from scripts.plot_functions import (
-    plot_error_bars_bpm_range,
-    plot_std_log_comparison,
-    show_plots,
-)
+from scripts.plot_functions import plot_error_bars_bpm_range, plot_std_log_comparison, show_plots
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -125,9 +116,7 @@ def build_track_command(
 # These functions are designed to work with process_map for parallel computation
 
 
-def _compute_error_sample(
-    i, matched_tunes, df_twiss, nturns, angle: float, start_err: bool = False
-) -> tuple[pd.Series, pd.Series]:
+def _compute_error_sample(i, matched_tunes, df_twiss, nturns, angle: float, start_err: bool = False) -> tuple[pd.Series, pd.Series]:
     """
     Worker function: Run tracking with random quadrupole strength errors.
 
@@ -176,15 +165,11 @@ def _compute_error_sample(
         mad_i[f"MADX['{name}'].k1"] = k1 + noise * abs(k1)  # Apply relative error
 
     # Perform tracking with perturbed quadrupoles
-    xi, yi = _get_track_end_positions(
-        mad_i, matched_tunes, df_twiss, nturns=nturns, angle=angle, start_err=start_err
-    )
+    xi, yi = _get_track_end_positions(mad_i, matched_tunes, df_twiss, nturns=nturns, angle=angle, start_err=start_err)
     return xi, yi
 
 
-def _compute_ic(
-    i, matched_tunes, df_twiss, nturns, angle: float, action0
-) -> tuple[pd.Series, pd.Series]:
+def _compute_ic(i, matched_tunes, df_twiss, nturns, angle: float, action0) -> tuple[pd.Series, pd.Series]:
     """
     Worker function: Run tracking with only initial condition perturbations.
 
@@ -224,7 +209,7 @@ def _compute_ic(
 
 def _setup_mad() -> MAD:
     """
-    Initialize a MAD-NG process with sequence loaded, beam set, and BPMs selected.
+    Initialise a MAD-NG process with sequence loaded, beam set, and BPMs selected.
 
     This function sets up a complete MAD-NG environment for beam tracking:
     1. Loads the accelerator sequence from file
@@ -252,13 +237,7 @@ def _setup_mad() -> MAD:
     # Install a marker at the starting BPM to define the tracking start point
     monitor_name = MAGNET_RANGE.split("/")[0]  # Extract first BPM name from range
     marker_name = mad.quote_strings(f"{monitor_name}_marker")
-    seq.install(
-        [
-            mad.element.marker(
-                **{"at": 0, "from": f'"{monitor_name}"', "name": marker_name}
-            )
-        ]
-    )
+    seq.install([mad.element.marker(**{"at": 0, "from": f'"{monitor_name}"', "name": marker_name})])
 
     # Cycle the sequence to start tracking from the marker position
     seq.cycle(marker_name)
@@ -292,7 +271,7 @@ def _match_tunes() -> tuple[dict[str, float], pd.DataFrame]:
     mad["result"] = mad.match(
         command=r"\ -> twiss{sequence=MADX[SEQ_NAME]}",  # Command to execute for each iteration
         variables=[
-            # Variables to optimize (tune correction knobs)
+            # Variables to optimise (tune correction knobs)
             {"var": "'MADX.dqx_b1_op'", "name": "'dqx_b1_op'"},  # Horizontal tune knob
             {"var": "'MADX.dqy_b1_op'", "name": "'dqy_b1_op'"},  # Vertical tune knob
         ],
@@ -342,9 +321,7 @@ def _get_last_turn_data(mad: MAD) -> pd.DataFrame:
     return (
         df[df["turn"] == df["turn"].max()]  # Keep only the final tracking turn
         .set_index("name")  # Use BPM names as index
-        .loc[
-            MAGNET_RANGE.split("/")[0] : MAGNET_RANGE.split("/")[1]
-        ]  # Slice to specified BPM range
+        .loc[MAGNET_RANGE.split("/")[0] : MAGNET_RANGE.split("/")[1]]  # Slice to specified BPM range
         .sort_index()  # Sort BPMs by name for consistent ordering
     )
 
@@ -383,9 +360,7 @@ def _get_track_end_positions(
         mad[f"MADX['{key}']"] = val
 
     # Construct and execute the tracking command
-    trk_command = build_track_command(
-        df_twiss, action, angle, nturns, start_err=start_err
-    )
+    trk_command = build_track_command(df_twiss, action, angle, nturns, start_err=start_err)
     mad.send(trk_command)  # Execute the tracking simulation
 
     # Extract final positions from tracking results
@@ -412,9 +387,7 @@ def _compute_baseline(angle, matched_tunes, df_twiss, nturns):
     mad = _setup_mad()  # Create fresh MAD instance
 
     # Perform tracking with no errors (reference case)
-    xi, yi = _get_track_end_positions(
-        mad, matched_tunes, df_twiss, nturns=nturns, angle=angle
-    )
+    xi, yi = _get_track_end_positions(mad, matched_tunes, df_twiss, nturns=nturns, angle=angle)
     return angle, xi, yi
 
 
@@ -437,12 +410,8 @@ def main():
     """
 
     # ===== COMMAND LINE ARGUMENT PARSING =====
-    parser = argparse.ArgumentParser(
-        description="Analyze noise effects in particle beam tracking"
-    )
-    parser.add_argument(
-        "-d", "--debug", action="store_true", help="Enable debug logging"
-    )
+    parser = argparse.ArgumentParser(description="Analyze noise effects in particle beam tracking")
+    parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging")
     parser.add_argument(
         "--nangles",
         type=int,
@@ -458,10 +427,7 @@ def main():
     else:
         logger.setLevel(logging.INFO)
 
-    logger.info(
-        f"Starting noise effect analysis: nturns={NTURNS}, "
-        f"error_samples={NUM_ERROR_SAMPLES}, angles={args.nangles}"
-    )
+    logger.info(f"Starting noise effect analysis: nturns={NTURNS}, error_samples={NUM_ERROR_SAMPLES}, angles={args.nangles}")
 
     # ===== SETUP AND BASELINE COMPUTATION =====
     # Match tunes to the desired working point and get optical functions
@@ -485,7 +451,7 @@ def main():
         max_workers=None,  # Use all available CPU cores
     )
 
-    # Reorganize results into a dictionary indexed by angle
+    # Reorganise results into a dictionary indexed by angle
     baseline = {ang: (xi, yi) for ang, xi, yi in baseline_results}
 
     # Use the first angle's results as reference for plotting
@@ -513,15 +479,14 @@ def main():
         max_workers=None,
     )
 
-    # Reorganize flat results back into a nested structure by angle
+    # Reorganise flat results back into a nested structure by angle
     results_quad = {angle: [] for angle in angles}
     for (i, angle), res in zip(quad_tasks, flat_quad):
         results_quad[angle].append(res)
 
     # ===== INITIAL CONDITION ERROR ANALYSIS =====
     logger.info(
-        f"Computing trajectories with initial condition errors: "
-        f"samples={NUM_ERROR_SAMPLES}, position_std={IC_XY_STD}, momentum_std={IC_PXPY_STD}"
+        f"Computing trajectories with initial condition errors: samples={NUM_ERROR_SAMPLES}, position_std={IC_XY_STD}, momentum_std={IC_PXPY_STD}"
     )
 
     # Reuse the same task structure as quadrupole errors
@@ -541,16 +506,13 @@ def main():
         max_workers=None,
     )
 
-    # Reorganize results by angle
+    # Reorganise results by angle
     results_ic = {angle: [] for angle in angles}
     for (i, angle), res in zip(ic_tasks, flat_ic):
         results_ic[angle].append(res)
 
     # ===== COMBINED ERROR ANALYSIS =====
-    logger.info(
-        "Computing trajectories with combined errors: "
-        "quadrupole errors + initial condition errors"
-    )
+    logger.info("Computing trajectories with combined errors: quadrupole errors + initial condition errors")
 
     # Use same task structure for consistency
     cmb_tasks = quad_tasks
@@ -569,7 +531,7 @@ def main():
         max_workers=None,
     )
 
-    # Reorganize results by angle
+    # Reorganise results by angle
     results_combined = {angle: [] for angle in angles}
     for (i, angle), res in zip(cmb_tasks, flat_cmb):
         results_combined[angle].append(res)
@@ -633,9 +595,7 @@ def main():
     std_x_ic = np.std(diffs_x, axis=0)
     std_y_ic = np.std(diffs_y, axis=0)
 
-    fig_ic = plot_error_bars_bpm_range(
-        s_positions, baseline_x, std_x_ic, baseline_y, std_y_ic, MAGNET_RANGE
-    )
+    fig_ic = plot_error_bars_bpm_range(s_positions, baseline_x, std_x_ic, baseline_y, std_y_ic, MAGNET_RANGE)
     fig_ic.suptitle("IC Perturbation Error Bars", fontsize=14)
     fig_ic.savefig("plots/errorbar_comparison_ic.png", dpi=300, bbox_inches="tight")
 
@@ -663,9 +623,7 @@ def main():
         MAGNET_RANGE,
     )
     fig_combined.suptitle("Combined Errors (Quadrupole + IC) Error Bars", fontsize=14)
-    fig_combined.savefig(
-        "plots/errorbar_comparison_combined.png", dpi=300, bbox_inches="tight"
-    )
+    fig_combined.savefig("plots/errorbar_comparison_combined.png", dpi=300, bbox_inches="tight")
     # ----------------------------
     # Plot standard deviations on a logarithmic scale
     plot_std_log_comparison(

@@ -13,11 +13,8 @@ import pandas as pd
 from nxcals.spark_session_builder import get_or_create
 from pylhc.nxcal_knobs import get_energy
 
-from aba_optimiser.config import PROJECT_ROOT, OptSettings
-from aba_optimiser.measurements.create_datafile import (
-    process_measurements,
-    save_online_knobs,
-)
+from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
+from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.training.controller import LHCController as Controller
 
 logger = logging.getLogger(__name__)
@@ -55,7 +52,8 @@ def optimise_ranges(
     range_config: RangeConfig,
     range_type: str,
     beam: int,
-    co_settings: OptSettings,
+    optimiser_config: OptimiserConfig,
+    simulation_config: SimulationConfig,
     corrector_knobs_file: Path,
     tune_knobs_file: Path,
     measurement_file: Path,
@@ -63,18 +61,17 @@ def optimise_ranges(
     title: str,
     energy: float,
 ) -> tuple[list[float], list[float]]:
-    """Optimize for a given range configuration."""
+    """Optimise for a given range configuration."""
     results = []
     uncertainties = []
     num_ranges = len(range_config.magnet_ranges)
     for i in range(num_ranges):
-        logger.info(
-            f"Starting optimisation for {range_type} {i + 1}/{num_ranges} for {title}"
-        )
+        logger.info(f"Starting optimisation for {range_type} {i + 1}/{num_ranges} for {title}")
 
         controller = Controller(
             beam=beam,
-            opt_settings=co_settings,
+            optimiser_config=optimiser_config,
+            simulation_config=simulation_config,
             measurement_files=measurement_file,
             corrector_files=corrector_knobs_file,
             tune_knobs_files=tune_knobs_file,
@@ -100,9 +97,7 @@ def optimise_ranges(
         # results.append(fitted_deltap)
         uncertainties.append(uncs["deltap"])  # Assuming uncs is a dict with 'deltap'
         logger.info(f"{range_type.capitalize()} {i + 1}: deltap = {results[-1]}")
-        logger.info(
-            f"Finished optimisation for {range_type} {i + 1}/{num_ranges} for {title}"
-        )
+        logger.info(f"Finished optimisation for {range_type} {i + 1}/{num_ranges} for {title}")
     return results, uncertainties
 
 
@@ -110,12 +105,8 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
     """Create measurement configurations for beam 1."""
     model_dir_b1 = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB1/Models/2025-11-07_B1_12cm_right_knobs/"
     arc_magnet_ranges_b1 = [f"BPM.9R{s}.B1/BPM.9L{s % 8 + 1}.B1" for s in range(1, 9)]
-    arc_bpm_starts_b1 = [
-        [f"BPM.{i}R{s}.B1" for i in range(9, 35, 3)] for s in range(1, 9)
-    ]
-    arc_bpm_end_points_b1 = [
-        [f"BPM.{i}L{s % 8 + 1}.B1" for i in range(9, 34, 3)] for s in range(1, 9)
-    ]
+    arc_bpm_starts_b1 = [[f"BPM.{i}R{s}.B1" for i in range(9, 35, 3)] for s in range(1, 9)]
+    arc_bpm_end_points_b1 = [[f"BPM.{i}L{s % 8 + 1}.B1" for i in range(9, 34, 3)] for s in range(1, 9)]
 
     arc_config_b1 = RangeConfig(
         magnet_ranges=arc_magnet_ranges_b1,
@@ -176,16 +167,9 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
     """Create measurement configurations for beam 2."""
     model_dir_b2 = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB2/Models/2025-11-07_B2_12cm"
     # Arc settings
-    arc_magnet_ranges_b2 = [
-        f"BPM.9L{s}.B2/BPM.9R{(s - 2) % 8 + 1}.B2" for s in range(8, 0, -1)
-    ]
-    arc_bpm_starts_b2 = [
-        [f"BPM.{i}L{s}.B2" for i in range(9, 34, 3)] for s in range(8, 0, -1)
-    ]
-    arc_bpm_end_points_b2 = [
-        [f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 35, 3)]
-        for s in range(8, 0, -1)
-    ]
+    arc_magnet_ranges_b2 = [f"BPM.9L{s}.B2/BPM.9R{(s - 2) % 8 + 1}.B2" for s in range(8, 0, -1)]
+    arc_bpm_starts_b2 = [[f"BPM.{i}L{s}.B2" for i in range(9, 34, 3)] for s in range(8, 0, -1)]
+    arc_bpm_end_points_b2 = [[f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 35, 3)] for s in range(8, 0, -1)]
     arc_config_b2 = RangeConfig(
         magnet_ranges=arc_magnet_ranges_b2,
         bpm_starts=arc_bpm_starts_b2,
@@ -243,9 +227,7 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementConfi
     ]
 
 
-def process_single_config(
-    config: MeasurementConfig, temp_analysis_dir: Path, date: str, skip_reload: bool
-) -> None:
+def process_single_config(config: MeasurementConfig, temp_analysis_dir: Path, date: str, skip_reload: bool) -> None:
     """Process a single measurement configuration."""
     results_dir = PROJECT_ROOT / f"b{config.beam}co_results"
     tune_knobs_file = results_dir / f"tune_knobs_{config.title}.txt"
@@ -290,10 +272,7 @@ def process_single_config(
         )
 
     # Generate files from times
-    files = [
-        Path(f"{config.folder}/{config.name_prefix}{time}.sdds")
-        for time in config.times
-    ]
+    files = [Path(f"{config.folder}/{config.name_prefix}{time}.sdds") for time in config.times]
 
     pzs, bad_bpms, ana_dir = process_measurements(
         files,
@@ -306,13 +285,7 @@ def process_single_config(
     file_path = ana_dir / measurement_filename
 
     # Compute averages per BPM
-    averaged = (
-        pzs.groupby("name")[
-            ["x", "px", "y", "py", "var_x", "var_y", "var_px", "var_py"]
-        ]
-        .mean()
-        .reset_index()
-    )
+    averaged = pzs.groupby("name")[["x", "px", "y", "py", "var_x", "var_y", "var_px", "var_py"]].mean().reset_index()
     print(
         averaged["var_x"].describe(),
         averaged["var_y"].describe(),
@@ -352,18 +325,20 @@ def process_single_config(
             for bpm in bad_bpms:
                 f.write(f"{bpm}\n")
 
-    co_settings = OptSettings(
+    optimiser_config = OptimiserConfig(
         max_epochs=1000,
-        # For pre trimmed data
-        tracks_per_worker=1,
-        num_batches=1,
-        num_workers=1,
         warmup_epochs=3,
         warmup_lr_start=5e-7,
         max_lr=1e0,
         min_lr=1e0,
         gradient_converged_value=1e-6,
         optimiser_type="lbfgs",
+    )
+    simulation_config = SimulationConfig(
+        # For pre trimmed data
+        tracks_per_worker=1,
+        num_batches=1,
+        num_workers=1,
         optimise_energy=True,
     )
 
@@ -371,7 +346,8 @@ def process_single_config(
         config.arc_config,
         "arc",
         config.beam,
-        co_settings,
+        optimiser_config,
+        simulation_config,
         corrector_knobs_file,
         tune_knobs_file,
         measurement_file,
@@ -393,9 +369,7 @@ def process_single_config(
         mean_arcs = weighted_mean(results_arcs, uncs_arcs)
     except ValueError:
         mean_arcs = float(np.mean(results_arcs))
-        logger.warning(
-            "Falling back to unweighted mean for arcs due to non-positive uncertainties."
-        )
+        logger.warning("Falling back to unweighted mean for arcs due to non-positive uncertainties.")
     logger.info(f"Weighted mean deltap arcs: {mean_arcs}")
     logger.info(f"Std dev of deltap arcs: {np.std(results_arcs)}")
 
@@ -421,9 +395,7 @@ def main():
 
     # Parse command line arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--beam", type=int, choices=[1, 2], help="Beam number 1 or 2", default=2
-    )
+    parser.add_argument("--beam", type=int, choices=[1, 2], help="Beam number 1 or 2", default=2)
     parser.add_argument(
         "--skip-reload",
         action="store_true",

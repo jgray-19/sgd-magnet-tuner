@@ -4,10 +4,7 @@
 import logging
 import multiprocessing as mp
 
-from aba_optimiser.config import (
-    DPP_OPT_SETTINGS_TEMPLATE,
-    QUAD_OPT_SETTINGS_TEMPLATE,
-)
+from aba_optimiser.config import DPP_OPTIMISER_CONFIG, DPP_SIMULATION_CONFIG, QUAD_OPTIMISER_CONFIG, QUAD_SIMULATION_CONFIG
 from aba_optimiser.training.controller import Controller
 
 if __name__ == "__main__":
@@ -17,7 +14,7 @@ if __name__ == "__main__":
     # Step 1: Optimise energy (dp/p) first
     logging.info("Starting energy optimisation...")
     energy_controller = Controller(
-        DPP_OPT_SETTINGS_TEMPLATE, show_plots=True, initial_knob_strengths={"deltap": 1e-6}
+        optimiser_config=DPP_OPTIMISER_CONFIG, simulation_config=DPP_SIMULATION_CONFIG, show_plots=True, initial_knob_strengths={"deltap": 1e-6}
     )
     energy_knobs, _ = energy_controller.run()
     del energy_controller

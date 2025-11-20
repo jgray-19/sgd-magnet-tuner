@@ -21,17 +21,10 @@ import numpy as np
 from pymadng import MAD
 from tqdm.contrib.concurrent import process_map
 
-from aba_optimiser.config import (
-    LHCB1_SEQ_NAME,
-    REL_K1_STD_DEV,
-)
+from aba_optimiser.config import LHCB1_SEQ_NAME, REL_K1_STD_DEV
 from aba_optimiser.io.utils import get_lhc_file_path
 from aba_optimiser.momentum_recon.transverse import calculate_pz
-from scripts.plot_functions import (
-    plot_error_bars_bpm_range,
-    plot_std_log_comparison,
-    show_plots,
-)
+from scripts.plot_functions import plot_error_bars_bpm_range, plot_std_log_comparison, show_plots
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -148,7 +141,7 @@ class MADSimulator:
 
     def _setup_mad(self) -> MAD:
         """
-        Initialize a MAD-NG process with sequence loaded, beam set, and BPMs selected.
+        Initialise a MAD-NG process with sequence loaded, beam set, and BPMs selected.
 
         Args:
             config: Simulation configuration parameters
@@ -206,9 +199,7 @@ MAD.element.marker {marker_name} {{ at=-1e-10, from="{bpm_name}" }} ! 1e-10 is t
             info=2,
         )
 
-        self.matched_tunes = {
-            key: self.mad[f"MADX['{key}']"] for key in ("dqx_b1_op", "dqy_b1_op")
-        }
+        self.matched_tunes = {key: self.mad[f"MADX['{key}']"] for key in ("dqx_b1_op", "dqy_b1_op")}
 
         # Get Twiss at start of sequence
         tw = self.mad.twiss(sequence=self.mad.MADX[LHCB1_SEQ_NAME], observe=1)[0]
@@ -408,12 +399,8 @@ MADX['{name}'].k1 = MADX['{name}'].k1 + {noise:-.16e} * math.abs(MADX['{name}'].
 
         df = run_single_turn()
 
-        recon_from_prev, recon_from_next = calculate_pz(
-            df, inject_noise=True, tws=self.simulator.df_twiss, info=False, rng=rng
-        )
-        assert (recon_from_next.iloc[0] == recon_from_prev.iloc[0]).all(), (
-            "Reconstruction from previous and next turns should match at the start."
-        )
+        recon_from_prev, recon_from_next = calculate_pz(df, inject_noise=True, tws=self.simulator.df_twiss, info=False, rng=rng)
+        assert (recon_from_next.iloc[0] == recon_from_prev.iloc[0]).all(), "Reconstruction from previous and next turns should match at the start."
 
         initial_coords = tuple(recon_from_prev[["x", "px", "y", "py"]].iloc[0])
 
@@ -423,9 +410,7 @@ MADX['{name}'].k1 = MADX['{name}'].k1 + {noise:-.16e} * math.abs(MADX['{name}'].
 
         # Use the simulator to run the track with explicit initial_coords
         # We call get_track_end_positions which will use build_track_command with initial_coords
-        return self.simulator.get_track_end_positions(
-            angle=angle, initial_coords=initial_coords
-        )
+        return self.simulator.get_track_end_positions(angle=angle, initial_coords=initial_coords)
 
     def compute_standard_deviations(
         self,
@@ -451,19 +436,13 @@ MADX['{name}'].k1 = MADX['{name}'].k1 + {noise:-.16e} * math.abs(MADX['{name}'].
         for angle in baseline:
             bx, by = baseline[angle]
             for result in results[angle]:
-                diffs_x.append(
-                    (result.x_positions[bpm_names] - bx[bpm_names]).to_numpy()
-                )
-                diffs_y.append(
-                    (result.y_positions[bpm_names] - by[bpm_names]).to_numpy()
-                )
+                diffs_x.append((result.x_positions[bpm_names] - bx[bpm_names]).to_numpy())
+                diffs_y.append((result.y_positions[bpm_names] - by[bpm_names]).to_numpy())
 
         diffs_x = np.stack(diffs_x, axis=0)
         diffs_y = np.stack(diffs_y, axis=0)
 
-        return NoiseAnalysisResults(
-            std_x=np.std(diffs_x, axis=0), std_y=np.std(diffs_y, axis=0)
-        )
+        return NoiseAnalysisResults(std_x=np.std(diffs_x, axis=0), std_y=np.std(diffs_y, axis=0))
 
 
 # Multiprocessing wrapper functions
@@ -513,10 +492,8 @@ def save_error_bar_plot(
         title: Plot title
         filename: Output filename
     """
-    fig = plot_error_bars_bpm_range(
-        s_positions, baseline_x, std_x, baseline_y, std_y, config.bpm_range, y_lim=y_lim
-    )
-    fig.suptitle(title, fontsize=14)
+    fig = plot_error_bars_bpm_range(s_positions, baseline_x, std_x, baseline_y, std_y, config.bpm_range, y_lim=y_lim)
+    fig.suptitle(title, fontsise=14)
     fig.savefig(filename, dpi=300, bbox_inches="tight")
 
 
@@ -529,17 +506,14 @@ def main():
     # Create configuration
     config = SimulationConfig()
 
-    logger.info(
-        f"Starting analysis: nturns={config.nturns}, "
-        f"nangles={config.nangles}, samples={config.num_error_samples}"
-    )
+    logger.info(f"Starting analysis: nturns={config.nturns}, nangles={config.nangles}, samples={config.num_error_samples}")
 
-    # Initialize temporary simulator to get baseline parameters
+    # Initialise temporary simulator to get baseline parameters
     temp_simulator = MADSimulator(config)
     matched_tunes = temp_simulator.matched_tunes
     df_twiss = temp_simulator.df_twiss
 
-    # Initialize analyzer with df_twiss for optimisation
+    # Initialise analyzer with df_twiss for optimisation
     analyzer = NoiseAnalyser(config, matched_tunes, df_twiss)
 
     # Sample angles between 0 and 2π
@@ -548,9 +522,7 @@ def main():
     # Compute baseline in parallel
     logger.info("Computing baseline tracks")
     baseline_args = [(angle, matched_tunes, df_twiss, config) for angle in angles]
-    baseline_results = process_map(
-        _compute_baseline_wrapper, baseline_args, desc="Baseline computation"
-    )
+    baseline_results = process_map(_compute_baseline_wrapper, baseline_args, desc="Baseline computation")
     baseline = {ang: (xi, yi) for ang, xi, yi in baseline_results}
 
     # Use baseline of first angle for plotting reference
@@ -566,27 +538,18 @@ def main():
     # Compute quadrupole error samples in parallel
     logger.info("Computing quadrupole error samples")
     quad_tasks = list(product(range(config.num_error_samples), angles))
-    quad_args = [
-        (idx, matched_tunes, df_twiss, angle, config) for idx, angle in quad_tasks
-    ]
-    quad_flat = process_map(
-        _compute_error_sample_wrapper, quad_args, desc="Quadrupole error samples"
-    )
+    quad_args = [(idx, matched_tunes, df_twiss, angle, config) for idx, angle in quad_tasks]
+    quad_flat = process_map(_compute_error_sample_wrapper, quad_args, desc="Quadrupole error samples")
 
-    # Reorganize results by angle
+    # Reorganise results by angle
     results_quad = {angle: [] for angle in angles}
     for (idx, angle), result in quad_flat:
         results_quad[angle].append(result)
 
     # Compute IC perturbation samples in parallel
     logger.info("Computing IC perturbation samples")
-    ic_args = [
-        (idx, matched_tunes, df_twiss, angle, config, False)
-        for idx, angle in quad_tasks
-    ]
-    ic_flat = process_map(
-        _compute_ic_sample_wrapper, ic_args, desc="IC perturbation samples"
-    )
+    ic_args = [(idx, matched_tunes, df_twiss, angle, config, False) for idx, angle in quad_tasks]
+    ic_flat = process_map(_compute_ic_sample_wrapper, ic_args, desc="IC perturbation samples")
 
     results_ic = {angle: [] for angle in angles}
     for (idx, angle), result in ic_flat:
@@ -594,12 +557,8 @@ def main():
 
     # Compute combined error samples in parallel
     logger.info("Computing combined error samples")
-    combined_args = [
-        (idx, matched_tunes, df_twiss, angle, config, True) for idx, angle in quad_tasks
-    ]
-    combined_flat = process_map(
-        _compute_ic_sample_wrapper, combined_args, desc="Combined error samples"
-    )
+    combined_args = [(idx, matched_tunes, df_twiss, angle, config, True) for idx, angle in quad_tasks]
+    combined_flat = process_map(_compute_ic_sample_wrapper, combined_args, desc="Combined error samples")
 
     results_combined = {angle: [] for angle in angles}
     for (idx, angle), result in combined_flat:
@@ -607,15 +566,9 @@ def main():
 
     # Compute standard deviations for each noise type
     logger.info("Computing standard deviations")
-    quad_analysis = analyzer.compute_standard_deviations(
-        baseline, results_quad, bpm_names_ordered
-    )
-    ic_analysis = analyzer.compute_standard_deviations(
-        baseline, results_ic, bpm_names_ordered
-    )
-    combined_analysis = analyzer.compute_standard_deviations(
-        baseline, results_combined, bpm_names_ordered
-    )
+    quad_analysis = analyzer.compute_standard_deviations(baseline, results_quad, bpm_names_ordered)
+    ic_analysis = analyzer.compute_standard_deviations(baseline, results_ic, bpm_names_ordered)
+    combined_analysis = analyzer.compute_standard_deviations(baseline, results_combined, bpm_names_ordered)
 
     # Generate and save plots
     logger.info("Generating plots")

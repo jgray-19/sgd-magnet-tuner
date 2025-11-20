@@ -1,0 +1,72 @@
+! run_optics_track_init.mad
+
+num_knobs = #knob_names
+
+function map2bet(map, sdir)
+    !             map, rnk_, cpl_, bet_, dir_
+    return gphys.map2bet(map, 6, nil, nil, sdir) ! 6 to get dispersion as well
+end
+
+orbit_deriv_key = {x = "100000", y = "001000"}
+momentum_deriv_key = {x = "010000", y = "000100"}
+x_derivative_wrt_knob_keys = {x = {}, y = {}}
+px_derivative_wrt_knob_keys = {x = {}, y = {}}
+
+-- Precompute the suffixes for knob derivatives
+local knob_suffixes = {}
+for k=1,num_knobs do
+    knob_suffixes[k] = string.rep("0", k - 1) .. "1"
+end
+
+for _, plane in ipairs{"x", "y"} do
+    for k=1,num_knobs do
+        x_derivative_wrt_knob_keys[plane][k] = monomial(orbit_deriv_key[plane] .. knob_suffixes[k])
+        px_derivative_wrt_knob_keys[plane][k] = monomial(momentum_deriv_key[plane] .. knob_suffixes[k])
+    end
+end
+
+function derivative_beta_wrt_knob(map, plane)
+    f_x = map[plane]:get(orbit_deriv_key[plane])
+    f_px = map[plane]:get(momentum_deriv_key[plane])
+
+    f_xk = vector(num_knobs)
+    f_pxk = vector(num_knobs)
+
+    for k=1,num_knobs do
+        f_xk:seti(k, map[plane]:get(x_derivative_wrt_knob_keys[plane][k]))
+        f_pxk:seti(k, map[plane]:get(px_derivative_wrt_knob_keys[plane][k]))
+    end
+
+    return 2 * (f_x * f_xk + f_px * f_pxk)
+end
+
+betx = vector(nbpms)
+bety = vector(nbpms)
+derivative_beta_x_wrt_knob = matrix(nbpms, num_knobs)
+derivative_beta_y_wrt_knob = matrix(nbpms, num_knobs)
+
+observation_index = nbpms + 1  ! Start beyond the last bpm to ensure reset is called before tracking
+function save_data(elm, mflw, _, slc)
+    local turn in mflw
+    -- Observe the BPMs at the specified intervals
+    if slc == -2 and elm:is_observed() then
+        optics_map = map2bet(mflw[1])  ! Use first particle's map for optics -> only 1 particle needed
+        betx:seti(observation_index, optics_map.beta11)
+        bety:seti(observation_index, optics_map.beta22)
+
+        derivative_beta_x_wrt_knob:setrow(observation_index, derivative_beta_wrt_knob(mflw[1], "x"))
+        derivative_beta_y_wrt_knob:setrow(observation_index, derivative_beta_wrt_knob(mflw[1], "y"))
+
+        -- Increment the index for the next bpm
+        observation_index = observation_index + 1
+    end
+end
+
+function reset_before_tracking()
+    assert(observation_index == nbpms + 1, "Not all BPMs observed before resetting, got " .. observation_index - 1 .. ", expected " .. nbpms)
+    observation_index = 1
+    betx:zeros()
+    bety:zeros()
+    derivative_beta_x_wrt_knob:zeros()
+    derivative_beta_y_wrt_knob:zeros()
+end

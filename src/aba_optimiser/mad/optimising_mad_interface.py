@@ -4,12 +4,7 @@ from pathlib import Path
 import numpy as np
 import tfs
 
-from aba_optimiser.config import (
-    BEAM_ENERGY,
-    CORRECTOR_STRENGTHS,
-    TUNE_KNOBS_FILE,
-    OptSettings,
-)
+from aba_optimiser.config import BEAM_ENERGY, CORRECTOR_STRENGTHS, TUNE_KNOBS_FILE, SimulationConfig
 from aba_optimiser.io.utils import read_knobs
 
 from .base_mad_interface import BaseMadInterface
@@ -82,7 +77,7 @@ class OptimisationMadInterface(BaseMadInterface):
         seq_name: str | None = None,
         magnet_range: str = "$start/$end",
         bpm_range: str | None = None,
-        opt_settings: OptSettings = None,
+        simulation_config: SimulationConfig | None = None,
         discard_mad_output: bool = False,
         bpm_pattern: str = BPM_PATTERN,
         bad_bpms: list[str] | None = None,
@@ -99,7 +94,7 @@ class OptimisationMadInterface(BaseMadInterface):
             sequence_file: Path to the MAD-X sequence file
             magnet_range: Range of magnets to include, e.g., "MARKER.1/MARKER.10"
             bpm_range: Range of BPMs to observe, e.g., "BPM.13R3.B1/BPM.12L4.B1"
-            opt_settings: Optimization settings for adjustment knobs
+            simulation_config: Simulation configuration for which parameters to optimise
             discard_mad_output: Whether to discard MAD-NG output to stdout
             bpm_pattern: Pattern for BPM matching
             bad_bpms: List of bad BPMs to exclude from observation
@@ -146,8 +141,8 @@ class OptimisationMadInterface(BaseMadInterface):
         self.mad["bpm_range"] = self.bpm_range
         self.mad["bpm_pattern"] = self.bpm_pattern
 
-        if opt_settings is not None:
-            self._make_adj_knobs(opt_settings)
+        if simulation_config is not None:
+            self._make_adj_knobs(simulation_config)
 
         # Setup optimization-specific functionality
         self._observe_bpms(bad_bpms)
@@ -201,16 +196,12 @@ class OptimisationMadInterface(BaseMadInterface):
 
             # Log how many non-zero correctors are being applied
             nonzero = (corrector_table["hkick"] != 0) | (corrector_table["vkick"] != 0)
-            LOGGER.info(
-                f"Applying {nonzero.sum()} non-zero corrector strengths from {corrector_strengths}"
-            )
+            LOGGER.info(f"Applying {nonzero.sum()} non-zero corrector strengths from {corrector_strengths}")
 
             # Apply corrector strengths for non-zero correctors only
             self.apply_corrector_strengths(corrector_table[nonzero])
         except (tfs.TfsFormatError, UnboundLocalError) as e:
-            LOGGER.error(
-                f"Error reading or applying corrector strengths: {e}, assuming knobs"
-            )
+            LOGGER.error(f"Error reading or applying corrector strengths: {e}, assuming knobs")
             knobs = read_knobs(corrector_strengths)
             for name, val in knobs.items():
                 self.mad.send(f"MADX['{name}'] = {val}")
@@ -235,28 +226,26 @@ class OptimisationMadInterface(BaseMadInterface):
         LOGGER.debug(f"Previous tune knob values: {prev}")
         LOGGER.debug(f"Set tune knobs from {tune_knobs_file}: {len(tune_knobs)}")
 
-    def _make_adj_knobs(self, opt_settings: OptSettings) -> None:
+    def _make_adj_knobs(self, simulation_config: SimulationConfig) -> None:
         """
         Create deferred-strength knobs for elements matching the optimisation settings.
         """
         mad_code = MAKE_KNOBS_INIT_MAD
 
-        if opt_settings.optimise_quadrupoles or opt_settings.optimise_bends:
+        if simulation_config.optimise_quadrupoles or simulation_config.optimise_bends:
             conditions = []
             for kind, attr, pattern, flag in [
-                ("sbend", "k0", "MB%.", opt_settings.optimise_bends),
-                ("quadrupole", "k1", "MQ%.", opt_settings.optimise_quadrupoles),
+                ("sbend", "k0", "MB%.", simulation_config.optimise_bends),
+                ("quadrupole", "k1", "MQ%.", simulation_config.optimise_quadrupoles),
             ]:
                 if flag:
-                    conditions.append(
-                        f'(e.kind == "{kind}" and e.{attr} ~=0 and e.name:match("{pattern}"))'
-                    )
+                    conditions.append(f'(e.kind == "{kind}" and e.{attr} ~=0 and e.name:match("{pattern}"))')
             element_condition = " or ".join(conditions) if conditions else "false"
 
             loop_code = MAKE_KNOBS_LOOP_MAD.format(element_condition=element_condition)
             mad_code += loop_code
 
-        if opt_settings.optimise_energy:
+        if simulation_config.optimise_energy:
             mad_code += 'table.insert(knob_names, "pt")\n'
 
         mad_code += MAKE_KNOBS_END_MAD.format(py_name=self.py_name)
@@ -265,9 +254,7 @@ class OptimisationMadInterface(BaseMadInterface):
         self.knob_names: list[str] = self.mad.recv()
         self.elem_spos: list[float] = self.mad.recv()
         if self.elem_spos:
-            LOGGER.info(
-                f"Created {len(self.knob_names)} knobs from {self.elem_spos[0]} to {self.elem_spos[-1]}"
-            )
+            LOGGER.info(f"Created {len(self.knob_names)} knobs from {self.elem_spos[0]} to {self.elem_spos[-1]}")
         else:
             LOGGER.info("No knobs created. Just optimising energy")
 
