@@ -1,8 +1,34 @@
 """Worker processes for distributed tracking and optimisation workloads.
 
-Helper modules manage IPC, batching, and lifecycle coordination for multiprocessing
-setups used during large simulations.
+This package provides worker process implementations for parallel computation
+of accelerator physics simulations and optimizations. Workers communicate with
+the main process via pipes and compute gradients and loss functions.
+
+Available Workers:
+    - TrackingWorker: Particle tracking (supports 'multi-turn' and 'arc-by-arc' modes)
+    - OpticsWorker: Optics function (beta, dispersion) computations
+
+Data Structures:
+    - TrackingData: Input data for tracking workers
+    - OpticsData: Input data for optics workers
+    - WorkerConfig: Configuration for all worker types
 """
 
-# Importing * is a bad practice and you should be punished for using it
-__all__: list[str] = []
+from aba_optimiser.workers.abstract_worker import AbstractWorker
+from aba_optimiser.workers.common import OpticsData, TrackingData, WeightProcessor, WorkerConfig
+from aba_optimiser.workers.optics import OpticsWorker
+from aba_optimiser.workers.tracking_worker import TrackingWorker
+
+__all__ = [
+    # Abstract base
+    "AbstractWorker",
+    # Worker implementations
+    "TrackingWorker",
+    "OpticsWorker",
+    # Data structures
+    "TrackingData",
+    "OpticsData",
+    "WorkerConfig",
+    # Utilities
+    "WeightProcessor",
+]

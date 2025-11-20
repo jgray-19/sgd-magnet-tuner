@@ -9,7 +9,7 @@ import numpy as np
 
 from aba_optimiser.config import BEAM_ENERGY
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
-from aba_optimiser.workers.arc_by_arc import ArcByArcWorker
+from aba_optimiser.workers import TrackingWorker
 
 if TYPE_CHECKING:
     from aba_optimiser.config import SimulationConfig
@@ -18,7 +18,9 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 
-def circular_far_samples(arr: np.ndarray, k: int, start_offset: int = 0) -> tuple[np.ndarray, np.ndarray]:
+def circular_far_samples(
+    arr: np.ndarray, k: int, start_offset: int = 0
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Pick k indices as far apart as possible on a circular array.
     k must be <= len(arr). start_offset rotates the selection.
@@ -117,6 +119,6 @@ class ConfigurationManager:
         n_data_points = {}
         for bpm_range in self.bpm_ranges:
             n_bpms, _ = self.mad_iface.count_bpms(bpm_range)
-            n_data_points[bpm_range] = ArcByArcWorker.get_n_data_points(n_bpms)
+            n_data_points[bpm_range] = TrackingWorker.get_n_data_points(n_bpms)
             logging.info(f"{bpm_range}: {n_data_points[bpm_range]} data points")
         return n_data_points

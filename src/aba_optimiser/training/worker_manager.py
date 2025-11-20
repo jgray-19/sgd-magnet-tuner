@@ -16,8 +16,7 @@ import numpy as np
 
 from aba_optimiser.config import PARTICLE_MASS
 from aba_optimiser.physics.deltap import dp2pt
-from aba_optimiser.workers.arc_by_arc import ArcByArcWorker
-from aba_optimiser.workers.base_worker import WorkerConfig, WorkerData
+from aba_optimiser.workers import TrackingData, TrackingWorker, WorkerConfig
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -90,7 +89,7 @@ class WorkerManager:
         bpm_ranges: list[str],
         machine_deltaps: list[float],
         simulation_config: SimulationConfig,
-    ) -> list[tuple[WorkerData, WorkerConfig, int]]:
+    ) -> list[tuple[TrackingData, WorkerConfig, int]]:
         """Create payloads for all workers.
 
         Args:
@@ -102,15 +101,15 @@ class WorkerManager:
             simulation_config (SimulationConfig): Simulation configuration containing optimization flags
 
         Returns:
-            list[tuple[WorkerData, WorkerConfig, int]]: List of tuples containing:
-                - WorkerData: Data arrays for the worker
+            list[tuple[TrackingData, WorkerConfig, int]]: List of tuples containing:
+                - TrackingData: Data arrays for the worker
                 - WorkerConfig: Configuration parameters for the worker
                 - int: Worker ID
 
         Raises:
             AssertionError: If a turn batch is empty
         """
-        payloads: list[tuple[WorkerData, WorkerConfig, int]] = []
+        payloads: list[tuple[TrackingData, WorkerConfig, int]] = []
         # Precompute arrays once per file for memory efficiency
         arrays_cache = {idx: self._extract_arrays(df) for idx, df in track_data.items()}
 
@@ -157,7 +156,7 @@ class WorkerManager:
                     LOGGER.debug(
                         f"Worker {len(payloads)}: file={primary_file_idx}, range={bpm_range}, sdir={sdir}, turns={len(turn_batch)}"
                     )
-                    data = WorkerData(
+                    data = TrackingData(
                         position_comparisons=pos,
                         momentum_comparisons=mom,
                         position_variances=pos_var,
@@ -328,7 +327,7 @@ class WorkerManager:
 
         for worker_id, (data, config, _file_idx) in enumerate(payloads):
             parent, child = mp.Pipe()
-            w = ArcByArcWorker(child, worker_id, data, config, simulation_config)
+            w = TrackingWorker(child, worker_id, data, config, simulation_config, mode="arc-by-arc")
             w.start()
             self.parent_conns.append(parent)
             self.workers.append(w)

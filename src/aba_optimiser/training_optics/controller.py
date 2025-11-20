@@ -19,7 +19,7 @@ from aba_optimiser.io.utils import get_lhc_file_path, read_knobs
 from aba_optimiser.training.configuration_manager import ConfigurationManager
 from aba_optimiser.training.optimisation_loop import OptimisationLoop
 from aba_optimiser.training.result_manager import ResultManager
-from aba_optimiser.workers.optics_worker import OpticsWorker, WorkerConfig, WorkerData
+from aba_optimiser.workers import OpticsData, OpticsWorker, WorkerConfig
 
 X = "x"
 Y = "y"
@@ -85,6 +85,7 @@ class OpticsController:
             optimise_quadrupoles=True,
             optimise_bends=False,
         )
+        self.simulation_config = simulation_config
 
         # Load beta function measurements from optics folder
         optics_path = Path(optics_folder)
@@ -120,7 +121,6 @@ class OpticsController:
             corrector_strengths=corrector_file,
             tune_knobs_file=tune_knobs_file,
             beam_energy=beam_energy,
-            simulation_config=simulation_config,
             sdir=np.nan,
             bad_bpms=bad_bpms,
             seq_name=seq_name,
@@ -173,7 +173,7 @@ class OpticsController:
         workers = []
         for worker_id, (config, data) in enumerate(self.worker_payloads):
             parent, child = mp.Pipe()
-            w = OpticsWorker(child, worker_id, data, config)
+            w = OpticsWorker(child, worker_id, data, config, self.simulation_config)
             w.start()
             parent_conns.append(parent)
             workers.append(w)
@@ -187,6 +187,13 @@ class OpticsController:
             total_turns=1,
         )
         uncertainties = np.zeros(len(self.initial_knobs))
+
+        # Terminate workers
+        logger.info("Terminating workers...")
+        for conn in parent_conns:
+            conn.send((None, None))
+        for w in workers:
+            w.join()
 
         # Generate plots if requested
         self.result_manager.generate_plots(
@@ -210,7 +217,7 @@ def create_worker_payloads(
     bpms_ranges: list[str],
     bad_bpms: list[str] | None,
     template_config: WorkerConfig,
-) -> list[tuple[WorkerConfig, WorkerData]]:
+) -> list[tuple[WorkerConfig, OpticsData]]:
     """Create worker payloads for optics optimisation."""
 
     logger.info(f"Loading beta measurements from {optics_dir}")
@@ -312,7 +319,7 @@ def create_worker_payloads(
                 sdir=sdir,
             )
 
-            data = WorkerData(
+            data = OpticsData(
                 beta_comparisons=beta_comp,
                 beta_variances=err_beta_comp**2,
                 init_coords=init_cond,
