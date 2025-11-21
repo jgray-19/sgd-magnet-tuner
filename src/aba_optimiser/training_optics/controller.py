@@ -170,8 +170,8 @@ def create_worker_payloads(
 
     # Load all TFS files
     file_specs = {
-        "beta_x": (AMP_BETA_NAME, X),
-        "beta_y": (AMP_BETA_NAME, Y),
+        "beta_x": (BETA_NAME, X),
+        "beta_y": (BETA_NAME, Y),
         "alfa_x": (BETA_NAME, X),
         "alfa_y": (BETA_NAME, Y),
         "disp_x": (DISPERSION_NAME, X),
