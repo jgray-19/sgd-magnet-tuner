@@ -28,6 +28,10 @@ local _, mflw= track{
 assert(mflw.tpar == mflw.npar, "Lost some particles during tracking")
 python:send(betx, true)
 python:send(bety, true)
+! python:send(alfx, true)
+! python:send(alfy, true)
 python:send(derivative_beta_x_wrt_knob, true)
 python:send(derivative_beta_y_wrt_knob, true)
+! python:send(derivative_alfa_x_wrt_knob, true)
+! python:send(derivative_alfa_y_wrt_knob, true)
 !collectgarbage("collect")  -- Clean up memory after sending data

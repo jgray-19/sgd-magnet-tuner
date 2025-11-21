@@ -24,7 +24,11 @@ if TYPE_CHECKING:
     from tensorboardX import SummaryWriter
 
     from aba_optimiser.config import OptimiserConfig, SimulationConfig
-    from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig, SequenceConfig
+    from aba_optimiser.training.controller_config import (
+        BPMConfig,
+        MeasurementConfig,
+        SequenceConfig,
+    )
 
 logger = logging.getLogger(__name__)
 random.seed(42)  # For reproducibility

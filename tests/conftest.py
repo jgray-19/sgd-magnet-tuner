@@ -31,6 +31,12 @@ def data_dir() -> Path:
 
 
 @pytest.fixture(scope="module")
+def model_dir(data_dir: Path) -> Path:
+    """Path to the example model files used by several tests."""
+    return data_dir / "model_b1__t0.28_0.31_18cm"
+
+
+@pytest.fixture(scope="module")
 def corrector_file(data_dir: Path) -> Path:
     """Path to the example corrector strengths file used by several tests."""
     return data_dir / "corrector_strengths.tfs"
@@ -60,9 +66,7 @@ def interface() -> Generator[BaseMadInterface, None, None]:
 
 
 @pytest.fixture(scope="function")
-def loaded_interface(
-    interface: BaseMadInterface, sequence_file: Path
-) -> BaseMadInterface:
+def loaded_interface(interface: BaseMadInterface, sequence_file: Path) -> BaseMadInterface:
     """Fixture that returns an interface with the example sequence loaded."""
     interface.load_sequence(sequence_file, "lhcb1")
     return interface

@@ -26,36 +26,70 @@ for _, plane in ipairs{"x", "y"} do
 end
 
 function derivative_beta_wrt_knob(map, plane)
-    f_x = map[plane]:get(orbit_deriv_key[plane])
-    f_px = map[plane]:get(momentum_deriv_key[plane])
+    fx_x = map[plane]:get(orbit_deriv_key[plane])
+    fx_px = map[plane]:get(momentum_deriv_key[plane])
 
-    f_xk = vector(num_knobs)
-    f_pxk = vector(num_knobs)
+    fx_xk = vector(num_knobs)
+    fx_pxk = vector(num_knobs)
 
     for k=1,num_knobs do
-        f_xk:seti(k, map[plane]:get(x_derivative_wrt_knob_keys[plane][k]))
-        f_pxk:seti(k, map[plane]:get(px_derivative_wrt_knob_keys[plane][k]))
+        fx_xk:seti(k, map[plane]:get(x_derivative_wrt_knob_keys[plane][k]))
+        fx_pxk:seti(k, map[plane]:get(px_derivative_wrt_knob_keys[plane][k]))
     end
 
-    return 2 * (f_x * f_xk + f_px * f_pxk)
+    return 2 * (fx_x * fx_xk + fx_px * fx_pxk)
 end
+
+! function derivative_alfa_wrt_knob(map, plane)
+!     mom = "p" .. plane
+!     fx_x = map[plane]:get(orbit_deriv_key[plane])
+!     fpx_x = map[mom]:get(orbit_deriv_key[plane])
+
+!     fx_px = map[plane]:get(momentum_deriv_key[plane])
+!     fpx_px = map[mom]:get(momentum_deriv_key[plane])
+
+!     fx_xk = vector(num_knobs)
+!     fpx_xk = vector(num_knobs)
+!     fx_pxk = vector(num_knobs)
+!     fpx_pxk = vector(num_knobs)
+
+!     for k=1,num_knobs do
+!         fx_xk:seti(k, map[plane]:get(x_derivative_wrt_knob_keys[plane][k]))
+!         fpx_xk:seti(k, map[mom]:get(x_derivative_wrt_knob_keys[plane][k]))
+
+!         fx_pxk:seti(k, map[plane]:get(px_derivative_wrt_knob_keys[plane][k]))
+!         fpx_pxk:seti(k, map[mom]:get(px_derivative_wrt_knob_keys[plane][k]))
+!     end
+
+!     return -1 * (fpx_x * fx_xk + fpx_x * fx_xk + fpx_px * fx_pxk + fx_px * fpx_pxk)
+! end
+
 
 betx = vector(nbpms)
 bety = vector(nbpms)
+! alfx = vector(nbpms)
+! alfy = vector(nbpms)
+
 derivative_beta_x_wrt_knob = matrix(nbpms, num_knobs)
 derivative_beta_y_wrt_knob = matrix(nbpms, num_knobs)
+! derivative_alfa_x_wrt_knob = matrix(nbpms, num_knobs)
+! derivative_alfa_y_wrt_knob = matrix(nbpms, num_knobs)
 
 observation_index = nbpms + 1  ! Start beyond the last bpm to ensure reset is called before tracking
 function save_data(elm, mflw, _, slc)
-    local turn in mflw
     -- Observe the BPMs at the specified intervals
+    ! We don't care about forward or backward slices here as we assume the observation points are BPMs and have no effect on the physics
     if slc == -2 and elm:is_observed() then
         optics_map = map2bet(mflw[1])  ! Use first particle's map for optics -> only 1 particle needed
         betx:seti(observation_index, optics_map.beta11)
         bety:seti(observation_index, optics_map.beta22)
+        ! alfx:seti(observation_index, optics_map.alfa11)
+        ! alfy:seti(observation_index, optics_map.alfa22)
 
         derivative_beta_x_wrt_knob:setrow(observation_index, derivative_beta_wrt_knob(mflw[1], "x"))
         derivative_beta_y_wrt_knob:setrow(observation_index, derivative_beta_wrt_knob(mflw[1], "y"))
+        ! derivative_alfa_x_wrt_knob:setrow(observation_index, derivative_alfa_wrt_knob(mflw[1], "x"))
+        ! derivative_alfa_y_wrt_knob:setrow(observation_index, derivative_alfa_wrt_knob(mflw[1], "y"))
 
         -- Increment the index for the next bpm
         observation_index = observation_index + 1
@@ -67,6 +101,11 @@ function reset_before_tracking()
     observation_index = 1
     betx:zeros()
     bety:zeros()
+    ! alfx:zeros()
+    ! alfy:zeros()
+
     derivative_beta_x_wrt_knob:zeros()
     derivative_beta_y_wrt_knob:zeros()
+    ! derivative_alfa_x_wrt_knob:zeros()
+    ! derivative_alfa_y_wrt_knob:zeros()
 end

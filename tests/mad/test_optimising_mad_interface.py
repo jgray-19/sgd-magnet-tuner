@@ -118,9 +118,10 @@ class TestOptimisationMadInterfaceInit:
         bpm_pattern = r"^BPM"
         check_interface_basic_init(interface, "py")
 
-        assert interface.mad._MAD__process.stdout_file.writable()
-        assert str(interface.mad._MAD__process.stdout_file_path) == "/dev/null"
-        assert interface.mad._MAD__process.debug is False  # discard_mad_output=True
+        # Default discard_mad_output=False, so no stdout_file attributes
+        assert not hasattr(interface.mad._MAD__process, 'stdout_file')
+        assert not hasattr(interface.mad._MAD__process, 'stdout_file_path')
+        assert interface.mad._MAD__process.debug is False  # default debug=False
 
         assert interface.magnet_range == "$start/$end"
         assert interface.bpm_range == "$start/$end"

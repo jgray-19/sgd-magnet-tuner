@@ -24,7 +24,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
-class BetaWeights:
+class OpticsWeights:
     """Container for beta function weights.
 
     Attributes:
@@ -32,12 +32,14 @@ class BetaWeights:
         y: Weights for vertical beta function
     """
 
-    x: np.ndarray  # Shape: (n_bpms,)
-    y: np.ndarray  # Shape: (n_bpms,)
+    betx: np.ndarray  # Shape: (n_bpms,)
+    bety: np.ndarray  # Shape: (n_bpms,)
+    # alfx: np.ndarray  # Shape: (n_bpms,)
+    # alfy: np.ndarray  # Shape: (n_bpms,)
 
 
 @dataclass
-class BetaComparisons:
+class OpticsComparisons:
     """Container for reference beta function data.
 
     Attributes:
@@ -45,8 +47,10 @@ class BetaComparisons:
         y: Reference vertical beta functions
     """
 
-    x: np.ndarray  # Shape: (n_bpms,)
-    y: np.ndarray  # Shape: (n_bpms,)
+    betx: np.ndarray  # Shape: (n_bpms,)
+    bety: np.ndarray  # Shape: (n_bpms,)
+    # alfx: np.ndarray  # Shape: (n_bpms,)
+    # alfy: np.ndarray  # Shape: (n_bpms,)
 
 
 class OpticsWorker(AbstractWorker[OpticsData]):
@@ -70,30 +74,39 @@ class OpticsWorker(AbstractWorker[OpticsData]):
             data: OpticsData container with reference measurements
         """
         LOGGER.debug(
-            f"Worker {self.worker_id}: Processing optics data "
-            f"with {len(data.beta_comparisons)} BPMs"
+            f"Worker {self.worker_id}: Processing optics data with {len(data.comparisons)} BPMs"
         )
 
         # Extract beta comparisons symmetrically
-        self.comparisons = BetaComparisons(
-            x=data.beta_comparisons[:, 0],  # beta_x
-            y=data.beta_comparisons[:, 1],  # beta_y
+        self.comparisons = OpticsComparisons(
+            betx=data.comparisons[:, 0],  # beta_x
+            bety=data.comparisons[:, 1],  # beta_y
+            # alfx=data.comparisons[:, 2],  # alpha_x
+            # alfy=data.comparisons[:, 3],  # alpha_y
         )
 
         # Compute weights from variances symmetrically
-        betx_vars = data.beta_variances[:, 0]
-        bety_vars = data.beta_variances[:, 1]
+        betx_vars = data.variances[:, 0]
+        bety_vars = data.variances[:, 1]
+        # alfx_vars = data.variances[:, 2]
+        # alfy_vars = data.variances[:, 3]
 
         betx_weights = WeightProcessor.variance_to_weight(betx_vars)
         bety_weights = WeightProcessor.variance_to_weight(bety_vars)
+        # alfx_weights = WeightProcessor.variance_to_weight(alfx_vars)
+        # alfy_weights = WeightProcessor.variance_to_weight(alfy_vars)
 
         # Store Hessian weights (used for approximate Hessian calculation)
-        self.hessian_weights = BetaWeights(x=betx_weights, y=bety_weights)
+        self.hessian_weights = OpticsWeights(
+            betx=betx_weights, bety=bety_weights, # alfx=alfx_weights, alfy=alfy_weights
+        )
 
         # Normalize weights for gradient computation
-        self.weights = BetaWeights(
-            x=WeightProcessor.normalize_weights(betx_weights),
-            y=WeightProcessor.normalize_weights(bety_weights),
+        self.weights = OpticsWeights(
+            betx=WeightProcessor.normalise_weights(betx_weights),
+            bety=WeightProcessor.normalise_weights(bety_weights),
+            # alfx=WeightProcessor.normalise_weights(alfx_weights),
+            # alfy=WeightProcessor.normalise_weights(alfy_weights),
         )
 
         # Store initial conditions
@@ -235,25 +248,37 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
         # Receive beta functions
         betx_results = mad.recv()
         bety_results = mad.recv()
+        # alfx_results = mad.recv()
+        # alfy_results = mad.recv()
 
         # Receive derivatives
         dbetx_dk_results = mad.recv()
         dbety_dk_results = mad.recv()
+        # dalfx_dk_results = mad.recv()
+        # dalfy_dk_results = mad.recv()
 
         # Convert to numpy arrays
         # Shape: (n_bpms,)
         betx = np.asarray(betx_results).squeeze(-1)
         bety = np.asarray(bety_results).squeeze(-1)
+        # alfx = np.asarray(alfx_results).squeeze(-1)
+        # alfy = np.asarray(alfy_results).squeeze(-1)
 
         # Shape: (n_bpms, n_knobs) - note: MAD sends as (n_knobs, n_bpms) transposed
         dbetx_dk = np.asarray(dbetx_dk_results)
         dbety_dk = np.asarray(dbety_dk_results)
+        # dalfx_dk = np.asarray(dalfx_dk_results)
+        # dalfy_dk = np.asarray(dalfy_dk_results)
 
         return {
             "betx": betx,
             "bety": bety,
+            # "alfx": alfx,
+            # "alfy": alfy,
             "dbetx_dk": dbetx_dk,
             "dbety_dk": dbety_dk,
+            # "dalfx_dk": dalfx_dk,
+            # "dalfy_dk": dalfy_dk,
         }
 
     def _compute_loss_and_gradients(
@@ -270,21 +295,27 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
             Tuple of (gradient array, loss value)
         """
         # Compute residuals symmetrically
-        residual_x = results["betx"] - self.comparisons.x
-        residual_y = results["bety"] - self.comparisons.y
+        residual_betx = results["betx"] - self.comparisons.betx
+        residual_bety = results["bety"] - self.comparisons.bety
+        # residual_alfx = results["alfx"] - self.comparisons.alfx
+        # residual_alfy = results["alfy"] - self.comparisons.alfy
 
         # Compute gradients (weighted residual @ jacobian)
         # Shape: (n_bpms,) @ (n_bpms, n_knobs) -> (n_knobs,)
-        gx = (self.weights.x * residual_x) @ results["dbetx_dk"]
-        gy = (self.weights.y * residual_y) @ results["dbety_dk"]
+        gbx = (self.weights.betx * residual_betx) @ results["dbetx_dk"]
+        gby = (self.weights.bety * residual_bety) @ results["dbety_dk"]
+        # gax = (self.weights.alfx * residual_alfx) @ results["dalfx_dk"]
+        # gay = (self.weights.alfy * residual_alfy) @ results["dalfy_dk"]
 
         # Compute loss (weighted sum of squared residuals)
-        loss_x = np.sum(self.weights.x * residual_x**2)
-        loss_y = np.sum(self.weights.y * residual_y**2)
+        loss_bx = np.sum(self.weights.betx * residual_betx**2)
+        loss_by = np.sum(self.weights.bety * residual_bety**2)
+        # loss_ax = np.sum(self.weights.alfx * residual_alfx**2)
+        # loss_ay = np.sum(self.weights.alfy * residual_alfy**2)
 
         # Total gradient and loss (factor of 2 from derivative of squared residuals)
-        grad = 2.0 * (gx + gy)
-        loss = loss_x + loss_y
+        grad = 2.0 * (gbx + gby) # + gax + gay)
+        loss = loss_bx + loss_by # + loss_ax + loss_ay
 
         return grad, loss
 

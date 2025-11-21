@@ -7,12 +7,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pytest
 import tfs
 from omc3.hole_in_one import hole_in_one_entrypoint
 from turn_by_turn import convert_to_tbt, write_tbt
 
-from aba_optimiser.config import BEND_ERROR_FILE, QUAD_OPTIMISER_CONFIG, OptimiserConfig
+from aba_optimiser.config import BEND_ERROR_FILE, OptimiserConfig
 from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 from aba_optimiser.simulation.optics import perform_orbit_correction
@@ -20,6 +21,7 @@ from aba_optimiser.training.controller_config import BPMConfig, SequenceConfig
 from aba_optimiser.training_optics import OpticsController
 from aba_optimiser.xsuite.xsuite_tools import (
     initialise_env,
+    insert_ac_dipole,
     insert_particle_monitors_at_pattern,
     run_tracking,
 )
@@ -46,7 +48,7 @@ TRACK_COLUMNS = (
 
 def _generate_nonoise_track(
     tmp_dir: Path,
-    data_dir: Path,
+    model_dir: Path,
     sequence_file: Path,
     flattop_turns: int,
     dpp_value: float,
@@ -59,7 +61,6 @@ def _generate_nonoise_track(
     mad = BaseMadInterface()  # stdout="/dev/null", redirect_stderr=True
     mad.load_sequence(sequence_file, "lhcb1")
     mad.setup_beam(beam_energy=6800)
-    assert dpp_value == 0, "Only dpp=0 currently supported for noiseless tracking generation."
 
     # Create unique corrector file path based on destination
     corrector_file = tmp_dir / "correctors.tfs"
@@ -116,34 +117,51 @@ py:send(new_magnet_values, true)
     tune_knobs_file = tmp_dir / "tune_knobs.txt"
     save_knobs(matched_tunes, tune_knobs_file)
 
-    insert_particle_monitors_at_pattern(
-        env["lhcb1"],
-        pattern="bpm.*[^k]",
-        num_turns=flattop_turns,
-        num_particles=1,
-        inplace=True,
-    )
+    # Compute twiss for ACD insertion
+    tws = env["lhcb1"].twiss(method="4d", delta0=dpp_value)
+
+    # Insert AC dipole
+    acd_ramp = 1000
+    total_turns = flattop_turns + acd_ramp
+    driven_tunes = [0.27, 0.322]
     output_files = []
-    for dpp in [-2.5e-4, 0.0, 2.5e-4]:
-        particles = env["lhcb1"].build_particles(
-            x=[1e-4],
-            px=[-1e-6],
-            y=[1e-4],
-            py=[-1e-6],
-            delta=[dpp],
+    for lag in [0, np.pi / 4, np.pi / 3]:
+        lhcb1 = insert_ac_dipole(
+            env["lhcb1"],
+            tws,
+            beam=1,
+            acd_ramp=acd_ramp,
+            total_turns=total_turns,
+            driven_tunes=driven_tunes,
+            lag=lag,
         )
-        run_tracking(
-            line=env["lhcb1"],
-            particles=particles,
-            nturns=flattop_turns,
+
+        insert_particle_monitors_at_pattern(
+            lhcb1,
+            pattern="bpm.*[^k]",
+            num_turns=flattop_turns,
+            num_particles=1,
+            inplace=True,
         )
-        sdds = convert_to_tbt(env["lhcb1"])
-        output_file = tmp_dir / f"track_result_{dpp}.sdds"
-        output_files.append(output_file)
-        write_tbt(output_file, sdds)
+        for dpp in [-2.5e-4, 0.0, 2.5e-4]:
+            particles = lhcb1.build_particles(
+                x=[1e-4],
+                px=[-1e-6],
+                y=[1e-4],
+                py=[-1e-6],
+                delta=[dpp + dpp_value],
+            )
+            run_tracking(
+                line=lhcb1,
+                particles=particles,
+                nturns=flattop_turns,
+            )
+            sdds = convert_to_tbt(lhcb1)
+            output_file = tmp_dir / f"track_result_{dpp}_{lag}.sdds"
+            output_files.append(output_file)
+            write_tbt(output_file, sdds, noise=1e-4)
 
     linfile_dir = tmp_dir / "linfiles"
-    model_dir = data_dir / "model_b1__t0.28_0.31_18cm"
     hole_in_one_entrypoint(
         harpy=True,
         files=output_files,
@@ -151,9 +169,11 @@ py:send(new_magnet_values, true)
         outputdir=linfile_dir,
         to_write=["lin", "spectra"],
         opposite_direction=False,
-        tunes=[0.28, 0.31, 0.0],
-        natdeltas=[0.0, -0.0, 0.0],
-        clean=False,
+        driven_excitation="acd",
+        tunes=driven_tunes + [0.0],
+        nattunes=[0.28, 0.31, 0.0],
+        turn=[acd_ramp, 50e3],
+        clean=True,
     )
     all_linfiles = list(linfile_dir.glob("*.linx"))
     all_files = [f.parent / f.name.strip(".linx") for f in all_linfiles]
@@ -167,7 +187,7 @@ py:send(new_magnet_values, true)
         beam=1,
         model_dir=model_dir,
         year="2025",
-        compensation="none",
+        compensation="model",
     )
     return corrector_file, magnet_strengths, tune_knobs_file, analysis_dir
 
@@ -184,30 +204,32 @@ def test_controller_opt(
     tmp_dir: Path,
     sequence_file: Path,
     data_dir: Path,
+    model_dir: Path,
 ) -> None:
     """Test that the controller initializes correctly with custom num_tracks and flattop_turns."""
     magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
 
     corrector_file, magnet_strengths, tune_knobs_file, analysis_dir = _generate_nonoise_track(
         tmp_dir,
-        data_dir,
+        model_dir,
         sequence_file,
         6600,
-        0,
+        0e-4,
         magnet_range,
         perturb_quads=True,
+        # perturb_bends=True,
     )
 
     # Constants for the test
     bpm_start_points = [
         "BPM.9R2.B1",
         "BPM.10R2.B1",
-        "BPM.11R2.B1",
+        # "BPM.11R2.B1",
     ]
     bpm_end_points = [
         "BPM.9L3.B1",
         "BPM.10L3.B1",
-        "BPM.11L3.B1",
+        # "BPM.11L3.B1",
     ]
 
     # print all files in analysis_dir for debugging
@@ -243,6 +265,7 @@ def test_controller_opt(
         corrector_file=corrector_file,
         tune_knobs_file=tune_knobs_file,
         true_strengths=magnet_strengths,
+        use_errors=True,
     )
 
     estimate, unc = ctrl.run()

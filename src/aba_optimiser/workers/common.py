@@ -78,8 +78,8 @@ class OpticsData:
         init_coords: Initial Twiss parameters and dispersion
     """
 
-    beta_comparisons: np.ndarray  # Shape: (n_bpms, 2) - [betx, bety]
-    beta_variances: np.ndarray  # Shape: (n_bpms, 2) - [var_betx, var_bety]
+    comparisons: np.ndarray  # Shape: (n_bpms, 2) - [betx, bety]
+    variances: np.ndarray  # Shape: (n_bpms, 2) - [var_betx, var_bety]
     init_coords: dict[str, np.ndarray]  # betx, bety, alfx, alfy, dx, dpx, dy, dpy
 
 
@@ -108,7 +108,7 @@ class WeightProcessor:
         return weights
 
     @staticmethod
-    def normalize_weights(weights: np.ndarray) -> np.ndarray:
+    def normalise_weights(weights: np.ndarray) -> np.ndarray:
         """Normalize weights so maximum weight is 1.
 
         Args:

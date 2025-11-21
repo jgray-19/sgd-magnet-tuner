@@ -6,9 +6,12 @@ creating controller configuration objects for common use cases.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def create_arc_measurement_config(

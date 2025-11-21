@@ -17,9 +17,7 @@ from turn_by_turn import read_tbt
 
 from aba_optimiser.filtering.svd import svd_clean_measurements
 from aba_optimiser.measurements.create_datafile import convert_measurements
-from aba_optimiser.momentum_recon.transverse import (
-    calculate_pz,
-)
+from aba_optimiser.momentum_recon.transverse import calculate_pz
 
 
 def _rmse(actual: np.ndarray, predicted: np.ndarray) -> float:
@@ -27,10 +25,9 @@ def _rmse(actual: np.ndarray, predicted: np.ndarray) -> float:
 
 
 @pytest.mark.slow
-def test_calculate_pz_recovers_true_momenta(data_dir, sequence_file):
+def test_calculate_pz_recovers_true_momenta(data_dir, model_dir, sequence_file):
     # optics_path = data_dir / "optics"
     tracking_path = data_dir / "tracking"
-    model_dir = data_dir / "model"
     tws = tfs.read(model_dir / "twiss_ac.dat")
     # rename all colmnms to lower case for consistency
     tws.columns = [col.lower() for col in tws.columns]
@@ -49,9 +46,7 @@ def test_calculate_pz_recovers_true_momenta(data_dir, sequence_file):
 
     truth = pd.read_parquet(tracking_path / "true_data.parquet")
 
-    noisy_files = [
-        read_tbt(tracking_path / f"acd_errs_noisy_{i}.sdds") for i in range(3)
-    ]
+    noisy_files = [read_tbt(tracking_path / f"acd_errs_noisy_{i}.sdds") for i in range(3)]
     noisy_files = convert_measurements(noisy_files)
     for df in noisy_files:
         # Add the px_true and py_true columns for comparison later

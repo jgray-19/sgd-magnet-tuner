@@ -21,10 +21,7 @@ import xtrack as xt
 from xobjects import ContextCpu as Context
 from xtrack.mad_parser.loader import load_madx_lattice
 
-from aba_optimiser.config import (
-    BEAM_ENERGY,
-    PROJECT_ROOT,
-)
+from aba_optimiser.config import BEAM_ENERGY, PROJECT_ROOT
 from aba_optimiser.io.utils import get_lhc_file_path
 from aba_optimiser.simulation.tracking import create_initial_conditions
 
@@ -118,9 +115,7 @@ def insert_particle_monitors_at_pattern(
         monitored_line = line.copy()
 
     # Find all element names matching the pattern (e.g., all BPMs)
-    selected_list = [
-        name for name in monitored_line.element_names if re.match(pattern, name)
-    ]
+    selected_list = [name for name in monitored_line.element_names if re.match(pattern, name)]
     if not selected_list:
         logger.warning(f"No elements found matching pattern '{pattern}'.")
         return monitored_line
@@ -155,6 +150,7 @@ def insert_ac_dipole(
     acd_ramp: int,
     total_turns: int,
     driven_tunes: list[float],
+    lag: float = 0.0,
 ) -> xt.Line:
     """
     Inserts an AC dipole at the marked location in the line.
@@ -174,9 +170,7 @@ def insert_ac_dipole(
     acd_marker = f"mkqa.6l4.b{beam}"
     betxac = tws.rows[acd_marker]["betx"]
     betyac = tws.rows[acd_marker]["bety"]
-    logger.info(
-        f"Inserting AC dipole at {acd_marker} with betx={betxac}, bety={betyac}"
-    )
+    logger.info(f"Inserting AC dipole at {acd_marker} with betx={betxac}, bety={betyac}")
 
     driven_tunes = [q % 1 for q in driven_tunes]  # Ensure tunes are in [0, 1)
     logger.info(f"Driven tunes: {driven_tunes}")
@@ -190,14 +184,14 @@ def insert_ac_dipole(
         plane="x",
         volt=2 * 0.042 * pbeam * abs(qxd_qx) / np.sqrt(180.0 * betxac),
         freq=driven_tunes[0],
-        lag=0,
+        lag=lag,
         ramp=[0, acd_ramp, total_turns, total_turns + acd_ramp],
     )
     line.env.elements[f"mkacv.6l4.b{beam}"] = xt.ACDipole(
         plane="y",
         volt=2 * 0.042 * pbeam * abs(qyd_qx) / np.sqrt(177.0 * betyac),
         freq=driven_tunes[1],
-        lag=0,
+        lag=lag,
         ramp=[0, acd_ramp, total_turns, total_turns + acd_ramp],
     )
     placement = line.get_s_position(acd_marker)
@@ -206,9 +200,7 @@ def insert_ac_dipole(
     return line
 
 
-def run_acd_twiss(
-    line: xt.Line, beam: int, dpp: float, driven_tunes: list[float]
-) -> xt.TwissTable:
+def run_acd_twiss(line: xt.Line, beam: int, dpp: float, driven_tunes: list[float]) -> xt.TwissTable:
     """
     Run twiss calculation with AC dipole elements.
 
@@ -274,9 +266,7 @@ def run_tracking(
     raise RuntimeError("Tracking failed. Please check the input parameters.")
 
 
-def _set_corrector_strengths(
-    env: xt.Environment, corrector_table: tfs.TfsDataFrame
-) -> None:
+def _set_corrector_strengths(env: xt.Environment, corrector_table: tfs.TfsDataFrame) -> None:
     logger.debug(f"Applying corrector strengths to {len(corrector_table)} elements")
     for _, row in corrector_table.iterrows():
         env.set(row["ename"].lower(), knl=[-row["hkick"]], ksl=[row["vkick"]])
@@ -445,9 +435,7 @@ def line_to_dataframes(tracked_line: xt.Line) -> list[pd.DataFrame]:
 
     # First check that no particles were lost during tracking. There will be trailing
     # zeros in the data if particles were lost. This might be difficult to detect.
-    assert all(
-        mon.data.particle_id[-1] == mon.data.particle_id.max() for mon in monitors
-    ), (
+    assert all(mon.data.particle_id[-1] == mon.data.particle_id.max() for mon in monitors), (
         "Some particles were lost during tracking, which is not supported by this function. "
         "Ensure that all particles are tracked through the entire line without loss."
     )
@@ -455,9 +443,7 @@ def line_to_dataframes(tracked_line: xt.Line) -> list[pd.DataFrame]:
     # Check that all monitors have the same number of particles
     npart_set = {len(set(mon.data.particle_id)) for mon in monitors}
     if len(npart_set) != 1:
-        raise ValueError(
-            "Monitors have different number of particles, maybe some lost particles?"
-        )
+        raise ValueError("Monitors have different number of particles, maybe some lost particles?")
     npart = npart_set.pop()
 
     num_turns = len(monitors[0].data.x) // npart
