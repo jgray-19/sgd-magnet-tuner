@@ -90,7 +90,7 @@ def create_model(beam: int, output_dir: pathlib.Path):
 
     # Generate the MAD-X sequence
     make_madx_seq(beam, output_dir, beam4=beam == 2)
-    update_model_with_ng(beam, output_dir, tunes=NAT_TUNES)
+    update_model_with_ng(beam, output_dir, tunes=NAT_TUNES, drv_tunes=DRV_TUNES)
     print(f"Model for beam {beam} created and compressed successfully.")
 
 
@@ -165,7 +165,7 @@ def start_madng(
 
     mad.MADX.load(f"'{saved_seq}'", f"'{saved_mad}'")
     mad.send(f"""
-lhc_beam = beam {{particle="proton", energy=450}};
+lhc_beam = beam {{particle="proton", energy=6800}};
 MADX.lhcb{beam}.beam = lhc_beam;
 print("Initialising model with beam:", {beam});
     """)
@@ -177,7 +177,7 @@ def _print_tunes(mad: MAD, beam: int, label: str) -> tuple[float, float]:
 local tbl = twiss {{sequence=MADX.lhcb{beam}}};
 py:send({{tbl.q1, tbl.q2}}, true)
     """)
-    q1, q2 = mad.recv()  # type: ignore
+    q1, q2 = mad.recv()
     assert isinstance(q1, float) and isinstance(q2, float), "Received tunes are not floats"
     print(f"{label} tunes: ", q1, q2)
     return q1, q2
@@ -253,7 +253,7 @@ def convert_tfs_to_madx(tfs_df: tfs.TfsDataFrame) -> tfs.TfsDataFrame:
     tfs_df["NAME"] = tfs_df["NAME"].replace(drifts["NAME"].to_list(), replace_names)
 
     # Remove rows containing 'vkicker' or 'hkicker' in the 'KIND' column.
-    tfs_df = tfs_df[~tfs_df["KIND"].str.contains("vkicker|hkicker")]
+    # tfs_df = tfs_df[~tfs_df["KIND"].str.contains("vkicker|hkicker")]
 
     # Set the NAME column as index and remove unwanted rows
     tfs_df = tfs_df.set_index("NAME")
@@ -287,7 +287,12 @@ MADX.lhcb{beam}:  select(observed, {{pattern="BPM"}})
     """)
 
 
-def update_model_with_ng(beam: int, model_dir: Path, tunes: list[float] = [0.28, 0.31]) -> None:
+def update_model_with_ng(
+    beam: int,
+    model_dir: Path,
+    tunes: list[float] = [0.28, 0.31],
+    drv_tunes: list[float] = [0.0, 0.0],
+) -> None:
     """
     Update the accelerator model with MAD-NG and perform tune matching.
 
@@ -304,14 +309,9 @@ str_cols = py:recv()
 
 cols = MAD.utility.tblcat(cols, str_cols)
 
--- Calculate the twiss parameters with coupling and observe the BPMs
 ! Coupling needs to be true to calculate Edwards-Teng parameters and R matrix
-twiss_elements = twiss {{sequence=MADX.lhcb{beam}, mapdef=4, coupling=true }}
-
--- Select everything
-twiss_elements:select(nil, \\ -> true)
-
--- Deselect the drifts
+twiss_elements = twiss {{ sequence=MADX.lhcb{beam}, coupling=true }}
+twiss_elements:select(nil, \\ -> true) ! Everything
 twiss_elements:deselect{{pattern="drift"}}
 """)
         mad.send(MODEL_HEADER).send(MODEL_COLUMNS).send(MODEL_STRENGTHS)
@@ -321,9 +321,33 @@ twiss_elements:deselect{{pattern="drift"}}
             f"""twiss_elements:write("{model_dir / "twiss_elements.dat"}", cols, hnams, true)"""
         )
         observe_bpms(mad, beam)
+        ac_marker = f"MKQA.6L4.B{beam}"
         mad.send(f"""
-twiss_ac   = twiss {{sequence=MADX.lhcb{beam}, coupling=true, observe=1 }}
 twiss_data = twiss {{sequence=MADX.lhcb{beam}, coupling=true, observe=1 }}
+""")
+        mad.send(f"""
+local hackicker, vackicker in MAD.element
+MADX.lhcb{beam}:install{{
+    hackicker "hackicker" {{
+        at = 1.583/2,
+        from = "{ac_marker}",
+
+        -- quad part
+        nat_q = {tunes[0]:.5e},
+        drv_q = {drv_tunes[0]:.5e},
+        ac_bet = twiss_elements['{ac_marker}'].beta11,
+    }},
+    vackicker "vackicker" {{
+        at = 1.583/2,
+        from = "{ac_marker}",
+
+        -- quad part
+        nat_q = {tunes[1]:.5e},
+        drv_q = {drv_tunes[1]:.5e},
+        ac_bet = twiss_elements['{ac_marker}'].beta22,
+    }}
+}}
+twiss_ac = twiss {{sequence=MADX.lhcb{beam}, coupling=true, observe=1 }}
         """)
         add_strengths_to_twiss(mad, "twiss_ac")
         add_strengths_to_twiss(mad, "twiss_data")
