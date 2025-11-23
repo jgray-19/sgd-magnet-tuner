@@ -90,7 +90,7 @@ def create_model(beam: int, output_dir: pathlib.Path):
 
     # Generate the MAD-X sequence
     make_madx_seq(beam, output_dir, beam4=beam == 2)
-    update_model_with_ng(beam, output_dir, tunes=NAT_TUNES)
+    update_model_with_ng(beam, output_dir, tunes=NAT_TUNES, drv_tunes=DRV_TUNES)
     print(f"Model for beam {beam} created and compressed successfully.")
 
 
@@ -287,7 +287,12 @@ MADX.lhcb{beam}:  select(observed, {{pattern="BPM"}})
     """)
 
 
-def update_model_with_ng(beam: int, model_dir: Path, tunes: list[float] = [0.28, 0.31]) -> None:
+def update_model_with_ng(
+    beam: int,
+    model_dir: Path,
+    tunes: list[float] = [0.28, 0.31],
+    drv_tunes: list[float] = [0.0, 0.0],
+) -> None:
     """
     Update the accelerator model with MAD-NG and perform tune matching.
 
@@ -321,9 +326,33 @@ twiss_elements:deselect{{pattern="drift"}}
             f"""twiss_elements:write("{model_dir / "twiss_elements.dat"}", cols, hnams, true)"""
         )
         observe_bpms(mad, beam)
+        ac_marker = f"MKQA.6L4.B{beam}"
         mad.send(f"""
-twiss_ac   = twiss {{sequence=MADX.lhcb{beam}, coupling=true, observe=1 }}
 twiss_data = twiss {{sequence=MADX.lhcb{beam}, coupling=true, observe=1 }}
+""")
+        mad.send(f"""
+local hackicker, vackicker in MAD.element
+MADX.lhcb{beam}:install{{
+    hackicker "hackicker" {{
+        at = 1.583/2,
+        from = "{ac_marker}",
+
+        -- quad part
+        nat_q = {tunes[0]:.5e},
+        drv_q = {drv_tunes[0]:.5e},
+        ac_bet = twiss_elements['{ac_marker}'].beta11,
+    }},
+    vackicker "vackicker" {{
+        at = 1.583/2,
+        from = "{ac_marker}",
+
+        -- quad part
+        nat_q = {tunes[1]:.5e},
+        drv_q = {drv_tunes[1]:.5e},
+        ac_bet = twiss_elements['{ac_marker}'].beta22,
+    }}
+}}
+twiss_ac = twiss {{sequence=MADX.lhcb{beam}, coupling=true, observe=1 }}
         """)
         add_strengths_to_twiss(mad, "twiss_ac")
         add_strengths_to_twiss(mad, "twiss_data")
