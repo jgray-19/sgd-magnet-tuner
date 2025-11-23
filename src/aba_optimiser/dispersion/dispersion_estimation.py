@@ -79,6 +79,7 @@ def find_closest_bpms_for_correctors(
     bpms: Sequence[str],
     twiss_elements: pd.DataFrame,
     num_closest: int = 5,
+    beam: int = 1,
 ) -> dict[str, list[tuple[str, int]]]:
     """For each corrector, find the closest BPMs, considering ring wrapping.
 
@@ -102,9 +103,10 @@ def find_closest_bpms_for_correctors(
 
         for bpm in bpms:
             s_b = twiss_elements.loc[bpm, "S"]
+            is_b4 = (-1) ** (beam - 1)
             # Distance from BPM to corrector
-            d_forward = (s_c - s_b) % length
-            d_backward = (s_b - s_c) % length
+            d_forward = (s_c - s_b) % length * is_b4
+            d_backward = (s_b - s_c) % length * is_b4
 
             if d_forward <= d_backward:
                 min_d = d_forward
@@ -270,6 +272,7 @@ def estimate_corrector_dispersions(
     particle: str = "proton",
     num_closest_bpms: int = 10,
     plane: str = "x",
+    beam: int = 1,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Estimate dispersion at all correctors using optics analysis data.
 
@@ -343,7 +346,11 @@ def estimate_corrector_dispersions(
     # Find closest BPMs for each corrector
     logger.info(f"Finding {num_closest_bpms} closest BPMs for each corrector")
     corrector_bpms = find_closest_bpms_for_correctors(
-        corrector_list, bpm_list, twiss_elements, num_closest=num_closest_bpms
+        corrector_list,
+        bpm_list,
+        twiss_elements,
+        num_closest=num_closest_bpms,
+        beam=beam,
     )
 
     # Estimate dispersion

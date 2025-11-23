@@ -1,0 +1,45 @@
+title, "LHC Model created by omc3";
+! Model directory        /afs/cern.ch/work/j/jmgray/private/sgd-magnet-tuner/tests/data/model_b2__t0.28_0.31_18cm
+! Acc-Models             /afs/cern.ch/work/j/jmgray/private/sgd-magnet-tuner/tests/data/model_b2__t0.28_0.31_18cm/acc-models-lhc
+! LHC year               2025
+! Natural Tune X              0.280
+! Natural Tune Y              0.310
+! Best Knowledge                 NO
+! Excitation                    ACD
+! > Driven Tune X             0.270
+! > Driven Tune Y             0.322
+
+
+call, file = 'macros/general.macros.madx';
+call, file = 'macros/lhc.macros.madx';
+omc3_beam_energy = 6800;
+exec, define_nominal_beams();
+
+call, file = 'macros/lhc.macros.run3.madx';
+
+! ----- Calling Sequence -----
+option, -echo;  ! suppress output from base sequence loading to keep the log small
+call, file = 'acc-models-lhc/lhc.seq';
+option, echo;  ! re-enable output to see the optics settings
+
+! ---- Call optics and other modifiers ----
+call, file = 'acc-models-lhc/operation/optics/R2025aRP_A18cmC18cmA10mL200cm_Flat.madx'; !@modifier
+
+! ----- Remove IR symmetry definitions -----
+
+call, file="acc-models-lhc/toolkit/remove-triplet-symmetry-knob.madx"; ! removes 'ktqx.r1 := -ktqx.l1'-type issues
+
+! ----- Finalize Sequence -----
+exec, cycle_sequences();
+use, sequence = LHCB2;
+exec, match_tunes(0.28, 0.31, 2);
+exec, coupling_knob(2);
+exec, do_twiss_monitors(LHCB2, 'twiss.dat', 0.0);
+exec, do_twiss_elements(LHCB2, 'twiss_elements.dat', 0.0);
+use_acd=1;
+use_adt=0;
+if(use_acd == 1){
+exec, twiss_ac_dipole(0.28, 0.31, 0.27, 0.322, 2, 'twiss_ac.dat', 0.0);
+}else if(use_adt == 1){
+exec, twiss_adt(0.28, 0.31, 0.27, 0.322, 2, 'twiss_adt.dat', 0.0);
+}

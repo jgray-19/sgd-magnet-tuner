@@ -86,7 +86,6 @@ class BaseController(ABC):
             seq_name,
             beam_energy,
         )
-        self.config_manager.check_worker_and_bpms()
 
         # Normalize and initialize knob strengths
         true_strengths_dict = normalize_true_strengths(true_strengths)

@@ -204,14 +204,14 @@ def test_controller_opt(
     tmp_dir: Path,
     sequence_file: Path,
     data_dir: Path,
-    model_dir: Path,
+    model_dir_b1: Path,
 ) -> None:
     """Test that the controller initializes correctly with custom num_tracks and flattop_turns."""
     magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
 
     corrector_file, magnet_strengths, tune_knobs_file, analysis_dir = _generate_nonoise_track(
         tmp_dir,
-        model_dir,
+        model_dir_b1,
         sequence_file,
         6600,
         0e-4,

@@ -49,12 +49,12 @@ class ConfigurationManager:
         self.elem_spos: np.ndarray = np.array([])
         self.all_bpms: np.ndarray = np.array([])
         self.initial_strengths: np.ndarray = np.array([])
+        self.bpm_ranges: list[str] = []
 
         self.start_bpms = bpm_start_points
         self.end_bpms = bpm_end_points
         self.magnet_range = magnet_range
         self.simulation_config = simulation_config
-        self.bpm_ranges = [s + "/" + e for s in bpm_start_points for e in bpm_end_points]
 
     def setup_mad_interface(
         self,
@@ -80,12 +80,9 @@ class ConfigurationManager:
 
         self.elem_spos = self.mad_iface.elem_spos
         self.all_bpms = self.mad_iface.all_bpms
-
-    def check_worker_and_bpms(self) -> None:
-        """Determine the worker type and BPM start points based on the run mode."""
-        for bpm in self.start_bpms:
-            if bpm not in self.all_bpms:
-                raise ValueError(f"BPM {bpm} not found in the sequence.")
+        self.start_bpms = [bpm for bpm in self.start_bpms if bpm in self.all_bpms]
+        self.end_bpms = [bpm for bpm in self.end_bpms if bpm in self.all_bpms]
+        self.bpm_ranges = [s + "/" + e for s in self.start_bpms for e in self.end_bpms]
 
     def initialise_knob_strengths(
         self,

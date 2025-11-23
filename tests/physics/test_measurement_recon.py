@@ -25,10 +25,10 @@ def _rmse(actual: np.ndarray, predicted: np.ndarray) -> float:
 
 
 @pytest.mark.slow
-def test_calculate_pz_recovers_true_momenta(data_dir, model_dir, sequence_file):
+def test_calculate_pz_recovers_true_momenta(data_dir, model_dir_b1, sequence_file):
     # optics_path = data_dir / "optics"
     tracking_path = data_dir / "tracking"
-    tws = tfs.read(model_dir / "twiss_ac.dat")
+    tws = tfs.read(model_dir_b1 / "twiss_ac.dat")
     # rename all colmnms to lower case for consistency
     tws.columns = [col.lower() for col in tws.columns]
     tws = tws.rename(

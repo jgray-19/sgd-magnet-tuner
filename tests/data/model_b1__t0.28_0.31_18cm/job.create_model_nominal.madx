@@ -1,6 +1,6 @@
 title, "LHC Model created by omc3";
-! Model directory        /afs/cern.ch/work/j/jmgray/private/dpp_corr
-! Acc-Models             /afs/cern.ch/work/j/jmgray/private/dpp_corr/model_b1__t0.28_0.31_18cm/acc-models-lhc
+! Model directory        /afs/cern.ch/work/j/jmgray/private/sgd-magnet-tuner/tests/data/model_b1__t0.28_0.31_18cm
+! Acc-Models             /afs/cern.ch/work/j/jmgray/private/sgd-magnet-tuner/tests/data/model_b1__t0.28_0.31_18cm/acc-models-lhc
 ! LHC year               2025
 ! Natural Tune X              0.280
 ! Natural Tune Y              0.310
@@ -19,17 +19,17 @@ call, file = 'macros/lhc.macros.run3.madx';
 
 ! ----- Calling Sequence -----
 option, -echo;  ! suppress output from base sequence loading to keep the log small
-call, file = '/afs/cern.ch/work/j/jmgray/private/dpp_corr/model_b1__t0.28_0.31_18cm/acc-models-lhc/lhc.seq';
+call, file = 'acc-models-lhc/lhc.seq';
 option, echo;  ! re-enable output to see the optics settings
 
 ! ---- Call optics and other modifiers ----
-call, file = '/afs/cern.ch/work/j/jmgray/private/dpp_corr/acc-models-lhc/operation/optics/R2025aRP_A18cmC18cmA10mL200cm_Flat.madx'; !@modifier
+call, file = 'acc-models-lhc/operation/optics/R2025aRP_A18cmC18cmA10mL200cm_Flat.madx'; !@modifier
 
 ! ----- Remove IR symmetry definitions -----
 
-call, file="/afs/cern.ch/work/j/jmgray/private/dpp_corr/model_b1__t0.28_0.31_18cm/acc-models-lhc/toolkit/remove-triplet-symmetry-knob.madx"; ! removes 'ktqx.r1 := -ktqx.l1'-type issues
+call, file="acc-models-lhc/toolkit/remove-triplet-symmetry-knob.madx"; ! removes 'ktqx.r1 := -ktqx.l1'-type issues
 
-! ----- Finalise Sequence -----
+! ----- Finalize Sequence -----
 exec, cycle_sequences();
 use, sequence = LHCB1;
 exec, match_tunes(0.28, 0.31, 1);
