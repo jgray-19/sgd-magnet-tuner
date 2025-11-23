@@ -165,7 +165,7 @@ def start_madng(
 
     mad.MADX.load(f"'{saved_seq}'", f"'{saved_mad}'")
     mad.send(f"""
-lhc_beam = beam {{particle="proton", energy=450}};
+lhc_beam = beam {{particle="proton", energy=6800}};
 MADX.lhcb{beam}.beam = lhc_beam;
 print("Initialising model with beam:", {beam});
     """)
@@ -177,7 +177,7 @@ def _print_tunes(mad: MAD, beam: int, label: str) -> tuple[float, float]:
 local tbl = twiss {{sequence=MADX.lhcb{beam}}};
 py:send({{tbl.q1, tbl.q2}}, true)
     """)
-    q1, q2 = mad.recv()  # type: ignore
+    q1, q2 = mad.recv()
     assert isinstance(q1, float) and isinstance(q2, float), "Received tunes are not floats"
     print(f"{label} tunes: ", q1, q2)
     return q1, q2
@@ -309,21 +309,14 @@ str_cols = py:recv()
 
 cols = MAD.utility.tblcat(cols, str_cols)
 
--- Calculate the twiss parameters with coupling and observe the BPMs
 ! Coupling needs to be true to calculate Edwards-Teng parameters and R matrix
-twiss_elements = twiss {{sequence=MADX.lhcb{beam}, mapdef=4, coupling=true }}
-
--- Select everything
-twiss_elements:select(nil, \\ -> true)
-
--- Deselect the drifts
-twiss_elements:deselect{{pattern="drift"}}
+twiss_elements = twiss {{ sequence=MADX.lhcb{beam}, coupling=true }}
 """)
         mad.send(MODEL_HEADER).send(MODEL_COLUMNS).send(MODEL_STRENGTHS)
         add_strengths_to_twiss(mad, "twiss_elements")
         mad.send(
             # True below is to make sure only selected rows are written
-            f"""twiss_elements:write("{model_dir / "twiss_elements.dat"}", cols, hnams, true)"""
+            f"""twiss_elements:write("{model_dir / "twiss_elements.dat"}", cols, hnams)"""
         )
         observe_bpms(mad, beam)
         ac_marker = f"MKQA.6L4.B{beam}"
