@@ -227,7 +227,6 @@ def convert_tfs_to_madx(tfs_df: tfs.TfsDataFrame) -> tfs.TfsDataFrame:
       - Converts all column names and header keys to uppercase.
       - Renames the columns 'MU1' and 'MU2' to 'MUX' and 'MUY', respectively.
       - Renames drift element names to consecutive values starting at 'DRIFT_0'.
-      - Removes rows containing 'vkicker' or 'hkicker' in the 'KIND' column.
       - Sets the 'NAME' column as the index and removes rows with '$start' or '$end'.
 
     Parameters
@@ -251,9 +250,6 @@ def convert_tfs_to_madx(tfs_df: tfs.TfsDataFrame) -> tfs.TfsDataFrame:
     drifts = tfs_df[tfs_df["KIND"] == "drift"]
     replace_names = [f"DRIFT_{i}" for i in range(len(drifts))]
     tfs_df["NAME"] = tfs_df["NAME"].replace(drifts["NAME"].to_list(), replace_names)
-
-    # Remove rows containing 'vkicker' or 'hkicker' in the 'KIND' column.
-    # tfs_df = tfs_df[~tfs_df["KIND"].str.contains("vkicker|hkicker")]
 
     # Set the NAME column as index and remove unwanted rows
     tfs_df = tfs_df.set_index("NAME")
