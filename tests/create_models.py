@@ -318,7 +318,7 @@ twiss_elements:deselect{{pattern="drift"}}
         add_strengths_to_twiss(mad, "twiss_elements")
         mad.send(
             # True below is to make sure only selected rows are written
-            f"""twiss_elements:write("{model_dir / "twiss_elements.dat"}", cols, hnams, true)"""
+            f"""twiss_elements:write("{model_dir / "twiss_elements.dat"}", cols, hnams)"""
         )
         observe_bpms(mad, beam)
         ac_marker = f"MKQA.6L4.B{beam}"
