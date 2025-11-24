@@ -79,7 +79,6 @@ def find_closest_bpms_for_correctors(
     bpms: Sequence[str],
     twiss_elements: pd.DataFrame,
     num_closest: int = 5,
-    beam: int = 1,
 ) -> dict[str, list[tuple[str, int]]]:
     """For each corrector, find the closest BPMs, considering ring wrapping.
 
@@ -103,10 +102,9 @@ def find_closest_bpms_for_correctors(
 
         for bpm in bpms:
             s_b = twiss_elements.loc[bpm, "S"]
-            is_b4 = (-1) ** (beam - 1)
-            # Distance from BPM to corrector
-            d_forward = (s_c - s_b) % length * is_b4
-            d_backward = (s_b - s_c) % length * is_b4
+            # Distance from BPM to corrector (always positive)
+            d_forward = (s_c - s_b) % length
+            d_backward = (s_b - s_c) % length
 
             if d_forward <= d_backward:
                 min_d = d_forward
@@ -122,6 +120,27 @@ def find_closest_bpms_for_correctors(
         corrector_bpms[corrector] = [(bpm, sdir) for bpm, sdir, _ in bpm_distances[:num_closest]]
 
     return corrector_bpms
+
+
+def _has_valid_optics_at_bpm(
+    bpm: str,
+    beta_x: pd.DataFrame,
+    beta_y: pd.DataFrame,
+    alfa_x: pd.DataFrame,
+    alfa_y: pd.DataFrame,
+    disp_x: pd.DataFrame,
+    disp_y: pd.DataFrame,
+) -> bool:
+    """Check if all optics values at a BPM are finite (not inf/nan)."""
+    optics_data = [
+        (beta_x, ["BETX"]),
+        (beta_y, ["BETY"]),
+        (alfa_x, ["ALFX"]),
+        (alfa_y, ["ALFY"]),
+        (disp_x, ["DX", "DPX"]),
+        (disp_y, ["DY", "DPY"]),
+    ]
+    return all(np.isfinite(df.loc[bpm, col]) for df, cols in optics_data for col in cols)
 
 
 def estimate_corrector_dispersion(
@@ -171,6 +190,9 @@ def estimate_corrector_dispersion(
     mad.send("""
 coord_names = {"x", "px", "y", "py", "t", "pt"}
 da_x0_base = MAD.damap{nv=#coord_names, mo=1, vn=coord_names}
+observed = MAD.element.flags.observed
+loaded_sequence:deselect(observed)
+loaded_sequence:select(observed, {pattern="MCB"})
     """)
 
     corrector_dispersion_estimates: dict[str, list[float]] = {}
@@ -179,6 +201,10 @@ da_x0_base = MAD.damap{nv=#coord_names, mo=1, vn=coord_names}
         corrector_dispersion_estimates[corrector] = []
 
         for bpm, sdir in bpm_info:
+            # Skip BPMs with invalid optics data
+            if not _has_valid_optics_at_bpm(bpm, beta_x, beta_y, alfa_x, alfa_y, disp_x, disp_y):
+                continue
+
             tracking_range = f"{bpm}/{corrector}"
             mad["tracking_range"] = tracking_range
             mad["sdir"] = sdir
@@ -214,13 +240,14 @@ unshush()
 local trk, flw = MAD.track{{
     sequence = loaded_sequence,
     range = tracking_range,
-    observe=0,
+    observe=1,
     dir = sdir,
     X0 = da_x0,
     save=true,
+    savemap=true,
 }}
-assert(#trk < 500, "tracking is taking too long! with sdir=" .. sdir .. " and range=" .. tracking_range)
-B1 = MAD.gphys.map2bet(flw[1], 6, nil, nil, sdir)
+assert(#trk < 50, "tracking is taking too long! with sdir=" .. sdir .. " and range=" .. tracking_range)
+B1 = MAD.gphys.map2bet(trk["{corrector}"].__map, 6, nil, nil, sdir)
 py:send(B1.d{plane})
 """)
             estimated_dispersion = mad.receive()
@@ -272,7 +299,6 @@ def estimate_corrector_dispersions(
     particle: str = "proton",
     num_closest_bpms: int = 10,
     plane: str = "x",
-    beam: int = 1,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Estimate dispersion at all correctors using optics analysis data.
 
@@ -350,7 +376,6 @@ def estimate_corrector_dispersions(
         bpm_list,
         twiss_elements,
         num_closest=num_closest_bpms,
-        beam=beam,
     )
 
     # Estimate dispersion

@@ -35,10 +35,11 @@ def model_dir_b1(data_dir: Path) -> Path:
     """Path to the example model files used by several tests."""
     return data_dir / "model_b1__t0.28_0.31_18cm"
 
+
 @pytest.fixture(scope="module")
 def seq_b1(model_dir_b1: Path) -> Path:
     """Path to the example sequence file for beam 1 used by several tests."""
-    return model_dir_b1 / "lhcb1.seq"
+    return model_dir_b1 / "lhcb1_saved.seq"
 
 
 @pytest.fixture(scope="module")
@@ -50,7 +51,8 @@ def model_dir_b2(data_dir: Path) -> Path:
 @pytest.fixture(scope="module")
 def seq_b2(model_dir_b2: Path) -> Path:
     """Path to the example sequence file for beam 2 used by several tests."""
-    return model_dir_b2 / "lhcb2.seq"
+    return model_dir_b2 / "lhcb2_saved.seq"
+
 
 @pytest.fixture(scope="module")
 def corrector_file(data_dir: Path) -> Path:

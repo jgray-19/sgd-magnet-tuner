@@ -110,7 +110,9 @@ class BaseMadInterface:
             particle: Particle type (default: proton)
         """
         logger.info(f"Setting beam: particle={particle}, energy={beam_energy:.15e} GeV")
-        self.mad.send(f'loaded_sequence.beam = beam {{ particle = "{particle}", energy = {beam_energy:.15e} }}')
+        self.mad.send(
+            f'loaded_sequence.beam = beam {{ particle = "{particle}", energy = {beam_energy:.15e} }}'
+        )
 
     def observe_elements(self, pattern: str = "BPM") -> None:
         """
@@ -153,7 +155,9 @@ loaded_sequence:deselect(observed, {{pattern="{elem}"}})
         else:
             self.mad.send(f"loaded_sequence:cycle('{marker_name}')")
 
-    def install_marker(self, element_name: str, marker_name: str = None, offset: float = -1e-10) -> str:
+    def install_marker(
+        self, element_name: str, marker_name: str = None, offset: float = -1e-10
+    ) -> str:
         """
         Install a marker element near an existing element.
 
@@ -284,7 +288,9 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
                         self.mad.send(f"loaded_sequence['{ename}'].{attr} = {self.py_name}:recv()")
                         self.mad.send(row[col])
                     else:
-                        logger.warning(f"Column '{col}' not found in corrector table for element {ename}")
+                        logger.warning(
+                            f"Column '{col}' not found in corrector table for element {ename}"
+                        )
             else:
                 logger.warning(f"Element {ename} has unknown kind '{kind}'")
 
@@ -369,13 +375,17 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
 
     def pt2dp(self, pt: float) -> float:
         """Convert transverse momentum to delta p/p."""
-        self.mad.send(f"{self.py_name}:send(MAD.gphys.pt2dp({self.py_name}:recv(), loaded_sequence.beam.beta))")
+        self.mad.send(
+            f"{self.py_name}:send(MAD.gphys.pt2dp({self.py_name}:recv(), loaded_sequence.beam.beta))"
+        )
         self.mad.send(pt)
         return self.mad.recv()
 
     def dp2pt(self, dp: float) -> float:
         """Convert delta p/p to transverse momentum."""
-        self.mad.send(f"{self.py_name}:send(MAD.gphys.dp2pt({self.py_name}:recv(), loaded_sequence.beam.beta))")
+        self.mad.send(
+            f"{self.py_name}:send(MAD.gphys.dp2pt({self.py_name}:recv(), loaded_sequence.beam.beta))"
+        )
         self.mad.send(dp)
         return self.mad.recv()
 

@@ -33,12 +33,8 @@ def calculate_beta_beating(
     Returns:
         Tuple of (beta11_beating, beta22_beating) as pandas Series
     """
-    beta11_beating = (changed_tws["beta11"] - initial_tws["beta11"]) / initial_tws[
-        "beta11"
-    ]
-    beta22_beating = (changed_tws["beta22"] - initial_tws["beta22"]) / initial_tws[
-        "beta22"
-    ]
+    beta11_beating = (changed_tws["beta11"] - initial_tws["beta11"]) / initial_tws["beta11"]
+    beta22_beating = (changed_tws["beta22"] - initial_tws["beta22"]) / initial_tws["beta22"]
 
     logger.info(
         f"Beta11 beating: {beta11_beating.mean() * 100:.2f}% ± {beta11_beating.std() * 100:.2f}%"
@@ -50,9 +46,7 @@ def calculate_beta_beating(
     return beta11_beating, beta22_beating
 
 
-def match_tunes(
-    mad: MAD, target_qx: float, target_qy: float, deltap: float
-) -> dict[str, float]:
+def match_tunes(mad: MAD, target_qx: float, target_qy: float, deltap: float) -> dict[str, float]:
     """
     Match tunes to target values using MAD.
 
@@ -93,6 +87,7 @@ def perform_orbit_correction(
     target_qx: float,
     target_qy: float,
     corrector_file: Path,
+    beam: int = 1,
 ) -> None:
     """
     Perform orbit correction and tune rematching with off-momentum twiss.
@@ -111,37 +106,37 @@ def perform_orbit_correction(
     mad["correct_file"] = str(corrector_file.absolute())
 
     logger.info(f"Starting orbit correction with corrector file: {corrector_file}")
-    mad.send(r"""
+    mad.send(rf"""
 local correct, option in MAD
 
 io.write("*** orbit correction using off momentum twiss\n")
-local tbl = twiss { sequence=loaded_sequence, deltap=machine_deltap }
+local tbl = twiss {{ sequence=loaded_sequence, deltap=machine_deltap }}
 
 ! Increase file numerical formatting
 local fmt = option.numfmt ; option.numfmt = "% -.16e"
-correct { sequence=loaded_sequence, model=tbl, method="micado", info=1, plane="x" } :write(correct_file)
+correct {{ sequence=loaded_sequence, model=tbl, method="micado", info=1, plane="x" }} :write(correct_file)
 option.numfmt = fmt ! restore formatting
 
 io.write("*** rematching tunes for off-momentum twiss\n")
-match {
-  command := twiss {sequence=loaded_sequence, observe=1, deltap=machine_deltap},
-  variables = { rtol=1e-6, -- 1 ppm
-    { var = 'MADX.dqx_b1_op', name='dQx.b1_op' },
-    { var = 'MADX.dqy_b1_op', name='dQy.b1_op' },
-  },
-  equalities = { tol = 1e-10,
-    { expr = \t -> t.q1-62-qx, name='q1' },
-    { expr = \t -> t.q2-60-qy, name='q2' },
-  },
+match {{
+  command := twiss {{sequence=loaded_sequence, observe=1, deltap=machine_deltap}},
+  variables = {{ rtol=1e-6, -- 1 ppm
+    {{ var = 'MADX.dqx_b{beam}_op', name='dQx.b{beam}_op' }},
+    {{ var = 'MADX.dqy_b{beam}_op', name='dQy.b{beam}_op' }},
+  }},
+  equalities = {{ tol = 1e-10,
+    {{ expr = \t -> t.q1-62-qx, name='q1' }},
+    {{ expr = \t -> t.q2-60-qy, name='q2' }},
+  }},
   info=2
-}
+}}
 """)
     logger.info("Orbit correction and tune rematching completed")
 
     # Store matched tunes in Python variables
     matched_tunes = {
-        "dqx.b1_op": mad["MADX['dqx_b1_op']"],
-        "dqy.b1_op": mad["MADX['dqy_b1_op']"],
+        f"dqx.b{beam}_op": mad[f"MADX['dqx_b{beam}_op']"],
+        f"dqy.b{beam}_op": mad[f"MADX['dqy_b{beam}_op']"],
     }
     logger.info(f"Matched tune knobs: {matched_tunes}")
 
