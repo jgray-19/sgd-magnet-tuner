@@ -26,7 +26,7 @@ def create_lhc_model(
     drv_tunes: list[float] | None = None,
     energy: int | None = None,
     year: str | None = None,
-    modifier: str | None = None,
+    modifiers: str | list[str] | None = None,
 ) -> None:
     """
     Create a complete LHC model for the specified beam.
@@ -66,7 +66,11 @@ def create_lhc_model(
     drv_tunes = drv_tunes or DRV_TUNES
     energy = energy or ENERGY
     year = year or YEAR
-    modifier = modifier or MODIFIER
+
+    if not modifiers:
+        modifiers = [MODIFIER]
+    elif isinstance(modifiers, str):
+        modifiers = [modifiers]
 
     print(f"\n{'=' * 70}")
     print(f"Creating LHC Model for Beam {beam}")
@@ -76,7 +80,7 @@ def create_lhc_model(
     print(f"Driven tunes: {drv_tunes}")
     print(f"Energy: {energy} GeV")
     print(f"Year: {year}")
-    print(f"Modifier: {modifier}")
+    print(f"Modifiers: {modifiers}")
     print(f"{'=' * 70}\n")
 
     # Create output directory
@@ -94,7 +98,7 @@ def create_lhc_model(
         energy=energy,
         nat_tunes=nat_tunes,
         drv_tunes=drv_tunes,
-        modifiers=[modifier],
+        modifiers=modifiers,
         outputdir=output_dir,
     )
     print("✓ Base model created\n")

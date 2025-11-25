@@ -45,6 +45,7 @@ MODEL_HEADER: Final[list[str]] = [
     "energy",
     "deltap",
     "length",
+    "alfap",
     "q1",
     "q2",
     "q3",

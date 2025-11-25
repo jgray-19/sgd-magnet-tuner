@@ -50,9 +50,9 @@ def initialise_madng_model(
     saved_seq = model_dir / f"lhcb{beam}_saved.seq"
     saved_mad = model_dir / f"lhcb{beam}_saved.mad"
 
-    if not saved_seq.exists() or not saved_mad.exists():
+    if not saved_seq.exists():
         raise FileNotFoundError(
-            f"Saved sequence files not found in {model_dir}. Run make_madx_sequence first."
+            f"Saved sequence file not found in {model_dir}. Run make_madx_sequence first."
         )
 
     # Load the saved sequence
