@@ -20,13 +20,13 @@ from omc3.optics_measurements.constants import (
     PHASE,
 )
 
+from aba_optimiser.config import POSITION_STD_DEV
 from aba_optimiser.momentum_recon.core import (
     OUT_COLS,
     LatticeMaps,
     attach_lattice_columns,
     build_lattice_maps,
     diagnostics,
-    ensure_twiss,
     get_rng,
     inject_noise_xy,
     sync_endpoints,
@@ -171,8 +171,8 @@ def _measurement_neighbor_tables(
 
 def calculate_pz(
     orig_data: tfs.TfsDataFrame,
-    inject_noise: bool = True,
-    tws: tfs.TfsDataFrame | None = None,
+    tws: tfs.TfsDataFrame,
+    inject_noise: bool | float = True,
     info: bool = True,
     rng: np.random.Generator | None = None,
     low_noise_bpms: list[str] | None = None,
@@ -189,25 +189,20 @@ def calculate_pz(
     data = orig_data.copy(deep=True)
     with contextlib.suppress(AttributeError, TypeError, ValueError):
         data["name"] = data["name"].astype("category")
-    for column in ("x", "y"):
-        if column in data.columns:
-            with contextlib.suppress(AttributeError, TypeError, ValueError):
-                data[column] = data[column].astype(np.float32)
     rng = get_rng(rng)
 
-    if inject_noise:
-        inject_noise_xy(data, orig_data, rng, low_noise_bpms)
+    if inject_noise is not False:
+        noise_std = POSITION_STD_DEV if inject_noise is True else float(inject_noise)
+        inject_noise_xy(data, orig_data, rng, low_noise_bpms, noise_std=noise_std)
 
     if subtract_mean:
         _subtract_bpm_means(data, info)
 
     bpm_list = data["name"].unique().tolist()
-    tws = ensure_twiss(tws, info)
     tws = tws[tws.index.isin(bpm_list)]
 
     maps = build_lattice_maps(tws)
     prev_x_df, prev_y_df, next_x_df, next_y_df = build_lattice_neighbor_tables(tws)
-
     bpm_index = {bpm: idx for idx, bpm in enumerate(bpm_list)}
 
     data_p = data.join(prev_x_df, on="name", rsuffix="_px")

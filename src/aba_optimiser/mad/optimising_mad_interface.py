@@ -39,7 +39,7 @@ for i, e, s, ds in loaded_sequence:siter(magnet_range) do
         local k_str_name
         if e.k0 and e.k0 ~= 0 then
             k_str_name = string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".k0"
-            MADX[k_str_name] = e.k0 ! Must not be 0.
+            MADX[k_str_name] = bend_dict[k_str_name] ! Use bend_dict to get normalised value.
             e.k0 = \\->MADX[k_str_name]
         elseif e.k1 and e.k1 ~= 0 then
             k_str_name = e.name .. ".k1"
@@ -85,7 +85,7 @@ class OptimisationMadInterface(BaseMadInterface):
         corrector_strengths: Path | None = CORRECTOR_STRENGTHS,
         tune_knobs_file: Path | None = TUNE_KNOBS_FILE,
         start_bpm: str | None = None,
-        **kwargs,
+        **mad_kwargs,
     ):
         """
         Initialise optimization MAD interface with automatic setup.
@@ -106,12 +106,11 @@ class OptimisationMadInterface(BaseMadInterface):
         """
         # Configure MAD output
         if discard_mad_output:
-            kwargs.setdefault("stdout", "/dev/null")
-            kwargs.setdefault("redirect_stderr", True)
+            mad_kwargs.setdefault("stdout", "/dev/null")
+            mad_kwargs.setdefault("redirect_stderr", True)
 
         # Initialise base class
-        super().__init__(**kwargs)
-
+        super().__init__(**mad_kwargs)
         # Store optimisation-specific attributes
         self.sequence_file = sequence_file
         if seq_name is None:
@@ -135,6 +134,8 @@ class OptimisationMadInterface(BaseMadInterface):
         if start_bpm is not None:
             marker_name = self.install_marker(start_bpm, "marker_" + start_bpm)
             self.cycle_sequence(marker_name=marker_name)
+        else:
+            LOGGER.info("Skipping sequence cycling (no start BPM provided)")
 
         # Set MAD variables for ranges and patterns
         self.mad["magnet_range"] = self.magnet_range
@@ -143,6 +144,8 @@ class OptimisationMadInterface(BaseMadInterface):
 
         if simulation_config is not None:
             self._make_adj_knobs(simulation_config)
+        else:
+            LOGGER.info("Skipping knob creation (no simulation config provided)")
 
         # Setup optimization-specific functionality
         self._observe_bpms(bad_bpms)
@@ -196,7 +199,9 @@ class OptimisationMadInterface(BaseMadInterface):
 
             # Log how many non-zero correctors are being applied
             nonzero = (corrector_table["hkick"] != 0) | (corrector_table["vkick"] != 0)
-            LOGGER.info(f"Applying {nonzero.sum()} non-zero corrector strengths from {corrector_strengths}")
+            LOGGER.info(
+                f"Applying {nonzero.sum()} non-zero corrector strengths from {corrector_strengths}"
+            )
 
             # Apply corrector strengths for non-zero correctors only
             self.apply_corrector_strengths(corrector_table[nonzero])
@@ -226,10 +231,32 @@ class OptimisationMadInterface(BaseMadInterface):
         LOGGER.debug(f"Previous tune knob values: {prev}")
         LOGGER.debug(f"Set tune knobs from {tune_knobs_file}: {len(tune_knobs)}")
 
+    def _make_bend_dict(self) -> None:
+        """
+        Create a dictionary of the bend strengths in the current sequence.
+        """
+        from aba_optimiser.physics.lhc_bends import normalise_lhcbend_magnets
+
+        self.mad.send(f"""
+        bend_dict = {{}}
+        for i, e in loaded_sequence:siter(magnet_range) do
+            if e.kind == "sbend" and e.k0 ~= 0 then
+                bend_dict[e.name .. ".k0"] = e.k0
+            end
+        end
+        print("Sending bend dictionary " .. MAD.tostring(bend_dict))
+        {self.py_name}:send(bend_dict, true)
+        bend_dict = {self.py_name}:recv()
+        print("Retrieved " .. MAD.tostring(bend_dict))
+        """)
+        self.mad.send(normalise_lhcbend_magnets(self.mad.recv()))
+
     def _make_adj_knobs(self, simulation_config: SimulationConfig) -> None:
         """
         Create deferred-strength knobs for elements matching the optimisation settings.
         """
+        if simulation_config.optimise_bends:
+            self._make_bend_dict()
         mad_code = MAKE_KNOBS_INIT_MAD
 
         if simulation_config.optimise_quadrupoles or simulation_config.optimise_bends:
@@ -239,7 +266,9 @@ class OptimisationMadInterface(BaseMadInterface):
                 ("quadrupole", "k1", "MQ%.", simulation_config.optimise_quadrupoles),
             ]:
                 if flag:
-                    conditions.append(f'(e.kind == "{kind}" and e.{attr} ~=0 and e.name:match("{pattern}"))')
+                    conditions.append(
+                        f'(e.kind == "{kind}" and e.{attr} ~=0 and e.name:match("{pattern}"))'
+                    )
             element_condition = " or ".join(conditions) if conditions else "false"
 
             loop_code = MAKE_KNOBS_LOOP_MAD.format(element_condition=element_condition)
@@ -254,7 +283,9 @@ class OptimisationMadInterface(BaseMadInterface):
         self.knob_names: list[str] = self.mad.recv()
         self.elem_spos: list[float] = self.mad.recv()
         if self.elem_spos:
-            LOGGER.info(f"Created {len(self.knob_names)} knobs from {self.elem_spos[0]} to {self.elem_spos[-1]}")
+            LOGGER.info(
+                f"Created {len(self.knob_names)} knobs from {self.elem_spos[0]} to {self.elem_spos[-1]}"
+            )
         else:
             LOGGER.info("No knobs created. Just optimising energy")
 

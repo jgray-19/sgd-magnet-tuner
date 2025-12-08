@@ -59,6 +59,10 @@ class SimulationConfig:
     optimise_quadrupoles: bool = field(default=False)
     optimise_bends: bool = field(default=False)
 
+    # Whether to include momenta (px, py) in loss function
+    # When False, only positions (x, y) are used for optimisation
+    optimise_momenta: bool = field(default=True)
+
     # Worker mode: arc-by-arc vs whole ring
     run_arc_by_arc: bool = field(default=True)
 
@@ -146,8 +150,8 @@ QUAD_SIMULATION_CONFIG = SimulationConfig(
 # =============================================================================
 
 # Standard error of the noise
-POSITION_STD_DEV = 1e-4  # Standard deviation of the position noise
-MOMENTUM_STD_DEV = 3e-6  # Standard deviation of the momentum noise
+POSITION_STD_DEV = 1e-5  # Standard deviation of the position noise
+MOMENTUM_STD_DEV = 3e-7  # Standard deviation of the momentum noise
 REL_K1_STD_DEV = 1e-4  # Standard deviation of the K1 noise
 MACHINE_DELTAP = -16e-5  # -11e-5  # The energy deviation of the machine from expected.
 DELTAP = 1e-3

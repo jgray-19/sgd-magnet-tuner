@@ -15,6 +15,7 @@ pytest.importorskip("matplotlib")
 # import matplotlib.pyplot as plt
 from turn_by_turn import read_tbt
 
+from aba_optimiser.config import POSITION_STD_DEV
 from aba_optimiser.filtering.svd import svd_clean_measurements
 from aba_optimiser.measurements.create_datafile import convert_measurements
 from aba_optimiser.momentum_recon.transverse import calculate_pz
@@ -23,10 +24,15 @@ from aba_optimiser.momentum_recon.transverse import calculate_pz
 def _rmse(actual: np.ndarray, predicted: np.ndarray) -> float:
     return float(np.sqrt(np.mean((predicted - actual) ** 2)))
 
+def _add_var_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["var_x"] = POSITION_STD_DEV**2
+    df["var_y"] = POSITION_STD_DEV**2
+    return df
+
 
 @pytest.mark.slow
-def test_calculate_pz_recovers_true_momenta(data_dir, model_dir_b1, sequence_file):
-    # optics_path = data_dir / "optics"
+def test_calculate_pz_recovers_true_momenta(data_dir, model_dir_b1):
     tracking_path = data_dir / "tracking"
     tws = tfs.read(model_dir_b1 / "twiss_ac.dat")
     # rename all colmnms to lower case for consistency
@@ -48,13 +54,9 @@ def test_calculate_pz_recovers_true_momenta(data_dir, model_dir_b1, sequence_fil
 
     noisy_files = [read_tbt(tracking_path / f"acd_errs_noisy_{i}.sdds") for i in range(3)]
     noisy_files = convert_measurements(noisy_files)
-    for df in noisy_files:
-        # Add the px_true and py_true columns for comparison later
-        df["x_weight"] = 1.0
-        df["y_weight"] = 1.0
 
     noisy_result = calculate_pz(
-        orig_data=noisy_files[0], inject_noise=False, tws=tws, info=False
+        orig_data=_add_var_columns(noisy_files[0]), inject_noise=False, tws=tws, info=False
     ).rename(columns={"px": "px_calc", "py": "py_calc"})
 
     names_left = noisy_result["name"].unique().tolist()
@@ -62,6 +64,7 @@ def test_calculate_pz_recovers_true_momenta(data_dir, model_dir_b1, sequence_fil
 
     # Apply SVD cleaning to noisy data
     cleaned_df = svd_clean_measurements(meas_df=noisy_files[0])
+    cleaned_df = _add_var_columns(cleaned_df)
     cleaned_noise_result = calculate_pz(
         orig_data=cleaned_df, inject_noise=False, tws=tws, info=False
     ).rename(columns={"px": "px_calc", "py": "py_calc"})
@@ -104,33 +107,3 @@ def test_calculate_pz_recovers_true_momenta(data_dir, model_dir_b1, sequence_fil
     # Check cleaned is better than noisy
     assert px_rmse_cleaned < 3.2e-6
     assert py_rmse_cleaned < 3e-7
-
-    # Plot phase space for the 10th BPM
-    # bpm_names = sorted(names_left)
-    # if len(bpm_names) > 9:
-    #     bpm_name = bpm_names[9]
-    #     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-    #     datasets = [
-    #         ("Truth", truth, "px", "py"),
-    #         ("Noisy", merged_noisy, "px_calc", "py_calc"),
-    #         ("Cleaned", merged_cleaned, "px_calc", "py_calc"),
-    #     ]
-    #     colors = ["blue", "red", "green", "orange"]
-    #     for (label, df, px_col, py_col), color in zip(datasets, colors):
-    #         df_bpm = df[df["name"] == bpm_name]
-    #         axes[0].scatter(
-    #             df_bpm["x"], df_bpm[px_col], s=1, color=color, label=label, alpha=0.7
-    #         )
-    #         axes[1].scatter(
-    #             df_bpm["y"], df_bpm[py_col], s=1, color=color, label=label, alpha=0.7
-    #         )
-    #     axes[0].set_title(f"X vs Px for {bpm_name}")
-    #     axes[0].set_xlabel("x")
-    #     axes[0].set_ylabel("px")
-    #     axes[0].legend()
-    #     axes[1].set_title(f"Y vs Py for {bpm_name}")
-    #     axes[1].set_xlabel("y")
-    #     axes[1].set_ylabel("py")
-    #     axes[1].legend()
-    #     plt.tight_layout()
-    #     plt.show()

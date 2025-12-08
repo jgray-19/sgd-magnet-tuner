@@ -24,8 +24,9 @@ call, file = 'acc-models-lhc/lhc.seq';
 option, echo;  ! re-enable output to see the optics settings
 
 ! ---- Call optics and other modifiers ----
-call, file = 'acc-models-lhc/operation/optics/R2025aRP_A12cmC12cmA10mL200cm_Flat.madx; !@modifier - 12cm optics
-! call, file = 'acc-models-lhc/operation/optics/R2025aRP_A18cmC18cmA10mL200cm_Flat.madx'; !@modifier - 18cm optics
+! call, file = 'acc-models-lhc/operation/optics/R2025aRP_A12cmC12cmA10mL200cm_Flat.madx; !@modifier - 12cm optics
+call, file = 'acc-models-lhc/operation/optics/R2025aRP_A18cmC18cmA10mL200cm_Flat.madx'; !@modifier - 18cm optics
+call, file = 'crossing_knobs_b1.madx'; !@modifier - crossing knobs
 ! call, file = 'acc-models-lhc/operation/optics/R2025aRP_A120cmC120cmA10mL200cm.madx'; !@modifier - 1.2m optics
 ! call, file = 'acc-models-lhc/operation/optics/R2025aRP_A11mC11mA10mL10m_PhaseKnob100ON.madx'; !@modifier - Injection optics
 ! call, file = 'acc-models-lhc/operation/optics/R2025aRP_A200cmC200cmA10mL200cm_1.madx'; !@modifier - Before ATS antisqueeze
@@ -37,9 +38,9 @@ call, file="acc-models-lhc/toolkit/remove-triplet-symmetry-knob.madx"; ! removes
 
 ! ----- Finalise Sequence -----
 exec, cycle_sequences();
-set, format="-.16e";
 use, sequence = LHCB1;
 exec, match_tunes(0.28, 0.31, 1);
 exec, coupling_knob(1);
+set, format="-.16e";
 save, sequence = LHCB1, file = 'lhcb1.seq';
-system, 'cp lhcb1.seq /afs/cern.ch/work/j/jmgray/private/sgd-magnet-tuner/src/aba_optimiser/mad/sequences';
+system, 'mv lhcb1.seq /afs/cern.ch/work/j/jmgray/private/sgd-magnet-tuner/src/aba_optimiser/mad/sequences';

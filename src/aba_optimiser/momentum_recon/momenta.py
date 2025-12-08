@@ -14,24 +14,13 @@ def _column_or_zeros(frame, column: str, template: np.ndarray) -> np.ndarray:
     return np.zeros_like(template, dtype=float)
 
 
-def _propagated_variance(
-    coeff_first: np.ndarray,
-    coeff_second: np.ndarray,
-    var_first: np.ndarray,
-    var_second: np.ndarray,
-) -> np.ndarray:
-    return np.square(coeff_first) * var_first + np.square(coeff_second) * var_second
-
-
 def _require_columns(frame, cols: set[str], context: str) -> None:
     missing = cols.difference(frame.columns)
     if missing:
         raise KeyError(f"Missing columns for {context}: {sorted(missing)}")
 
 
-def momenta_from_prev(
-    data_p: tfs.TfsDataFrame, dpp_est: float = 0.0
-) -> tfs.TfsDataFrame:
+def momenta_from_prev(data_p: tfs.TfsDataFrame, dpp_est: float = 0.0) -> tfs.TfsDataFrame:
     _require_columns(
         data_p,
         {"x", "y", "prev_x", "prev_y", "var_x", "var_y", "prev_x_var", "prev_y_var"},
@@ -89,49 +78,23 @@ def momenta_from_prev(
         / sqrt_beta_y
     )
 
-    denom_prev_x = sqrt_beta_x * sqrt_beta_x_prev
-    coeff_prev_x = np.divide(
-        cos_phi_x + sin_phi_x * tan_phi_x,
-        denom_prev_x,
-        out=np.zeros_like(denom_prev_x, dtype=float),
-        where=denom_prev_x != 0.0,
-    )
-    coeff_curr_x = np.divide(
-        tan_phi_x + alpha_x,
-        betax,
-        out=np.zeros_like(betax, dtype=float),
-        where=betax != 0.0,
-    )
-
-    prev_x_var = data_p["prev_x_var"].to_numpy()
     curr_x_var = data_p["var_x"].to_numpy()
-    var_px = _propagated_variance(coeff_prev_x, coeff_curr_x, prev_x_var, curr_x_var)
-    data_p["var_px"] = var_px
-
-    denom_prev_y = sqrt_beta_y * sqrt_beta_y_prev
-    coeff_prev_y = np.divide(
-        cos_phi_y + sin_phi_y * tan_phi_y,
-        denom_prev_y,
-        out=np.zeros_like(denom_prev_y, dtype=float),
-        where=denom_prev_y != 0.0,
-    )
-    coeff_curr_y = np.divide(
-        tan_phi_y + alpha_y,
-        betay,
-        out=np.zeros_like(betay, dtype=float),
-        where=betay != 0.0,
-    )
-
-    prev_y_var = data_p["prev_y_var"].to_numpy()
+    prev_x_var = data_p["prev_x_var"].to_numpy()
     curr_y_var = data_p["var_y"].to_numpy()
-    var_py = _propagated_variance(coeff_prev_y, coeff_curr_y, prev_y_var, curr_y_var)
-    data_p["var_py"] = var_py
+    prev_y_var = data_p["prev_y_var"].to_numpy()
+
+    # Analytical derivatives for variance propagation
+    dpx_dx_current = -(tan_phi_x + alpha_x) / betax
+    dpx_dx_prev = -(cos_phi_x + sin_phi_x * tan_phi_x) / (sqrt_beta_x * sqrt_beta_x_prev)
+    dpy_dy_current = -(tan_phi_y + alpha_y) / betay
+    dpy_dy_prev = -(cos_phi_y + sin_phi_y * tan_phi_y) / (sqrt_beta_y * sqrt_beta_y_prev)
+
+    data_p["var_px"] = dpx_dx_current**2 * curr_x_var + dpx_dx_prev**2 * prev_x_var
+    data_p["var_py"] = dpy_dy_current**2 * curr_y_var + dpy_dy_prev**2 * prev_y_var
     return data_p
 
 
-def momenta_from_next(
-    data_n: tfs.TfsDataFrame, dpp_est: float = 0.0
-) -> tfs.TfsDataFrame:
+def momenta_from_next(data_n: tfs.TfsDataFrame, dpp_est: float = 0.0) -> tfs.TfsDataFrame:
     _require_columns(
         data_n,
         {"x", "y", "next_x", "next_y", "var_x", "var_y", "next_x_var", "next_y_var"},
@@ -161,61 +124,34 @@ def momenta_from_next(
     phi_x = data_n["delta_x"].to_numpy() * 2 * np.pi
     phi_y = data_n["delta_y"].to_numpy() * 2 * np.pi
 
-    x_current_norm = (x_current - dpp_est * dx_current) / sqrt_beta_x
-    x_next_norm = (x_next - dpp_est * dx_next) / sqrt_beta_x_next
-    y_current_norm = y_current / sqrt_beta_y
-    y_next_norm = y_next / sqrt_beta_y_next
-
     cos_phi_x = np.cos(phi_x)
     cos_phi_y = np.cos(phi_y)
     tan_phi_x = np.tan(phi_x)
     tan_phi_y = np.tan(phi_y)
 
-    sec_phi_x = np.divide(1.0, cos_phi_x, where=cos_phi_x != 0.0)
-    sec_phi_y = np.divide(1.0, cos_phi_y, where=cos_phi_y != 0.0)
+    sec_phi_x = 1.0 / cos_phi_x
+    sec_phi_y = 1.0 / cos_phi_y
 
     data_n["px"] = (
-        x_next_norm * sec_phi_x + x_current_norm * (tan_phi_x - alpha_x)
+        ((x_next - dpp_est * dx_next) / sqrt_beta_x_next) * sec_phi_x
+        + ((x_current - dpp_est * dx_current) / sqrt_beta_x) * (tan_phi_x - alpha_x)
     ) / sqrt_beta_x + dpx_current * dpp_est
     data_n["py"] = (
-        y_next_norm * sec_phi_y + y_current_norm * (tan_phi_y - alpha_y)
+        ((y_next) / sqrt_beta_y_next) * sec_phi_y
+        + (y_current / sqrt_beta_y) * (tan_phi_y - alpha_y)
     ) / sqrt_beta_y
 
-    denom_next_x = sqrt_beta_x * sqrt_beta_x_next
-    coeff_next_x = np.divide(
-        sec_phi_x,
-        denom_next_x,
-        out=np.zeros_like(denom_next_x, dtype=float),
-        where=denom_next_x != 0.0,
-    )
-    coeff_curr_x = np.divide(
-        tan_phi_x - alpha_x,
-        betax,
-        out=np.zeros_like(betax, dtype=float),
-        where=betax != 0.0,
-    )
+    # Analytical derivatives for variance propagation
+    dpx_dx_current = (tan_phi_x - alpha_x) / betax
+    dpx_dx_next = sec_phi_x / (sqrt_beta_x * sqrt_beta_x_next)
+    dpy_dy_current = (tan_phi_y - alpha_y) / betay
+    dpy_dy_next = sec_phi_y / (sqrt_beta_y * sqrt_beta_y_next)
 
-    next_x_var = data_n["next_x_var"].to_numpy()
     curr_x_var = data_n["var_x"].to_numpy()
-    var_px = _propagated_variance(coeff_next_x, coeff_curr_x, next_x_var, curr_x_var)
-    data_n["var_px"] = var_px
-
-    denom_next_y = sqrt_beta_y * sqrt_beta_y_next
-    coeff_next_y = np.divide(
-        sec_phi_y,
-        denom_next_y,
-        out=np.zeros_like(denom_next_y, dtype=float),
-        where=denom_next_y != 0.0,
-    )
-    coeff_curr_y = np.divide(
-        tan_phi_y - alpha_y,
-        betay,
-        out=np.zeros_like(betay, dtype=float),
-        where=betay != 0.0,
-    )
-
-    next_y_var = data_n["next_y_var"].to_numpy()
+    next_x_var = data_n["next_x_var"].to_numpy()
     curr_y_var = data_n["var_y"].to_numpy()
-    var_py = _propagated_variance(coeff_next_y, coeff_curr_y, next_y_var, curr_y_var)
-    data_n["var_py"] = var_py
+    next_y_var = data_n["next_y_var"].to_numpy()
+
+    data_n["var_px"] = dpx_dx_current**2 * curr_x_var + dpx_dx_next**2 * next_x_var
+    data_n["var_py"] = dpy_dy_current**2 * curr_y_var + dpy_dy_next**2 * next_y_var
     return data_n

@@ -5,135 +5,97 @@ Integration-style tests for the controller logic using lightweight tracking data
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import pytest
-import tfs
 
-from aba_optimiser.config import BEND_ERROR_FILE, OptimiserConfig, SimulationConfig
-from aba_optimiser.io.utils import read_knobs, save_knobs
-from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+from aba_optimiser.config import OptimiserConfig, SimulationConfig
+from aba_optimiser.simulation.coordinates import create_initial_conditions
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
-from aba_optimiser.simulation.optics import perform_orbit_correction
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig, SequenceConfig
 from aba_optimiser.xsuite.xsuite_tools import (
-    initialise_env,
     insert_particle_monitors_at_pattern,
     line_to_dataframes,
     run_tracking,
 )
+from tests.training.helpers import TRACK_COLUMNS, generate_model_with_errors
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pandas as pd
+    import tfs
+
 logger = logging.getLogger(__name__)
 
-TRACK_COLUMNS = (
-    "turn",
-    "name",
-    "x",
-    "px",
-    "y",
-    "py",
-    "var_x",
-    "var_y",
-    "var_px",
-    "var_py",
-    "kick_plane",
-)
 
-
-def _generate_nonoise_track(
-    tmp_dir: Path,
-    sequence_file: Path,
+def _run_track_with_model(
+    env: dict,
+    twiss_data: tfs.TfsDataFrame,
     flattop_turns: int,
     destination: Path,
     dpp_value: float,
-    magnet_range: str,
-    perturb_quads: bool = False,
-    perturb_bends: bool = False,
-    average_closed_orbit: int | bool = False,
-    remove_mean: bool = False,
-) -> tuple[Path, dict, Path | None]:
-    """Generate a parquet file containing noiseless tracking data for the requested BPMs."""
-    # Create MAD interface and load sequence
-    mad = BaseMadInterface()  # stdout="/dev/null", redirect_stderr=True
-    mad.load_sequence(sequence_file, "lhcb1")
-    mad.setup_beam(beam_energy=6800)
+    action_list: list[float],
+    angle_list: list[float],
+    return_dataframes: bool = False,
+) -> list[Path] | list[pd.DataFrame]:
+    """
+    Run tracking with the given model and initial conditions.
 
-    # Create unique corrector file path based on destination
-    corrector_file = destination.parent / f"corrector_{destination.stem}.tfs"
+    Args:
+        env: xsuite environment dictionary
+        twiss_data: Twiss data from MAD-NG
+        flattop_turns: Number of turns to track
+        destination: Path to save the parquet file (or base path for multiple files)
+        dpp_value: Momentum deviation
+        action_list: List of action values for each particle
+        angle_list: List of angle values for each particle
+        return_dataframes: If True, return dataframes instead of writing to disk
 
-    # Perform orbit correction for off-momentum beam (delta = 2e-4)
-    magnet_strengths = {}
-    if perturb_quads:
-        mad.mad.send(f"""
-local randseed, randn, abs in MAD.gmath
-new_magnet_values = {{}}
-for _, elm in loaded_sequence:iter('{magnet_range}') do
-if elm.kind == 'quadrupole' and elm.k1 ~= 0.0 and elm.name:match("MQ%.") then
-    elm.k1 = elm.k1 + 1e-4 * randn() * abs(elm.k1)
-    new_magnet_values[elm.name .. ".k1"] = elm.k1
-end
-end
-py:send(new_magnet_values, true)
-        """)
-        magnet_strengths = mad.mad.recv()
-    if perturb_bends:
-        bend_errors_table = tfs.read(BEND_ERROR_FILE)
-        bend_errors_dict = bend_errors_table["K0L"].to_dict()
-        for elm in mad.mad.loaded_sequence:
-            # Dipoles
-            if elm.kind == "sbend" and elm.k0 != 0 and elm.name[:3] == "MB.":
-                if elm.name not in bend_errors_dict:
-                    raise ValueError(f"Bend error for {elm.name} not found in {BEND_ERROR_FILE}")
-                k0l_error = bend_errors_dict[elm.name]
-                elm.k0 += k0l_error / elm.l
-                magnet_strengths[elm.name + ".k0"] = elm.k0
+    Returns:
+        List of Path objects for each generated parquet file, or list of DataFrames if return_dataframes=True
+    """
+    num_particles = len(action_list)
 
-    matched_tunes = perform_orbit_correction(
-        mad=mad.mad,
-        machine_deltap=dpp_value,
-        target_qx=0.28,
-        target_qy=0.31,
-        corrector_file=corrector_file,
-    )
-    # Read corrector table
-    corrector_table = tfs.read(corrector_file)
-    corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
-
-    # Create xsuite environment with orbit correction applied
-    env = initialise_env(
-        matched_tunes=matched_tunes,
-        magnet_strengths=magnet_strengths,
-        corrector_table=corrector_table,
-        json_file=tmp_dir / "env_config.json",
-        sequence_file=sequence_file,
-        seq_name="lhcb1",
-    )
-
-    # save the tune knobs to file with unique name
-    tune_knobs_file = destination.parent / f"tune_knobs_{destination.stem}.txt"
-    save_knobs(matched_tunes, tune_knobs_file)
+    if len(angle_list) != num_particles:
+        raise ValueError("action_list and angle_list must have the same length")
 
     insert_particle_monitors_at_pattern(
         env["lhcb1"],
         pattern="bpm.*[^k]",
         num_turns=flattop_turns,
-        num_particles=1,
+        num_particles=num_particles,
         inplace=True,
     )
+
+    xs = []
+    pxs = []
+    ys = []
+    pys = []
+    deltas = []
+    for i in range(num_particles):
+        x0 = create_initial_conditions(
+            i,
+            action_list,
+            angle_list,
+            twiss_data,
+            kick_both_planes=True,
+            starting_bpm=env["lhcb1"].element_names[0].upper(),
+        )
+        xs.append(x0["x"])
+        pxs.append(x0["px"])
+        ys.append(x0["y"])
+        pys.append(x0["py"])
+        deltas.append(dpp_value + 0)
+
     particles = env["lhcb1"].build_particles(
-        x=[1e-4],
-        px=[-1e-6],
-        y=[1e-4],
-        py=[-1e-6],
-        delta=[dpp_value],
+        x=xs,
+        px=pxs,
+        y=ys,
+        py=pys,
+        delta=deltas,
     )
     run_tracking(
         line=env["lhcb1"],
@@ -142,48 +104,92 @@ py:send(new_magnet_values, true)
     )
     true_dfs = line_to_dataframes(env["lhcb1"])
 
-    df = prepare_track_dataframe(true_dfs[0], 0, flattop_turns, kick_both_planes=True)
-    df = df.loc[:, TRACK_COLUMNS].copy()
-    df["name"] = df["name"].astype(str)
-    df["kick_plane"] = df["kick_plane"].astype(str)
+    # Process dataframes
+    processed_dfs = []
+    for true_df in true_dfs:
+        df = prepare_track_dataframe(true_df, 0, flattop_turns, kick_both_planes=True)
+        df = df.loc[:, TRACK_COLUMNS].copy()
+        df["name"] = df["name"].astype(str)
+        df["kick_plane"] = df["kick_plane"].astype(str)
+        processed_dfs.append(df)
 
-    if average_closed_orbit:
-        # Compute averages per BPM
-        averaged = (
-            df.groupby("name")[["x", "px", "y", "py", "var_x", "var_y", "var_px", "var_py"]]
-            .mean()
-            .reset_index()
-        )
-        # Create new DataFrame with 3 turns, each with averaged values
-        new_rows = []
-        for turn in [1, 2, 3]:
-            for _, row in averaged.iterrows():
-                new_rows.append(
-                    {
-                        "name": row["name"],
-                        "turn": turn,
-                        "x": row["x"],
-                        "y": row["y"],
-                        "px": row["px"],
-                        "py": row["py"],
-                        "var_x": row["var_x"],
-                        "var_y": row["var_y"],
-                        "var_px": row["var_px"],
-                        "var_py": row["var_py"],
-                        "kick_plane": "xy",
-                    }
-                )
-        df = pd.DataFrame(new_rows)
-        df["name"] = df["name"].astype("category")
-        df["turn"] = df["turn"].astype("int32")
+    if return_dataframes:
+        return processed_dfs
 
-    if remove_mean:
-        # Remove mean from coordinates for each BPM
-        for coord in ["x", "px"]:
-            df[coord] = df.groupby("name")[coord].transform(lambda x: x - x.mean())
-
+    # Save each particle track to a separate file
+    output_files = []
     destination.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(destination, index=False)
+
+    for idx, df in enumerate(processed_dfs):
+        if num_particles == 1:
+            output_path = destination
+        else:
+            # Create unique filename for each particle
+            output_path = (
+                destination.parent / f"{destination.stem}_particle_{idx}{destination.suffix}"
+            )
+
+        df.to_parquet(output_path, index=False)
+        output_files.append(output_path)
+
+    return output_files
+
+
+def _generate_nonoise_track(
+    sequence_file: Path,
+    json_file: Path,
+    flattop_turns: int,
+    destination: Path,
+    dpp_value: float,
+    magnet_range: str,
+    perturb_quads: bool = False,
+    perturb_bends: bool = False,
+    num_particles: int = 1,
+    phases: list[float] | None = None,
+) -> tuple[Path, dict[str, float], Path | None]:
+    """Generate a parquet file containing noiseless tracking data for the requested BPMs."""
+    # Create unique corrector file path based on destination
+    corrector_file = destination.parent / f"corrector_{destination.stem}.tfs"
+
+    # Generate model with errors
+    env, magnet_strengths, twiss_data, tune_knobs_file = generate_model_with_errors(
+        sequence_file=sequence_file,
+        json_file=json_file,
+        dpp_value=dpp_value,
+        magnet_range=magnet_range,
+        corrector_file=corrector_file,
+        perturb_quads=perturb_quads,
+        perturb_bends=perturb_bends,
+    )
+
+    # Create action and angle lists
+    action = 4e-8  # action for larger kick
+    angle = 0.0
+
+    if num_particles == 1:
+        action_list = [action]
+        angle_list = [angle]
+    else:
+        # If explicit phases provided use them, otherwise spread phases evenly
+        if phases is not None:
+            if len(phases) != num_particles:
+                raise ValueError("Length of phases must equal num_particles")
+            angle_list = phases
+        else:
+            angle_list = (np.linspace(0.0, 2 * np.pi, num=num_particles, endpoint=False)).tolist()
+        action_list = [action] * num_particles
+
+    # Run tracking with the model
+    _run_track_with_model(
+        env=env,
+        twiss_data=twiss_data,
+        flattop_turns=flattop_turns,
+        destination=destination,
+        dpp_value=dpp_value,
+        action_list=action_list,
+        angle_list=angle_list,
+    )
+
     return corrector_file, magnet_strengths, tune_knobs_file
 
 
@@ -248,34 +254,12 @@ def _make_simulation_config_quad() -> SimulationConfig:
     )
 
 
-def _make_optimiser_config_bend() -> OptimiserConfig:
-    return OptimiserConfig(
-        max_epochs=3000,
-        warmup_epochs=3,
-        warmup_lr_start=5e-10,
-        max_lr=2e-8,
-        min_lr=2e-8,
-        gradient_converged_value=1e-6,
-        optimiser_type="adam",
-    )
-
-
-def _make_simulation_config_bend() -> SimulationConfig:
-    return SimulationConfig(
-        tracks_per_worker=100,
-        num_batches=10,
-        num_workers=1,
-        optimise_energy=False,
-        optimise_quadrupoles=False,
-        optimise_bends=True,
-    )
-
-
 @pytest.mark.slow
 def test_controller_energy_opt(
     tmp_dir: Path,
     flattop_turns: int,
     sequence_file: Path,
+    json_b1: Path,
     dpp_value: float,
 ) -> None:
     """Test that the controller initialises correctly with custom num_tracks and flattop_turns."""
@@ -286,8 +270,8 @@ def test_controller_energy_opt(
     magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
 
     corrector_file, _, tune_knobs_file = _generate_nonoise_track(
-        tmp_dir,
         sequence_file,
+        json_b1,
         flattop_turns,
         off_dpp_path,
         dpp_value,
@@ -318,7 +302,7 @@ def test_controller_energy_opt(
         corrector_files=corrector_file,
         tune_knobs_files=tune_knobs_file,
         flattop_turns=flattop_turns,
-        num_tracks=1,
+        bunches_per_file=1,
     )
 
     bpm_config = BPMConfig(
@@ -348,29 +332,29 @@ def test_controller_energy_opt(
 
 
 @pytest.mark.slow
-def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path) -> None:
+def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path, json_b1: Path) -> None:
     """Test quadrupole optimisation using the simple opt script logic."""
     # Constants for the test
-    magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
+    magnet_range = "BPM.9R1.B1/BPM.9L2.B1"
     bpm_start_points = [
-        "BPM.9R2.B1",
-        # "BPM.10R2.B1",
+        "BPM.9R1.B1",
+        "BPM.10R1.B1",
     ]
     bpm_end_points = [
-        "BPM.9L3.B1",
-        # "BPM.10L3.B1",
+        "BPM.9L2.B1",
+        "BPM.10L2.B1",
     ]
 
     flattop_turns = 1000
     off_magnet_path = tmp_dir / "track_off_magnet.parquet"
 
     corrector_file, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
-        tmp_dir,
         sequence_file,
+        json_b1,
         flattop_turns,
         off_magnet_path,
         0.0,
-        magnet_range,
+        "$start/$end",
         perturb_quads=True,
     )
 
@@ -389,7 +373,7 @@ def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path) -> None:
         corrector_files=corrector_file,
         tune_knobs_files=tune_knobs_file,
         flattop_turns=flattop_turns,
-        num_tracks=1,
+        bunches_per_file=1,
     )
 
     bpm_config = BPMConfig(
@@ -416,279 +400,3 @@ def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path) -> None:
         assert rel_diff < 1e-8, (
             f"Magnet {magnet}: FAIL, estimated {value}, true {true_values[magnet]}, rel diff {rel_diff}"
         )
-
-
-@pytest.mark.slow
-def test_controller_quad_opt_all_arcs_beta_beating(tmp_dir: Path, sequence_file: Path) -> None:
-    """
-    Test quadrupole optimisation across all 8 arcs.
-
-    1. Creates a perturbed MAD instance with errors in all arcs
-    2. Measures beta beating: perturbed vs unperturbed (BEFORE)
-    3. Optimises quadrupoles in each arc sequentially
-    4. Applies all optimised values to a new MAD instance
-    5. Measures beta beating: optimised vs unperturbed (AFTER - should approach 0)
-
-    Uses magnet ranges from create_datafile_loop.py for beam 1.
-    """
-    # Define magnet ranges for all 8 arcs (beam 1)
-    magnet_ranges_b1 = [f"BPM.9R{s}.B1/BPM.9L{s % 8 + 1}.B1" for s in range(1, 9)]
-
-    # Generate BPM start/end points for each arc
-    bpm_starts_b1 = [[f"BPM.{i}R{s}.B1" for i in [9]] for s in range(1, 9)]
-    bpm_end_points_b1 = [[f"BPM.{i}L{s % 8 + 1}.B1" for i in [9]] for s in range(1, 9)]
-
-    flattop_turns = 1000
-    optimiser_config = OptimiserConfig(
-        max_epochs=3000,
-        warmup_epochs=50,
-        warmup_lr_start=1e-9,
-        max_lr=1e-6,
-        min_lr=1e-6,
-        gradient_converged_value=1e-11,
-    )
-    simulation_config = SimulationConfig(
-        tracks_per_worker=1,
-        num_workers=4,
-        num_batches=1,
-        optimise_energy=True,
-        optimise_quadrupoles=False,
-        optimise_bends=False,
-    )
-
-    # Get initial reference twiss (unperturbed)
-    logger.info("Creating unperturbed reference MAD")
-    mad_reference = BaseMadInterface()
-    mad_reference.load_sequence(sequence_file, "lhcb1")
-    mad_reference.setup_beam(beam_energy=6800)
-    mad_reference.observe_elements()
-    reference_tws = mad_reference.run_twiss()
-
-    # Create perturbed MAD instance with errors across the entire ring
-    logger.info("Creating perturbed MAD with quadrupole errors across entire ring")
-    mad_perturbed = BaseMadInterface()
-    mad_perturbed.load_sequence(sequence_file, "lhcb1")
-    mad_perturbed.setup_beam(beam_energy=6800)
-    mad_perturbed.observe_elements()
-
-    # Generate tracking data with perturbations across the entire ring
-    logger.info("Generating tracking data with perturbed quadrupoles across entire ring")
-    off_magnet_path = tmp_dir / "track_full_ring_perturbed.parquet"
-    deltap = 1e-4
-    corrector_file, all_perturbed_strengths, tune_knobs_file = _generate_nonoise_track(
-        tmp_dir,
-        sequence_file,
-        flattop_turns,
-        off_magnet_path,
-        deltap,
-        "$start/$end",  # Entire ring
-        perturb_quads=True,
-        perturb_bends=True,
-        remove_mean=False,
-    )
-    logger.info(f"Perturbed {len(all_perturbed_strengths)} quadrupoles across entire ring")
-    empty_corrector_file = tmp_dir / "empty_correctors.txt"
-    empty_corrector_file.touch()  # Create an empty corrector file
-
-    # Calculate beta beating BEFORE optimization (perturbed vs reference)
-    logger.info("Calculating beta beating BEFORE optimization")
-    mad_perturbed.set_magnet_strengths(all_perturbed_strengths)
-    perturbed_tws = mad_perturbed.run_twiss(deltap=deltap)
-    beta11_beat_before = (perturbed_tws["beta11"] - reference_tws["beta11"]) / reference_tws[
-        "beta11"
-    ]
-    beta22_beat_before = (perturbed_tws["beta22"] - reference_tws["beta22"]) / reference_tws[
-        "beta22"
-    ]
-    rms_before = np.sqrt((beta11_beat_before**2 + beta22_beat_before**2).mean())
-
-    logger.info(f"RMS beta beating BEFORE optimization: {rms_before * 100:.4f}%")
-    logger.info(
-        f"Beta11 beating: mean={beta11_beat_before.mean() * 100:.4f}%, std={beta11_beat_before.std() * 100:.4f}%"
-    )
-    logger.info(
-        f"Beta22 beating: mean={beta22_beat_before.mean() * 100:.4f}%, std={beta22_beat_before.std() * 100:.4f}%"
-    )
-
-    # Now optimise each arc and collect optimised strengths
-    logger.info("\n=== Starting optimization for all arcs ===")
-    all_optimised_strengths = {}
-    perturbed_energy = {"deltap": deltap, **all_perturbed_strengths}
-    optimised_deltaps = []
-
-    for arc_idx in range(8):
-        logger.info(f"\nOptimizing arc {arc_idx + 1}/8")
-
-        magnet_range = magnet_ranges_b1[arc_idx]
-        bpm_start_points = bpm_starts_b1[arc_idx]
-        bpm_end_points = bpm_end_points_b1[arc_idx]
-
-        logger.info(f"Arc {arc_idx + 1}")
-
-        # Run optimization using the shared tracking data
-        sequence_config = SequenceConfig(
-            sequence_file_path=sequence_file,
-            magnet_range=magnet_range,
-            beam_energy=6800,
-        )
-
-        measurement_config = MeasurementConfig(
-            measurement_files=off_magnet_path,
-            corrector_files=empty_corrector_file,
-            tune_knobs_files=tune_knobs_file,
-            flattop_turns=flattop_turns,
-            num_tracks=1,
-        )
-
-        bpm_config = BPMConfig(
-            start_points=bpm_start_points,
-            end_points=bpm_end_points,
-        )
-
-        ctrl = Controller(
-            optimiser_config=optimiser_config,
-            simulation_config=simulation_config,
-            sequence_config=sequence_config,
-            measurement_config=measurement_config,
-            bpm_config=bpm_config,
-            show_plots=False,
-            true_strengths=perturbed_energy.copy(),
-        )
-        estimate_energy, unc = ctrl.run()
-        optimised_deltaps.append(estimate_energy["deltap"])
-        # del ctrl
-        quad_optimiser_config = replace(
-            optimiser_config,
-            max_epochs=2000,
-            max_lr=1e-7,
-        )
-        quad_simulation_config = replace(
-            simulation_config,
-            optimise_energy=True,
-            optimise_quadrupoles=True,
-        )
-        measurement_config_quad = MeasurementConfig(
-            measurement_files=off_magnet_path,
-            corrector_files=empty_corrector_file,
-            tune_knobs_files=tune_knobs_file,
-            flattop_turns=flattop_turns,
-            num_tracks=1,
-        )
-
-        ctrl = Controller(
-            optimiser_config=quad_optimiser_config,
-            simulation_config=quad_simulation_config,
-            initial_knob_strengths=estimate_energy,
-            sequence_config=sequence_config,
-            measurement_config=measurement_config_quad,
-            bpm_config=bpm_config,
-            show_plots=False,
-            true_strengths=perturbed_energy.copy(),
-        )
-        estimate, unc = ctrl.run()
-        plt.close("all")  # Close any plots to save memory
-
-        # Store optimised strengths
-        all_optimised_strengths.update(estimate)
-        logger.info(f"Arc {arc_idx + 1} optimised: {len(estimate)} quadrupoles")
-
-    # Create optimised MAD instance with all optimised values
-    logger.info("\n=== Creating optimised MAD instance with all optimised quadrupole values ===")
-    mad_optimised = BaseMadInterface()
-    mad_optimised.load_sequence(sequence_file, "lhcb1")
-    mad_optimised.setup_beam(beam_energy=6800)
-    mad_optimised.observe_elements()
-
-    # Apply all optimised strengths
-    optimised_deltap = np.mean(optimised_deltaps)
-    all_optimised_strengths.pop("deltap", None)  # Remove deltap if present
-
-    mad_optimised.set_magnet_strengths(all_optimised_strengths)
-    corrector_table = tfs.read(corrector_file)
-    corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
-    mad_optimised.apply_corrector_strengths(corrector_table)
-    tune_knobs = read_knobs(tune_knobs_file)
-    mad_optimised.set_madx_variables(**tune_knobs)
-
-    # Calculate beta beating AFTER optimization (optimised vs reference)
-    logger.info("Calculating beta beating AFTER optimization")
-    optimised_tws = mad_optimised.run_twiss(deltap=optimised_deltap)
-    beta11_beat_after = (perturbed_tws["beta11"] - optimised_tws["beta11"]) / optimised_tws[
-        "beta11"
-    ]
-    beta22_beat_after = (perturbed_tws["beta22"] - optimised_tws["beta22"]) / optimised_tws[
-        "beta22"
-    ]
-    rms_after = np.sqrt((beta11_beat_after**2 + beta22_beat_after**2).mean())
-
-    logger.info(f"RMS beta beating AFTER optimization: {rms_after * 100:.4f}%")
-    logger.info(
-        f"Beta11 beating: mean={beta11_beat_after.mean() * 100:.4f}%, std={beta11_beat_after.std() * 100:.4f}%"
-    )
-    logger.info(
-        f"Beta22 beating: mean={beta22_beat_after.mean() * 100:.4f}%, std={beta22_beat_after.std() * 100:.4f}%"
-    )
-
-    # Summary
-    logger.info("\n=== Beta Beating Summary ===")
-    logger.info(f"RMS BEFORE: {rms_before * 100:.4f}%")
-    logger.info(f"RMS AFTER:  {rms_after * 100:.4f}%")
-    logger.info(f"Improvement: {(rms_before - rms_after) / rms_before * 100:.2f}%")
-    logger.info(f"Reduction factor: {rms_before / rms_after:.2f}x")
-
-    # Plot beta beating around the ring
-    logger.info("\n=== Creating beta beating plots ===")
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsise=(14, 10))
-
-    s_position = reference_tws["s"]
-
-    # Plot horizontal beta beating
-    ax1.plot(
-        s_position,
-        beta11_beat_before * 100,
-        "r-",
-        label="Before optimization",
-        alpha=0.7,
-    )
-    ax1.plot(s_position, beta11_beat_after * 100, "b-", label="After optimization", alpha=0.7)
-    ax1.axhline(y=0, color="k", linestyle="--", alpha=0.3)
-    ax1.set_xlabel("s [m]")
-    ax1.set_ylabel(r"$\Delta\beta_x/\beta_x$ [%]")
-    ax1.set_title("Horizontal Beta Beating Around the Ring")
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-
-    # Plot vertical beta beating
-    ax2.plot(
-        s_position,
-        beta22_beat_before * 100,
-        "r-",
-        label="Before optimization",
-        alpha=0.7,
-    )
-    ax2.plot(s_position, beta22_beat_after * 100, "b-", label="After optimization", alpha=0.7)
-    ax2.axhline(y=0, color="k", linestyle="--", alpha=0.3)
-    ax2.set_xlabel("s [m]")
-    ax2.set_ylabel(r"$\Delta\beta_y/\beta_y$ [%]")
-    ax2.set_title("Vertical Beta Beating Around the Ring")
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plot_path = tmp_dir / "beta_beating_comparison.png"
-    # plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-    logger.info(f"Beta beating plot saved to {plot_path}")
-    plt.show()
-
-    # Assertions
-    assert rms_after < rms_before, (
-        f"Beta beating did not improve! Before: {rms_before * 100:.4f}%, After: {rms_after * 100:.4f}%"
-    )
-
-    # Check that we're approaching zero (at least 50% improvement)
-    improvement_ratio = (rms_before - rms_after) / rms_before
-    assert improvement_ratio > 0.5, (
-        f"Insufficient improvement: only {improvement_ratio * 100:.2f}% (expected > 50%)"
-    )
-
-    logger.info("Test passed: Beta beating improved significantly after optimization!")

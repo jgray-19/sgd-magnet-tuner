@@ -40,7 +40,7 @@ def create_arc_measurement_config(
         corrector_files=corrector_files,
         tune_knobs_files=tune_knobs_files,
         machine_deltaps=machine_deltap,
-        num_tracks=num_tracks,
+        bunches_per_file=num_tracks,
         flattop_turns=flattop_turns,
     )
 

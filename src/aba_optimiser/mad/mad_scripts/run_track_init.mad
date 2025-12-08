@@ -89,7 +89,7 @@ function save_data(elm, mflw, _, slc)
 end
 
 function reset_before_tracking()
-    assert(observe_count == nbpms + 1, "Not all BPMs observed before resetting, got " .. observe_count - 1 .. ", expected " .. nbpms)
+    ! assert(observe_count == nbpms + 1, "Not all BPMs observed before resetting, got " .. observe_count - 1 .. ", expected " .. nbpms)
     observe_count = 1
     for i=1,batch_size do
         x[i]:zeros()

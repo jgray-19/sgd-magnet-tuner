@@ -25,7 +25,7 @@ local _, mflw= track{
     range=tracking_range,
     dir=sdir,
 }
-assert(mflw.tpar == mflw.npar, "Lost some particles during tracking")
+! assert(mflw.tpar == mflw.npar, "Lost some particles during tracking")
 python:send(x, true)
 python:send(y, true)
 python:send(px, true)

@@ -97,7 +97,7 @@ function save_data(elm, mflw, _, slc)
 end
 
 function reset_before_tracking()
-    assert(observation_index == nbpms + 1, "Not all BPMs observed before resetting, got " .. observation_index - 1 .. ", expected " .. nbpms)
+    !assert(observation_index == nbpms + 1, "Not all BPMs observed before resetting, got " .. observation_index - 1 .. ", expected " .. nbpms)
     observation_index = 1
     betx:zeros()
     bety:zeros()

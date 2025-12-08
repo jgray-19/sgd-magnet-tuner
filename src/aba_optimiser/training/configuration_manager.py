@@ -84,6 +84,15 @@ class ConfigurationManager:
         self.end_bpms = [bpm for bpm in self.end_bpms if bpm in self.all_bpms]
         self.bpm_ranges = [s + "/" + e for s in self.start_bpms for e in self.end_bpms]
 
+    @property
+    def bpm_pairs(self) -> list[tuple[str, str]]:
+        """Return BPM ranges as explicit (start, end) tuples.
+
+        This keeps backwards compatibility with `bpm_ranges` strings while
+        making it easy for callers that prefer tuple input.
+        """
+        return [(s, e) for s in self.start_bpms for e in self.end_bpms]
+
     def initialise_knob_strengths(
         self,
         true_strengths: dict[str, float],

@@ -289,10 +289,10 @@ def get_mean_dpp(
     Returns a single float value representing the mean δ across all valid measurements.
     """
     dpp_df = calculate_dpp_both(data, tws=tws, info=info)
-    mean_dpp = dpp_df["delta_avg"].mean()
+    mean_dpp = np.nanmean(dpp_df["delta_avg"])
     if info:
         LOGGER.info("Mean δ across all valid measurements: %s", mean_dpp)
-    return mean_dpp
+    return mean_dpp if np.isfinite(mean_dpp) else 0.0
 
 
 if __name__ == "__main__":

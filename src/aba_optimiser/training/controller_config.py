@@ -7,10 +7,7 @@ individual arguments passed to controller constructors.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
 
 
 @dataclass
@@ -83,12 +80,24 @@ class MeasurementConfig:
         flattop_turns: Number of turns recorded on the flat top
     """
 
-    measurement_files: list[str] | str
-    corrector_files: list[Path] | Path | None = None
-    tune_knobs_files: list[Path] | Path | None = None
+    measurement_files: list[Path]
+    corrector_files: list[Path] | None = None
+    tune_knobs_files: list[Path] | None = None
     machine_deltaps: list[float] | float = 0.0
-    num_tracks: int = 3
+    bunches_per_file: int = 3
     flattop_turns: int = 6600
+
+    # create a post-init method to ensure single values are converted to lists
+    def __post_init__(self) -> None:
+        """Ensure attributes are lists."""
+        if isinstance(self.measurement_files, Path):
+            self.measurement_files = [self.measurement_files]
+        if self.corrector_files is None or isinstance(self.corrector_files, Path):
+            self.corrector_files = [self.corrector_files]
+        if self.tune_knobs_files is None or isinstance(self.tune_knobs_files, Path):
+            self.tune_knobs_files = [self.tune_knobs_files]
+        if isinstance(self.machine_deltaps, float):
+            self.machine_deltaps = [self.machine_deltaps]
 
 
 @dataclass

@@ -123,7 +123,7 @@ class OptimisationLoop:
             epoch_loss /= total_turns
             epoch_grad /= total_turns
 
-            grad_norm = np.linalg.norm(epoch_grad)
+            grad_norm = np.linalg.norm(epoch_grad[epoch_grad != 0.0])
             self._update_smoothed_grad_norm(grad_norm)
 
             self._log_epoch_stats(
@@ -142,10 +142,13 @@ class OptimisationLoop:
                     f"\nGradient norm below threshold: {self.smoothed_grad_norm:.3e}. Stopping early at epoch {epoch}."
                 )
                 break
-            if (
-                sum(abs(current_knobs[k] - prev_knobs[k]) for k in self.knob_names) < 1e-11
-                and epoch > 10
-            ):
+            avg_rel_knob_change = sum(
+                abs(current_knobs[k] - prev_knobs[k]) / abs(prev_knobs[k])
+                if prev_knobs[k] != 0
+                else 0
+                for k in self.knob_names
+            ) / len(self.knob_names)
+            if avg_rel_knob_change < 1e-9 and epoch > 10:
                 LOGGER.info(f"\nKnob updates below threshold. Stopping early at epoch {epoch}.")
                 break
 

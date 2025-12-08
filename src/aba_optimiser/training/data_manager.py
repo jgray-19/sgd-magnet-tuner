@@ -27,13 +27,13 @@ class DataManager:
         all_bpms: list[str],
         simulation_config: SimulationConfig,
         measurement_files: list[str],
-        num_tracks: int,
+        num_bunches: int,
         flattop_turns: int,
     ):
         self.all_bpms = all_bpms
         self.simulation_config = simulation_config
         self.measurement_files = measurement_files
-        self.num_tracks = num_tracks
+        self.num_bunches = num_bunches
         self.flattop_turns = flattop_turns
 
         # Available turns will be populated after loading track data
@@ -56,7 +56,9 @@ class DataManager:
         # Copy because we drop non-selected markers and convert from view.
         return select_markers(df, self.all_bpms).copy()
 
-    def _read_parquet(self, source: str, needed_turns: set[int] | None, offset: int) -> pd.DataFrame:
+    def _read_parquet(
+        self, source: str, needed_turns: set[int] | None, offset: int
+    ) -> pd.DataFrame:
         """Read a parquet with optional turn filtering and column validation."""
         if needed_turns:
             filtered_turns = [t - offset for t in needed_turns]
@@ -78,7 +80,11 @@ class DataManager:
         for file_idx in self.track_data:
             all_turns = sorted(self.track_data[file_idx].index.get_level_values("turn").unique())
             # reduce bpm order to only those present in the data
-            bpm_order_filtered = [bpm for bpm in self.all_bpms if bpm in self.track_data[file_idx].index.get_level_values("name")]
+            bpm_order_filtered = [
+                bpm
+                for bpm in self.all_bpms
+                if bpm in self.track_data[file_idx].index.get_level_values("name")
+            ]
             self.track_data[file_idx] = self.track_data[file_idx].reindex(
                 pd.MultiIndex.from_product([all_turns, bpm_order_filtered], names=["turn", "name"])
             )
@@ -102,10 +108,15 @@ class DataManager:
             if mf is not None:
                 sources.append(mf)
             else:
-                raise ValueError("measurement_files should not contain None - controller should have resolved defaults")
+                raise ValueError(
+                    "measurement_files should not contain None - controller should have resolved defaults"
+                )
 
         # Turn offsets per file (global turn space)
-        offsets = {file_idx: file_idx * self.flattop_turns * self.num_tracks for file_idx in range(len(sources))}
+        offsets = {
+            file_idx: file_idx * self.flattop_turns * self.num_bunches
+            for file_idx in range(len(sources))
+        }
 
         # Load and reduce
         file_tracks: dict[int, pd.DataFrame] = {}
@@ -120,12 +131,16 @@ class DataManager:
             # set the x_weight and y_weight to 0
             nan_mask = df[["x", "y", "px", "py"]].isna().any(axis=1)
             if nan_mask.any():
-                raise ValueError("Found NaN values in track data. Please clean the data before proceeding.")
+                raise ValueError(
+                    "Found NaN values in track data. Please clean the data before proceeding."
+                )
 
         self.track_data = file_tracks
 
         # Build a fast file map {turn -> file_index}
-        file_turn_sets = {file_idx: set(self.track_data[file_idx]["turn"].unique()) for file_idx in file_tracks}
+        file_turn_sets = {
+            file_idx: set(self.track_data[file_idx]["turn"].unique()) for file_idx in file_tracks
+        }
 
         for df in self.track_data.values():
             df.set_index(["turn", "name"], inplace=True)
@@ -148,13 +163,17 @@ class DataManager:
 
         LOGGER.info(
             "Loaded track data: %s",
-            ", ".join(f"file_{idx}={len(file_turn_sets[idx])} turns" for idx in sorted(file_tracks.keys())),
+            ", ".join(
+                f"file_{idx}={len(file_turn_sets[idx])} turns" for idx in sorted(file_tracks.keys())
+            ),
         )
 
     def prepare_turn_batches(self, config_manager: ConfigurationManager) -> None:
         """Build the list of turns to be processed and validate availability."""
         if self.track_data is None:
-            raise ValueError("Track data must be loaded before preparing turn batches. Call load_track_data() first.")
+            raise ValueError(
+                "Track data must be loaded before preparing turn batches. Call load_track_data() first."
+            )
 
         LOGGER.info("Preparing turn batches for worker distribution")
 
@@ -172,7 +191,9 @@ class DataManager:
                     turns_to_remove.add(track_turns[-1])  # Last
 
         self.available_turns = [t for t in self.available_turns if t not in turns_to_remove]
-        LOGGER.info(f"Removed {len(turns_to_remove)} boundary turns, {len(self.available_turns)} available")
+        LOGGER.info(
+            f"Removed {len(turns_to_remove)} boundary turns, {len(self.available_turns)} available"
+        )
 
         # Determine how many batches to create
         num_workers = self.simulation_config.num_workers
@@ -203,9 +224,11 @@ class DataManager:
         # Use configured or adjusted tracks_per_worker
         self.tracks_per_worker = tracks_per_worker
 
-        actual_workers = num_batches * num_ranges * 2
+        num_starts = len(config_manager.start_bpms)
+        num_ends = len(config_manager.end_bpms)
+        actual_workers = num_batches * (num_starts + num_ends)
         LOGGER.info(
-            f"Creating {num_batches} batches × {num_ranges} ranges × 2 directions = {actual_workers} workers, {self.tracks_per_worker} turns/worker"
+            f"Creating {num_batches} batches x ({num_starts} starts + {num_ends} ends) = {actual_workers} workers, {self.tracks_per_worker} turns/worker"
         )
 
         # Organise turns by file, then create batches round-robin
@@ -229,7 +252,10 @@ class DataManager:
                     file_idx_pos = 0
 
                 file_idx = file_indices[file_idx_pos]
-                if file_idx in turns_by_file and len(turns_by_file[file_idx]) >= self.tracks_per_worker:
+                if (
+                    file_idx in turns_by_file
+                    and len(turns_by_file[file_idx]) >= self.tracks_per_worker
+                ):
                     # Take batch from this file
                     batch = turns_by_file[file_idx][: self.tracks_per_worker]
                     turns_by_file[file_idx] = turns_by_file[file_idx][self.tracks_per_worker :]

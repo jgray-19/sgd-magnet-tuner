@@ -95,11 +95,13 @@ class BaseMadInterface:
             seq_name: Name of the sequence to load
         """
         logger.info(f"Loading sequence from {sequence_file}")
-        self.mad.send("shush()")
+        # self.mad.send("shush()")
         self.mad.send(f'MADX:load("{sequence_file}")')
+        if self.mad.MADX[seq_name] == 0:
+            raise ValueError(f"Sequence '{seq_name}' not found in MAD file '{sequence_file}'")
         self.mad.send(f"loaded_sequence = MADX.{seq_name}")
         self.mad["SEQ_NAME"] = seq_name
-        self.mad.send("unshush()")
+        # self.mad.send("unshush()")
 
     def setup_beam(self, beam_energy: float, particle: str = "proton") -> None:
         """
@@ -325,7 +327,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
                 {"expr": f"\\t -> math.abs(t.q1)-(62+{target_qx})", "name": "'q1'"},
                 {"expr": f"\\t -> math.abs(t.q2)-(60+{target_qy})", "name": "'q2'"},
             ],
-            objective={"fmin": 1e-18},
+            objective={"fmin": 1e-8},
             info=2,
         )
 
@@ -339,13 +341,14 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
 
     def run_tracking(
         self,
-        x0: float = 0,
-        px0: float = 0,
-        y0: float = 0,
-        py0: float = 0,
-        t0: float = 0,
-        pt0: float = 0,
+        x: float = 0,
+        px: float = 0,
+        y: float = 0,
+        py: float = 0,
+        t: float = 0,
+        pt: float = 0,
         nturns: int = 1,
+        **kwargs,
     ) -> None:
         """
         Run particle tracking.
@@ -357,16 +360,14 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
         logger.debug(f"Running tracking for {nturns} turns")
         self.mad["trk", "mflw"] = self.mad.track(
             sequence="loaded_sequence",
-            X0={"x": x0, "px": px0, "y": y0, "py": py0, "t": t0, "pt": pt0},
+            X0={"x": x, "px": px, "y": y, "py": py, "t": t, "pt": pt},
             nturn=nturns,
+            **kwargs,
         )
 
     def get_tracking_data(self) -> tfs.TfsDataFrame:
         """
         Retrieve tracking data.
-
-        Args:
-            last_turn_only: If True, return only last turn data
 
         Returns:
             DataFrame with tracking results

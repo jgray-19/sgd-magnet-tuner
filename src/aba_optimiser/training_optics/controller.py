@@ -113,9 +113,10 @@ class OpticsController(BaseController):
             seq_name=sequence_config.seq_name,
         )
 
+        # Use explicit BPM (start, end) pairs from config manager
         self.worker_payloads = create_worker_payloads(
             optics_path,
-            self.config_manager.bpm_ranges,
+            self.config_manager.bpm_pairs,
             sequence_config.bad_bpms,
             template_config,
             self.use_errors,
@@ -159,12 +160,23 @@ class OpticsController(BaseController):
 
 def create_worker_payloads(
     optics_dir: Path,
-    bpms_ranges: list[str],
+    bpm_pairs: list[tuple[str, str]],
     bad_bpms: list[str] | None,
     template_config: WorkerConfig,
     use_errors: bool = True,
 ) -> list[tuple[WorkerConfig, OpticsData]]:
-    """Create worker payloads for optics optimisation."""
+    """Create worker payloads for optics optimisation.
+
+    Args:
+        optics_dir: Path to directory containing TFS optics measurement files
+        bpm_pairs: List of (start_bpm, end_bpm) tuples defining tracking ranges
+        bad_bpms: Optional list of BPM names to exclude from analysis
+        template_config: Template configuration to use for all workers
+        use_errors: Whether to use measurement errors in optimization
+
+    Returns:
+        List of (WorkerConfig, OpticsData) tuples for each worker
+    """
 
     logger.info(f"Loading beta measurements from {optics_dir}")
 
@@ -205,61 +217,68 @@ def create_worker_payloads(
         if any(bpm in df.index for bpm in (bad_bpms or [])):
             raise ValueError("Bad BPMs found in optics measurement data.")
 
+    if not bpm_pairs:
+        return []
+
     worker_payloads = []
-    for sdir in [1, -1]:
-        for bpm_range in bpms_ranges:
-            start_bpm, end_bpm = bpm_range.split("/")
-            init_bpm = start_bpm if sdir == 1 else end_bpm
 
-            # Generate initial conditions
-            init_cond = {}
-            init_cond["beta11"] = beta_x.loc[init_bpm, "BETX"]
-            init_cond["beta22"] = beta_y.loc[init_bpm, "BETY"]
-            init_cond["alfa11"] = alfa_x.loc[init_bpm, "ALFX"]
-            init_cond["alfa22"] = alfa_y.loc[init_bpm, "ALFY"]
-            init_cond["dx"] = disp_x.loc[init_bpm, "DX"]
-            init_cond["dpx"] = disp_x.loc[init_bpm, "DPX"]
-            init_cond["dy"] = disp_y.loc[init_bpm, "DY"]
-            init_cond["dpy"] = disp_y.loc[init_bpm, "DPY"]
-            init_cond["x"] = orbit_x.loc[init_bpm, "X"]
-            init_cond["y"] = orbit_y.loc[init_bpm, "Y"]
+    # Extract unique starts and ends from bpm_pairs
+    # (bpm_pairs is a cartesian product, we need to extract the original lists)
+    starts = {s for s, _ in bpm_pairs}
+    ends = {e for _, e in bpm_pairs}
 
-            # Extract comparison data using utility function
-            # We need to extract from both beta_x and beta_y separately and then combine
-            betx_data = extract_bpm_range_data(beta_x, start_bpm, end_bpm, sdir, ["BETX"])
-            bety_data = extract_bpm_range_data(beta_y, start_bpm, end_bpm, sdir, ["BETY"])
-            # alfx_data = extract_bpm_range_data(beta_x, start_bpm, end_bpm, sdir, ["ALFX"])
-            # alfy_data = extract_bpm_range_data(beta_y, start_bpm, end_bpm, sdir, ["ALFY"])
-            comp = np.hstack([betx_data, bety_data])  # , alfx_data, alfy_data])
+    # Build list of (start_bpm, end_bpm, init_bpm, sdir) tuples according to
+    # the requested behaviour: for sdir=1 iterate starts with fixed first end;
+    # for sdir=-1 iterate ends with fixed first start.
+    range_specs: list[tuple[str, str, str, int]] = [(s, ends[0], s, 1) for s in starts] + [
+        (starts[0], e, e, -1) for e in ends
+    ]
 
-            errbetx_data = extract_bpm_range_data(beta_x, start_bpm, end_bpm, sdir, ["ERRBETX"])
-            errbety_data = extract_bpm_range_data(beta_y, start_bpm, end_bpm, sdir, ["ERRBETY"])
-            # erralfx_data = extract_bpm_range_data(beta_x, start_bpm, end_bpm, sdir, ["ERRALFX"])
-            # erralfy_data = extract_bpm_range_data(beta_y, start_bpm, end_bpm, sdir, ["ERRALFY"])
-            err_comp = np.hstack([errbetx_data, errbety_data])  # , erralfx_data, erralfy_data])
+    # Single payload construction loop
+    for start_bpm, end_bpm, init_bpm, sdir in range_specs:
+        # Generate initial conditions
+        init_cond = {}
+        init_cond["beta11"] = beta_x.loc[init_bpm, "BETX"]
+        init_cond["beta22"] = beta_y.loc[init_bpm, "BETY"]
+        init_cond["alfa11"] = alfa_x.loc[init_bpm, "ALFX"]
+        init_cond["alfa22"] = alfa_y.loc[init_bpm, "ALFY"]
+        init_cond["dx"] = disp_x.loc[init_bpm, "DX"]
+        init_cond["dpx"] = disp_x.loc[init_bpm, "DPX"]
+        init_cond["dy"] = disp_y.loc[init_bpm, "DY"]
+        init_cond["dpy"] = disp_y.loc[init_bpm, "DPY"]
+        init_cond["x"] = orbit_x.loc[init_bpm, "X"]
+        init_cond["y"] = orbit_y.loc[init_bpm, "Y"]
 
-            if not use_errors or np.all(err_comp == 0):
-                logger.warning(
-                    f"No valid errors found for BPM range {start_bpm} to {end_bpm}. "
-                    "Using uniform errors of 1.0."
-                )
-                err_comp = np.ones_like(err_comp)
+        # Extract comparison data using utility function
+        betx_data = extract_bpm_range_data(beta_x, start_bpm, end_bpm, sdir, ["BETX"])
+        bety_data = extract_bpm_range_data(beta_y, start_bpm, end_bpm, sdir, ["BETY"])
+        comp = np.hstack([betx_data, bety_data])
 
-            config = replace(
-                template_config,
-                start_bpm=start_bpm,
-                end_bpm=end_bpm,
-                sdir=sdir,
+        errbetx_data = extract_bpm_range_data(beta_x, start_bpm, end_bpm, sdir, ["ERRBETX"])
+        errbety_data = extract_bpm_range_data(beta_y, start_bpm, end_bpm, sdir, ["ERRBETY"])
+        err_comp = np.hstack([errbetx_data, errbety_data])
+
+        if not use_errors or np.all(err_comp == 0):
+            logger.warning(
+                f"No valid errors found for BPM range {start_bpm} to {end_bpm}. "
+                "Using uniform errors of 1.0."
             )
+            err_comp = np.ones_like(err_comp)
 
-            data = OpticsData(
-                comparisons=comp,
-                variances=err_comp**2,
-                init_coords=init_cond,
-            )
+        config = replace(
+            template_config,
+            start_bpm=start_bpm,
+            end_bpm=end_bpm,
+            sdir=sdir,
+        )
 
-            worker_payloads.append((config, data))
+        data = OpticsData(
+            comparisons=comp,
+            variances=err_comp**2,
+            init_coords=init_cond,
+        )
 
+        worker_payloads.append((config, data))
     return worker_payloads
 
 

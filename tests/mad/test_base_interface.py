@@ -291,7 +291,7 @@ def test_twiss(loaded_interface_with_beam: BaseMadInterface):
 @pytest.mark.parametrize(
     "target_qx,target_qy,qx_knob,qy_knob",
     [
-        (0.28, 0.31, None, None),
+        (0.2801, 0.3101, None, None),
         (0.29, 0.32, "dqx_b1", "dqy_b1"),
         (0.27, 0.30, None, None),
     ],
@@ -404,7 +404,7 @@ def test_run_tracking_nonzero_initial(loaded_interface_with_beam: BaseMadInterfa
 
     # Add a non-zero initial condition and check tracking
     x0, px0, y0, py0, t0, pt0 = 1e-3, 1e-4, -1e-3, -1e-4, 1e-7, 1e-5
-    interface.run_tracking(x0=x0, px0=px0, y0=y0, py0=py0, t0=t0, pt0=pt0, nturns=5)
+    interface.run_tracking(x=x0, px=px0, y=y0, py=py0, t=t0, pt=pt0, nturns=5)
     results_df = interface.mad.trk.to_df()
 
     # Check that there are 5 rows

@@ -5,16 +5,14 @@ from __future__ import annotations
 import dataclasses
 import gc
 import logging
-
-# import multiprocessing as mp
 import random
-import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
+from aba_optimiser.physics.lhc_bends import normalise_lhcbend_magnets
 from aba_optimiser.training.base_controller import BaseController, LHCControllerMixin
 from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.utils import normalize_true_strengths
@@ -73,10 +71,14 @@ class Controller(BaseController):
             logger.info("Optimising quadrupoles")
         if simulation_config.optimise_bends:
             logger.info("Optimising bends")
+        if simulation_config.optimise_momenta:
+            logger.info("Including momenta (px, py) in loss function")
+        else:
+            logger.info("Using position-only optimization (x, y only)")
 
         # Normalize and validate multi-config inputs
         measurement_files, corrector_files, tune_knobs_files, machine_deltaps = (
-            self._normalize_multi_config_inputs(
+            self._validate_config_inputs(
                 measurement_config.measurement_files,
                 measurement_config.corrector_files,
                 measurement_config.tune_knobs_files,
@@ -107,14 +109,16 @@ class Controller(BaseController):
         )
 
         # Initialize tracking-specific managers
-        self._init_data_manager(measurement_config.num_tracks, measurement_config.flattop_turns)
+        self._init_data_manager(
+            measurement_config.bunches_per_file, measurement_config.flattop_turns
+        )
         self._init_worker_manager(
             sequence_config.magnet_range,
             sequence_config.bad_bpms,
             sequence_config.seq_name,
             sequence_config.beam_energy,
             measurement_config.flattop_turns,
-            measurement_config.num_tracks,
+            measurement_config.bunches_per_file,
         )
         # Process true strengths with tracking-specific transformations
         true_strengths_dict = self._process_true_strengths(true_strengths)
@@ -215,20 +219,10 @@ class Controller(BaseController):
         return uncertainties
 
     @staticmethod
-    def _normalize_multi_config_inputs(
+    def _validate_config_inputs(
         measurement_files, corrector_files, tune_knobs_files, machine_deltaps
     ) -> tuple:
-        """Normalize multi-configuration inputs to lists and validate lengths."""
-        # Normalize inputs to lists
-        if isinstance(measurement_files, Path | str) or measurement_files is None:
-            measurement_files = [measurement_files]
-        if isinstance(corrector_files, Path | str) or corrector_files is None:
-            corrector_files = [corrector_files]
-        if isinstance(tune_knobs_files, Path | str) or tune_knobs_files is None:
-            tune_knobs_files = [tune_knobs_files]
-        if isinstance(machine_deltaps, int | float):
-            machine_deltaps = [machine_deltaps]
-
+        """Validate and normalise multi-configuration inputs."""
         # Validate and expand lists
         num_configs = len(measurement_files)
         for name, lst in [
@@ -251,7 +245,7 @@ class Controller(BaseController):
             self.config_manager.all_bpms,
             self.simulation_config,
             self.measurement_files,
-            num_tracks=num_tracks,
+            num_bunches=num_tracks,
             flattop_turns=flattop_turns,
         )
 
@@ -310,20 +304,7 @@ class Controller(BaseController):
                     true_strengths_dict.pop("deltap")
                 )
 
-        # Normalize bend magnet keys (remove [ABCD] and average)
-        pattern = r"(MB\.)([ABCD])([0-9]+[LR][1-8]\.B[12])\.k0"
-        normalized = {}
-        for key, value in true_strengths_dict.items():
-            match = re.match(pattern, key)
-            if match:
-                new_key = match.group(1) + match.group(3) + ".k0"
-                if new_key not in normalized:
-                    normalized[new_key] = []
-                normalized[new_key].append(value)
-            else:
-                normalized[key] = value
-
-        return {k: np.mean(v) if isinstance(v, list) else v for k, v in normalized.items()}
+        return normalise_lhcbend_magnets(true_strengths_dict)
 
     def _process_initial_knobs(self, initial_knob_strengths) -> dict[str, float] | None:
         """Process initial knob strengths, converting deltap to pt if present."""

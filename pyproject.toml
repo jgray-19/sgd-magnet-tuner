@@ -19,6 +19,7 @@ dependencies = [
     "tensorboardX",
     "pymadng>=0.3.0",
     "matplotlib",
+    "uncertainties",
 ]
 
 [project.optional-dependencies]
@@ -58,6 +59,8 @@ package-dir = {"" = "src"}
 source = ["src/aba_optimiser"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["tests/data"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]

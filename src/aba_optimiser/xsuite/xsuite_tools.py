@@ -39,7 +39,7 @@ def create_xsuite_environment(
     beam_energy: float = BEAM_ENERGY,
     seq_name: str | None = None,
     rerun_madx: bool = False,
-    json_file: Path | None = None,
+    json_file: Path | bool = True,
 ) -> xt.Environment:
     """
     Run MADX to create a saved sequence then load this into xsuite.
@@ -50,7 +50,7 @@ def create_xsuite_environment(
         beam_energy: Beam energy in GeV
         seq_name: Name of the sequence
         rerun_madx: Whether to force re-running MADX
-        json_file: Optional custom path to JSON file (overrides automatic path)
+        json_file: Optional custom path to JSON file. If True, uses default path. If False, always rerun MADX.
 
     Returns:
         xsuite Environment object
@@ -60,7 +60,7 @@ def create_xsuite_environment(
             raise ValueError("Either beam or sequence_file must be provided.")
         sequence_file = get_lhc_file_path(beam)
 
-    if json_file is None:
+    if json_file is True:
         xsuite_dir = PROJECT_ROOT / "src" / "aba_optimiser" / "xsuite"
         json_file = xsuite_dir / f"{sequence_file.stem}.json"
 
@@ -68,17 +68,19 @@ def create_xsuite_environment(
         seq_name = sequence_file.stem
 
     if (
-        not json_file.exists()  # If the JSON file does not exist
+        rerun_madx is True  # If rerun is requested
+        or json_file is False
+        or not json_file.exists()  # If the JSON file does not exist
         # Or sequence file is newer than JSON file
         or sequence_file.stat().st_mtime > json_file.stat().st_mtime
-        or rerun_madx  # or if override is requested
     ):
         if not sequence_file.exists():
             raise FileNotFoundError(f"Sequence file not found: {sequence_file}")
 
         env: xt.Environment = load_madx_lattice(file=sequence_file)
-        env.to_json(json_file)
-        logging.info(f"xsuite environment saved to {json_file}")
+        if json_file is not False:
+            env.to_json(json_file)
+            logging.info(f"xsuite environment saved to {json_file}")
     else:
         logging.info(f"Loading existing xsuite environment from {json_file}")
         env = xt.Environment.from_json(json_file)
@@ -246,6 +248,41 @@ def run_acd_twiss(line: xt.Line, beam: int, dpp: float, driven_tunes: list[float
     return line_acd.twiss(method="4d", delta0=dpp)
 
 
+def xsuite_tws_to_ng(tws) -> tfs.TfsDataFrame:
+    """Convert xsuite twiss object to ng-compatible format.
+
+    Transforms twiss parameters from xsuite format to the format expected by
+    the ng (non-Gaussian) analysis tools, including column renaming and index
+    changes to match BPM naming conventions.
+
+    Args:
+        tws: Twiss object from xsuite tracking.
+
+    Returns:
+        Twiss data frame with columns and headers formatted for ng analysis.
+    """
+    import tfs
+
+    tws_df = tws.to_pandas()
+    tws_df = tfs.TfsDataFrame(tws_df)
+    tws_df.columns = [c.lower() for c in tws_df.columns]
+    # Convert BPM names to uppercase to match tracking data
+    tws_df["name"] = tws_df["name"].str.upper()
+    tws_df = tws_df.rename(
+        columns={
+            "betx": "beta11",
+            "bety": "beta22",
+            "alfx": "alfa11",
+            "alfy": "alfa22",
+            "mux": "mu1",
+            "muy": "mu2",
+        }
+    )
+    # Use fractional tunes (not full tunes)
+    tws_df.headers = {"q1": float(tws.qx % 1), "q2": float(tws.qy % 1)}
+    return tws_df.set_index("name")
+
+
 def run_tracking(
     line: xt.Line,
     particles: xt.Particles,
@@ -269,7 +306,16 @@ def run_tracking(
 def _set_corrector_strengths(env: xt.Environment, corrector_table: tfs.TfsDataFrame) -> None:
     logger.debug(f"Applying corrector strengths to {len(corrector_table)} elements")
     for _, row in corrector_table.iterrows():
-        env.set(row["ename"].lower(), knl=[-row["hkick"]], ksl=[row["vkick"]])
+        assert (
+            env[row["ename"].lower()].knl[0] == 0.0 and env[row["ename"].lower()].ksl[0] == 0.0
+        ), (
+            f"Corrector {row['ename']} already has non-zero strength "
+            f"knl={env[row['ename'].lower()].knl[0]}, "
+            f"ksl={env[row['ename'].lower()].ksl[0]}"
+        )
+        knl_str = -row["hkick"] if abs(row["hkick"]) > 1e-10 else 0.0
+        ksl_str = -row["vkick"] if abs(row["vkick"]) > 1e-10 else 0.0
+        env.set(row["ename"].lower(), knl=[knl_str], ksl=[ksl_str])
 
 
 def initialise_env(
@@ -307,6 +353,10 @@ def initialise_env(
         rerun_madx=False,
         json_file=json_file,
     )
+
+    for ename, elem in base_env[seq_name].element_dict.items():
+        if isinstance(elem, xt.RBend):
+            base_env.set(ename, length=elem.length_straight)
 
     for k, v in matched_tunes.items():
         # convert dq[x|y]_b{beam}_op to dq[x|y].b{beam}_op

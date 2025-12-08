@@ -17,6 +17,7 @@ import numpy as np
 from aba_optimiser.config import PARTICLE_MASS
 from aba_optimiser.physics.deltap import dp2pt
 from aba_optimiser.workers import TrackingData, TrackingWorker, WorkerConfig
+from aba_optimiser.workers.tracking_position_only import PositionOnlyTrackingWorker
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -113,71 +114,72 @@ class WorkerManager:
         # Precompute arrays once per file for memory efficiency
         arrays_cache = {idx: self._extract_arrays(df) for idx, df in track_data.items()}
 
+        # Split bpm_ranges into unique starts and ends
+        starts = list({r.split("/")[0] for r in bpm_ranges})
+        ends = list({r.split("/")[1] for r in bpm_ranges})
+
         LOGGER.info(
-            f"Creating worker payloads: {len(bpm_ranges)} BPM ranges x {len(turn_batches)} batches x 2 directions"
+            f"Creating worker payloads: {len(starts)} starts + {len(ends)} ends x {len(turn_batches)} batches"
         )
-        for sdir in [1, -1]:
-            for bpm_i, bpm_range in enumerate(bpm_ranges):
-                start_bpm, end_bpm = bpm_range.split("/")
-                for batch_idx, turn_batch in enumerate(turn_batches):
-                    if (
-                        simulation_config.different_turns_per_range
-                        and batch_idx % len(bpm_ranges) != bpm_i
-                    ):
-                        continue
 
-                    if not turn_batch:
-                        raise ValueError(f"Empty batch {batch_idx} for {bpm_range}")
+        # Build list of (start_bpm, end_bpm, sdir) tuples according to
+        # the requested behaviour: for sdir=1 iterate starts with fixed first end;
+        # for sdir=-1 iterate ends with fixed first start.
+        range_specs: list[tuple[str, str, int]] = [(s, ends[0], 1) for s in starts] + [
+            (starts[0], e, -1) for e in ends
+        ]
 
-                    # All turns must be from same file
-                    primary_file_idx = file_turn_map[turn_batch[0]]
-                    if any(file_turn_map[t] != primary_file_idx for t in turn_batch):
-                        raise ValueError(f"Batch {batch_idx} has turns from multiple files")
+        for start_bpm, end_bpm, sdir in range_specs:
+            bpm_range = f"{start_bpm}/{end_bpm}"
+            for batch_idx, turn_batch in enumerate(turn_batches):
+                if not turn_batch:
+                    raise ValueError(f"Empty batch {batch_idx} for {bpm_range}")
 
-                    # Create payload arrays
-                    pos, mom, pos_var, mom_var, init_coords, pts = self._make_worker_payload(
-                        turn_batch,
-                        file_turn_map,
-                        start_bpm,
-                        end_bpm,
-                        self.n_data_points[bpm_range],
-                        sdir,
-                        machine_deltaps,
-                        arrays_cache,
-                    )
+                # All turns must be from same file
+                primary_file_idx = file_turn_map[turn_batch[0]]
+                if any(file_turn_map[t] != primary_file_idx for t in turn_batch):
+                    raise ValueError(f"Batch {batch_idx} has turns from multiple files")
 
-                    for arr in (pos, mom, pos_var, mom_var):
-                        arr.setflags(write=False)
+                # Create payload arrays
+                pos, mom, pos_var, mom_var, init_coords, pts = self._make_worker_payload(
+                    turn_batch,
+                    file_turn_map,
+                    start_bpm,
+                    end_bpm,
+                    self.n_data_points[bpm_range],
+                    sdir,
+                    machine_deltaps,
+                    arrays_cache,
+                )
 
-                    primary_file_idx = file_turn_map[turn_batch[0]]
-                    if any(file_turn_map[t] != primary_file_idx for t in turn_batch):
-                        raise ValueError(f"Batch {batch_idx} has turns from multiple files")
+                for arr in (pos, mom, pos_var, mom_var):
+                    arr.setflags(write=False)
 
-                    LOGGER.debug(
-                        f"Worker {len(payloads)}: file={primary_file_idx}, range={bpm_range}, sdir={sdir}, turns={len(turn_batch)}"
-                    )
-                    data = TrackingData(
-                        position_comparisons=pos,
-                        momentum_comparisons=mom,
-                        position_variances=pos_var,
-                        momentum_variances=mom_var,
-                        init_coords=init_coords,
-                        init_pts=pts,
-                    )
-                    config = WorkerConfig(
-                        start_bpm=start_bpm,
-                        end_bpm=end_bpm,
-                        magnet_range=self.magnet_range,
-                        sequence_file_path=self.sequence_file_path,
-                        corrector_strengths=self.corrector_strengths_files[primary_file_idx],
-                        tune_knobs_file=self.tune_knobs_files[primary_file_idx],
-                        beam_energy=self.beam_energy,
-                        sdir=sdir,
-                        bad_bpms=self.bad_bpms,
-                        seq_name=self.seq_name,
-                    )
+                LOGGER.debug(
+                    f"Worker {len(payloads)}: file={primary_file_idx}, range={bpm_range}, sdir={sdir}, turns={len(turn_batch)}"
+                )
+                data = TrackingData(
+                    position_comparisons=pos,
+                    momentum_comparisons=mom,
+                    position_variances=pos_var,
+                    momentum_variances=mom_var,
+                    init_coords=init_coords,
+                    init_pts=pts,
+                )
+                config = WorkerConfig(
+                    start_bpm=start_bpm,
+                    end_bpm=end_bpm,
+                    magnet_range=self.magnet_range,
+                    sequence_file_path=self.sequence_file_path,
+                    corrector_strengths=self.corrector_strengths_files[primary_file_idx],
+                    tune_knobs_file=self.tune_knobs_files[primary_file_idx],
+                    beam_energy=self.beam_energy,
+                    sdir=sdir,
+                    bad_bpms=self.bad_bpms,
+                    seq_name=self.seq_name,
+                )
 
-                    payloads.append((data, config, primary_file_idx))
+                payloads.append((data, config, primary_file_idx))
 
         # Log summary of worker file assignments
         file_usage = {}
@@ -325,9 +327,17 @@ class WorkerManager:
         )
         LOGGER.info(f"Starting {len(payloads)} workers...")
 
+        # Select worker class based on whether momenta optimization is enabled
+        if simulation_config.optimise_momenta:
+            worker_class = TrackingWorker
+            LOGGER.info("Using TrackingWorker (position + momentum)")
+        else:
+            worker_class = PositionOnlyTrackingWorker
+            LOGGER.info("Using PositionOnlyTrackingWorker (position only)")
+
         for worker_id, (data, config, _file_idx) in enumerate(payloads):
             parent, child = mp.Pipe()
-            w = TrackingWorker(child, worker_id, data, config, simulation_config, mode="arc-by-arc")
+            w = worker_class(child, worker_id, data, config, simulation_config, mode="arc-by-arc")
             w.start()
             self.parent_conns.append(parent)
             self.workers.append(w)

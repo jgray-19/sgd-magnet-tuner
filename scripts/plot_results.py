@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 
+SAVE_DPI = 150
+
 
 def read_deltap_file(filepath):
     """Parse a results file into arrays and summary statistics."""
@@ -63,6 +65,18 @@ EXPECTED_MAP = {
 }
 
 
+ARC_MAPPING = {
+    1: "12",
+    2: "23",
+    3: "34",
+    4: "45",
+    5: "56",
+    6: "67",
+    7: "78",
+    8: "81",
+}
+
+
 BASE_COLORS = {
     "0": "blue",
     "0p1": "green",
@@ -79,6 +93,42 @@ READABLE_NAMES = {
     "m0p1": "-0.1",
     "m0p2": "-0.2",
 }
+
+
+def _sci_tex(value: float, sig: int = 2) -> str:
+    """Return a LaTeX math fragment for `value` in scientific notation.
+
+    Examples:
+      1.23e-4 -> "1.23\\times10^{-4}"
+      1.23e0 -> "1.23"
+      1.0e1 -> "10"
+      1.0e-1 -> "0.1"
+      0 -> "0"
+    The returned string is suitable for inclusion inside a math `$...$` string.
+    """
+    if value == 0:
+        return "0"
+    s = f"{value:.{sig}e}"
+    mant, exp = s.split("e")
+    exp_i = int(exp)
+    mant_f = float(mant)
+    if exp_i == 0:
+        return rf"{mant_f:.{sig}f}"
+    if abs(exp_i) == 1:
+        return rf"{mant_f * 10**exp_i:.{sig}f}"
+    return rf"{mant_f:.{sig}f}\times10^{{{exp_i}}}"
+
+
+def _sci_tex_signed(value: float, sig: int = 2) -> str:
+    """Return a signed LaTeX fragment: "+1.23\\times10^{-4}" or "-1.23\\times10^{-4}".
+
+    Use this for intercept terms so the sign is explicit when concatenated.
+    """
+    if value == 0:
+        return "+0"
+    sign = "+" if value >= 0 else "-"
+    mag = abs(value)
+    return sign + _sci_tex(mag, sig)
 
 
 @dataclass
@@ -98,9 +148,10 @@ def format_fit_label(
     extra: str = "",
     is_estimated: bool = False,
 ) -> str:
-    sign = "+ " if intercept >= 0 else "- "
     est = " Corrector" if is_estimated else " DLMN"
-    return f"Beam {beam}{est} Fit: y = {slope:.2e}x {sign}{abs(intercept):.2e}{extra}"
+    slope_str = _sci_tex(slope)
+    intercept_str = _sci_tex_signed(intercept)
+    return f"Beam {beam}{est} Fit: $y = {slope_str}x {intercept_str}${extra}"
 
 
 def collect_expected_measured_points(beam_data, dispersion_type="estimated"):
@@ -128,6 +179,9 @@ def collect_expected_measured_points(beam_data, dispersion_type="estimated"):
     elif dispersion_type == "model":
         estimated = beam_data.model_dispersion
         estimated_err = beam_data.model_dispersion_err
+    elif dispersion_type == "none":
+        estimated = {}
+        estimated_err = {}
     else:
         raise ValueError(f"Invalid dispersion_type: {dispersion_type}")
 
@@ -222,6 +276,7 @@ def plot_all_deltap_vs_range(beam_data_list):
         for file_key, d in beam_data.data.items():
             # Plot arcs
             if len(d["arcs"]) > 0:
+                mapped_arcs = [ARC_MAPPING.get(a, a) for a in d["arcs"]]
                 base_color = BASE_COLORS[file_key]
                 if beam_data.beam == 1:
                     color = base_color
@@ -233,18 +288,19 @@ def plot_all_deltap_vs_range(beam_data_list):
                     linestyle = "--"
                     marker = "s"
                 plt.plot(
-                    d["arcs"],
+                    mapped_arcs,
                     d["arc_deltaps"],
                     linestyle=linestyle,
                     marker=marker,
                     color=color,
                 )
-    plt.xlabel("Range")
-    plt.ylabel(r"Deltap ($\times 10^{-5}$)")
+    plt.xlabel("Arc", fontsize=16)
+    plt.ylabel(r"Deltap ($\times 10^{-5}$)", fontsize=16)
     beam_str = f"Beam {beam_data_list[0].beam}" if len(beam_data_list) == 1 else "Beams 1 and 2"
-    plt.title(f"Deltap vs Range for {beam_str} - All Files")
+    # plt.title(f"Deltap vs ARC for {beam_str} - All Files")
     ax = plt.gca()
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}"))
+    ax.tick_params(axis="both", labelsize=14)
     # Custom legend
     handles = []
     labels = []
@@ -261,15 +317,17 @@ def plot_all_deltap_vs_range(beam_data_list):
     handle_b2 = plt.Line2D([0], [0], color="black", linestyle="--", marker="s", markersize=6)
     handles.append(handle_b2)
     labels.append("Beam 2")
-    plt.legend(handles, labels, loc="best")
+    plt.legend(handles, labels, loc="best", fontsize=14)
     plt.grid(visible=True)
     if len(beam_data_list) == 1:
         plt.savefig(
-            f"b{beam_data_list[0].beam}{co}_results/deltap_all_beam{beam_data_list[0].beam}.png"
+            f"b{beam_data_list[0].beam}{co}_results/deltap_all_beam{beam_data_list[0].beam}.png",
+            dpi=SAVE_DPI,
+            bbox_inches="tight",
         )
     else:
         Path("combined_results").mkdir(parents=True, exist_ok=True)
-        plt.savefig("combined_results/deltap_all_beams.png")
+        plt.savefig("combined_results/deltap_all_beams.png", dpi=SAVE_DPI, bbox_inches="tight")
     plt.show()
 
 
@@ -285,13 +343,12 @@ def plot_difference_vs_arc(beam_data: BeamData):
     base_deltaps = beam_data.data["0"]["arc_deltaps"]
     if len(base_deltaps) == 0:
         return
+    mapped_arcs = [ARC_MAPPING.get(a, a) for a in beam_data.data["0"]["arcs"]]
     for i, file_key in enumerate(files):
         ax = axes[i]
         diff_deltaps = beam_data.data[file_key]["arc_deltaps"]
         diffs = diff_deltaps - base_deltaps
-        expected_diff = (
-            beam_data.data[file_key]["expected"] - beam_data.data["0"]["expected"]
-        )
+        expected_diff = beam_data.data[file_key]["expected"] - beam_data.data["0"]["expected"]
         n = len(diffs)
         if n == 0:
             continue
@@ -299,7 +356,7 @@ def plot_difference_vs_arc(beam_data: BeamData):
         std_diff = float(np.std(diffs))
         ci = 1.96 * std_diff / np.sqrt(n) if n > 1 else 0.0
         ax.plot(
-            beam_data.data["0"]["arcs"],
+            mapped_arcs,
             diffs,
             "o-",
             color="blue",
@@ -313,7 +370,7 @@ def plot_difference_vs_arc(beam_data: BeamData):
             label=f"Mean: {mean_diff * 1e5:.1f}",
         )
         ax.fill_between(
-            beam_data.data["0"]["arcs"],
+            mapped_arcs,
             mean_diff - ci,
             mean_diff + ci,
             alpha=0.2,
@@ -342,19 +399,20 @@ def plot_difference_vs_arc(beam_data: BeamData):
                 alpha=0.7,
                 label=f"Mean Arcs Diff: {mean_arcs_diff * 1e5:.1f}",
             )
-        ax.set_ylabel(r"Deltap Difference ($\times 10^{-5}$)")
-        ax.set_title(
-            f"Deltap Difference ({READABLE_NAMES[file_key]} - 0) vs Arc for Beam {beam_data.beam}\nStd Dev: {std_diff:.2e}"
-        )
-        ax.yaxis.set_major_formatter(
-            ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}")
-        )
-        ax.legend()
+        ax.set_ylabel(r"Deltap Difference ($\times 10^{-5}$)", fontsize=16)
+        # ax.set_title(
+        #     f"Deltap Difference ({READABLE_NAMES[file_key]} - 0) vs ARC for Beam {beam_data.beam}\nStd Dev: {std_diff:.2e}"
+        # )
+        ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}"))
+        ax.tick_params(axis="both", labelsize=14)
+        ax.legend(fontsize=14)
         ax.grid(visible=True)
-    axes[-1].set_xlabel("Arc")
+    axes[-1].set_xlabel("Arc", fontsize=16)
     plt.tight_layout()
     plt.savefig(
-        f"b{beam_data.beam}{co}_results/deltap_diffs_all_beam{beam_data.beam}.png"
+        f"b{beam_data.beam}{co}_results/deltap_diffs_all_beam{beam_data.beam}.png",
+        dpi=SAVE_DPI,
+        bbox_inches="tight",
     )
     plt.show()
 
@@ -365,7 +423,7 @@ def plot_expected_vs_measured_mean_common(
     """Common plotting logic for expected vs measured mean deltap plots."""
     if isinstance(beam_data_list, BeamData):
         beam_data_list = [beam_data_list]
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(12, 8))
 
     for beam_data in beam_data_list:
         dlmn_points, corrector_points = collect_expected_measured_points(beam_data, dispersion_type)
@@ -378,6 +436,14 @@ def plot_expected_vs_measured_mean_common(
         stderr = [p["stderr"] for p in dlmn_points]
 
         color = "blue" if beam_data.beam == 1 else "red"
+        fit = None
+        if include_fits and len(means) > 1:
+            fit = np.polyfit(expecteds, means, 1)
+        dlmn_label = (
+            format_fit_label(beam_data.beam, fit[0], fit[1])
+            if fit is not None
+            else f"Beam {beam_data.beam} DLMN result"
+        )
         plt.errorbar(
             expecteds,
             means,
@@ -386,11 +452,10 @@ def plot_expected_vs_measured_mean_common(
             capsize=8,
             markersize=6,
             color=color,
-            label=f"Beam {beam_data.beam} DLMN result",
+            label=dlmn_label,
         )
 
-        if include_fits and len(means) > 1:
-            fit = np.polyfit(expecteds, means, 1)
+        if fit is not None:
             fit_line = np.poly1d(fit)
             x_fit = np.linspace(min(expecteds), max(expecteds), 100)
             plt.plot(
@@ -398,17 +463,28 @@ def plot_expected_vs_measured_mean_common(
                 fit_line(x_fit),
                 color=color,
                 linestyle="-",
-                label=format_fit_label(beam_data.beam, fit[0], fit[1]),
+                label="_nolegend_",
             )
 
-        if corrector_points:
+        if corrector_points and dispersion_type != "none":
             expecteds_est = [p["expected"] for p in corrector_points]
             means_est = [p["measured"] for p in corrector_points]
             stderr_est = [p["stderr"] for p in corrector_points]
 
             color_est = "blue" if beam_data.beam == 1 else "red"
             marker = "s"
-            dispersion_label = "Estimated" if dispersion_type == "estimated" else "Model"
+            fit_est = None
+            if include_fits and len(means_est) > 1:
+                fit_est = np.polyfit(expecteds_est, means_est, 1)
+            corr_label = (
+                format_fit_label(beam_data.beam, fit_est[0], fit_est[1], is_estimated=True)
+                if fit_est is not None
+                else (
+                    f"Beam {beam_data.beam} From Corrector Strengths, Estimated Dispersion"
+                    if dispersion_type == "estimated"
+                    else f"Beam {beam_data.beam} From Corrector Strengths, Model Dispersion"
+                )
+            )
             plt.errorbar(
                 expecteds_est,
                 means_est,
@@ -417,10 +493,9 @@ def plot_expected_vs_measured_mean_common(
                 capsize=8,
                 markersize=6,
                 color=color_est,
-                label=f"Beam {beam_data.beam} Corrector calc ({dispersion_label})",
+                label=corr_label,
             )
-            if include_fits and len(means_est) > 1:
-                fit_est = np.polyfit(expecteds_est, means_est, 1)
+            if fit_est is not None:
                 fit_line_est = np.poly1d(fit_est)
                 x_fit_est = np.linspace(min(expecteds_est), max(expecteds_est), 100)
                 plt.plot(
@@ -428,9 +503,7 @@ def plot_expected_vs_measured_mean_common(
                     fit_line_est(x_fit_est),
                     color=color_est,
                     linestyle="--",
-                    label=format_fit_label(
-                        beam_data.beam, fit_est[0], fit_est[1], is_estimated=True
-                    ),
+                    label="_nolegend_",
                 )
 
     if not include_fits:
@@ -446,32 +519,60 @@ def plot_expected_vs_measured_mean_common(
             max_exp = max(all_expecteds)
             plt.plot([min_exp, max_exp], [min_exp, max_exp], "k--", label="Ideal: y = x")
 
-    plt.xlabel(r"Expected Deltap ($\times 10^{-5}$)")
-    plt.ylabel(r"Measured Mean Deltap ($\times 10^{-5}$)")
+    plt.xlabel(r"Expected Deltap ($\times 10^{-5}$)", fontsize=16)
+    plt.ylabel(r"Measured Mean Deltap ($\times 10^{-5}$)", fontsize=16)
     beam_str = f"Beam {beam_data_list[0].beam}" if len(beam_data_list) == 1 else "Beams 1 and 2"
-    dispersion_title = "Estimated" if dispersion_type == "estimated" else "Model"
+    if dispersion_type == "estimated":
+        dispersion_title = "Estimated"
+    elif dispersion_type == "model":
+        dispersion_title = "Model"
+    else:
+        dispersion_title = "No Corrector"
     fit_suffix = "" if include_fits else ", No Fit"
-    plt.title(
-        f"Expected vs Measured Mean Deltap ({dispersion_title} Disp{fit_suffix}) - {beam_str}"
-    )
+    if dispersion_type == "none":
+        title = f"Expected vs Measured Mean Deltap{fit_suffix} - {beam_str}"
+    else:
+        title = (
+            f"Expected vs Measured Mean Deltap - {beam_str}"
+            # f"Expected vs Measured Mean Deltap ({dispersion_title} Disp{fit_suffix}) - {beam_str}"
+        )
+    # plt.title(title)
     ax = plt.gca()
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}"))
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}"))
-    plt.legend()
+    ax.tick_params(axis="both", labelsize=14)
+    plt.legend(fontsize=14)
     plt.grid(visible=True)
 
+    # Set y limits
+    plt.ylim(-40e-5, 35e-5)
+
     if len(beam_data_list) == 1:
-        dispersion_suffix = "_estimated" if dispersion_type == "estimated" else "_model"
+        if dispersion_type == "estimated":
+            dispersion_suffix = "_estimated"
+        elif dispersion_type == "model":
+            dispersion_suffix = "_model"
+        else:
+            dispersion_suffix = "_none"
         fit_suffix = "" if include_fits else "_no_fit"
         plt.savefig(
-            f"b{beam_data_list[0].beam}{co}_results/expected_vs_measured{fit_suffix}{dispersion_suffix}_beam{beam_data_list[0].beam}.png"
+            f"b{beam_data_list[0].beam}{co}_results/expected_vs_measured{fit_suffix}{dispersion_suffix}_beam{beam_data_list[0].beam}.png",
+            dpi=SAVE_DPI,
+            bbox_inches="tight",
         )
     else:
         Path("combined_results").mkdir(parents=True, exist_ok=True)
-        dispersion_suffix = "_estimated" if dispersion_type == "estimated" else "_model"
+        if dispersion_type == "estimated":
+            dispersion_suffix = "_estimated"
+        elif dispersion_type == "model":
+            dispersion_suffix = "_model"
+        else:
+            dispersion_suffix = "_none"
         fit_suffix = "" if include_fits else "_no_fit"
         plt.savefig(
-            f"combined_results/expected_vs_measured{fit_suffix}{dispersion_suffix}_beams.png"
+            f"combined_results/expected_vs_measured{fit_suffix}{dispersion_suffix}_beams.png",
+            dpi=SAVE_DPI,
+            bbox_inches="tight",
         )
     plt.show()
 
@@ -532,38 +633,41 @@ def plot_difference_vs_measured_difference(beam_data_list):
             color=color,
             linestyle="-",
             label=format_fit_label(
-                beam_data.beam, fit[0], fit[1], extra=f", 1 - R² = {1 - r_squared:.2e}"
+                beam_data.beam, fit[0], fit[1], extra=f", $1 - R^2 = {_sci_tex(1 - r_squared)}$"
             ),
         )
-    plt.xlabel(r"Expected Difference ($\times 10^{-5}$)")
-    plt.ylabel(r"Measured Difference ($\times 10^{-5}$)")
-    beam_str = f"Beam {beam_data_list[0].beam}" if len(beam_data_list) == 1 else "Beams 1 and 2"
-    plt.title(f"All Pairwise Differences: Expected vs Measured - {beam_str}")
+    plt.xlabel(r"Expected Difference ($\times 10^{-5}$)", fontsize=16)
+    plt.ylabel(r"Measured Difference ($\times 10^{-5}$)", fontsize=16)
+    # beam_str = f"Beam {beam_data_list[0].beam}" if len(beam_data_list) == 1 else "Beams 1 and 2"
+    # plt.title(f"All Pairwise Differences: Expected vs Measured - {beam_str}")
     ax = plt.gca()
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}"))
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}"))
-    plt.legend()
+    ax.tick_params(axis="both", labelsize=14)
+    plt.legend(fontsize=14)
     plt.grid(visible=True)
     if len(beam_data_list) == 1:
         plt.savefig(
-            f"b{beam_data_list[0].beam}{co}_results/all_pairwise_diffs_beam{beam_data_list[0].beam}.png"
+            f"b{beam_data_list[0].beam}{co}_results/all_pairwise_diffs_beam{beam_data_list[0].beam}.png",
+            dpi=SAVE_DPI,
+            bbox_inches="tight",
         )
     else:
         Path("combined_results").mkdir(parents=True, exist_ok=True)
-        plt.savefig("combined_results/all_pairwise_diffs_beams.png")
+        plt.savefig(
+            "combined_results/all_pairwise_diffs_beams.png", dpi=SAVE_DPI, bbox_inches="tight"
+        )
     plt.show()
 
 
 def main():
     parser = argparse.ArgumentParser(description="Plot deltap results for beam 1 or 2.")
-    parser.add_argument(
-        "beam", type=int, choices=[1, 2], nargs="?", help="Beam number (1 or 2)"
-    )
+    parser.add_argument("beam", type=int, choices=[1, 2], nargs="?", help="Beam number (1 or 2)")
     parser.add_argument("--both", action="store_true", help="Plot for both beams")
     parser.add_argument(
         "--dispersion",
         type=str,
-        choices=["estimated", "model"],
+        choices=["estimated", "model", "none"],
         default="estimated",
         help="Which dispersion to use for corrector calculations (default: estimated)",
     )

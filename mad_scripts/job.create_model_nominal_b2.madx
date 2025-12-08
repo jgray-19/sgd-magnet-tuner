@@ -23,8 +23,9 @@ call, file = 'acc-models-lhc/lhcb4.seq';
 option, echo;  ! re-enable output to see the optics settings
 
 ! ---- Call optics and other modifiers ----
-call, file = 'acc-models-lhc/operation/optics/R2025aRP_A12cmC12cmA10mL200cm_Flat.madx'; !@modifier
-! call, file = 'acc-models-lhc/operation/optics/R2025aRP_A30cmC30cmA10mL200cm_Flat.madx'; !@modifier
+call, file = 'acc-models-lhc/operation/optics/R2025aRP_A12cmC12cmA10mL200cm_Flat.madx'; !@modifier - 12cm optics
+call, file = 'crossing_knobs_b2.madx'; !@modifier - crossing knobs
+! call, file = 'acc-models-lhc/operation/optics/R2025aRP_A30cmC30cmA10mL200cm_Flat.madx'; !@modifier - 30cm optics
 
 ! ----- Remove IR symmetry definitions -----
 
@@ -32,9 +33,9 @@ call, file="acc-models-lhc/toolkit/remove-triplet-symmetry-knob.madx"; ! removes
 
 ! ----- Finalise Sequence -----
 ! exec, cycle_sequences();
-set, format="-.16e";
 use, sequence = LHCB2;
 exec, match_tunes(0.28, 0.31, 2);
 exec, coupling_knob(2);
+set, format="-.16e";
 save, sequence = LHCB2, file = 'lhcb2.seq';
-system, 'cp lhcb2.seq /afs/cern.ch/work/j/jmgray/private/sgd-magnet-tuner/src/aba_optimiser/mad/sequences';
+system, 'mv lhcb2.seq /afs/cern.ch/work/j/jmgray/private/sgd-magnet-tuner/src/aba_optimiser/mad/sequences';

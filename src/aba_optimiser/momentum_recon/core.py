@@ -7,8 +7,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from aba_optimiser.config import FILE_COLUMNS, POSITION_STD_DEV
-from aba_optimiser.io.utils import get_lhc_file_path
-from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 
 LOGGER = logging.getLogger(__name__)
 OUT_COLS = list(FILE_COLUMNS)
@@ -52,11 +50,12 @@ def inject_noise_xy(
     orig_df: tfs.TfsDataFrame,
     rng: np.random.Generator,
     low_noise_bpms: Sequence[str],
+    noise_std: float = POSITION_STD_DEV,
 ) -> None:
     n_rows = len(df)
-    LOGGER.debug("Adding Gaussian noise: std=%g", POSITION_STD_DEV)
-    noise_x = rng.normal(0.0, POSITION_STD_DEV, size=n_rows)
-    noise_y = rng.normal(0.0, POSITION_STD_DEV, size=n_rows)
+    LOGGER.debug("Adding Gaussian noise: std=%g", noise_std)
+    noise_x = rng.normal(0.0, noise_std, size=n_rows)
+    noise_y = rng.normal(0.0, noise_std, size=n_rows)
     if low_noise_bpms:
         mask = df["name"].isin(low_noise_bpms).to_numpy()
         if mask.any():
@@ -66,27 +65,10 @@ def inject_noise_xy(
                 low_count,
                 len(low_noise_bpms),
             )
-            noise_x[mask] = rng.normal(0.0, POSITION_STD_DEV / 10.0, size=low_count)
-            noise_y[mask] = rng.normal(0.0, POSITION_STD_DEV / 10.0, size=low_count)
+            noise_x[mask] = rng.normal(0.0, noise_std / 10.0, size=low_count)
+            noise_y[mask] = rng.normal(0.0, noise_std / 10.0, size=low_count)
     df["x"] = orig_df["x"] + noise_x
     df["y"] = orig_df["y"] + noise_y
-
-
-def ensure_twiss(tws: tfs.TfsDataFrame | None, info: bool) -> tfs.TfsDataFrame:
-    if tws is not None:
-        return tws
-    # If no Twiss provided, we provide LHC beam 1 twiss
-    mad = OptimisationMadInterface(
-        get_lhc_file_path(beam=1), bpm_pattern="BPM", corrector_strengths=None, tune_knobs_file=None
-    )
-    tws = mad.run_twiss()
-    if info:
-        LOGGER.info(
-            "Found tunes: q1=%s q2=%s",
-            getattr(tws, "q1", None),
-            getattr(tws, "q2", None),
-        )
-    return tws
 
 
 def build_lattice_maps(
@@ -325,45 +307,71 @@ def diagnostics(
 ) -> None:
     if not info:
         return
-    if "x" in orig_data.columns:
-        x_diff = data_p["x"] - orig_data["x"]
-        y_diff = data_p["y"] - orig_data["y"]
+
+    # Merge dataframes to ensure proper alignment by name and turn
+    # This prevents misleading diagnostics from index misalignment
+    merge_cols = ["name", "turn"]
+
+    # Merge prev estimates
+    merged_p = orig_data.merge(
+        data_p[merge_cols + ["x", "y", "px", "py"] if has_px else merge_cols + ["x", "y"]],
+        on=merge_cols,
+        suffixes=("_true", "_prev"),
+    )
+
+    # Merge next estimates
+    merged_n = orig_data.merge(
+        data_n[merge_cols + ["px", "py"] if has_px else merge_cols],
+        on=merge_cols,
+        suffixes=("_true", "_next"),
+    )
+
+    # Merge averaged estimates
+    merged_avg = orig_data.merge(
+        data_avg[merge_cols + ["px", "py"] if has_px else merge_cols],
+        on=merge_cols,
+        suffixes=("_true", "_avg"),
+    )
+
+    if "x_true" in merged_p.columns:
+        x_diff = merged_p["x_prev"] - merged_p["x_true"]
+        y_diff = merged_p["y_prev"] - merged_p["y_true"]
         print("x_diff mean", x_diff.abs().mean(), "±", x_diff.std())
         print("y_diff mean", y_diff.abs().mean(), "±", y_diff.std())
 
     print("MOMENTUM DIFFERENCES ------")
     if has_px:
-        px_diff_p = data_p["px"] - orig_data["px"]
-        px_diff_n = data_n["px"] - orig_data["px"]
-        px_diff_avg = data_avg["px"] - orig_data["px"]
+        px_diff_p = merged_p["px_prev"] - merged_p["px_true"]
+        px_diff_n = merged_n["px_next"] - merged_n["px_true"]
+        px_diff_avg = merged_avg["px_avg"] - merged_avg["px_true"]
         print("px_diff mean (prev w/ k)", px_diff_p.abs().mean(), "±", px_diff_p.std())
         print("px_diff mean (next w/ k)", px_diff_n.abs().mean(), "±", px_diff_n.std())
         print("px_diff mean (avg)", px_diff_avg.abs().mean(), "±", px_diff_avg.std())
 
     if has_py:
-        py_diff_p = data_p["py"] - orig_data["py"]
-        py_diff_n = data_n["py"] - orig_data["py"]
-        py_diff_avg = data_avg["py"] - orig_data["py"]
+        py_diff_p = merged_p["py_prev"] - merged_p["py_true"]
+        py_diff_n = merged_n["py_next"] - merged_n["py_true"]
+        py_diff_avg = merged_avg["py_avg"] - merged_avg["py_true"]
         print("py_diff mean (prev w/ k)", py_diff_p.abs().mean(), "±", py_diff_p.std())
         print("py_diff mean (next w/ k)", py_diff_n.abs().mean(), "±", py_diff_n.std())
         print("py_diff mean (avg)", py_diff_avg.abs().mean(), "±", py_diff_avg.std())
 
     epsilon = 1e-10
-    if has_px:
-        mask_px = orig_data["px"].abs() > epsilon
+    if has_px and "px_true" in merged_avg.columns:
+        mask_px = merged_avg["px_true"].abs() > epsilon
         if mask_px.any():
-            px_rel = (data_avg["px"] - orig_data["px"])[mask_px] / orig_data["px"][
-                mask_px
-            ]
+            px_rel = (merged_avg["px_avg"] - merged_avg["px_true"])[mask_px] / merged_avg[
+                "px_true"
+            ][mask_px]
             print("px_diff mean (avg rel)", px_rel.abs().mean(), "±", px_rel.std())
         else:
             print("px_diff mean (avg rel): No significant px values")
-    if has_py:
-        mask_py = orig_data["py"].abs() > epsilon
+    if has_py and "py_true" in merged_avg.columns:
+        mask_py = merged_avg["py_true"].abs() > epsilon
         if mask_py.any():
-            py_rel = (data_avg["py"] - orig_data["py"])[mask_py] / orig_data["py"][
-                mask_py
-            ]
+            py_rel = (merged_avg["py_avg"] - merged_avg["py_true"])[mask_py] / merged_avg[
+                "py_true"
+            ][mask_py]
             print("py_diff mean (avg rel)", py_rel.abs().mean(), "±", py_rel.std())
         else:
             print("py_diff mean (avg rel): No significant py values")
