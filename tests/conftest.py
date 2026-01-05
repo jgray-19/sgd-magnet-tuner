@@ -31,45 +31,57 @@ def data_dir() -> Path:
 
 
 @pytest.fixture(scope="module")
-def model_dir_b1(data_dir: Path) -> Path:
-    """Path to the example model files used by several tests."""
-    return data_dir / "model_b1__t0.28_0.31_18cm"
-
-
-@pytest.fixture(scope="module")
-def seq_b1(model_dir_b1: Path) -> Path:
+def seq_b1(data_dir: Path) -> Path:
     """Path to the example sequence file for beam 1 used by several tests."""
-    return model_dir_b1 / "lhcb1_saved.seq"
+    return data_dir / "sequences" / "lhcb1.seq"
 
 
 @pytest.fixture(scope="module")
-def json_b1(model_dir_b1: Path) -> Path:
+def json_b1(data_dir: Path) -> Path:
     """Path to the pre-generated xsuite JSON for beam 1."""
-    return model_dir_b1 / "lhcb1_saved.json"
+    return data_dir / "sequences" / "lhcb1.json"
 
 
 @pytest.fixture(scope="module")
-def model_dir_b2(data_dir: Path) -> Path:
-    """Path to the example model files used by several tests."""
-    return data_dir / "model_b2__t0.28_0.31_18cm"
+def json_b1_corrected(data_dir: Path) -> Path:
+    """Path to the corrected xsuite JSON for beam 1."""
+    return data_dir / "sequences" / "lhcb1_corrected.json"
 
 
 @pytest.fixture(scope="module")
-def seq_b2(model_dir_b2: Path) -> Path:
-    """Path to the example sequence file for beam 2 used by several tests."""
-    return model_dir_b2 / "lhcb2_saved.seq"
+def tune_knobs_file(data_dir: Path) -> Path:
+    """Path to the tune knobs file."""
+    return data_dir / "strengths" / "tune_knobs.txt"
 
 
 @pytest.fixture(scope="module")
-def json_b2(model_dir_b2: Path) -> Path:
-    """Path to the pre-generated xsuite JSON for beam 2."""
-    return model_dir_b2 / "lhcb2_saved.json"
+def corrector_knobs_file(data_dir: Path) -> Path:
+    """Path to the corrector knobs file."""
+    return data_dir / "correctors" / "corrector_knobs.txt"
 
 
 @pytest.fixture(scope="module")
 def corrector_file(data_dir: Path) -> Path:
-    """Path to the example corrector strengths file used by several tests."""
-    return data_dir / "corrector_strengths.tfs"
+    """Path to the corrector table file."""
+    return data_dir / "correctors" / "corrector_table.tfs"
+
+
+@pytest.fixture(scope="module")
+def tracking_path(data_dir: Path) -> Path:
+    """Path to the tracking data directory."""
+    return data_dir / "analysis" / "tracking"
+
+
+@pytest.fixture(scope="module")
+def estimated_strengths_file(data_dir: Path) -> Path:
+    """Path to the estimated quadrupole strengths file."""
+    return data_dir / "strengths" / "estimated_quad_strengths.json"
+
+
+@pytest.fixture(scope="module")
+def model_dir_b1() -> Path:
+    """Path to the beam 1 model directory."""
+    return Path(__file__).parent.parent / "models" / "lhcb1_12cm"
 
 
 @pytest.fixture(scope="module")
@@ -81,9 +93,9 @@ def corrector_table(corrector_file: Path) -> tfs.TfsDataFrame:
 
 
 @pytest.fixture(scope="module")
-def sequence_file(data_dir: Path) -> Path:
+def sequence_file(seq_b1: Path) -> Path:
     """Path to the example sequence file used by several tests."""
-    return data_dir / "lhcb1.seq"
+    return seq_b1
 
 
 @pytest.fixture(scope="function")

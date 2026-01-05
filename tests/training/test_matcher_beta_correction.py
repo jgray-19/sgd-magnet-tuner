@@ -81,7 +81,7 @@ def tmp_dir(
 
 
 @pytest.mark.slow
-def test_matcher_beta_correction(tmp_dir: Path, seq_b1: Path, json_b1: Path) -> None:
+def test_matcher_beta_correction(tmp_dir: Path, seq_b1: Path, json_b1: Path, estimated_strengths_file: Path) -> None:
     """Test beta matching using estimated quadrupole strengths from controller."""
     # Generate model with errors for validation (same setup as controller)
     corrector_file = tmp_dir / "corrector_track_off_magnet.tfs"
@@ -98,9 +98,6 @@ def test_matcher_beta_correction(tmp_dir: Path, seq_b1: Path, json_b1: Path) -> 
     twiss_errs = twiss_errs[twiss_errs["ename"].str.startswith("BPM")]
 
     # Read estimated strengths from file (written by test_quad_conv_with_errs)
-    data_dir = Path(__file__).parent.parent / "data"
-    estimated_strengths_file = data_dir / "estimated_quad_strengths.json"
-
     if not estimated_strengths_file.exists():
         pytest.skip(
             f"Estimated strengths file not found: {estimated_strengths_file}. Run test_quad_conv_with_errs first."

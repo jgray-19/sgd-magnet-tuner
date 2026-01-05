@@ -341,7 +341,7 @@ def test_calculate_pz_with_corrections_and_perturbations(
     py_noisy_max,
     px_divisor,
     py_divisor,
-    data_dir,
+    json_b1_corrected,
     sequence_file,
     tmp_path,
 ):
@@ -351,7 +351,7 @@ def test_calculate_pz_with_corrections_and_perturbations(
     - orbit_correction_off_momentum: Verify reconstruction with corrected orbits
     - magnet_perturbations_on_momentum: Verify robustness to random magnet errors
     """
-    json_path = data_dir / "lhcb1_corrected.json"
+    json_path = json_b1_corrected
     test_id = f"test_{delta_p}_{do_apply_magnet_perturbations}"
 
     tracking_df, truth, tws = _setup_xsuite_simulation(

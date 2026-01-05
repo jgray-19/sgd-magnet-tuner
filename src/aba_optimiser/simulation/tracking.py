@@ -283,6 +283,7 @@ def run_parallel_tracking(
     progress_interval: int,
     num_tracks: int,
     use_xsuite: bool = False,
+    json_file: Path | None = None,
 ) -> None:
     """
     Run parallel tracking for a batch of tracks.
@@ -307,6 +308,8 @@ def run_parallel_tracking(
         cleaned_queue: Queue for cleaned data
         progress_interval: Interval for progress logging
         num_tracks: Total number of tracks
+        use_xsuite: Whether to use xsuite instead of MAD-X
+        json_file: Path to JSON file for xsuite environment (required if use_xsuite=True)
     """
     from .data_processing import process_track
 
@@ -349,7 +352,14 @@ def run_parallel_tracking(
 
         # Create xsuite environment
         logger.info("Creating xsuite environment")
-        env = initialise_env(matched_tunes, magnet_strengths, corrector_table, seq_name=seq_name)
+        if json_file is None:
+            # Create default path near model directory
+            from aba_optimiser.config import PROJECT_ROOT
+            model_dir = PROJECT_ROOT / "models"
+            xsuite_dir = model_dir / "xsuite"
+            xsuite_dir.mkdir(exist_ok=True)
+            json_file = xsuite_dir / f"{sequence_file.stem}.json"
+        env = initialise_env(matched_tunes, magnet_strengths, corrector_table, seq_name=seq_name, json_file=json_file)
 
         # Set up the beam line with corrections
         logger.info("Setting up beam line with orbit correction")

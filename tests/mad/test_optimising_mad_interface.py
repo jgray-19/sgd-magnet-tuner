@@ -277,10 +277,10 @@ class TestOptimisationMadInterfaceInit:
 
         cleanup_interface(interface)
 
-    def test_knob_files(self, sequence_file: Path, data_dir: Path) -> None:
+    def test_knob_files(self, sequence_file: Path, corrector_knobs_file: Path, tune_knobs_file: Path) -> None:
         """Test initialization with knob for tunes and corrector files."""
-        corrector_knob_file = data_dir / "corrector_knobs.txt"
-        tune_knob_file = data_dir / "tune_knobs.txt"
+        corrector_knob_file = corrector_knobs_file
+        tune_knob_file = tune_knobs_file
 
         no_knob_interface = OptimisationMadInterface(
             sequence_file=str(sequence_file),

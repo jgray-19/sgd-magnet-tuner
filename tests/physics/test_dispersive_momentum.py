@@ -28,13 +28,13 @@ from .momentum_test_utils import (  # noqa: E402
 
 
 @pytest.mark.slow
-def test_dispersive_momentum_on_momentum(data_dir, sequence_file):
+def test_dispersive_momentum_on_momentum(json_b1, sequence_file):
     """Test dispersive momentum reconstruction for on-momentum beam.
 
     For on-momentum particles (δp=0), dispersive and transverse methods
     should produce nearly identical results.
     """
-    json_path = data_dir / "lhcb1.json"
+    json_path = json_b1
 
     tracking_df, tws, baseline_line = setup_ac_dipole_tracking(
         json_path=json_path,
@@ -98,7 +98,7 @@ def test_dispersive_momentum_on_momentum(data_dir, sequence_file):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("delta_p", [-5e-4, 4e-4])
-def test_dispersive_momentum_off_momentum(data_dir, sequence_file, delta_p):
+def test_dispersive_momentum_off_momentum(json_b1, sequence_file, delta_p):
     """Test dispersive momentum reconstruction for off-momentum beam.
 
     For off-momentum particles (δp≠0), the dispersive method should correct
@@ -108,7 +108,7 @@ def test_dispersive_momentum_off_momentum(data_dir, sequence_file, delta_p):
     The py reconstruction should be unaffected by dispersion and both methods
     should perform equally well.
     """
-    json_path = data_dir / "lhcb1.json"
+    json_path = json_b1
 
     tracking_df, tws, baseline_line = setup_ac_dipole_tracking(
         json_path=json_path,
@@ -174,13 +174,13 @@ def test_dispersive_momentum_off_momentum(data_dir, sequence_file, delta_p):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("delta_p", [-5e-4, 4e-4])
-def test_dispersive_momentum_off_momentum_with_noise(data_dir, sequence_file, delta_p):
+def test_dispersive_momentum_off_momentum_with_noise(json_b1, sequence_file, delta_p):
     """Test dispersive momentum reconstruction with noise for off-momentum beam.
 
     For off-momentum particles (δp≠0), verify that SVD cleaning improves
     reconstruction quality for noisy data compared to noisy reconstruction.
     """
-    json_path = data_dir / "lhcb1.json"
+    json_path = json_b1
 
     tracking_df, tws, baseline_line = setup_ac_dipole_tracking(
         json_path=json_path,

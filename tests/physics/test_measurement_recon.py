@@ -32,8 +32,7 @@ def _add_var_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @pytest.mark.slow
-def test_calculate_pz_recovers_true_momenta(data_dir, model_dir_b1):
-    tracking_path = data_dir / "tracking"
+def test_calculate_pz_recovers_true_momenta(tracking_path, model_dir_b1):
     tws = tfs.read(model_dir_b1 / "twiss_ac.dat")
     # rename all colmnms to lower case for consistency
     tws.columns = [col.lower() for col in tws.columns]

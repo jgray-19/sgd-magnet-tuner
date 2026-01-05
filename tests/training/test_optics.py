@@ -203,7 +203,6 @@ def tmp_dir(
 def test_controller_opt(
     tmp_dir: Path,
     sequence_file: Path,
-    data_dir: Path,
     model_dir_b1: Path,
 ) -> None:
     """Test that the controller initializes correctly with custom num_tracks and flattop_turns."""

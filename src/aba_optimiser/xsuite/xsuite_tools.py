@@ -33,13 +33,35 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def get_default_json_path(sequence_file: Path, model_dir: Path | None = None) -> Path:
+    """
+    Get the default JSON file path for a given sequence file.
+
+    Args:
+        sequence_file: Path to the MADX sequence file
+        model_dir: Optional model directory. If None, uses default location near models.
+
+    Returns:
+        Path to the JSON file
+    """
+    if model_dir is None:
+        # Default to models directory
+        model_dir = PROJECT_ROOT / "models"
+
+    # Create a subdirectory for xsuite files if it doesn't exist
+    xsuite_dir = model_dir / "xsuite"
+    xsuite_dir.mkdir(exist_ok=True)
+
+    return xsuite_dir / f"{sequence_file.stem}.json"
+
+
 def create_xsuite_environment(
     beam: int | None = None,
     sequence_file: Path | None = None,
     beam_energy: float = BEAM_ENERGY,
     seq_name: str | None = None,
     rerun_madx: bool = False,
-    json_file: Path | bool = True,
+    json_file: Path | None = None,
 ) -> xt.Environment:
     """
     Run MADX to create a saved sequence then load this into xsuite.
@@ -50,26 +72,24 @@ def create_xsuite_environment(
         beam_energy: Beam energy in GeV
         seq_name: Name of the sequence
         rerun_madx: Whether to force re-running MADX
-        json_file: Optional custom path to JSON file. If True, uses default path. If False, always rerun MADX.
+        json_file: Path to JSON file for saving/loading the xsuite environment. Required.
 
     Returns:
         xsuite Environment object
     """
+    if json_file is None:
+        raise ValueError("json_file parameter is required and cannot be None")
+
     if sequence_file is None:
         if beam is None:
             raise ValueError("Either beam or sequence_file must be provided.")
         sequence_file = get_lhc_file_path(beam)
-
-    if json_file is True:
-        xsuite_dir = PROJECT_ROOT / "src" / "aba_optimiser" / "xsuite"
-        json_file = xsuite_dir / f"{sequence_file.stem}.json"
 
     if seq_name is None:
         seq_name = sequence_file.stem
 
     if (
         rerun_madx is True  # If rerun is requested
-        or json_file is False
         or not json_file.exists()  # If the JSON file does not exist
         # Or sequence file is newer than JSON file
         or sequence_file.stat().st_mtime > json_file.stat().st_mtime
@@ -78,9 +98,8 @@ def create_xsuite_environment(
             raise FileNotFoundError(f"Sequence file not found: {sequence_file}")
 
         env: xt.Environment = load_madx_lattice(file=sequence_file)
-        if json_file is not False:
-            env.to_json(json_file)
-            logging.info(f"xsuite environment saved to {json_file}")
+        env.to_json(json_file)
+        logging.info(f"xsuite environment saved to {json_file}")
     else:
         logging.info(f"Loading existing xsuite environment from {json_file}")
         env = xt.Environment.from_json(json_file)
@@ -339,11 +358,14 @@ def initialise_env(
         sequence_file: Path to MADX sequence file. Takes precedence over beam.
         beam_energy: Beam energy in GeV
         seq_name: Name of the sequence
-        json_file: Optional custom path to JSON file (overrides automatic path)
+        json_file: Path to JSON file for saving/loading the xsuite environment. Required.
 
     Returns:
         Configured xsuite Environment object
     """
+    if json_file is None:
+        raise ValueError("json_file parameter is required and cannot be None")
+
     # logger.info(f"Initializing {batch_size} MAD interfaces for batch")
     base_env = create_xsuite_environment(
         beam=beam,

@@ -8,7 +8,7 @@ import multiprocessing
 
 # import re
 from dataclasses import replace
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -36,6 +36,9 @@ from tests.training.helpers import (
     generate_model_with_errors,
     get_twiss_without_errors,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _run_track_with_acd(
@@ -173,7 +176,9 @@ def tmp_dir(
 
 @pytest.mark.skipif(multiprocessing.cpu_count() < 60, reason="Requires at least 60 CPU cores")
 @pytest.mark.slow
-def test_controller_bend_opt_simple(tmp_dir: Path, seq_b1: Path, json_b1: Path) -> None:
+def test_controller_bend_opt_simple(
+    tmp_dir: Path, seq_b1: Path, json_b1: Path, estimated_strengths_file: Path
+) -> None:
     """Test bend optimisation using AC dipole excitation with different lag values."""
     flattop_turns = 2_000
     acd_ramp = 1_000  # Ramp turns for AC dipole
@@ -377,9 +382,7 @@ def test_controller_bend_opt_simple(tmp_dir: Path, seq_b1: Path, json_b1: Path) 
     # Save estimates to file
     import json
 
-    data_dir = Path(__file__).parent.parent / "data"
-    data_dir.mkdir(exist_ok=True)
-    with (data_dir / "estimated_quad_strengths.json").open("w") as f:
+    with estimated_strengths_file.open("w") as f:
         json.dump(all_estimates, f)
 
     # Plot beta function errors
