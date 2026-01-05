@@ -5,7 +5,8 @@ Integration test for quadrupole convergence with errors using AC dipole excitati
 from __future__ import annotations
 
 import multiprocessing
-import re
+
+# import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from aba_optimiser.filtering.svd import svd_clean_measurements
 from aba_optimiser.momentum_recon import (
     calculate_dispersive_pz,
     calculate_transverse_pz,
-    inject_noise_xy,
+    # inject_noise_xy,
 )
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
@@ -376,7 +377,7 @@ def test_controller_bend_opt_simple(tmp_dir: Path, seq_b1: Path, json_b1: Path) 
     # Save estimates to file
     import json
 
-    data_dir = Path(__file__).parent.parent.parent / "data"
+    data_dir = Path(__file__).parent.parent / "data"
     data_dir.mkdir(exist_ok=True)
     with (data_dir / "estimated_quad_strengths.json").open("w") as f:
         json.dump(all_estimates, f)
