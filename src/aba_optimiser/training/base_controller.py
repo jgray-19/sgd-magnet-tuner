@@ -47,6 +47,7 @@ class BaseController(ABC):
         first_bpm: str | None = None,
         seq_name: str | None = None,
         beam_energy: float = 6800.0,
+        bpm_range: str | None = None,
     ):
         """Initialize base controller.
 
@@ -64,6 +65,7 @@ class BaseController(ABC):
             first_bpm: First BPM in the sequence
             seq_name: Sequence name
             beam_energy: Beam energy in GeV
+            bpm_range: BPM range for determining fixed start/end points (defaults to magnet_range)
         """
         self.optimiser_config = optimiser_config
         self.simulation_config = simulation_config
@@ -77,7 +79,7 @@ class BaseController(ABC):
 
         # Initialize configuration manager
         self.config_manager = ConfigurationManager(
-            simulation_config, magnet_range, bpm_start_points, bpm_end_points
+            simulation_config, magnet_range, bpm_start_points, bpm_end_points, bpm_range
         )
         self.config_manager.setup_mad_interface(
             str(sequence_file_path),

@@ -198,7 +198,6 @@ class DataManager:
         # Determine how many batches to create
         num_workers = self.simulation_config.num_workers
         num_files = len(self.track_data)
-        num_ranges = len(config_manager.bpm_ranges)
         tracks_per_worker = self.simulation_config.tracks_per_worker
 
         # Check if we have enough turns

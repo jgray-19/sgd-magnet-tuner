@@ -35,6 +35,7 @@ class ResultManager:
         show_plots: bool = True,
         output_knobs_path: Path | None = None,
         knob_table_path: Path | None = None,
+        plots_dir: Path | None = None,
     ):
         """Initialise result manager.
 
@@ -45,6 +46,7 @@ class ResultManager:
             show_plots: Whether to display plots
             output_knobs_path: Path to save final knobs (defaults to PROJECT_ROOT/data/final_knobs.txt)
             knob_table_path: Path to save knob table (defaults to PROJECT_ROOT/data/knob_strengths_table.txt)
+            plots_dir: Directory to save plots (defaults to plots/)
         """
         self.knob_names = knob_names
         self.elem_spos = elem_spos
@@ -60,6 +62,10 @@ class ResultManager:
         else:
             self.output_knobs_path = output_knobs_path
             self.knob_table_path = knob_table_path
+        
+        # Set plots directory with default
+        from pathlib import Path
+        self.plots_dir = Path(plots_dir) if plots_dir is not None else Path("plots")
 
     def save_results(
         self,
@@ -132,7 +138,9 @@ class ResultManager:
         final_vals = np.array([current_knobs[k] for k in knob_names])
         true_vals = np.array([true_strengths.get(k, np.nan) for k in knob_names])
 
-        save_prefix = "plots/"
+        # Ensure plots directory exists
+        self.plots_dir.mkdir(parents=True, exist_ok=True)
+        save_prefix = f"{self.plots_dir}/"
         show_errorbars = True
 
         if (

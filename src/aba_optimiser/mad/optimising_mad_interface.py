@@ -14,19 +14,6 @@ BPM_PATTERN = "^BPM"
 LOGGER = logging.getLogger(__name__)
 
 # MAD code templates
-COUNT_BPMS_MAD = """
-local nbpms = 0
-local bpm_names = {{}}
-for _, elm in loaded_sequence:iter("{bpm_range}") do
-    if elm:is_observed() then
-        nbpms = nbpms + 1
-        table.insert(bpm_names, elm.name)
-    end
-end
-{py_name}:send(nbpms)
-{py_name}:send(bpm_names, true)
-"""
-
 MAKE_KNOBS_INIT_MAD = """
 local knob_names = {}
 local spos_list = {}
@@ -169,12 +156,10 @@ class OptimisationMadInterface(BaseMadInterface):
         # except RuntimeError as e:
         #     LOGGER.error(f"Failed to run twiss after setup: {e}")
 
-    def count_bpms(self, bpm_range) -> None:
+    def count_bpms(self, bpm_range) -> tuple[int, list[str]]:
         """Count the number of BPM elements in the specified range."""
-        self.mad.send(COUNT_BPMS_MAD.format(bpm_range=bpm_range, py_name=self.py_name))
-        nbpms = self.mad.recv()
-        all_bpms = self.mad.recv()
-        assert len(all_bpms) == nbpms, "Mismatch in counted BPMs and names list"
+        all_bpms = self.get_bpm_list(bpm_range)
+        nbpms = len(all_bpms)
         LOGGER.info(f"Counted {nbpms} BPMs in range: {bpm_range}")
         return nbpms, all_bpms
 

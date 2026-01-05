@@ -69,6 +69,16 @@ class SimulationConfig:
     # Whether to use different turns for each BPM range
     different_turns_per_range: bool = field(default=False)
 
+    # Whether to use fixed BPMs for start/end points
+    # When True (default): Uses fixed reference approach - pairs by varying starts
+    #                      with a fixed end, and varying ends with a fixed start.
+    #                      Example: [A,B,C] x [X,Y,Z] -> [(A,Z), (B,Z), (C,Z), (A,X), (A,Y)]
+    # When False: Creates ALL combinations (Cartesian product) of start and end BPMs.
+    #             Every start BPM is paired with every end BPM.
+    #             Example: [A,B,C] x [X,Y,Z] -> [(A,X), (A,Y), (A,Z), (B,X), (B,Y), (B,Z), (C,X), (C,Y), (C,Z)]
+    #             This provides many more measurement combinations to constrain the fit.
+    use_fixed_bpm: bool = field(default=True)
+
     # Computed fields
     total_tracks: int = field(init=False)
 

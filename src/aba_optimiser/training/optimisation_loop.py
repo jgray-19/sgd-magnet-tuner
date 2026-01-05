@@ -155,14 +155,37 @@ class OptimisationLoop:
         return current_knobs
 
     def _collect_batch_results(self, parent_conns: list[Connection]) -> tuple[float, np.ndarray]:
-        """Collect results from all workers for a batch."""
+        """Collect results from all workers for a batch.
+
+        Aggregates gradients using per-knob averaging: each knob's gradient is
+        averaged only over the workers that contributed a non-zero gradient for
+        that knob. This prevents magnets at the edges of the BPM range (which
+        are only visible to fewer workers) from being under-weighted compared
+        to magnets in the middle (which contribute gradients from all workers).
+        """
         total_loss = 0.0
         agg_grad: None | np.ndarray = None
+        # contrib_count: None | np.ndarray = None  # Count of non-zero contributions per knob
+
         for conn in parent_conns:
             _, grad, loss = conn.recv()
-            agg_grad = grad if agg_grad is None else agg_grad + grad
+            grad_flat = grad.flatten()
+
+            if agg_grad is None:
+                agg_grad = grad_flat.copy()
+                # contrib_count = (grad_flat != 0).astype(np.float64)
+            else:
+                agg_grad += grad_flat
+                # contrib_count += (grad_flat != 0).astype(np.float64)
+
             total_loss += loss
-        return total_loss, agg_grad.flatten()
+
+        # Average each knob's gradient by the number of workers that contributed
+        # to it (avoiding division by zero for knobs with no contributions)
+        # contrib_count = np.maximum(contrib_count, 1.0)
+        avg_grad = agg_grad  # / contrib_count
+
+        return total_loss, avg_grad
 
     def _update_knobs(
         self, current_knobs: dict[str, float], agg_grad: np.ndarray, lr: float

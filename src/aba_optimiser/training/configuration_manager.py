@@ -43,6 +43,7 @@ class ConfigurationManager:
         magnet_range: str,
         bpm_start_points: list[str],
         bpm_end_points: list[str],
+        bpm_range: str | None = None,
     ):
         self.mad_iface: OptimisationMadInterface | None = None
         self.knob_names: list[str] = []
@@ -55,6 +56,7 @@ class ConfigurationManager:
         self.end_bpms = bpm_end_points
         self.magnet_range = magnet_range
         self.simulation_config = simulation_config
+        self.bpm_range = bpm_range
 
     def setup_mad_interface(
         self,
@@ -82,15 +84,34 @@ class ConfigurationManager:
         self.all_bpms = self.mad_iface.all_bpms
         self.start_bpms = [bpm for bpm in self.start_bpms if bpm in self.all_bpms]
         self.end_bpms = [bpm for bpm in self.end_bpms if bpm in self.all_bpms]
-        self.bpm_ranges = [s + "/" + e for s in self.start_bpms for e in self.end_bpms]
+
+        # Use bpm_range to determine fixed start and end points, defaulting to magnet_range
+        effective_bpm_range = self.bpm_range or self.magnet_range
+        self.fixed_start, self.fixed_end = effective_bpm_range.split("/", 1)
+
+        # Validate fixed points are in the model
+        if self.fixed_start not in self.all_bpms or self.fixed_end not in self.all_bpms:
+            LOGGER.warning(
+                f"Fixed BPMs from range {effective_bpm_range} not found in model, using first available"
+            )
+            self.fixed_start = self.start_bpms[0] if self.start_bpms else self.fixed_start
+            self.fixed_end = self.end_bpms[0] if self.end_bpms else self.fixed_end
 
     @property
     def bpm_pairs(self) -> list[tuple[str, str]]:
         """Return BPM ranges as explicit (start, end) tuples.
 
-        This keeps backwards compatibility with `bpm_ranges` strings while
-        making it easy for callers that prefer tuple input.
+        When use_fixed_bpm is True (default), creates pairs by varying starts
+        with fixed end and varying ends with fixed start.
+
+        When use_fixed_bpm is False, creates all combinations (Cartesian product)
+        of start_bpms with end_bpms (every start with every end).
         """
+        if self.simulation_config.use_fixed_bpm:
+            return [(s, self.fixed_end) for s in self.start_bpms] + [
+                (self.fixed_start, e) for e in self.end_bpms
+            ]
+        # Cartesian product: every start with every end
         return [(s, e) for s in self.start_bpms for e in self.end_bpms]
 
     def initialise_knob_strengths(
@@ -120,11 +141,11 @@ class ConfigurationManager:
             filtered_true_strengths = {knob: true_strengths[knob] for knob in self.knob_names}
         return current_knobs, filtered_true_strengths
 
-    def calculate_n_data_points(self) -> dict[str, int]:
-        """Calculate number of data points for each BPM start point."""
+    def calculate_n_data_points(self) -> dict[tuple[str, str], int]:
+        """Calculate number of data points for each BPM pair."""
         n_data_points = {}
-        for bpm_range in self.bpm_ranges:
-            n_bpms, _ = self.mad_iface.count_bpms(bpm_range)
-            n_data_points[bpm_range] = TrackingWorker.get_n_data_points(n_bpms)
-            logging.info(f"{bpm_range}: {n_data_points[bpm_range]} data points")
+        for start, end in self.bpm_pairs:
+            n_bpms, _ = self.mad_iface.count_bpms(f"{start}/{end}")
+            n_data_points[(start, end)] = TrackingWorker.get_n_data_points(n_bpms)
+            logging.info(f"{start}/{end}: {n_data_points[(start, end)]} data points")
         return n_data_points

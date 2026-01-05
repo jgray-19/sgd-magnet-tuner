@@ -50,6 +50,7 @@ class Controller(BaseController):
         show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
         true_strengths: Path | dict[str, float] | None = None,
+        plots_dir: Path | None = None,
     ):
         """
         Initialise the controller with all required managers.
@@ -63,6 +64,7 @@ class Controller(BaseController):
             show_plots (bool, optional): Whether to show plots. Defaults to True.
             initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths.
             true_strengths (Path | dict[str, float], optional): True strengths file or dict.
+            plots_dir (Path | None, optional): Directory to save plots. Defaults to plots/.
         """
 
         # Log optimization targets
@@ -90,6 +92,10 @@ class Controller(BaseController):
         self.tune_knobs_files = tune_knobs_files
         self.machine_deltaps = machine_deltaps
         self.num_configs = len(measurement_files)
+        self.plots_dir = plots_dir
+
+        # Set bpm_range to magnet_range if not provided
+        bpm_range = sequence_config.bpm_range or sequence_config.magnet_range
 
         # Initialize base controller (handles config manager, optimization loop, result manager)
         super().__init__(
@@ -106,6 +112,7 @@ class Controller(BaseController):
             first_bpm=sequence_config.first_bpm,
             seq_name=sequence_config.seq_name,
             beam_energy=sequence_config.beam_energy,
+            bpm_range=bpm_range,
         )
 
         # Initialize tracking-specific managers
@@ -148,7 +155,8 @@ class Controller(BaseController):
                 self.data_manager.track_data,
                 self.data_manager.turn_batches,
                 self.data_manager.file_map,
-                self.config_manager.bpm_ranges,
+                self.config_manager.start_bpms,
+                self.config_manager.end_bpms,
                 self.simulation_config,
                 self.machine_deltaps,
             )
@@ -275,6 +283,8 @@ class Controller(BaseController):
             self.config_manager.calculate_n_data_points(),
             ybpm=magnet_range.split("/")[0],  # Assume start bpm has largest vertical kick
             magnet_range=magnet_range,
+            fixed_start=self.config_manager.fixed_start,
+            fixed_end=self.config_manager.fixed_end,
             sequence_file_path=self.sequence_file_path,
             corrector_strengths_files=self.corrector_files,
             tune_knobs_files=self.tune_knobs_files,
@@ -283,6 +293,7 @@ class Controller(BaseController):
             beam_energy=beam_energy,
             flattop_turns=flattop_turns,
             num_tracks=num_tracks,
+            use_fixed_bpm=self.simulation_config.use_fixed_bpm,
         )
 
     def _process_true_strengths(self, true_strengths) -> dict[str, float]:
@@ -339,6 +350,7 @@ class Controller(BaseController):
             self.config_manager.elem_spos,
             show_plots=self.show_plots,
             simulation_config=self.simulation_config,
+            plots_dir=self.plots_dir,
         )
 
 

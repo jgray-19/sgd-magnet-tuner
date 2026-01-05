@@ -38,10 +38,7 @@ if TYPE_CHECKING:
 )
 def test_init(py_name, expected_py_name, var_name, var_value) -> None:
     """Test initialization of BaseMadInterface."""
-    if py_name is None:
-        interface = BaseMadInterface()
-    else:
-        interface = BaseMadInterface(py_name=py_name)
+    interface = BaseMadInterface() if py_name is None else BaseMadInterface(py_name=py_name)
     check_interface_basic_init(interface, expected_py_name)
     interface.mad.send(f"{var_name} = {var_value}")
     assert getattr(interface.mad, var_name) == var_value
@@ -518,3 +515,28 @@ def test_pt2dp_dp2pt_consistency(loaded_interface_with_beam: BaseMadInterface):
         assert np.isclose(pt_back, pt, rtol=1e-12, atol=1e-15), (
             f"Inconsistency for pt={pt}: dp={dp}, pt_back={pt_back}"
         )
+
+
+@pytest.mark.parametrize("end_num", [10, 11, 12])
+def test_get_bpm_list(loaded_interface: BaseMadInterface, end_num: int) -> None:
+    """Test getting list of BPM names within a range."""
+    interface = loaded_interface
+
+    # Set up BPM observation
+    interface.observe_elements("BPM")
+
+    # Test getting BPM list for a range
+    start_num = 9
+    start_bpm = f"BPM.{start_num}R2.B1"
+    end_bpm = f"BPM.{end_num}R2.B1"
+    bpm_range = f"{start_bpm}/{end_bpm}"
+    expected_bpms = [f"BPM.{i}R2.B1" for i in range(start_num, end_num + 1)]
+    bpm_names = interface.get_bpm_list(bpm_range)
+
+    # Verify it's a list of strings
+    assert isinstance(bpm_names, list)
+    assert all(isinstance(name, str) for name in bpm_names)
+
+    # Check that the list has expected BPMs
+    assert bpm_names == expected_bpms, f"Expected BPMs {expected_bpms}, got {bpm_names}"
+    interface.unobserve_elements("BPM")

@@ -69,7 +69,9 @@ def generate_model_with_errors(
     """
     # Create MAD interface and load sequence
     mad = BaseMadInterface()
-    mad.load_sequence(sequence_file, "lhcb1")
+    beam = 1 if "lhcb1" in sequence_file.name else 2
+    seq_name = f"lhcb{beam}"
+    mad.load_sequence(sequence_file, seq_name)
     mad.setup_beam(beam_energy=6800)
 
     # Perform orbit correction for off-momentum beam
@@ -100,7 +102,7 @@ py:send(new_magnet_values, true)
                 magnet_strengths[elm.name + ".k0"] = elm.k0
 
     # Convert all rbends into true rbends to ensure correct tracking
-    convert_rbends_to_true_rbends(mad)
+    # convert_rbends_to_true_rbends(mad)
 
     matched_tunes = perform_orbit_correction(
         mad=mad.mad,
@@ -108,6 +110,7 @@ py:send(new_magnet_values, true)
         target_qx=0.28,
         target_qy=0.31,
         corrector_file=corrector_file,
+        beam=beam,
     )
     # Run twiss to get closed orbit and optics
     twiss_data = mad.run_twiss(observe=0)
@@ -123,7 +126,7 @@ py:send(new_magnet_values, true)
         corrector_table=corrector_table,
         json_file=json_file,
         sequence_file=sequence_file,
-        seq_name="lhcb1",
+        seq_name=seq_name,
         beam_energy=6800,
     )
 
@@ -146,11 +149,11 @@ def get_twiss_without_errors(
         sequence_file=sequence_file,
         seq_name="lhcb1",
         beam_energy=6800,
-        bpm_pattern="BPM" if just_bpms else ".*",
+        bpm_pattern="BPM",
         corrector_strengths=corrector_file,
         tune_knobs_file=tune_knobs_file,
     )
     convert_rbends_to_true_rbends(mad)
     if estimated_magnets is not None:
         mad.set_magnet_strengths(estimated_magnets)
-    return mad.run_twiss(observe=0)
+    return mad.run_twiss(observe=int(just_bpms))

@@ -17,6 +17,7 @@ class SequenceConfig:
     Attributes:
         sequence_file_path: Path to the MAD-NG sequence file
         magnet_range: Range of magnets to optimize (e.g., "BPM.9R2.B1/BPM.9L3.B1")
+        bpm_range: Range of BPMs for optimization (None to use magnet_range)
         first_bpm: First BPM in the sequence (None for auto-detection)
         seq_name: Sequence name in MAD-NG file (None for auto-detection)
         beam_energy: Beam energy in GeV
@@ -25,6 +26,7 @@ class SequenceConfig:
 
     sequence_file_path: str | Path
     magnet_range: str
+    bpm_range: str | None = None
     first_bpm: str | None = None
     seq_name: str | None = None
     beam_energy: float = 6800.0
@@ -38,6 +40,7 @@ class SequenceConfig:
         sequence_path: Path | None = None,
         beam_energy: float = 6800.0,
         bad_bpms: list[str] | None = None,
+        bpm_range: str | None = None,
     ) -> SequenceConfig:
         """Create configuration for LHC beam 1 or 2.
 
@@ -47,6 +50,7 @@ class SequenceConfig:
             sequence_path: Optional custom sequence file path
             beam_energy: Beam energy in GeV
             bad_bpms: List of bad BPMs to exclude
+            bpm_range: Optional BPM range for optimization (defaults to magnet_range)
 
         Returns:
             SequenceConfig configured for the specified LHC beam
@@ -60,6 +64,7 @@ class SequenceConfig:
         return cls(
             sequence_file_path=sequence_file,
             magnet_range=magnet_range,
+            bpm_range=bpm_range,
             first_bpm=first_bpm,
             seq_name=seq_name,
             beam_energy=beam_energy,

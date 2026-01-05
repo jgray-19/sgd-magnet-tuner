@@ -50,9 +50,11 @@ class WorkerManager:
 
     def __init__(
         self,
-        n_data_points: dict[str, int],
+        n_data_points: dict[tuple[str, str], int],
         ybpm: str,
         magnet_range: str,
+        fixed_start: str,
+        fixed_end: str,
         sequence_file_path: Path,
         corrector_strengths_files: list[Path],
         tune_knobs_files: list[Path],
@@ -61,6 +63,7 @@ class WorkerManager:
         beam_energy: float = 6800.0,
         flattop_turns: int = 1000,
         num_tracks: int = 1,
+        use_fixed_bpm: bool = True,
     ):
         """Initialise the WorkerManager."""
         self.n_data_points = n_data_points
@@ -68,12 +71,15 @@ class WorkerManager:
         self.workers: list[mp.Process] = []
         self.y_bpm = ybpm
         self.magnet_range = magnet_range
+        self.fixed_start = fixed_start
+        self.fixed_end = fixed_end
         self.sequence_file_path = sequence_file_path
         self.corrector_strengths_files = corrector_strengths_files
         self.tune_knobs_files = tune_knobs_files
         self._pos_cache: dict[int, dict[tuple[int, str], int]] = {}
         self.bad_bpms = bad_bpms
         self.seq_name = seq_name
+        self.use_fixed_bpm = use_fixed_bpm
         self.beam_energy = beam_energy
         self.flattop_turns = flattop_turns
         self.num_tracks = num_tracks
@@ -87,53 +93,49 @@ class WorkerManager:
         track_data: dict[int, pd.DataFrame],
         turn_batches: list[list[int]],
         file_turn_map: dict[int, int],
-        bpm_ranges: list[str],
+        start_bpms: list[str],
+        end_bpms: list[str],
         machine_deltaps: list[float],
         simulation_config: SimulationConfig,
     ) -> list[tuple[TrackingData, WorkerConfig, int]]:
         """Create payloads for all workers.
 
         Args:
-            track_data (dict[int, pd.DataFrame]): Dictionary mapping file indices to track data DataFrames
-            turn_batches (list[list[int]]): List of turn batches, each containing turn numbers for a worker
-            file_turn_map (dict[int, int]): Mapping from turn numbers to file indices
-            bpm_ranges (list[str]): List of BPM ranges
-            machine_deltaps (list[float]): List of machine deltaps corresponding to each file
-            simulation_config (SimulationConfig): Simulation configuration containing optimization flags
-
-        Returns:
-            list[tuple[TrackingData, WorkerConfig, int]]: List of tuples containing:
-                - TrackingData: Data arrays for the worker
-                - WorkerConfig: Configuration parameters for the worker
-                - int: Worker ID
-
-        Raises:
-            AssertionError: If a turn batch is empty
+            track_data: Dictionary mapping file indices to track data DataFrames
+            turn_batches: List of turn batches, each containing turn numbers for a worker
+            file_turn_map: Mapping from turn numbers to file indices
+            start_bpms: List of start BPMs (varying starts, track forward to fixed_end)
+            end_bpms: List of end BPMs (varying ends, track backward from fixed_start)
+            machine_deltaps: List of machine deltaps corresponding to each file
+            simulation_config: Simulation configuration containing optimization flags
         """
         payloads: list[tuple[TrackingData, WorkerConfig, int]] = []
-        # Precompute arrays once per file for memory efficiency
         arrays_cache = {idx: self._extract_arrays(df) for idx, df in track_data.items()}
 
-        # Split bpm_ranges into unique starts and ends
-        starts = list({r.split("/")[0] for r in bpm_ranges})
-        ends = list({r.split("/")[1] for r in bpm_ranges})
+        # Build range specs: (start, end, sdir)
+        if self.use_fixed_bpm:
+            # Forward: start -> fixed_end; Backward: fixed_start -> end
+            range_specs = [(s, self.fixed_end, 1) for s in start_bpms] + [
+                (self.fixed_start, e, -1) for e in end_bpms
+            ]
+            LOGGER.info(
+                f"Using fixed BPMs: {len(start_bpms)} starts → {self.fixed_end} + "
+                f"{self.fixed_start} → {len(end_bpms)} ends = {len(range_specs)} range specs"
+            )
+        else:
+            # Cartesian product: every start with every end, forward direction only
+            range_specs = [(s, e, 1) for s in start_bpms for e in end_bpms]
+            LOGGER.info(
+                f"Using Cartesian product: {len(start_bpms)} starts × {len(end_bpms)} ends = "
+                f"{len(range_specs)} range specs (all combinations)"
+            )
 
-        LOGGER.info(
-            f"Creating worker payloads: {len(starts)} starts + {len(ends)} ends x {len(turn_batches)} batches"
-        )
-
-        # Build list of (start_bpm, end_bpm, sdir) tuples according to
-        # the requested behaviour: for sdir=1 iterate starts with fixed first end;
-        # for sdir=-1 iterate ends with fixed first start.
-        range_specs: list[tuple[str, str, int]] = [(s, ends[0], 1) for s in starts] + [
-            (starts[0], e, -1) for e in ends
-        ]
+        LOGGER.info(f"Creating {len(range_specs)} range specs × {len(turn_batches)} batches")
 
         for start_bpm, end_bpm, sdir in range_specs:
-            bpm_range = f"{start_bpm}/{end_bpm}"
             for batch_idx, turn_batch in enumerate(turn_batches):
                 if not turn_batch:
-                    raise ValueError(f"Empty batch {batch_idx} for {bpm_range}")
+                    raise ValueError(f"Empty batch {batch_idx} for {start_bpm}/{end_bpm}")
 
                 # All turns must be from same file
                 primary_file_idx = file_turn_map[turn_batch[0]]
@@ -146,7 +148,7 @@ class WorkerManager:
                     file_turn_map,
                     start_bpm,
                     end_bpm,
-                    self.n_data_points[bpm_range],
+                    self.n_data_points[(start_bpm, end_bpm)],
                     sdir,
                     machine_deltaps,
                     arrays_cache,
@@ -156,7 +158,7 @@ class WorkerManager:
                     arr.setflags(write=False)
 
                 LOGGER.debug(
-                    f"Worker {len(payloads)}: file={primary_file_idx}, range={bpm_range}, sdir={sdir}, turns={len(turn_batch)}"
+                    f"Worker {len(payloads)}: file={primary_file_idx}, range={start_bpm}/{end_bpm}, sdir={sdir}, turns={len(turn_batch)}"
                 )
                 data = TrackingData(
                     position_comparisons=pos,
@@ -303,27 +305,30 @@ class WorkerManager:
         track_data: dict[int, pd.DataFrame],
         turn_batches: list[list[int]],
         file_turn_map: dict[int, int],
-        bpm_ranges: list[str],
+        start_bpms: list[str],
+        end_bpms: list[str],
         simulation_config: SimulationConfig,
         machine_deltaps: list[float],
     ):
-        """Start worker processes and return their parent connections.
+        """Start worker processes.
 
         Args:
-            track_data (dict[int, pd.DataFrame]): Dictionary mapping file indices to track data DataFrames
-            turn_batches (list[list[int]]): List of turn batches for worker distribution
-            file_turn_map (dict[int, int]): Mapping from turn numbers to file indices
-            bpm_ranges (list[str]): List of BPM ranges
-            simulation_config (SimulationConfig): Simulation configuration
-            machine_deltaps (list[float]): List of machine deltaps corresponding to each file
-
-        Note:
-            Process objects are stored internally on the manager and are
-            joined/terminated in `terminate_workers()`; callers only need the
-            connections to communicate with workers.
+            track_data: Dictionary mapping file indices to track data DataFrames
+            turn_batches: List of turn batches for worker distribution
+            file_turn_map: Mapping from turn numbers to file indices
+            start_bpms: List of start BPMs
+            end_bpms: List of end BPMs
+            simulation_config: Simulation configuration
+            machine_deltaps: List of machine deltaps corresponding to each file
         """
         payloads = self.create_worker_payloads(
-            track_data, turn_batches, file_turn_map, bpm_ranges, machine_deltaps, simulation_config
+            track_data,
+            turn_batches,
+            file_turn_map,
+            start_bpms,
+            end_bpms,
+            machine_deltaps,
+            simulation_config,
         )
         LOGGER.info(f"Starting {len(payloads)} workers...")
 
@@ -346,23 +351,43 @@ class WorkerManager:
     def collect_worker_results(self, total_turns: int) -> tuple[float, np.ndarray]:
         """Collect results from all workers for an epoch.
 
+        Aggregates gradients using per-knob averaging: each knob's gradient is
+        averaged only over the workers that contributed a non-zero gradient for
+        that knob. This prevents magnets at the edges of the BPM range (which
+        are only visible to fewer workers) from being under-weighted compared
+        to magnets in the middle (which contribute gradients from all workers).
+
         Args:
             total_turns (int): Total number of turns across all workers for normalisation
 
         Returns:
             tuple[float, np.ndarray]: A tuple containing:
                 - total_loss: average loss across all turns
-                - agg_grad: aggregated and normalised gradient array
+                - agg_grad: per-knob averaged gradient array
         """
         total_loss = 0.0
         agg_grad = None
+        contrib_count = None  # Count of non-zero contributions per knob
 
         for conn in self.parent_conns:
             _, grad, loss = conn.recv()
-            agg_grad = grad if agg_grad is None else agg_grad + grad
+            grad_flat = grad.flatten()
+
+            if agg_grad is None:
+                agg_grad = grad_flat.copy()
+                contrib_count = (grad_flat != 0).astype(np.float64)
+            else:
+                agg_grad += grad_flat
+                contrib_count += (grad_flat != 0).astype(np.float64)
+
             total_loss += loss
 
-        return total_loss / total_turns, agg_grad.flatten() / total_turns
+        # Average each knob's gradient by the number of workers that contributed
+        # to it (avoiding division by zero for knobs with no contributions)
+        contrib_count = np.maximum(contrib_count, 1.0)
+        avg_grad = agg_grad / contrib_count
+
+        return total_loss / total_turns, avg_grad
 
     def terminate_workers(self) -> None:
         """Terminate all workers and clean up processes."""
