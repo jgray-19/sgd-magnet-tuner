@@ -36,6 +36,7 @@ docs = [
 tracking = [
     "xsuite",
     "omc3",
+    "cpymad",
     "pyarrow",
     "psutil",
 ]
