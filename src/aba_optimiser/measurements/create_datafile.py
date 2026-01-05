@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -53,7 +53,7 @@ def load_files(files: list[str | Path]) -> TbtData:
 
 
 def convert_measurements(
-    measurements: list[TbtData], bad_bpms: list[str] = []
+    measurements: list[TbtData], bad_bpms: list[str] = [], combine_measurements: bool = True
 ) -> list[pd.DataFrame]:
     """Combine multiple TbtData objects into a single DataFrame.
 
@@ -71,6 +71,8 @@ def convert_measurements(
     all_data = []
     turn_offset = 1
     for meas in measurements:
+        if not combine_measurements:
+            turn_offset = 1
         for bunch in meas.matrices:
             df_x = bunch.X.copy()
             df_y = bunch.Y.copy()
@@ -362,6 +364,10 @@ def save_online_knobs(
     mb_results = mqt_extraction.get_mb_vals(spark, meas_time, beam)
     corrector_results = corrector_extraction.get_mcb_vals(spark, meas_time, beam)
 
+    # Stop Spark context to avoid conflicts with multiprocessing
+    # Spark signal handlers interfere with ProcessPoolExecutor shutdown
+    spark.stop()
+
     mqt_knobs = build_dict_from_nxcal_result(mqt_results)
     ms_knobs = build_dict_from_nxcal_result(ms_results)
     mb_knobs = build_dict_from_nxcal_result(mb_results)
@@ -378,6 +384,56 @@ def save_online_knobs(
     save_knobs(corrector_knobs, corrector_knobs_file)
 
 
+def detect_bad_bpms(
+    pzs: pd.DataFrame | list[pd.DataFrame],
+    all_bpms: set[str],
+    bad_bpms: list[str],
+    log_individual: bool = True,
+) -> None:
+    """Detect and add bad BPMs to the list.
+
+    Args:
+        pzs: DataFrame or list of DataFrames with processed data
+        all_bpms: Set of all expected BPM names
+        bad_bpms: List to extend with bad BPMs
+        log_individual: Whether to log individual bad BPMs
+    """
+    if isinstance(pzs, pd.DataFrame):
+        pzs = [pzs]
+
+    for pz in pzs:
+        # BPMs with NaN in px or py
+        mask = pz["px"].isna() | pz["py"].isna()
+        bad_bpms_mask = mask.groupby(pz["name"]).any()
+        new_bad = bad_bpms_mask[bad_bpms_mask].index.tolist()
+        bad_bpms.extend(new_bad)
+        if log_individual:
+            for bpm in new_bad:
+                logger.info(f"BPM {bpm}: has_nan=True")
+
+        # BPMs with infinite variance in both planes (x/y)
+        zero_mask = ((np.isinf(pz["var_x"])) | (np.isinf(pz["var_px"]))) & (
+            (np.isinf(pz["var_y"])) | (np.isinf(pz["var_py"]))
+        )
+        bad_bpms_zero = zero_mask.groupby(pz["name"]).any()
+        new_bad_zero = bad_bpms_zero[bad_bpms_zero].index.tolist()
+        bad_bpms.extend(new_bad_zero)
+        if log_individual:
+            for bpm in new_bad_zero:
+                logger.info(f"BPM {bpm}: zero_weight=True")
+
+    # Missing BPMs
+    all_unique_bpms = set.union(*(set(pz["name"].unique()) for pz in pzs))
+    missing_bpms = all_bpms - all_unique_bpms
+    bad_bpms.extend(missing_bpms)
+    if log_individual:
+        for bpm in missing_bpms:
+            logger.info(f"BPM {bpm}: missing from data")
+
+    # Remove duplicates
+    bad_bpms[:] = list(set(bad_bpms))
+
+
 def process_measurements(
     files: list[Path],
     analysis_dir: Path,
@@ -388,7 +444,8 @@ def process_measurements(
     use_uniform_vars: bool = False,
     num_workers: int | None = None,
     sequence_path: Path | None = None,
-) -> tuple[pd.DataFrame, list[str], Path]:
+    combine_files: bool = True,
+) -> tuple[pd.DataFrame | list[pd.DataFrame], list[str], Path | list[Path]]:
     """Process measurement files to compute pz data and identify bad BPMs.
 
     Args:
@@ -400,15 +457,17 @@ def process_measurements(
         bad_bpms: List of bad BPM names (None to run analysis)
         use_uniform_vars: If True, use uniform variances instead of noise-based
         num_workers: Number of parallel workers (None for auto)
+        sequence_path: Path to the MAD-X sequence file
+        combine_files: If True, combine all processed dataframes into one; if False, return list of dataframes
 
     Returns:
-        Tuple of (pzs_dataframe, bad_bpms_list, output_path)
+        Tuple of (pzs_dataframe or list of dataframes, bad_bpms_list, output_path or list of paths)
     """
     if bad_bpms is None:
         bad_bpms = run_analysis(analysis_dir, model_dir, files, beam)
 
     data = load_files(files)
-    combined = convert_measurements(data, bad_bpms)
+    combined = convert_measurements(data, bad_bpms, combine_measurements=combine_files)
     logger.info(f"Combined data has {len(combined)} DataFrames from different files/bunches.")
     tws = tfs.read(Path(model_dir) / "twiss_ac.dat")
     tws.columns = [col.lower() for col in tws.columns]
@@ -425,31 +484,37 @@ def process_measurements(
     tws.headers = {k.lower(): v for k, v in tws.headers.items()}
     tws = tws.set_index("name")
 
-    # Process DataFrames in parallel
-    logger.info(f"Processing {len(combined)} DataFrames in parallel...")
+    # Process DataFrames in parallel using threads to avoid Spark context inheritance issues
+    # ThreadPoolExecutor shares memory space and doesn't inherit problematic global state like ProcessPoolExecutor
+    logger.info(f"Processing {len(combined)} DataFrames in parallel with threads...")
     processed_results = [None] * len(combined)
 
-    # Limit to max 6 workers to avoid overloading the system
-    # (typically we have 3 bunches, so a multiple of that is good)
-    effective_workers = min(num_workers or len(combined), 6)
+    # Use ThreadPoolExecutor instead of ProcessPoolExecutor to avoid Spark context conflicts
+    # Limit to max 9 threads to avoid overloading the system
+    effective_workers = min(num_workers or len(combined), 9)
     if effective_workers > 0:
-        with ProcessPoolExecutor(max_workers=effective_workers) as executor:
-            futures = {
-                executor.submit(
-                    _process_single_dataframe, (i, df), tws, bad_bpms, use_uniform_vars
-                ): i
-                for i, df in enumerate(combined)
-            }
+        try:
+            with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+                futures = {
+                    executor.submit(
+                        _process_single_dataframe, (i, df), tws, bad_bpms, use_uniform_vars
+                    ): i
+                    for i, df in enumerate(combined)
+                }
 
-            for future in as_completed(futures):
-                try:
-                    idx, processed_df = future.result()
-                    processed_results[idx] = processed_df
-                    logger.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
-                except Exception as e:
-                    idx = futures[future]
-                    logger.error(f"Error processing dataframe {idx}: {e}")
-                    raise
+                for future in as_completed(futures):
+                    try:
+                        idx, processed_df = future.result(timeout=600)  # 10 minute timeout per task
+                        processed_results[idx] = processed_df
+                        logger.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
+                    except Exception as e:
+                        idx = futures[future]
+                        logger.error(f"Error processing dataframe {idx}: {e}")
+                        raise
+        except KeyboardInterrupt:
+            logger.warning("Keyboard interrupt received, shutting down gracefully...")
+            # The ThreadPoolExecutor context manager will handle cleanup
+            raise
     else:
         for i, df in enumerate(combined):
             idx, processed_df = _process_single_dataframe(
@@ -459,12 +524,28 @@ def process_measurements(
             logger.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
 
     combined = processed_results
-    pzs = pd.concat(combined, ignore_index=True)
-    pzs["name"] = pzs["name"].astype("category")
-    pzs["turn"] = pzs["turn"].astype("int32")
-    # Add the average dpp estimate to the headers
-    dpp_est = sum(proc_res.attrs["DPP_EST"] for proc_res in combined) / len(combined)
-    pzs.attrs["DPP_EST"] = dpp_est
+    if combine_files:
+        pzs = pd.concat(combined, ignore_index=True)
+        pzs["name"] = pzs["name"].astype("category")
+        pzs["turn"] = pzs["turn"].astype("int32")
+        # Add the average dpp estimate to the headers
+        dpp_est = sum(proc_res.attrs["DPP_EST"] for proc_res in combined) / len(combined)
+        pzs.attrs["DPP_EST"] = dpp_est
+    else:
+        # Group by file: each file has multiple bunches combined
+        num_files = len(files)
+        num_bunches_per_file = len(combined) // num_files
+        pzs = []
+        for i in range(num_files):
+            start = i * num_bunches_per_file
+            end = (i + 1) * num_bunches_per_file
+            file_dfs = combined[start:end]
+            file_pzs = pd.concat(file_dfs, ignore_index=True)
+            file_pzs["name"] = file_pzs["name"].astype("category")
+            file_pzs["turn"] = file_pzs["turn"].astype("int32")
+            file_pzs.attrs["DPP_EST"] = sum(df.attrs["DPP_EST"] for df in file_dfs) / len(file_dfs)
+            pzs.append(file_pzs)
+
     sequence_path = sequence_path or get_lhc_file_path(beam)
 
     mad_iface = OptimisationMadInterface(
@@ -474,39 +555,31 @@ def process_measurements(
     all_bpms = set(mad_iface.all_bpms)
     del mad_iface
 
-    pzs["name"] = pzs["name"].astype("category")
+    if combine_files:
+        pzs["name"] = pzs["name"].astype("category")
 
-    # print all bpms and the corresponding plane where py and px are NaN
-    mask = pzs["px"].isna() | pzs["py"].isna()
-    bad_bpms_mask = mask.groupby(pzs["name"]).any()
-    bad_bpms.extend(bad_bpms_mask[bad_bpms_mask].index.tolist())
-    for bpm in bad_bpms:
-        logger.info(f"BPM {bpm}: has_nan=True")
+        detect_bad_bpms(pzs, all_bpms, bad_bpms, log_individual=True)
 
-    # Add all bpms that have infinite variance in both planes
-    # fmt: off
-    zero_mask = (
-        (np.isinf(pzs["var_x"])) | (np.isinf(pzs["var_px"]))
-        & (np.isinf(pzs["var_y"])) | (np.isinf(pzs["var_py"]))
-    )
-    # fmt: on
-    bad_bpms_zero = zero_mask.groupby(pzs["name"]).any()
-    bad_bpms.extend(bad_bpms_zero[bad_bpms_zero].index.tolist())
-    for bpm in bad_bpms_zero[bad_bpms_zero].index.tolist():
-        logger.info(f"BPM {bpm}: zero_weight=True")
+        logger.info(f"Total bad BPMs: {len(bad_bpms)}")
 
-    missing_bpms = all_bpms - set(pzs["name"].unique())
-    for bpm in missing_bpms:
-        logger.info(f"BPM {bpm}: missing from data")
-    bad_bpms.extend(missing_bpms)
+        if filename:
+            file_path = analysis_dir / filename
+            pzs.to_parquet(file_path)
+
+            return pzs, bad_bpms, file_path
+        return pzs, bad_bpms, analysis_dir
+
+    detect_bad_bpms(pzs, all_bpms, bad_bpms, log_individual=False)
 
     logger.info(f"Total bad BPMs: {len(bad_bpms)}")
 
     if filename:
-        file_path = analysis_dir / filename
-        pzs.to_parquet(file_path)
-
-        return pzs, bad_bpms, file_path
+        file_paths = []
+        for i, pz in enumerate(pzs):
+            file_path = analysis_dir / f"{Path(filename).stem}_{i}.parquet"
+            pz.to_parquet(file_path)
+            file_paths.append(file_path)
+        return pzs, bad_bpms, file_paths
     return pzs, bad_bpms, analysis_dir
 
 
