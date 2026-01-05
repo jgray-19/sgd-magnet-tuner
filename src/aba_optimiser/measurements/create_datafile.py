@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,7 +23,9 @@ from aba_optimiser.config import (
 from aba_optimiser.filtering.svd import svd_clean_measurements
 from aba_optimiser.io.utils import get_lhc_file_path, save_knobs
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
-from aba_optimiser.momentum_recon.transverse import calculate_pz
+
+# from aba_optimiser.momentum_recon.transverse import calculate_pz
+from aba_optimiser.momentum_recon.dispersive import calculate_pz
 from aba_optimiser.training.controller import LHCController as Controller
 from aba_optimiser.training.controller_helpers import (
     create_arc_bpm_config,
@@ -95,6 +98,30 @@ def convert_measurements(
             all_data.append(df_combined)
             turn_offset += df_x.shape[1]  # Number of turns is number of columns
     return all_data
+
+
+def compute_uniform_vars(
+    combined: pd.DataFrame, bad_bpms: list[str], var_value: float = 1e-6
+) -> pd.DataFrame:
+    """Set uniform variances for all BPMs.
+
+    Args:
+        combined: DataFrame with BPM measurements
+        bad_bpms: List of bad BPM names to set to infinite variance
+        var_value: Uniform variance value to use (default: 1e-6)
+
+    Returns:
+        DataFrame with var_x, var_y, var_px, var_py columns added
+    """
+    combined["var_x"] = var_value
+    combined["var_y"] = var_value
+    combined["var_px"] = var_value
+    combined["var_py"] = var_value
+    combined.loc[combined["name"].isin(bad_bpms), "var_x"] = float("inf")
+    combined.loc[combined["name"].isin(bad_bpms), "var_y"] = float("inf")
+    combined.loc[combined["name"].isin(bad_bpms), "var_px"] = float("inf")
+    combined.loc[combined["name"].isin(bad_bpms), "var_py"] = float("inf")
+    return combined
 
 
 def compute_vars_from_known_noise(combined: pd.DataFrame, bad_bpms: list[str]) -> pd.DataFrame:
@@ -251,7 +278,7 @@ def run_analysis(
     return bad_bpms
 
 
-def build_dict_from_nxcal_result(result: list[NXCalResult]) -> dict[str, float]:
+def build_dict_from_nxcal_result(result: list[NXCalResult]) -> dict[str, float]:  # type: ignore
     """Convert NXCalResult to a dictionary of magnet strengths."""
     return {res.name: res.value for res in result}
 
@@ -259,6 +286,58 @@ def build_dict_from_nxcal_result(result: list[NXCalResult]) -> dict[str, float]:
 # def write_datafile(data: pd.DataFrame, output_file: str | Path) -> None:
 #     """Write the combined DataFrame to a Parquet file."""
 #     data.to_parquet(output_file)
+
+
+def _process_single_dataframe(
+    df_with_index: tuple[int, pd.DataFrame],
+    tws: pd.DataFrame,
+    bad_bpms: list[str],
+    use_uniform_vars: bool,
+) -> tuple[int, pd.DataFrame]:
+    """Process a single DataFrame: clean, compute vars, and calculate pz.
+
+    Args:
+        df_with_index: Tuple of (index, dataframe)
+        tws: Twiss DataFrame with optics parameters
+        bad_bpms: List of bad BPM names
+        use_uniform_vars: Whether to use uniform variances
+
+    Returns:
+        Tuple of (original_index, processed_dataframe)
+    """
+    i, df = df_with_index
+
+    # SVD clean
+    df = svd_clean_measurements(df)
+
+    # Remove BPMs not in twiss data
+    df = df[df["name"].isin(tws.index)]
+
+    # Compute variances
+    if use_uniform_vars:
+        df = compute_uniform_vars(df, bad_bpms)
+    else:
+        df = compute_vars_from_known_noise(df, bad_bpms)
+
+    # Subtract closed orbit
+    x_co = tws["x"].to_dict()
+    y_co = tws["y"].to_dict()
+    df["x"] = df["x"] - df["name"].map(x_co)
+    df["y"] = df["y"] - df["name"].map(y_co)
+
+    # Calculate pz
+    df = calculate_pz(df, tws=tws, inject_noise=False)
+
+    # Add back closed orbit
+    df["x"] = df["x"] + df["name"].map(x_co)
+    df["y"] = df["y"] + df["name"].map(y_co)
+
+    # Handle NaN values
+    if df["px"].isna().any() or df["py"].isna().any():
+        logger.warning(f"NaN values found in px or py for dataframe {i}, dropping rows.")
+        df = df.dropna(subset=["px", "py"])
+
+    return i, df
 
 
 def save_online_knobs(
@@ -306,8 +385,25 @@ def process_measurements(
     beam: int,
     filename: str | None = "pz_data.parquet",
     bad_bpms: list[str] | None = None,
+    use_uniform_vars: bool = False,
+    num_workers: int | None = None,
+    sequence_path: Path | None = None,
 ) -> tuple[pd.DataFrame, list[str], Path]:
-    """Process measurement files to compute pz data and identify bad BPMs."""
+    """Process measurement files to compute pz data and identify bad BPMs.
+
+    Args:
+        files: List of measurement file paths
+        analysis_dir: Directory for analysis outputs
+        model_dir: Directory containing model files
+        beam: Beam number (1 or 2)
+        filename: Output filename for parquet file (None to skip saving)
+        bad_bpms: List of bad BPM names (None to run analysis)
+        use_uniform_vars: If True, use uniform variances instead of noise-based
+        num_workers: Number of parallel workers (None for auto)
+
+    Returns:
+        Tuple of (pzs_dataframe, bad_bpms_list, output_path)
+    """
     if bad_bpms is None:
         bad_bpms = run_analysis(analysis_dir, model_dir, files, beam)
 
@@ -329,24 +425,51 @@ def process_measurements(
     tws.headers = {k.lower(): v for k, v in tws.headers.items()}
     tws = tws.set_index("name")
 
-    for i, df in enumerate(combined):
-        # df = compute_weights_from_beta_amplitude(df, analysis_dir)
-        # df = _add_unit_weights(df)
-        df = svd_clean_measurements(df)
-        df = compute_vars_from_known_noise(df, bad_bpms)
-        df = calculate_pz(df, tws=tws, inject_noise=False, subtract_mean=False)
-        # Check that the px and py columns have no NaN values after calculation
-        if df["px"].isna().any() or df["py"].isna().any():
-            logger.warning("NaN values found in px or py after pz calculation.")
-            # Handle NaN values (dropping the rows)
-            df = df.dropna(subset=["px", "py"])
-        combined[i] = df
+    # Process DataFrames in parallel
+    logger.info(f"Processing {len(combined)} DataFrames in parallel...")
+    processed_results = [None] * len(combined)
+
+    # Limit to max 6 workers to avoid overloading the system
+    # (typically we have 3 bunches, so a multiple of that is good)
+    effective_workers = min(num_workers or len(combined), 6)
+    if effective_workers > 0:
+        with ProcessPoolExecutor(max_workers=effective_workers) as executor:
+            futures = {
+                executor.submit(
+                    _process_single_dataframe, (i, df), tws, bad_bpms, use_uniform_vars
+                ): i
+                for i, df in enumerate(combined)
+            }
+
+            for future in as_completed(futures):
+                try:
+                    idx, processed_df = future.result()
+                    processed_results[idx] = processed_df
+                    logger.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
+                except Exception as e:
+                    idx = futures[future]
+                    logger.error(f"Error processing dataframe {idx}: {e}")
+                    raise
+    else:
+        for i, df in enumerate(combined):
+            idx, processed_df = _process_single_dataframe(
+                df_with_index=(i, df), tws=tws, bad_bpms=bad_bpms, use_uniform_vars=use_uniform_vars
+            )
+            processed_results[idx] = processed_df
+            logger.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
+
+    combined = processed_results
     pzs = pd.concat(combined, ignore_index=True)
     pzs["name"] = pzs["name"].astype("category")
     pzs["turn"] = pzs["turn"].astype("int32")
+    # Add the average dpp estimate to the headers
+    dpp_est = sum(proc_res.attrs["DPP_EST"] for proc_res in combined) / len(combined)
+    pzs.attrs["DPP_EST"] = dpp_est
+    sequence_path = sequence_path or get_lhc_file_path(beam)
 
     mad_iface = OptimisationMadInterface(
-        get_lhc_file_path(beam),
+        sequence_path,
+        seq_name=f"LHCB{beam}",
     )
     all_bpms = set(mad_iface.all_bpms)
     del mad_iface
