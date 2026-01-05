@@ -77,7 +77,7 @@ class WorkerLifecycleManager(Generic[WorkerType, PayloadType]):
         for conn in self.parent_conns:
             try:
                 conn.send(termination_signal)
-            except Exception as e:
+            except (OSError, ConnectionError) as e:
                 LOGGER.warning(f"Error sending termination signal: {e}")
 
         # Wait for all workers to finish
@@ -87,7 +87,7 @@ class WorkerLifecycleManager(Generic[WorkerType, PayloadType]):
                 if worker.is_alive():
                     LOGGER.warning(f"Worker {worker.name} did not terminate, forcing...")
                     worker.terminate()
-            except Exception as e:
+            except OSError as e:
                 LOGGER.warning(f"Error terminating worker {worker.name}: {e}")
 
         # Close connections

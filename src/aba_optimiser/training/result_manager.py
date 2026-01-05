@@ -62,7 +62,7 @@ class ResultManager:
         else:
             self.output_knobs_path = output_knobs_path
             self.knob_table_path = knob_table_path
-        
+
         # Set plots directory with default
         from pathlib import Path
         self.plots_dir = Path(plots_dir) if plots_dir is not None else Path("plots")

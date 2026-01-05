@@ -24,7 +24,7 @@ def setup_scientific_formatting(
     if ax is None:
         ax = plt.gca()
     # Support for list/array of axes
-    axes = ax if isinstance(ax, (list, tuple)) else [ax]
+    axes = ax if isinstance(ax, list | tuple) else [ax]
     for axis in axes:
         # Create independent ScalarFormatter instances per-axis so each
         # axis can pick its own exponent (offset) based on its data range.

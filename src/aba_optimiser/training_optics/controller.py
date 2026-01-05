@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-from omc3.optics_measurements.constants import AMP_BETA_NAME, BETA_NAME, DISPERSION_NAME, ORBIT_NAME
+from omc3.optics_measurements.constants import BETA_NAME, DISPERSION_NAME, ORBIT_NAME
 
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.training.base_controller import BaseController, LHCControllerMixin

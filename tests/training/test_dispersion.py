@@ -15,7 +15,6 @@ import pytest
 import tfs
 from omc3.hole_in_one import hole_in_one_entrypoint
 from omc3.model.constants import TWISS_ELEMENTS_DAT
-from omc3.model.manager import get_accelerator
 from turn_by_turn import convert_to_tbt, write_tbt
 
 from aba_optimiser.config import BEND_ERROR_FILE
