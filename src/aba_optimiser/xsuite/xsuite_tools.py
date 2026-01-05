@@ -354,14 +354,20 @@ def initialise_env(
         json_file=json_file,
     )
 
-    for ename, elem in base_env[seq_name].element_dict.items():
-        if isinstance(elem, xt.RBend):
-            base_env.set(ename, length=elem.length_straight)
+    # Now MAD-NG uses rbarc=true for rbends by default, so no need to convert.
+    # for ename, elem in base_env[seq_name].element_dict.items():
+    #     if isinstance(elem, xt.RBend):
+    #         base_env.set(ename, length=elem.length_straight)
 
     for k, v in matched_tunes.items():
         # convert dq[x|y]_b{beam}_op to dq[x|y].b{beam}_op
         k = k[:3] + "." + k[4:]
         base_env.set(k, v)
+        # Double check the k is the correct format
+        import re
+
+        if not re.match(r"dq[xy]\.b[12]_op", k):
+            raise ValueError(f"Unexpected tune knob name format: {k}")
 
     for str_name, strength in magnet_strengths.items():
         magnet_name, var = str_name.rsplit(".", 1)

@@ -27,6 +27,7 @@ def create_lhc_model(
     energy: int | None = None,
     year: str | None = None,
     modifiers: str | list[str] | None = None,
+    matching_knob: str = "_op",
 ) -> None:
     """
     Create a complete LHC model for the specified beam.
@@ -52,6 +53,9 @@ def create_lhc_model(
         LHC year/era. Defaults to config value.
     modifier : str, optional
         Optics modifier file name. Defaults to config value.
+    matching_knob : str, optional
+        Suffix for the tune matching knobs (e.g., "_op" for dQx.b1_op,
+        "" for dQx.b1, "_sq" for dQx.b1_sq). Default is "_op".
 
     Raises
     ------
@@ -105,7 +109,7 @@ def create_lhc_model(
 
     # Step 2: Generate MAD-X sequences
     print("Step 2: Generating MAD-X sequences...")
-    make_madx_sequence(beam, output_dir, beam4=(beam == 2))
+    make_madx_sequence(beam, output_dir, beam4=(beam == 2), matching_knob=matching_knob)
     print("✓ MAD-X sequences generated\n")
 
     # Step 3: Update with MAD-NG
@@ -115,6 +119,7 @@ def create_lhc_model(
         output_dir,
         tunes=nat_tunes,
         drv_tunes=drv_tunes,
+        matching_knob=matching_knob,
     )
     print("✓ Model update complete\n")
 

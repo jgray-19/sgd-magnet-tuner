@@ -26,6 +26,7 @@ def initialise_madng_model(
     model_dir: Path,
     *,
     tunes: list[float] | None = None,
+    matching_knob: str = "_op",
 ) -> None:
     """
     Initialize the LHC accelerator model in MAD-NG.
@@ -43,6 +44,8 @@ def initialise_madng_model(
         Directory containing the saved sequence files.
     tunes : list[float], optional
         Target fractional tunes [Q1, Q2]. If None, uses [0.28, 0.31].
+    matching_knob : str, optional
+        Suffix for the tune matching knobs. Default is "_op".
     """
     if tunes is None:
         tunes = [0.28, 0.31]
@@ -66,7 +69,7 @@ print("Initialized MAD-NG model for beam {beam}");
     """)
 
     # Match tunes
-    match_model_tunes(mad, beam, tunes)
+    match_model_tunes(mad, beam, tunes, matching_knob)
 
 
 def get_current_tunes(mad: MAD, beam: int, label: str = "") -> tuple[float, float]:
@@ -111,6 +114,7 @@ def match_model_tunes(
     mad: MAD,
     beam: int,
     target_tunes: list[float],
+    matching_knob: str = "_op",
 ) -> None:
     """
     Match model tunes to target fractional values.
@@ -126,6 +130,9 @@ def match_model_tunes(
         Beam number.
     target_tunes : list[float]
         Target fractional tunes [Q1, Q2] (e.g., [0.28, 0.31]).
+    matching_knob : str, optional
+        Suffix for the tune matching knobs (e.g., "_op" for dQx.b1_op,
+        "" for dQx.b1, "_sq" for dQx.b1_sq). Default is "_op".
 
     Notes
     -----
@@ -155,8 +162,8 @@ match {{
   command := twiss {{sequence=MADX.lhcb{beam}}},
   variables = {{
     rtol={TUNE_MATCH_RTOL},
-    {{ var = 'MADX.dqx_b{beam}_op', name='dQx.b{beam}_op' }},
-    {{ var = 'MADX.dqy_b{beam}_op', name='dQy.b{beam}_op' }},
+    {{ var = 'MADX.dqx_b{beam}{matching_knob}', name='dQx.b{beam}{matching_knob}' }},
+    {{ var = 'MADX.dqy_b{beam}{matching_knob}', name='dQy.b{beam}{matching_knob}' }},
   }},
   equalities = {{
     {{ expr = \\t -> math.abs(t.q1)-{target_q1_abs}, name='q1' }},
@@ -311,6 +318,7 @@ def update_model_with_madng(
     *,
     tunes: list[float] | None = None,
     drv_tunes: list[float] | None = None,
+    matching_knob: str = "_op",
 ) -> None:
     """
     Update LHC model using MAD-NG with tune matching and twiss computation.
@@ -331,6 +339,8 @@ def update_model_with_madng(
         Natural fractional tunes [Q1, Q2]. Defaults to [0.28, 0.31].
     drv_tunes : list[float], optional
         Driven fractional tunes [Q1, Q2]. Defaults to [0.0, 0.0].
+    matching_knob : str, optional
+        Suffix for the tune matching knobs. Default is "_op".
     """
     if tunes is None:
         tunes = [0.28, 0.31]
@@ -344,7 +354,7 @@ def update_model_with_madng(
 
     with MAD() as mad:
         # Initialize and match tunes
-        initialise_madng_model(mad, beam, model_dir, tunes=tunes)
+        initialise_madng_model(mad, beam, model_dir, tunes=tunes, matching_knob=matching_knob)
 
         # Compute and export twiss tables
         compute_and_export_twiss_tables(

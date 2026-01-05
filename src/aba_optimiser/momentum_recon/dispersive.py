@@ -95,5 +95,8 @@ def calculate_pz(
 
     data_avg = weighted_average(data_p, data_n)
 
+    # Add to the header the dpp used
+    data_avg.attrs["DPP_EST"] = dpp_est
+
     diagnostics(orig_data, data_p, data_n, data_avg, info, has_px, has_py)
     return data_avg[OUT_COLS]

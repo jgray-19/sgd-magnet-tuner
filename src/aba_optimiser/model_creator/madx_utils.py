@@ -11,9 +11,11 @@ def make_madx_sequence(
     beam: int,
     model_dir: pathlib.Path,
     *,
+    seq_outdir: pathlib.Path | None = None,
     beam4: bool = False,
     madx_filename: str | None = None,
-) -> None:
+    matching_knob: str = "_op",
+) -> pathlib.Path:
     """
     Generate and save the MAD-X sequence file for the specified beam.
 
@@ -27,11 +29,17 @@ def make_madx_sequence(
         Beam number (1 or 2).
     model_dir : pathlib.Path
         Directory containing the model files.
+    seq_outdir : pathlib.Path, optional
+        Output directory for the generated sequence file. If None,
+        saves in model_dir.
     beam4 : bool, optional
         If True, configure for beam 4 tracking mode (only valid for beam 2).
         Default is False.
     madx_filename : str, optional
         Name of the MAD-X job file. If None, uses default from config.
+    matching_knob : str, optional
+        Suffix for the tune matching knobs (e.g., "_op" for dQx.b1_op,
+        "" for dQx.b1, "_sq" for dQx.b1_sq). Default is "_op".
 
     Raises
     ------
@@ -75,6 +83,30 @@ def make_madx_sequence(
                     # Use beam4 sequence file instead
                     line = line.replace("acc-models-lhc/lhc.seq", "acc-models-lhc/lhcb4.seq")
 
+            # Replace match_tunes call with custom matching routine if non-default knob
+            if matching_knob != "_op" and "exec, match_tunes(" in line:
+                # Extract tune values and beam number from the line
+                # Format: exec, match_tunes(0.28, 0.31, 1);
+                import re
+
+                match = re.search(r"match_tunes\(([\d.]+),\s*([\d.]+),\s*(\d+)\)", line)
+                if match:
+                    qx, qy, beam_num = match.groups()
+                    qx_total = float(qx) - int(float(qx)) + 62
+                    qy_total = float(qy) - int(float(qy)) + 60
+
+                    # Use madx.input for custom matching
+                    match_cmd = f"""
+match, sequence=LHCB{beam_num};
+vary, name=dQx.b{beam_num}{matching_knob};
+vary, name=dQy.b{beam_num}{matching_knob};
+constraint, range=#E, mux={qx_total}, muy={qy_total};
+lmdif, tolerance=1E-10;
+endmatch;
+"""
+                    madx.input(match_cmd)
+                    continue
+
             # Stop at coupling knob (last line to process)
             if "coupling_knob" in line:
                 madx.input(line)
@@ -82,11 +114,14 @@ def make_madx_sequence(
 
             madx.input(line)
 
+        seq_name = f"lhcb{beam}_saved.seq"
+        seq_path = seq_outdir / seq_name if seq_outdir else model_dir / seq_name
         # Save the sequence
         save_cmd = f"""
 set, format="-16.16e";
-save, sequence=lhcb{beam}, file="lhcb{beam}_saved.seq", noexpr=false;
+save, sequence=lhcb{beam}, file="{seq_path.absolute()}", noexpr=false;
         """
         madx.input(save_cmd)
 
-    print(f"Saved MAD-X sequence for beam {beam} to lhcb{beam}_saved.seq")
+    print(f"Saved MAD-X sequence for beam {beam} to {seq_path}")
+    return seq_path

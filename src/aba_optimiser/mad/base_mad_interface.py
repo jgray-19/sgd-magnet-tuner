@@ -95,13 +95,13 @@ class BaseMadInterface:
             seq_name: Name of the sequence to load
         """
         logger.info(f"Loading sequence from {sequence_file}")
-        # self.mad.send("shush()")
+        self.mad.send("shush()")
         self.mad.send(f'MADX:load("{sequence_file}")')
         if self.mad.MADX[seq_name] == 0:
             raise ValueError(f"Sequence '{seq_name}' not found in MAD file '{sequence_file}'")
         self.mad.send(f"loaded_sequence = MADX.{seq_name}")
         self.mad["SEQ_NAME"] = seq_name
-        # self.mad.send("unshush()")
+        self.mad.send("unshush()")
 
     def setup_beam(self, beam_energy: float, particle: str = "proton") -> None:
         """
@@ -115,6 +115,33 @@ class BaseMadInterface:
         self.mad.send(
             f'loaded_sequence.beam = beam {{ particle = "{particle}", energy = {beam_energy:.15e} }}'
         )
+
+    def get_bpm_list(self, bpm_range: str) -> list[str]:
+        """
+        Get list of BPM names within a specified range.
+
+        Args:
+            bpm_range: Range specification (e.g., "BPM.11R2.B1/BPM.11L3.B1")
+
+        Returns:
+            List of BPM names within the range that are observed
+        """
+        logger.debug(f"Getting BPM list for range: {bpm_range}")
+
+        # Use MAD script to collect BPMs in range
+        get_bpms_mad = f"""
+        local bpm_names = {{}}
+        for _, elm in loaded_sequence:iter("{bpm_range}") do
+            if elm:is_observed() then
+                table.insert(bpm_names, elm.name)
+            end
+        end
+        {self.py_name}:send(bpm_names, true)
+        """
+
+        bpm_names = self.mad.send(get_bpms_mad).receive()  # Run the script
+        logger.debug(f"Found {len(bpm_names)} BPMs in range {bpm_range}")
+        return bpm_names
 
     def observe_elements(self, pattern: str = "BPM") -> None:
         """
@@ -324,10 +351,17 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
                 {"var": f"'MADX.{qy_knob}'", "name": f"'{qy_knob}'"},
             ],
             equalities=[
-                {"expr": f"\\t -> math.abs(t.q1)-(62+{target_qx})", "name": "'q1'"},
-                {"expr": f"\\t -> math.abs(t.q2)-(60+{target_qy})", "name": "'q2'"},
+                {
+                    "expr": f"\\t -> math.abs(t.q1)-(62+{target_qx})",
+                    "name": "'q1'",
+                    "tol": 1e-6,
+                },
+                {
+                    "expr": f"\\t -> math.abs(t.q2)-(60+{target_qy})",
+                    "name": "'q2'",
+                    "tol": 1e-6,
+                },
             ],
-            objective={"fmin": 1e-8},
             info=2,
         )
 
