@@ -42,6 +42,7 @@ def model_creator(beam: int = 2) -> None:
         energy=energy,
         year=year,
         modifiers=modifiers,
+        matching_knob="",
     )
 
 
@@ -157,5 +158,5 @@ def harpy_and_optics(beam: int = 2) -> None:
 
 
 if __name__ == "__main__":
-    model_creator(beam=1)
-    harpy_and_optics(beam=1)
+    model_creator(beam=2)
+    # harpy_and_optics(beam=1)
