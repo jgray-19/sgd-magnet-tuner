@@ -50,7 +50,7 @@ def _family_labels_and_colors(
     for n in names:
         families.append(n[:2])  # e.g., "MQ", "MS", "MB"
     palette = {"MQ": MQ_COLOUR, "MS": MS_COLOUR, "MB": MB_COLOUR}
-    colors = [palette[f] for f in families]
+    colors = [palette.get(f, "#808080") for f in families]  # Default to grey for unknown families
     return families, colors, palette
 
 
@@ -115,8 +115,8 @@ def _validate_inputs(
 
 def _get_family_colors_and_masks(magnet_names):
     families, _, _ = _family_labels_and_colors(magnet_names)
-    true_colours = [TRUE_COLOURS[f] for f in families]
-    final_colours = [FINAL_COLOURS[f] for f in families]
+    true_colours = [TRUE_COLOURS.get(f, "#808080") for f in families]
+    final_colours = [FINAL_COLOURS.get(f, "#808080") for f in families]
     is_mq = np.array([f == "MQ" for f in families], dtype=bool)
     is_ms = np.array([f == "MS" for f in families], dtype=bool)
     is_mb = np.array([f == "MB" for f in families], dtype=bool)

@@ -19,11 +19,12 @@ def get_lhc_file_path(beam: int) -> Path:
         Path to the LHC sequence file.
     """
     return (
-        PROJECT_ROOT / "src" / "aba_optimiser" / "mad" / "sequences" / f"lhcb{beam}.seq"
+        # PROJECT_ROOT / "src" / "aba_optimiser" / "mad" / "sequences" / f"lhcb{beam}.seq"
+        PROJECT_ROOT / "models" / f"lhcb{beam}_12cm" / f"lhcb{beam}_saved.seq"
     )
 
 
-def read_knobs(path: str) -> dict[str, float]:
+def read_knobs(file_path: str | Path) -> dict[str, float]:
     """
     Read knob strengths from a tab-delimited file.
 
@@ -33,9 +34,10 @@ def read_knobs(path: str) -> dict[str, float]:
     Returns:
         A dictionary mapping knob names to their true float strengths.
     """
+    path = Path(file_path)
     logger.info(f"Reading knobs from {path}")
     strengths: dict[str, float] = {}
-    with Path(path).open("r") as f:
+    with path.open("r") as f:
         for line in f:
             parts = line.strip().split("\t")
             if len(parts) != 2:

@@ -10,8 +10,8 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-from nxcals.spark_session_builder import get_or_create  # pyright: ignore[reportMissingImports]
-from pylhc.nxcal_knobs import get_energy  # pyright: ignore[reportMissingImports]
+from nxcals.spark_session_builder import get_or_create
+from pylhc.nxcal_knobs import get_energy
 
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
@@ -195,8 +195,8 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementSetup
             arc_config=arc_config_b2,
             folder=folder,
             name_prefix=name_prefix,
-            # times=["07_35_27_940", "07_36_39_380", "07_38_44_035"],
-            times=["07_36_39_380", "07_38_44_035"],
+            times=["07_35_27_940", "07_36_39_380", "07_38_44_035"],
+            # times=["07_36_39_380", "07_38_44_035"],
             title="0",
         ),
         MeasurementSetupConfig(
@@ -214,8 +214,8 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementSetup
             arc_config=arc_config_b2,
             folder=folder,
             name_prefix=name_prefix,
-            # times=["08_04_55_798", "08_06_06_900", "08_07_13_900"],
-            times=["08_06_06_900", "08_07_13_900"],
+            times=["08_04_55_798", "08_06_06_900", "08_07_13_900"],
+            # times=["08_06_06_900", "08_07_13_900"],
             title="0p1",
         ),
         MeasurementSetupConfig(
@@ -233,16 +233,29 @@ def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementSetup
             arc_config=arc_config_b2,
             folder=folder,
             name_prefix=name_prefix,
-            times=["08_19_35_860", "08_22_57_752"],
+            times=["08_19_35_860", "08_22_57_752", "08_18_27_900"],
             title="m0p2",
         ),
     ]
 
 
 def process_single_config(
-    config: MeasurementSetupConfig, temp_analysis_dir: Path, date: str, skip_reload: bool
+    config: MeasurementSetupConfig,
+    temp_analysis_dir: Path,
+    date: str,
+    skip_reload: bool,
+    use_fixed_bpm: bool = True,
 ) -> None:
-    """Process a single measurement configuration."""
+    """Process a single measurement configuration.
+
+    Args:
+        config: Measurement configuration for this run
+        temp_analysis_dir: Temporary directory for analysis outputs
+        date: Date string in YYYY-MM-DD format
+        skip_reload: If True, skip reloading strengths from LSA and reuse existing analysis
+        use_fixed_bpm: If True (default), use fixed reference BPM approach.
+                       If False, create all combinations of start/end BPMs (Cartesian product).
+    """
     results_dir = PROJECT_ROOT / f"b{config.beam}co_results"
     tune_knobs_file = results_dir / f"tune_knobs_{config.title}.txt"
     corrector_knobs_file = results_dir / f"corrector_knobs_{config.title}.txt"
@@ -358,6 +371,7 @@ def process_single_config(
         num_batches=1,
         num_workers=1,
         optimise_energy=True,
+        use_fixed_bpm=use_fixed_bpm,
     )
 
     results_arcs, uncs_arcs = optimise_ranges(
@@ -421,6 +435,11 @@ def main():
         action="store_true",
         help="Skip reloading strengths from LSA and redoing analysis",
     )
+    parser.add_argument(
+        "--no-fixed-bpm",
+        action="store_true",
+        help="Disable fixed BPM for start/end points, pair BPMs element-wise instead",
+    )
     args = parser.parse_args()
 
     # Define date
@@ -438,9 +457,12 @@ def main():
     # Temporary analysis directory
     temp_analysis_dir = PROJECT_ROOT / f"temp_analysis_co_{args.beam}"
 
+    # Determine use_fixed_bpm from args
+    use_fixed_bpm = not args.no_fixed_bpm
+
     # Process each configuration
     for config in configs:
-        process_single_config(config, temp_analysis_dir, date, args.skip_reload)
+        process_single_config(config, temp_analysis_dir, date, args.skip_reload, use_fixed_bpm)
 
     # Delete temp_analysis_dir if not skipping reload
     if not args.skip_reload:
