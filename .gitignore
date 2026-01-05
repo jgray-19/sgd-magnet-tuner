@@ -167,3 +167,10 @@ plots/
 *.out
 analysis*/
 *.png
+data/
+b1_flat_60_18cm/
+docs/api/
+mad_scripts/
+*_results/
+*_analysis*/
+models/**
