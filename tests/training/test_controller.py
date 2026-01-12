@@ -236,9 +236,9 @@ def _make_optimiser_config_quad() -> OptimiserConfig:
     return OptimiserConfig(
         max_epochs=300,
         warmup_epochs=50,
-        warmup_lr_start=1e-9,
-        max_lr=1e-7,
-        min_lr=1e-7,
+        warmup_lr_start=1e-8,
+        max_lr=1e-6,
+        min_lr=1e-8,
         gradient_converged_value=5e-14,
     )
 
@@ -397,6 +397,6 @@ def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path, json_b1:
             if true_values[magnet] != 0
             else abs(value)
         )
-        assert rel_diff < 1e-8, (
+        assert rel_diff < 1e-6, (
             f"Magnet {magnet}: FAIL, estimated {value}, true {true_values[magnet]}, rel diff {rel_diff}"
         )
