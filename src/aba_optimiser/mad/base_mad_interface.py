@@ -213,7 +213,8 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
 
     def run_twiss(self, **twiss_kwargs) -> tfs.TfsDataFrame:
         """
-        Run TWISS calculation and return results.
+        Run TWISS calculation and return results. If 'observe' is not specified,
+        it defaults to 1 (observing observed elements every turn).
 
         Args:
             **twiss_kwargs: Additional arguments for twiss calculation
