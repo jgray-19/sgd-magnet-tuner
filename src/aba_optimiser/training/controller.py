@@ -51,6 +51,8 @@ class Controller(BaseController):
         initial_knob_strengths: dict[str, float] | None = None,
         true_strengths: Path | dict[str, float] | None = None,
         plots_dir: Path | None = None,
+        debug: bool = False,
+        mad_logfile: Path | None = None,
     ):
         """
         Initialise the controller with all required managers.
@@ -65,6 +67,8 @@ class Controller(BaseController):
             initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths.
             true_strengths (Path | dict[str, float], optional): True strengths file or dict.
             plots_dir (Path | None, optional): Directory to save plots. Defaults to plots/.
+            debug (bool, optional): Enable debug mode. Defaults to False.
+            mad_logfile (Path | None, optional): Path to MAD log file. Defaults to None.
         """
 
         # Log optimization targets
@@ -113,6 +117,8 @@ class Controller(BaseController):
             seq_name=sequence_config.seq_name,
             beam_energy=sequence_config.beam_energy,
             bpm_range=bpm_range,
+            debug=debug,
+            mad_logfile=mad_logfile,
         )
 
         # Initialize tracking-specific managers
@@ -279,6 +285,10 @@ class Controller(BaseController):
         num_tracks: int,
     ) -> None:
         """Initialize worker manager for tracking workers."""
+        # Set worker logging level
+        import logging
+        logging.getLogger('aba_optimiser.workers').setLevel(self.simulation_config.worker_logging_level)
+
         self.worker_manager = WorkerManager(
             self.config_manager.calculate_n_data_points(),
             ybpm=magnet_range.split("/")[0],  # Assume start bpm has largest vertical kick
@@ -294,6 +304,8 @@ class Controller(BaseController):
             flattop_turns=flattop_turns,
             num_tracks=num_tracks,
             use_fixed_bpm=self.simulation_config.use_fixed_bpm,
+            debug=self.debug,
+            mad_logfile=self.mad_logfile,
         )
 
     def _process_true_strengths(self, true_strengths) -> dict[str, float]:

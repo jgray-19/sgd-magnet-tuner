@@ -104,8 +104,10 @@ class PositionOnlyTrackingWorker(TrackingWorker):
         self.hessian_weight_x = WeightProcessor.aggregate_hessian_weights(x_weights)
         self.hessian_weight_y = WeightProcessor.aggregate_hessian_weights(y_weights)
 
-        self.x_weights_full = WeightProcessor.normalise_weights(x_weights)
-        self.y_weights_full = WeightProcessor.normalise_weights(y_weights)
+        # Normalize weights globally across position dimensions
+        self.x_weights_full, self.y_weights_full = WeightProcessor.normalise_weights_globally(
+            x_weights, y_weights
+        )
 
     def _prepare_batches(
         self, init_coords: np.ndarray, init_pts: np.ndarray, num_batches: int

@@ -39,6 +39,7 @@ def _run_track_with_model(
     dpp_value: float,
     action_list: list[float],
     angle_list: list[float],
+    start_marker: str | None = None,
     return_dataframes: bool = False,
 ) -> list[Path] | list[pd.DataFrame]:
     """
@@ -70,11 +71,17 @@ def _run_track_with_model(
         inplace=True,
     )
 
+    if start_marker is not None:
+        env["lhcb1"].cycle(name_first_element=start_marker.lower(), inplace=True)
+
     xs = []
     pxs = []
     ys = []
     pys = []
     deltas = []
+    logger.info(f"Generating tracking for {num_particles} particles.")
+    logger.info(f"Starting BPM: {env['lhcb1'].element_names[0].upper()}")
+    logger.info(f"DPP value: {dpp_value}")
     for i in range(num_particles):
         x0 = create_initial_conditions(
             i,
@@ -142,6 +149,7 @@ def _generate_nonoise_track(
     destination: Path,
     dpp_value: float,
     magnet_range: str,
+    start_marker: str | None = None,
     perturb_quads: bool = False,
     perturb_bends: bool = False,
     num_particles: int = 1,
@@ -188,6 +196,7 @@ def _generate_nonoise_track(
         dpp_value=dpp_value,
         action_list=action_list,
         angle_list=angle_list,
+        start_marker=start_marker,
     )
 
     return corrector_file, magnet_strengths, tune_knobs_file
@@ -332,7 +341,10 @@ def test_controller_energy_opt(
 
 
 @pytest.mark.slow
-def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path, json_b1: Path) -> None:
+@pytest.mark.parametrize("start_marker", ["MSIA.EXIT.B1", "E.CELL.12.B1"])
+def test_controller_quad_opt_simple(
+    tmp_dir: Path, sequence_file: Path, json_b1: Path, start_marker: str
+) -> None:
     """Test quadrupole optimisation using the simple opt script logic."""
     # Constants for the test
     magnet_range = "BPM.9R1.B1/BPM.9L2.B1"
@@ -355,6 +367,7 @@ def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path, json_b1:
         off_magnet_path,
         0.0,
         "$start/$end",
+        start_marker=start_marker,
         perturb_quads=True,
     )
 
@@ -366,6 +379,7 @@ def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path, json_b1:
         sequence_file_path=sequence_file,
         magnet_range=magnet_range,
         beam_energy=6800,
+        first_bpm=start_marker,
     )
 
     measurement_config = MeasurementConfig(
@@ -380,7 +394,6 @@ def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path, json_b1:
         start_points=bpm_start_points,
         end_points=bpm_end_points,
     )
-
     ctrl = Controller(
         optimiser_config=optimiser_config,
         simulation_config=simulation_config,
@@ -388,8 +401,12 @@ def test_controller_quad_opt_simple(tmp_dir: Path, sequence_file: Path, json_b1:
         measurement_config=measurement_config,
         bpm_config=bpm_config,
         show_plots=False,
+        plots_dir=tmp_dir / "plots",
         true_strengths=true_values,
+        debug=False,
+        mad_logfile=tmp_dir / "mad_logfile.log",
     )
+    logger.info(f"Starting controller with logfile at {tmp_dir / 'mad_logfile.log'}")
     estimate, unc = ctrl.run()
     for magnet, value in estimate.items():
         rel_diff = (

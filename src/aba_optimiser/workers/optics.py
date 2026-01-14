@@ -1,8 +1,8 @@
-"""Optics function worker for beta function optimization.
+"""Optics function worker for phase optimization.
 
-This module implements the OpticsWorker class which computes beta functions
-and their gradients for optics matching. It treats beta_x and beta_y
-symmetrically throughout the computation.
+This module implements the OpticsWorker class which computes phase advances
+between consecutive BPMs and their gradients for optics matching. Phase advances
+are measured between pairs of adjacent BPMs, resulting in (n_bpms - 1) measurements.
 """
 
 from __future__ import annotations
@@ -25,88 +25,106 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class OpticsWeights:
-    """Container for beta function weights.
+    """Container for optics function weights.
 
     Attributes:
-        x: Weights for horizontal beta function
-        y: Weights for vertical beta function
+        phase_adv_x: Weights for horizontal phase advances
+        phase_adv_y: Weights for vertical phase advances
+        beta_x: Weights for horizontal beta functions
+        beta_y: Weights for vertical beta functions
     """
 
-    betx: np.ndarray  # Shape: (n_bpms,)
-    bety: np.ndarray  # Shape: (n_bpms,)
-    # alfx: np.ndarray  # Shape: (n_bpms,)
-    # alfy: np.ndarray  # Shape: (n_bpms,)
+    phase_adv_x: np.ndarray  # Shape: (n_bpms-1,)
+    phase_adv_y: np.ndarray  # Shape: (n_bpms-1,)
+    beta_x: np.ndarray  # Shape: (n_bpms,)
+    beta_y: np.ndarray  # Shape: (n_bpms,)
 
 
 @dataclass
 class OpticsComparisons:
-    """Container for reference beta function data.
+    """Container for reference optics data.
 
     Attributes:
-        x: Reference horizontal beta functions
-        y: Reference vertical beta functions
+        phase_adv_x: Reference horizontal phase advances between consecutive BPMs
+        phase_adv_y: Reference vertical phase advances between consecutive BPMs
+        beta_x: Reference horizontal beta functions at each BPM
+        beta_y: Reference vertical beta functions at each BPM
     """
 
-    betx: np.ndarray  # Shape: (n_bpms,)
-    bety: np.ndarray  # Shape: (n_bpms,)
-    # alfx: np.ndarray  # Shape: (n_bpms,)
-    # alfy: np.ndarray  # Shape: (n_bpms,)
+    phase_adv_x: np.ndarray  # Shape: (n_bpms-1,)
+    phase_adv_y: np.ndarray  # Shape: (n_bpms-1,)
+    beta_x: np.ndarray  # Shape: (n_bpms,)
+    beta_y: np.ndarray  # Shape: (n_bpms,)
 
 
 class OpticsWorker(AbstractWorker[OpticsData]):
     """Worker for optics function computations.
 
-    This worker computes beta functions (and potentially other Twiss parameters)
-    at BPM locations and their gradients with respect to optimization knobs.
-    It uses differential algebra for automatic differentiation.
+    This worker computes phase advances between consecutive BPMs and
+    beta functions at each BPM, along with their gradients with respect
+    to optimization knobs. It uses differential algebra for automatic
+    differentiation.
 
-    The implementation treats beta_x and beta_y symmetrically to ensure
-    consistent handling of both transverse planes.
+    Since phase advances are measured between BPM pairs, there are
+    (n_bpms - 1) measurement points for n_bpms BPMs. Beta functions
+    are measured at each BPM, giving n_bpms measurements.
     """
 
     def prepare_data(self, data: OpticsData) -> None:
         """Process and prepare optics data for computation.
 
-        Extracts beta function measurements, computes weights from variances,
-        and prepares initial Twiss parameters.
+        Extracts phase advance measurements between consecutive BPMs,
+        beta function measurements at each BPM, computes weights from
+        variances, and prepares initial Twiss parameters.
 
         Args:
             data: OpticsData container with reference measurements
         """
         LOGGER.debug(
-            f"Worker {self.worker_id}: Processing optics data with {len(data.comparisons)} BPMs"
+            f"Worker {self.worker_id}: Processing optics data with {len(data.comparisons)}"
+            f" phase advance measurements and {len(data.beta_comparisons)} beta function measurements"
         )
 
-        # Extract beta comparisons symmetrically
+        # Extract phase advance comparisons
         self.comparisons = OpticsComparisons(
-            betx=data.comparisons[:, 0],  # beta_x
-            bety=data.comparisons[:, 1],  # beta_y
-            # alfx=data.comparisons[:, 2],  # alpha_x
-            # alfy=data.comparisons[:, 3],  # alpha_y
+            phase_adv_x=data.comparisons[:, 0],  # phase_adv_x
+            phase_adv_y=data.comparisons[:, 1],  # phase_adv_y
+            beta_x=data.beta_comparisons[:, 0],  # beta_x
+            beta_y=data.beta_comparisons[:, 1],  # beta_y
         )
 
-        # Compute weights from variances symmetrically
-        betx_vars = data.variances[:, 0]
-        bety_vars = data.variances[:, 1]
-        # alfx_vars = data.variances[:, 2]
-        # alfy_vars = data.variances[:, 3]
+        # Compute weights from variances
+        phase_adv_x_vars = data.variances[:, 0]
+        phase_adv_y_vars = data.variances[:, 1]
+        beta_x_vars = data.beta_variances[:, 0]
+        beta_y_vars = data.beta_variances[:, 1]
 
-        betx_weights = WeightProcessor.variance_to_weight(betx_vars)
-        bety_weights = WeightProcessor.variance_to_weight(bety_vars)
-        # alfx_weights = WeightProcessor.variance_to_weight(alfx_vars)
-        # alfy_weights = WeightProcessor.variance_to_weight(alfy_vars)
+        phase_adv_x_weights = WeightProcessor.variance_to_weight(phase_adv_x_vars)
+        phase_adv_y_weights = WeightProcessor.variance_to_weight(phase_adv_y_vars)
+        beta_x_weights = WeightProcessor.variance_to_weight(beta_x_vars)
+        beta_y_weights = WeightProcessor.variance_to_weight(beta_y_vars)
 
         # Store Hessian weights (used for approximate Hessian calculation)
         self.hessian_weights = OpticsWeights(
-            betx=betx_weights, bety=bety_weights, # alfx=alfx_weights, alfy=alfy_weights
+            phase_adv_x=phase_adv_x_weights,
+            phase_adv_y=phase_adv_y_weights,
+            beta_x=beta_x_weights,
+            beta_y=beta_y_weights,
         )
 
-        # Normalize weights for gradient computation
+        # Normalize weights for gradient computation (normalize globally across all measurements)
+        norm_phase_adv_x_weight, norm_phase_adv_y_weight, norm_beta_x_weight, norm_beta_y_weight = (
+            WeightProcessor.normalise_weights_globally(
+                phase_adv_x_weights, phase_adv_y_weights, beta_x_weights, beta_y_weights
+            )
+        )
         self.weights = OpticsWeights(
-            betx=WeightProcessor.normalise_weights(betx_weights),
-            bety=WeightProcessor.normalise_weights(bety_weights),
-            # alfx=WeightProcessor.normalise_weights(alfx_weights),
-            # alfy=WeightProcessor.normalise_weights(alfy_weights),
+            phase_adv_x=norm_phase_adv_x_weight,
+            phase_adv_y=norm_phase_adv_y_weight,
+            beta_x=norm_beta_x_weight
+            * 0.1,  # Scale beta weights by 0.1 to prioritise phase advances
+            beta_y=norm_beta_y_weight
+            * 0.1,  # Scale beta weights by 0.1 to prioritise phase advances
         )
 
         # Store initial conditions
@@ -200,7 +218,13 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
         Args:
             mad: MAD-NG interface object
         """
-        mad.send(self.run_track_init_path.read_text())
+        text = self.run_track_init_path.read_text()
+        # Remove all comments from the initialization script and embed worker ID
+        filtered_lines = [
+            line for line in text.splitlines() if not line.strip().startswith("--") and line.strip()
+        ]
+        filtered_lines[0] += "!Worker ID: " + str(self.worker_id)
+        mad.send("\n".join(filtered_lines))
 
         # Verify initialization
         if not mad.send("python:send(true)").recv():
@@ -243,42 +267,52 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
             mad: MAD-NG interface object
 
         Returns:
-            Dictionary with keys: betx, bety, dbetx_dk, dbety_dk
+            Dictionary with keys: betx, bety, phase_adv_x, phase_adv_y,
+            dbeta_x_dk, dbeta_y_dk,
+            dphase_adv_x_dk, dphase_adv_y_dk
         """
-        # Receive beta functions
+        # Receive beta functions at each BPM
         betx_results = mad.recv()
         bety_results = mad.recv()
-        # alfx_results = mad.recv()
-        # alfy_results = mad.recv()
 
-        # Receive derivatives
-        dbetx_dk_results = mad.recv()
-        dbety_dk_results = mad.recv()
-        # dalfx_dk_results = mad.recv()
-        # dalfy_dk_results = mad.recv()
+        # Receive phase advance functions
+        phase_adv_x_results = mad.recv()
+        phase_adv_y_results = mad.recv()
+
+        # Receive beta derivatives
+        dbeta_x_dk_results = mad.recv()
+        dbeta_y_dk_results = mad.recv()
+
+        # Receive phase advance derivatives
+        dphase_adv_x_dk_results = mad.recv()
+        dphase_adv_y_dk_results = mad.recv()
 
         # Convert to numpy arrays
         # Shape: (n_bpms,)
         betx = np.asarray(betx_results).squeeze(-1)
         bety = np.asarray(bety_results).squeeze(-1)
-        # alfx = np.asarray(alfx_results).squeeze(-1)
-        # alfy = np.asarray(alfy_results).squeeze(-1)
+
+        # Shape: (n_bpms-1,)
+        phase_adv_x = np.asarray(phase_adv_x_results).squeeze(-1)
+        phase_adv_y = np.asarray(phase_adv_y_results).squeeze(-1)
 
         # Shape: (n_bpms, n_knobs) - note: MAD sends as (n_knobs, n_bpms) transposed
-        dbetx_dk = np.asarray(dbetx_dk_results)
-        dbety_dk = np.asarray(dbety_dk_results)
-        # dalfx_dk = np.asarray(dalfx_dk_results)
-        # dalfy_dk = np.asarray(dalfy_dk_results)
+        dbeta_x_dk = np.asarray(dbeta_x_dk_results)
+        dbeta_y_dk = np.asarray(dbeta_y_dk_results)
+
+        # Shape: (n_bpms-1, n_knobs) - note: MAD sends as (n_knobs, n_bpms-1) transposed
+        dphase_adv_x_dk = np.asarray(dphase_adv_x_dk_results)
+        dphase_adv_y_dk = np.asarray(dphase_adv_y_dk_results)
 
         return {
             "betx": betx,
             "bety": bety,
-            # "alfx": alfx,
-            # "alfy": alfy,
-            "dbetx_dk": dbetx_dk,
-            "dbety_dk": dbety_dk,
-            # "dalfx_dk": dalfx_dk,
-            # "dalfy_dk": dalfy_dk,
+            "phase_adv_x": phase_adv_x,
+            "phase_adv_y": phase_adv_y,
+            "dbeta_x_dk": dbeta_x_dk,
+            "dbeta_y_dk": dbeta_y_dk,
+            "dphase_adv_x_dk": dphase_adv_x_dk,
+            "dphase_adv_y_dk": dphase_adv_y_dk,
         }
 
     def _compute_loss_and_gradients(
@@ -286,7 +320,8 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
     ) -> tuple[np.ndarray, float]:
         """Compute weighted loss and gradients from optics results.
 
-        Uses symmetric treatment of beta_x and beta_y.
+        Uses symmetric treatment of phase_adv_x, phase_adv_y, beta_x, beta_y.
+        Computes cyclical residuals for phase advances (modulo 2π).
 
         Args:
             results: Dictionary of optics results and derivatives
@@ -294,28 +329,36 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
         Returns:
             Tuple of (gradient array, loss value)
         """
-        # Compute residuals symmetrically
-        residual_betx = results["betx"] - self.comparisons.betx
-        residual_bety = results["bety"] - self.comparisons.bety
-        # residual_alfx = results["alfx"] - self.comparisons.alfx
-        # residual_alfy = results["alfy"] - self.comparisons.alfy
+        # Compute cyclical residuals for phase advances (phase advances are modulo 1)
+        diff_phase_adv_x = results["phase_adv_x"] - self.comparisons.phase_adv_x
+        diff_phase_adv_y = results["phase_adv_y"] - self.comparisons.phase_adv_y
+
+        # Wrap differences to [-0.5, 0.5] range for cyclical phase advances (modulo 1)
+        residual_phase_adv_x = (diff_phase_adv_x + 0.5) % 1 - 0.5
+        residual_phase_adv_y = (diff_phase_adv_y + 0.5) % 1 - 0.5
+
+        # Compute beta function residuals (non-cyclical)
+        residual_beta_x = results["betx"] - self.comparisons.beta_x
+        residual_beta_y = results["bety"] - self.comparisons.beta_y
 
         # Compute gradients (weighted residual @ jacobian)
-        # Shape: (n_bpms,) @ (n_bpms, n_knobs) -> (n_knobs,)
-        gbx = (self.weights.betx * residual_betx) @ results["dbetx_dk"]
-        gby = (self.weights.bety * residual_bety) @ results["dbety_dk"]
-        # gax = (self.weights.alfx * residual_alfx) @ results["dalfx_dk"]
-        # gay = (self.weights.alfy * residual_alfy) @ results["dalfy_dk"]
+        # Phase advance contributions: Shape: (n_bpms-1,) @ (n_bpms-1, n_knobs) -> (n_knobs,)
+        gpx = (self.weights.phase_adv_x * residual_phase_adv_x) @ results["dphase_adv_x_dk"]
+        gpy = (self.weights.phase_adv_y * residual_phase_adv_y) @ results["dphase_adv_y_dk"]
+
+        # Beta function contributions: Shape: (n_bpms,) @ (n_bpms, n_knobs) -> (n_knobs,)
+        gbx = (self.weights.beta_x * residual_beta_x) @ results["dbeta_x_dk"]
+        gby = (self.weights.beta_y * residual_beta_y) @ results["dbeta_y_dk"]
 
         # Compute loss (weighted sum of squared residuals)
-        loss_bx = np.sum(self.weights.betx * residual_betx**2)
-        loss_by = np.sum(self.weights.bety * residual_bety**2)
-        # loss_ax = np.sum(self.weights.alfx * residual_alfx**2)
-        # loss_ay = np.sum(self.weights.alfy * residual_alfy**2)
+        loss_px = np.sum(self.weights.phase_adv_x * residual_phase_adv_x**2)
+        loss_py = np.sum(self.weights.phase_adv_y * residual_phase_adv_y**2)
+        loss_bx = np.sum(self.weights.beta_x * residual_beta_x**2)
+        loss_by = np.sum(self.weights.beta_y * residual_beta_y**2)
 
         # Total gradient and loss (factor of 2 from derivative of squared residuals)
-        grad = 2.0 * (gbx + gby) # + gax + gay)
-        loss = loss_bx + loss_by # + loss_ax + loss_ay
+        grad = 2.0 * (gpx + gpy + gbx + gby)
+        loss = loss_px + loss_py + loss_bx + loss_by
 
         return grad, loss
 
@@ -327,6 +370,6 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
             nbpms: Number of BPMs in the range
 
         Returns:
-            Number of data points (equal to number of BPMs)
+            Number of phase advance measurements (nbpms - 1, between consecutive BPMs)
         """
-        return nbpms
+        return nbpms - 1

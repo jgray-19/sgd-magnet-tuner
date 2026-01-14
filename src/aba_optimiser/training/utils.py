@@ -6,8 +6,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import numpy as np
-
 if TYPE_CHECKING:
     import pandas as pd
 
@@ -68,46 +66,36 @@ def normalize_true_strengths(
     raise TypeError(f"Unexpected type for true_strengths: {type(true_strengths)}")
 
 
-def extract_bpm_range_data(
-    df: pd.DataFrame,
+def extract_bpm_range_names(
+    all_bpms: list[str],
     start_bpm: str,
     end_bpm: str,
     sdir: int,
-    column_names: list[str],
-) -> np.ndarray:
-    """Extract data between start and end BPMs, handling circular wrapping.
+) -> list[str]:
+    """Extract BPM names between start and end BPMs, handling circular wrapping.
 
     Args:
-        df: DataFrame with BPM index
+        all_bpms: List of all BPM names
         start_bpm: Starting BPM name
         end_bpm: Ending BPM name
         sdir: Direction (1 for forward, -1 for reverse)
-        column_names: List of column names to extract (will be stacked horizontally)
 
     Returns:
-        Array of shape (n_bpms, len(column_names)) with extracted data
+        List of BPM names in the range
     """
-    start_pos = df.index.get_loc(start_bpm)
-    end_pos = df.index.get_loc(end_bpm) + 1
+    start_pos = all_bpms.index(start_bpm)
+    end_pos = all_bpms.index(end_bpm) + 1
 
-    # Extract each column
-    column_arrays = []
-    for col_name in column_names:
-        values = df[col_name].to_numpy()
-        if end_pos <= start_pos:
-            # Circular wrapping
-            extracted = np.concatenate((values[start_pos:], values[:end_pos]))
-        else:
-            extracted = values[start_pos:end_pos]
+    if end_pos <= start_pos:
+        # Circular wrapping
+        extracted = all_bpms[start_pos:] + all_bpms[:end_pos]
+    else:
+        extracted = all_bpms[start_pos:end_pos]
+    # Reverse for negative direction
+    if sdir == -1:
+        extracted = extracted[::-1]
 
-        # Reverse for negative direction
-        if sdir == -1:
-            extracted = extracted[::-1]
-
-        column_arrays.append(extracted)
-
-    # Stack into (n_bpms, n_columns)
-    return np.vstack(column_arrays).T
+    return extracted
 
 
 def find_common_bpms(*dataframes: pd.DataFrame) -> list[str]:
@@ -156,6 +144,44 @@ def load_tfs_files(
         file_path = directory / f"{prefix}{suffix}{EXT}"
         if not file_path.exists():
             raise FileNotFoundError(f"Required TFS file not found: {file_path}")
-        loaded[key] = tfs.read(file_path, index="NAME")
+        # Phase files have NAME/NAME2 pairs, so don't index by NAME
+        # Other files have single BPM per row, so index by NAME
+        if "phase" in key and "beta" not in key:
+            loaded[key] = tfs.read(file_path)
+        else:
+            loaded[key] = tfs.read(file_path, index="NAME")
 
     return loaded
+
+
+def create_bpm_range_specs(
+    bpm_start_points: list[str],
+    bpm_end_points: list[str],
+    use_fixed_bpm: bool,
+    fixed_start: str | None = None,
+    fixed_end: str | None = None,
+) -> list[tuple[str, str, int]]:
+    """Create BPM range specifications for optimization workers.
+
+    Args:
+        bpm_start_points: List of starting BPM names
+        bpm_end_points: List of ending BPM names
+        use_fixed_bpm: If True, use fixed BPM pairs; if False, create cartesian product
+        fixed_start: Fixed start BPM for backward tracking (only used if use_fixed_bpm=True)
+        fixed_end: Fixed end BPM for forward tracking (only used if use_fixed_bpm=True)
+
+    Returns:
+        List of (start_bpm, end_bpm, sdir) tuples where sdir is 1 for forward, -1 for reverse
+    """
+    if use_fixed_bpm:
+        if fixed_start is None or fixed_end is None:
+            raise ValueError("fixed_start and fixed_end must be provided when use_fixed_bpm=True")
+        # Forward: start -> fixed_end; Backward: fixed_start -> end
+        range_specs = [(s, fixed_end, 1) for s in bpm_start_points] + [
+            (fixed_start, e, -1) for e in bpm_end_points
+        ]
+    else:
+        # Cartesian product: every start with every end, forward direction only
+        range_specs = [(s, e, 1) for s in bpm_start_points for e in bpm_end_points]
+
+    return range_specs

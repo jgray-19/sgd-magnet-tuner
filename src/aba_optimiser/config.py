@@ -79,6 +79,9 @@ class SimulationConfig:
     #             This provides many more measurement combinations to constrain the fit.
     use_fixed_bpm: bool = field(default=True)
 
+    # Logging level for worker processes (separate from main process)
+    worker_logging_level: int = field(default=logging.WARNING)
+
     # Computed fields
     total_tracks: int = field(init=False)
 

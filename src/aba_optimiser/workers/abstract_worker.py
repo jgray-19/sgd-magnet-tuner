@@ -179,6 +179,18 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         bpm_range = self.get_bpm_range(sdir=1)
         LOGGER.debug(f"Worker {self.worker_id}: Using BPM range {bpm_range}")
 
+        # Adapt logfile path to include worker ID if provided
+        worker_logfile = None
+        if self.config.mad_logfile is not None:
+            logfile_path = self.config.mad_logfile
+            # Insert worker ID before the extension
+            if logfile_path.suffix:
+                worker_logfile = logfile_path.with_name(
+                    f"{logfile_path.stem}_worker_{self.worker_id}{logfile_path.suffix}"
+                )
+            else:
+                worker_logfile = logfile_path.with_name(f"{logfile_path.name}_worker_{self.worker_id}")
+
         mad_iface = OptimisationMadInterface(
             self.config.sequence_file_path,
             py_name="python",
@@ -190,6 +202,9 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             corrector_strengths=self.config.corrector_strengths,
             tune_knobs_file=self.config.tune_knobs_file,
             beam_energy=self.config.beam_energy,
+            debug=self.config.debug,
+            mad_logfile=worker_logfile,
+            optimise_knobs=self.config.optimise_knobs,
         )
 
         knob_names = mad_iface.knob_names

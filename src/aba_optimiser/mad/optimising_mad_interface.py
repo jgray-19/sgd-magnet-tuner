@@ -65,14 +65,17 @@ class OptimisationMadInterface(BaseMadInterface):
         magnet_range: str = "$start/$end",
         bpm_range: str | None = None,
         simulation_config: SimulationConfig | None = None,
-        discard_mad_output: bool = False,
         bpm_pattern: str = BPM_PATTERN,
         bad_bpms: list[str] | None = None,
         beam_energy: float = BEAM_ENERGY,
         corrector_strengths: Path | None = CORRECTOR_STRENGTHS,
         tune_knobs_file: Path | None = TUNE_KNOBS_FILE,
         start_bpm: str | None = None,
-        **mad_kwargs,
+        py_name: str = "python",
+        debug: bool = False,
+        mad_logfile: Path | None = None,
+        discard_mad_output: bool = False,
+        optimise_knobs: list[str] | None = None,
     ):
         """
         Initialise optimization MAD interface with automatic setup.
@@ -82,22 +85,37 @@ class OptimisationMadInterface(BaseMadInterface):
             magnet_range: Range of magnets to include, e.g., "MARKER.1/MARKER.10"
             bpm_range: Range of BPMs to observe, e.g., "BPM.13R3.B1/BPM.12L4.B1"
             simulation_config: Simulation configuration for which parameters to optimise
-            discard_mad_output: Whether to discard MAD-NG output to stdout
             bpm_pattern: Pattern for BPM matching
             bad_bpms: List of bad BPMs to exclude from observation
             beam_energy: Beam energy in GeV
             corrector_strengths: Path to corrector strengths file, or None to skip
             seq_name: Name of the sequence to load
             tune_knobs_file: Path to tune knobs file, or None to skip
-            **kwargs: Additional keyword arguments for MAD initialization
+            py_name: Name used for Python-MAD communication
+            debug: bool = False, Enable debug mode. Defaults to False.
+            mad_logfile: Path | None = None, Path to MAD log file. Defaults to None.
+            discard_mad_output: bool = False, Whether to discard MAD-NG output to stdout.
+            optimise_knobs: list[str] | None = None, List of knob names to optimise. If None, optimises all knobs.
         """
         # Configure MAD output
-        if discard_mad_output:
-            mad_kwargs.setdefault("stdout", "/dev/null")
-            mad_kwargs.setdefault("redirect_stderr", True)
+        stdout = None
+        redirect_stderr = False
+        if mad_logfile is not None:
+            stdout = mad_logfile
+            redirect_stderr = True
+            if discard_mad_output:
+                LOGGER.warning(
+                    "MAD logfile specified, but discard_mad_output is True. MAD output will be logged."
+                )
+            LOGGER.info(f"MAD logfile set to: {mad_logfile.absolute()}")
+        elif discard_mad_output:
+            stdout = "/dev/null"
+            redirect_stderr = True
 
         # Initialise base class
-        super().__init__(**mad_kwargs)
+        super().__init__(
+            stdout=stdout, redirect_stderr=redirect_stderr, py_name=py_name, debug=debug
+        )
         # Store optimisation-specific attributes
         self.sequence_file = sequence_file
         if seq_name is None:
@@ -108,6 +126,7 @@ class OptimisationMadInterface(BaseMadInterface):
         self.bpm_pattern = bpm_pattern
         self.beam_energy = beam_energy
         self.seq_name = seq_name
+        self.optimise_knobs = optimise_knobs
 
         # Type hints for attributes set during initialization
         self.nbpms: int
@@ -121,6 +140,7 @@ class OptimisationMadInterface(BaseMadInterface):
         if start_bpm is not None:
             marker_name = self.install_marker(start_bpm, "marker_" + start_bpm)
             self.cycle_sequence(marker_name=marker_name)
+            LOGGER.info(f"Cycled sequence to start at BPM: {start_bpm}")
         else:
             LOGGER.info("Skipping sequence cycling (no start BPM provided)")
 
@@ -149,12 +169,6 @@ class OptimisationMadInterface(BaseMadInterface):
             self._set_tune_knobs(tune_knobs_file)
         else:
             LOGGER.info("Skipping tune knobs (not provided)")
-
-        # try:
-        #     tws = self.run_twiss()
-        #     LOGGER.info(f"Initial tunes: {tws.q1}, {tws.q2}")
-        # except RuntimeError as e:
-        #     LOGGER.error(f"Failed to run twiss after setup: {e}")
 
     def count_bpms(self, bpm_range) -> tuple[int, list[str]]:
         """Count the number of BPM elements in the specified range."""
@@ -265,8 +279,22 @@ class OptimisationMadInterface(BaseMadInterface):
         mad_code += MAKE_KNOBS_END_MAD.format(py_name=self.py_name)
 
         self.mad.send(mad_code)
-        self.knob_names: list[str] = self.mad.recv()
-        self.elem_spos: list[float] = self.mad.recv()
+        knob_names_all: list[str] = self.mad.recv()
+        elem_spos_all: list[float] = self.mad.recv()
+
+        # Filter knobs if optimise_knobs is specified
+        if self.optimise_knobs is not None:
+            original_count = len(knob_names_all)
+            filtered_indices = [i for i, k in enumerate(knob_names_all) if k in self.optimise_knobs]
+            self.knob_names = [knob_names_all[i] for i in filtered_indices]
+            self.elem_spos = [elem_spos_all[i] for i in filtered_indices]
+            LOGGER.info(
+                f"Filtered knobs from {original_count} to {len(self.knob_names)} based on optimise_knobs"
+            )
+        else:
+            self.knob_names = knob_names_all
+            self.elem_spos = elem_spos_all
+
         if self.elem_spos:
             LOGGER.info(
                 f"Created {len(self.knob_names)} knobs from {self.elem_spos[0]} to {self.elem_spos[-1]}"

@@ -186,11 +186,10 @@ class TrackingWorker(AbstractWorker[TrackingData]):
         self.hessian_weight_px = WeightProcessor.aggregate_hessian_weights(px_weights)
         self.hessian_weight_py = WeightProcessor.aggregate_hessian_weights(py_weights)
 
-        # Normalize weights for gradient computation
-        self.x_weights_full = WeightProcessor.normalise_weights(x_weights)
-        self.y_weights_full = WeightProcessor.normalise_weights(y_weights)
-        self.px_weights_full = WeightProcessor.normalise_weights(px_weights)
-        self.py_weights_full = WeightProcessor.normalise_weights(py_weights)
+        # Normalize weights globally across all dimensions for gradient computation
+        self.x_weights_full, self.y_weights_full, self.px_weights_full, self.py_weights_full = (
+            WeightProcessor.normalise_weights_globally(x_weights, y_weights, px_weights, py_weights)
+        )
 
     def _prepare_batches(
         self, init_coords: np.ndarray, init_pts: np.ndarray, num_batches: int

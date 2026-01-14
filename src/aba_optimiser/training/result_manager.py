@@ -176,6 +176,7 @@ class ResultManager:
                 current_knobs["deltap"],
                 uncertainties[-1],
             )
+        LOGGER.info(f"Plots saved to {self.plots_dir.resolve()}")
 
         if self.show_plots:
             show_plots()

@@ -48,6 +48,9 @@ class BaseController(ABC):
         seq_name: str | None = None,
         beam_energy: float = 6800.0,
         bpm_range: str | None = None,
+        debug: bool = False,
+        mad_logfile: Path | None = None,
+        optimise_knobs: list[str] | None = None,
     ):
         """Initialize base controller.
 
@@ -66,11 +69,14 @@ class BaseController(ABC):
             seq_name: Sequence name
             beam_energy: Beam energy in GeV
             bpm_range: BPM range for determining fixed start/end points (defaults to magnet_range)
+            optimise_knobs: List of global knob names to optimise, or None
         """
         self.optimiser_config = optimiser_config
         self.simulation_config = simulation_config
         self.sequence_file_path = Path(sequence_file_path)
         self.show_plots = show_plots
+        self.debug = debug
+        self.mad_logfile = mad_logfile
 
         # Filter bad BPMs
         bpm_start_points, bpm_end_points = filter_bad_bpms(
@@ -79,7 +85,12 @@ class BaseController(ABC):
 
         # Initialize configuration manager
         self.config_manager = ConfigurationManager(
-            simulation_config, magnet_range, bpm_start_points, bpm_end_points, bpm_range
+            simulation_config,
+            magnet_range,
+            bpm_start_points,
+            bpm_end_points,
+            bpm_range,
+            optimise_knobs,
         )
         self.config_manager.setup_mad_interface(
             str(sequence_file_path),
@@ -87,6 +98,8 @@ class BaseController(ABC):
             bad_bpms,
             seq_name,
             beam_energy,
+            debug,
+            mad_logfile,
         )
 
         # Normalize and initialize knob strengths
@@ -176,6 +189,7 @@ class LHCControllerMixin:
         sequence_path: Path | None = None,
         bad_bpms: list[str] | None = None,
         beam_energy: float = 6800.0,
+        optimise_knobs: list[str] | None = None,
     ):
         """Create a SequenceConfig for LHC beam.
 
@@ -185,19 +199,18 @@ class LHCControllerMixin:
             sequence_path: Optional custom sequence path
             bad_bpms: List of bad BPMs to exclude
             beam_energy: Beam energy in GeV
+            optimise_knobs: List of knob names to optimise
 
         Returns:
             SequenceConfig configured for the specified LHC beam
         """
         from aba_optimiser.training.controller_config import SequenceConfig
 
-        lhc_config = LHCControllerMixin.get_lhc_config(beam, sequence_path)
-
-        return SequenceConfig(
-            sequence_file_path=lhc_config["sequence_file_path"],
+        return SequenceConfig.for_lhc_beam(
+            beam=beam,
             magnet_range=magnet_range,
-            first_bpm=lhc_config["first_bpm"],
-            seq_name=lhc_config["seq_name"],
+            sequence_path=sequence_path,
             beam_energy=beam_energy,
             bad_bpms=bad_bpms,
+            optimise_knobs=optimise_knobs,
         )

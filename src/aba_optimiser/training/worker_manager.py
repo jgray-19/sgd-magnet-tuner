@@ -16,6 +16,7 @@ import numpy as np
 
 from aba_optimiser.config import PARTICLE_MASS
 from aba_optimiser.physics.deltap import dp2pt
+from aba_optimiser.training.utils import create_bpm_range_specs
 from aba_optimiser.workers import TrackingData, TrackingWorker, WorkerConfig
 from aba_optimiser.workers.tracking_position_only import PositionOnlyTrackingWorker
 
@@ -64,6 +65,9 @@ class WorkerManager:
         flattop_turns: int = 1000,
         num_tracks: int = 1,
         use_fixed_bpm: bool = True,
+        debug: bool = False,
+        mad_logfile: Path | None = None,
+        optimise_knobs: list[str] | None = None,
     ):
         """Initialise the WorkerManager."""
         self.n_data_points = n_data_points
@@ -83,6 +87,9 @@ class WorkerManager:
         self.beam_energy = beam_energy
         self.flattop_turns = flattop_turns
         self.num_tracks = num_tracks
+        self.debug = debug
+        self.mad_logfile = mad_logfile
+        self.optimise_knobs = optimise_knobs
 
     def _compute_pt(self, file_idx: int, machine_deltaps: list[float]) -> float:
         """Compute transverse momentum based on file index."""
@@ -96,7 +103,6 @@ class WorkerManager:
         start_bpms: list[str],
         end_bpms: list[str],
         machine_deltaps: list[float],
-        simulation_config: SimulationConfig,
     ) -> list[tuple[TrackingData, WorkerConfig, int]]:
         """Create payloads for all workers.
 
@@ -107,28 +113,14 @@ class WorkerManager:
             start_bpms: List of start BPMs (varying starts, track forward to fixed_end)
             end_bpms: List of end BPMs (varying ends, track backward from fixed_start)
             machine_deltaps: List of machine deltaps corresponding to each file
-            simulation_config: Simulation configuration containing optimization flags
         """
         payloads: list[tuple[TrackingData, WorkerConfig, int]] = []
         arrays_cache = {idx: self._extract_arrays(df) for idx, df in track_data.items()}
 
         # Build range specs: (start, end, sdir)
-        if self.use_fixed_bpm:
-            # Forward: start -> fixed_end; Backward: fixed_start -> end
-            range_specs = [(s, self.fixed_end, 1) for s in start_bpms] + [
-                (self.fixed_start, e, -1) for e in end_bpms
-            ]
-            LOGGER.info(
-                f"Using fixed BPMs: {len(start_bpms)} starts → {self.fixed_end} + "
-                f"{self.fixed_start} → {len(end_bpms)} ends = {len(range_specs)} range specs"
-            )
-        else:
-            # Cartesian product: every start with every end, forward direction only
-            range_specs = [(s, e, 1) for s in start_bpms for e in end_bpms]
-            LOGGER.info(
-                f"Using Cartesian product: {len(start_bpms)} starts × {len(end_bpms)} ends = "
-                f"{len(range_specs)} range specs (all combinations)"
-            )
+        range_specs = create_bpm_range_specs(
+            start_bpms, end_bpms, self.use_fixed_bpm, self.fixed_start, self.fixed_end
+        )
 
         LOGGER.info(f"Creating {len(range_specs)} range specs × {len(turn_batches)} batches")
 
@@ -179,6 +171,9 @@ class WorkerManager:
                     sdir=sdir,
                     bad_bpms=self.bad_bpms,
                     seq_name=self.seq_name,
+                    debug=self.debug,
+                    mad_logfile=self.mad_logfile,
+                    optimise_knobs=self.optimise_knobs,
                 )
 
                 payloads.append((data, config, primary_file_idx))
@@ -328,7 +323,6 @@ class WorkerManager:
             start_bpms,
             end_bpms,
             machine_deltaps,
-            simulation_config,
         )
         LOGGER.info(f"Starting {len(payloads)} workers...")
 

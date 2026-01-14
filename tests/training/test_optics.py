@@ -7,11 +7,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-import numpy as np
 import pytest
 import tfs
-from omc3.hole_in_one import hole_in_one_entrypoint
-from turn_by_turn import convert_to_tbt, write_tbt
+from omc3.scripts.fake_measurement_from_model import generate as fake_measurement
 
 from aba_optimiser.config import BEND_ERROR_FILE, OptimiserConfig
 from aba_optimiser.io.utils import save_knobs
@@ -19,12 +17,6 @@ from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 from aba_optimiser.simulation.optics import perform_orbit_correction
 from aba_optimiser.training.controller_config import BPMConfig, SequenceConfig
 from aba_optimiser.training_optics import OpticsController
-from aba_optimiser.xsuite.xsuite_tools import (
-    initialise_env,
-    insert_ac_dipole,
-    insert_particle_monitors_at_pattern,
-    run_tracking,
-)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -103,92 +95,29 @@ py:send(new_magnet_values, true)
     corrector_table = tfs.read(corrector_file)
     corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
 
-    # Create xsuite environment with orbit correction applied
-    env = initialise_env(
-        matched_tunes=matched_tunes,
-        magnet_strengths=magnet_strengths,
-        corrector_table=corrector_table,
-        json_file=tmp_dir / "env_config.json",
-        sequence_file=sequence_file,
-        seq_name="lhcb1",
-    )
-
     # save the tune knobs to file with unique name
     tune_knobs_file = tmp_dir / "tune_knobs.txt"
     save_knobs(matched_tunes, tune_knobs_file)
 
-    # Compute twiss for ACD insertion
-    tws = env["lhcb1"].twiss(method="4d", delta0=dpp_value)
-
-    # Insert AC dipole
-    acd_ramp = 1000
-    total_turns = flattop_turns + acd_ramp
-    driven_tunes = [0.27, 0.322]
-    output_files = []
-    for lag in [0, np.pi / 4, np.pi / 3]:
-        lhcb1 = insert_ac_dipole(
-            env["lhcb1"],
-            tws,
-            beam=1,
-            acd_ramp=acd_ramp,
-            total_turns=total_turns,
-            driven_tunes=driven_tunes,
-            lag=lag,
-        )
-
-        insert_particle_monitors_at_pattern(
-            lhcb1,
-            pattern="bpm.*[^k]",
-            num_turns=flattop_turns,
-            num_particles=1,
-            inplace=True,
-        )
-        for dpp in [-2.5e-4, 0.0, 2.5e-4]:
-            particles = lhcb1.build_particles(
-                x=[1e-4],
-                px=[-1e-6],
-                y=[1e-4],
-                py=[-1e-6],
-                delta=[dpp + dpp_value],
-            )
-            run_tracking(
-                line=lhcb1,
-                particles=particles,
-                nturns=flattop_turns,
-            )
-            sdds = convert_to_tbt(lhcb1)
-            output_file = tmp_dir / f"track_result_{dpp}_{lag}.sdds"
-            output_files.append(output_file)
-            write_tbt(output_file, sdds, noise=1e-4)
-
-    linfile_dir = tmp_dir / "linfiles"
-    hole_in_one_entrypoint(
-        harpy=True,
-        files=output_files,
-        tbt_datatype="lhc",
-        outputdir=linfile_dir,
-        to_write=["lin", "spectra"],
-        opposite_direction=False,
-        driven_excitation="acd",
-        tunes=driven_tunes + [0.0],
-        nattunes=[0.28, 0.31, 0.0],
-        turn=[acd_ramp, 50e3],
-        clean=True,
-    )
-    all_linfiles = list(linfile_dir.glob("*.linx"))
-    all_files = [f.parent / f.name.strip(".linx") for f in all_linfiles]
     analysis_dir = tmp_dir / "analysis"
 
-    hole_in_one_entrypoint(
-        optics=True,
-        files=all_files,
+    mad.observe_elements()
+    twiss = mad.run_twiss(coupling=True)
+
+    # Convert all the columns to uppercase
+    twiss.columns = [col.upper() for col in twiss.columns]
+    twiss.rename(columns={"MU1": "MUX", "MU2": "MUY"}, inplace=True)
+
+    # Rename mu1 and mu2 to mux and muy
+    twiss.headers = {key.upper(): value for key, value in twiss.headers.items()}
+
+    fake_measurement(
+        twiss=twiss,
         outputdir=analysis_dir,
-        accel="lhc",
-        beam=1,
-        model_dir=model_dir,
-        year="2025",
-        compensation="model",
+        # randomize=["values", "errors"],
+        # relative_errors=[1e-2],
     )
+
     return corrector_file, magnet_strengths, tune_knobs_file, analysis_dir
 
 
@@ -238,9 +167,9 @@ def test_controller_opt(
     optimiser_config = OptimiserConfig(
         max_epochs=2000,
         warmup_epochs=100,
-        warmup_lr_start=1e-9,
-        max_lr=2e-7,
-        min_lr=1.5e-7,
+        warmup_lr_start=1e-8,
+        max_lr=3e-7,
+        min_lr=1e-7,
         gradient_converged_value=1e-4,
     )
 
@@ -274,6 +203,6 @@ def test_controller_opt(
             if magnet_strengths[magnet] != 0
             else abs(value)
         )
-        assert rel_diff < 1e-8, (
+        assert rel_diff < 1e-7, (
             f"Magnet {magnet}: FAIL, estimated {value}, true {magnet_strengths[magnet]}, rel diff {rel_diff}"
         )

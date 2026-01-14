@@ -22,6 +22,7 @@ class SequenceConfig:
         seq_name: Sequence name in MAD-NG file (None for auto-detection)
         beam_energy: Beam energy in GeV
         bad_bpms: List of BPM names to exclude from analysis
+        optimise_knobs: List of global knob names to optimise
     """
 
     sequence_file_path: str | Path
@@ -31,6 +32,7 @@ class SequenceConfig:
     seq_name: str | None = None
     beam_energy: float = 6800.0
     bad_bpms: list[str] | None = None
+    optimise_knobs: list[str] | None = None
 
     @classmethod
     def for_lhc_beam(
@@ -41,6 +43,7 @@ class SequenceConfig:
         beam_energy: float = 6800.0,
         bad_bpms: list[str] | None = None,
         bpm_range: str | None = None,
+        optimise_knobs: list[str] | None = None,
     ) -> SequenceConfig:
         """Create configuration for LHC beam 1 or 2.
 
@@ -51,6 +54,7 @@ class SequenceConfig:
             beam_energy: Beam energy in GeV
             bad_bpms: List of bad BPMs to exclude
             bpm_range: Optional BPM range for optimization (defaults to magnet_range)
+            optimise_knobs: List of global knob names to optimise
 
         Returns:
             SequenceConfig configured for the specified LHC beam
@@ -69,6 +73,7 @@ class SequenceConfig:
             seq_name=seq_name,
             beam_energy=beam_energy,
             bad_bpms=bad_bpms,
+            optimise_knobs=optimise_knobs,
         )
 
 

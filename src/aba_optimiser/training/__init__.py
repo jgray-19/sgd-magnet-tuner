@@ -17,7 +17,7 @@ from aba_optimiser.training.optimisation_loop import OptimisationLoop
 from aba_optimiser.training.result_manager import ResultManager
 from aba_optimiser.training.scheduler import LRScheduler
 from aba_optimiser.training.utils import (
-    extract_bpm_range_data,
+    extract_bpm_range_names,
     filter_bad_bpms,
     find_common_bpms,
     load_tfs_files,
@@ -45,7 +45,7 @@ __all__ = [
     "WorkerManager",
     "filter_bad_bpms",
     "normalize_true_strengths",
-    "extract_bpm_range_data",
+    "extract_bpm_range_names",
     "find_common_bpms",
     "load_tfs_files",
 ]

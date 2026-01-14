@@ -30,6 +30,9 @@ class WorkerConfig:
         sdir: Direction of propagation (+1 forward, -1 backward)
         bad_bpms: List of BPM names to exclude from analysis
         seq_name: Name of the sequence in MAD-NG (if not default)
+        debug: Enable debug mode for MAD interface
+        mad_logfile: Path to MAD log file (can be None)
+        optimise_knobs: List of global knob names to optimise
     """
 
     start_bpm: str
@@ -42,7 +45,9 @@ class WorkerConfig:
     sdir: int = 1
     bad_bpms: list[str] | None = None
     seq_name: str | None = None
-
+    debug: bool = False
+    mad_logfile: Path | None = None
+    optimise_knobs: list[str] | None = None
 
 @dataclass
 class TrackingData:
@@ -73,14 +78,21 @@ class OpticsData:
     """Data container for optics function measurements.
 
     Attributes:
-        beta_comparisons: Reference beta function values [betx, bety] per BPM
+        comparisons: Reference phase advance values [phase_adv_x, phase_adv_y] between consecutive BPMs
+        variances: Measurement uncertainties for phase advances
+        beta_comparisons: Reference beta function values [beta_x, beta_y] at each BPM
         beta_variances: Measurement uncertainties for beta functions
         init_coords: Initial Twiss parameters and dispersion
+
+    Note: Phase advances are measured between consecutive BPMs, so there are (n_bpms - 1) measurements.
+          Beta functions are measured at each BPM, so there are n_bpms measurements.
     """
 
-    comparisons: np.ndarray  # Shape: (n_bpms, 2) - [betx, bety]
-    variances: np.ndarray  # Shape: (n_bpms, 2) - [var_betx, var_bety]
-    init_coords: dict[str, np.ndarray]  # betx, bety, alfx, alfy, dx, dpx, dy, dpy
+    comparisons: np.ndarray  # Shape: (n_bpms-1, 2) - [phase_adv_x, phase_adv_y]
+    variances: np.ndarray  # Shape: (n_bpms-1, 2) - [var_phase_adv_x, var_phase_adv_y]
+    beta_comparisons: np.ndarray  # Shape: (n_bpms, 2) - [beta_x, beta_y]
+    beta_variances: np.ndarray  # Shape: (n_bpms, 2) - [var_beta_x, var_beta_y]
+    init_coords: dict[str, np.ndarray]  # beta11, beta22, alfa11, alfa22, dx, dpx, dy, dpy
 
 
 class WeightProcessor:
@@ -121,6 +133,21 @@ class WeightProcessor:
         if max_weight > 0:
             return weights / max_weight
         return weights
+
+    @staticmethod
+    def normalise_weights_globally(*weights_arrays: np.ndarray) -> tuple[np.ndarray, ...]:
+        """Normalize multiple weight arrays globally so that the maximum across all is 1.
+
+        Args:
+            weights_arrays: Multiple arrays of weight values
+
+        Returns:
+            Tuple of normalized weight arrays
+        """
+        global_max = max(np.max(weights) for weights in weights_arrays)
+        if global_max > 0:
+            return tuple(weights / global_max for weights in weights_arrays)
+        return weights_arrays
 
     @staticmethod
     def aggregate_hessian_weights(weights: np.ndarray) -> np.ndarray:

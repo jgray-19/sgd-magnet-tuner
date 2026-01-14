@@ -12,6 +12,8 @@ from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.workers import TrackingWorker
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from aba_optimiser.config import SimulationConfig
 
 
@@ -44,6 +46,7 @@ class ConfigurationManager:
         bpm_start_points: list[str],
         bpm_end_points: list[str],
         bpm_range: str | None = None,
+        optimise_knobs: list[str] | None = None,
     ):
         self.mad_iface: OptimisationMadInterface | None = None
         self.knob_names: list[str] = []
@@ -57,6 +60,7 @@ class ConfigurationManager:
         self.magnet_range = magnet_range
         self.simulation_config = simulation_config
         self.bpm_range = bpm_range
+        self.optimise_knobs = optimise_knobs
 
     def setup_mad_interface(
         self,
@@ -65,6 +69,8 @@ class ConfigurationManager:
         bad_bpms: list[str] | None,
         seq_name: str | None = None,
         beam_energy: float = BEAM_ENERGY,
+        debug: bool = False,
+        mad_logfile: Path | None = None,
     ) -> None:
         """Initialise the MAD-NG interface and get basic model parameters."""
         self.mad_iface = OptimisationMadInterface(
@@ -77,6 +83,9 @@ class ConfigurationManager:
             tune_knobs_file=None,
             bad_bpms=bad_bpms,
             beam_energy=beam_energy,
+            debug=debug,
+            mad_logfile=mad_logfile,
+            optimise_knobs=self.optimise_knobs,
         )
         self.knob_names = self.mad_iface.knob_names
 

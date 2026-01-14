@@ -94,7 +94,7 @@ class BaseMadInterface:
             sequence_file: Path to sequence file
             seq_name: Name of the sequence to load
         """
-        logger.info(f"Loading sequence from {sequence_file}")
+        logger.debug(f"Loading sequence from {sequence_file}")
         self.mad.send("shush()")
         self.mad.send(f'MADX:load("{sequence_file}")')
         if self.mad.MADX[seq_name] == 0:
@@ -111,7 +111,7 @@ class BaseMadInterface:
             beam_energy: Beam energy in GeV
             particle: Particle type (default: proton)
         """
-        logger.info(f"Setting beam: particle={particle}, energy={beam_energy:.15e} GeV")
+        logger.debug(f"Setting beam: particle={particle}, energy={beam_energy:.15e} GeV")
         self.mad.send(
             f'loaded_sequence.beam = beam {{ particle = "{particle}", energy = {beam_energy:.15e} }}'
         )
@@ -130,16 +130,25 @@ class BaseMadInterface:
 
         # Use MAD script to collect BPMs in range
         get_bpms_mad = f"""
-        local bpm_names = {{}}
-        for _, elm in loaded_sequence:iter("{bpm_range}") do
+        local all_bpms = {{}}
+        local bpm_in_range = {{}}
+        for _, elm in loaded_sequence:iter() do
             if elm:is_observed() then
-                table.insert(bpm_names, elm.name)
+                table.insert(all_bpms, elm.name)
             end
         end
-        {self.py_name}:send(bpm_names, true)
+        for _, elm in loaded_sequence:iter("{bpm_range}") do
+            if elm:is_observed() then
+                table.insert(bpm_in_range, elm.name)
+            end
+        end
+        {self.py_name}:send(all_bpms, true)
+        {self.py_name}:send(bpm_in_range, true)
         """
-
-        bpm_names = self.mad.send(get_bpms_mad).receive()  # Run the script
+        self.mad.send(get_bpms_mad)
+        all_bpms = self.mad.receive()  # Run the script
+        bpms_in_range = self.mad.receive()
+        bpm_names = [bpm for bpm in all_bpms if bpm in bpms_in_range]  # Preserve order of all_bpms
         logger.debug(f"Found {len(bpm_names)} BPMs in range {bpm_range}")
         return bpm_names
 
@@ -179,10 +188,18 @@ loaded_sequence:deselect(observed, {{pattern="{elem}"}})
             marker_name: Name of marker to cycle to
         """
         logger.debug(f"Cycling sequence to start from {marker_name}")
+        success_script = f"\n{self.py_name}:send(true)\n"
         if marker_name is None:
-            self.mad.send("loaded_sequence:cycle()")
+            self.mad.send("loaded_sequence:cycle()" + success_script)
         else:
-            self.mad.send(f"loaded_sequence:cycle('{marker_name}')")
+            self.mad.send(f"loaded_sequence:cycle('{marker_name}')" + success_script)
+        try:
+            assert self.mad.recv(), (
+                "Sequence cycling failed, you may have left something in the pipe."
+            )
+        except RuntimeError as e:
+            logger.error(f"Error during sequence cycling: {e}")
+            raise RuntimeError("Cycle failed - check MAD output for details") from e
 
     def install_marker(
         self, element_name: str, marker_name: str = None, offset: float = -1e-10
@@ -200,6 +217,15 @@ loaded_sequence:deselect(observed, {{pattern="{elem}"}})
         """
         if marker_name is None:
             marker_name = f"{element_name}_marker"
+
+        elm_idx = self.mad.send(
+            f"{self.py_name}:send(loaded_sequence:index_of('{element_name}'))"
+        ).recv()
+        if elm_idx is None:
+            raise ValueError(f"Element '{element_name}' not found in loaded sequence")
+        if elm_idx <= 2:
+            # First index is always $start marker, second is first real element
+            offset = 1e-10  # Can't go before the first element -> MAD-NG bug
 
         quoted_marker = self.mad.quote_strings(marker_name)
         logger.debug(f"Installing marker {marker_name} at {element_name}")
