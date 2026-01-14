@@ -11,10 +11,10 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 from nxcals.spark_session_builder import get_or_create
-from pylhc.nxcal_knobs import get_energy
 
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
+from aba_optimiser.measurements.knob_extraction import get_energy
 from aba_optimiser.training.controller import LHCController as Controller
 from aba_optimiser.training.controller_helpers import (
     create_arc_bpm_config,

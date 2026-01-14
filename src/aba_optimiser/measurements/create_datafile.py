@@ -33,10 +33,7 @@ from aba_optimiser.training.controller_helpers import (
 )
 
 if TYPE_CHECKING:
-    try:
-        from pylhc.nxcal_knobs import NXCalResult
-    except ImportError:
-        NXCalResult = None
+    from aba_optimiser.measurements.knob_extraction import NXCALSResult
 
 logger = logging.getLogger(__name__)
 
@@ -103,14 +100,14 @@ def convert_measurements(
 
 
 def compute_uniform_vars(
-    combined: pd.DataFrame, bad_bpms: list[str], var_value: float = 1e-6
+    combined: pd.DataFrame, bad_bpms: list[str], var_value: float = 1e-8
 ) -> pd.DataFrame:
     """Set uniform variances for all BPMs.
 
     Args:
         combined: DataFrame with BPM measurements
         bad_bpms: List of bad BPM names to set to infinite variance
-        var_value: Uniform variance value to use (default: 1e-6)
+        var_value: Uniform variance value to use (default: 1e-8)
 
     Returns:
         DataFrame with var_x, var_y, var_px, var_py columns added
@@ -280,8 +277,8 @@ def run_analysis(
     return bad_bpms
 
 
-def build_dict_from_nxcal_result(result: list[NXCalResult]) -> dict[str, float]:  # type: ignore
-    """Convert NXCalResult to a dictionary of magnet strengths."""
+def build_dict_from_nxcal_result(result: list[NXCALSResult]) -> dict[str, float]:  # type: ignore
+    """Convert NXCALSResult to a dictionary of magnet strengths."""
     return {res.name: res.value for res in result}
 
 
@@ -347,23 +344,24 @@ def save_online_knobs(
     beam: int,
     tune_knobs_file: Path | None = None,
     corrector_knobs_file: Path | None = None,
+    energy: float | None = None,
 ) -> None:
     """Load and save knob data from NXCal."""
     try:
         from nxcals.spark_session_builder import get_or_create
-        from pylhc import corrector_extraction, mqt_extraction
+
+        from aba_optimiser.measurements import knob_extraction
     except ImportError as e:
         raise ImportError(
-            "nxcals and pylhc are required for save_online_knobs but are not installed."
+            "nxcals is required for save_online_knobs but is not installed."
         ) from e
 
     spark = get_or_create()
-    mq_results = mqt_extraction.get_mq_vals(spark, meas_time, beam)
-    mqt_results = mqt_extraction.get_mqt_vals(spark, meas_time, beam)
-    ms_results = mqt_extraction.get_ms_vals(spark, meas_time, beam)
-    mb_results = mqt_extraction.get_mb_vals(spark, meas_time, beam)
-    corrector_results = corrector_extraction.get_mcb_vals(spark, meas_time, beam)
-
+    mq_results = knob_extraction.get_mq_vals(spark, meas_time, beam, energy=energy)
+    mqt_results = knob_extraction.get_mqt_vals(spark, meas_time, beam, energy=energy)
+    ms_results = knob_extraction.get_ms_vals(spark, meas_time, beam, energy=energy)
+    mb_results = knob_extraction.get_mb_vals(spark, meas_time, beam, energy=energy)
+    corrector_results = knob_extraction.get_mcb_vals(spark, meas_time, beam, energy=energy)
     # Stop Spark context to avoid conflicts with multiprocessing
     # Spark signal handlers interfere with ProcessPoolExecutor shutdown
     spark.stop()

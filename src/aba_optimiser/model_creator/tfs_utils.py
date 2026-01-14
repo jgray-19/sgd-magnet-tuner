@@ -25,19 +25,30 @@ def convert_tfs_to_madx(tfs_df: tfs.TfsDataFrame) -> tfs.TfsDataFrame:
     tfs.TfsDataFrame
         Converted TFS DataFrame in MAD-X format.
     """
-    # Convert to uppercase for MAD-X compatibility
-    tfs_df.columns = tfs_df.columns.str.upper()
-    tfs_df.headers = {key.upper(): value for key, value in tfs_df.headers.items()}
+    # Reset the index to manipulate columns
+    tfs_df = tfs_df.reset_index()
 
-    # Rename phase advance columns to MAD-X convention
-    tfs_df = tfs_df.rename(columns={"MU1": "MUX", "MU2": "MUY"})
+    # Make the headers all upper case for consistency
+    tfs_df.headers = {k.upper(): v for k, v in tfs_df.headers.items()}
+
+    # Make the columns all upper case for consistency
+    tfs_df.columns = [col.upper() for col in tfs_df.columns]
+
+    # Change MU1 and MU2 from MUX and MUY column names
+    tfs_df.rename(columns={"MU1": "MUX", "MU2": "MUY"}, inplace=True)
+
+    # Change disp1 and disp3 to DX and DY
+    tfs_df.rename(
+        columns={"DISP1": "DX", "DISP2": "DPX", "DISP3": "DY", "DISP4": "DPY"}, inplace=True
+    )
 
     # Renumber drift elements consecutively
-    drifts = tfs_df[tfs_df["KIND"] == "drift"]
+    drifts = tfs_df[
+        (tfs_df["KIND"] == "drift") & (tfs_df["NAME"].str.lower().str.startswith("drift"))
+    ]
     if not drifts.empty:
-        drift_names = drifts["NAME"].tolist()
-        new_drift_names = [f"DRIFT_{i}" for i in range(len(drift_names))]
-        tfs_df["NAME"] = tfs_df["NAME"].replace(drift_names, new_drift_names)
+        new_drift_names = [f"DRIFT_{i}" for i in range(len(drifts))]
+        tfs_df.loc[tfs_df["KIND"] == "drift", "NAME"] = new_drift_names
 
     # Set NAME as index and filter out special markers
     tfs_df = tfs_df.set_index("NAME")
