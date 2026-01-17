@@ -10,6 +10,7 @@ and analysis.
    :caption: Contents
 
    getting_started
+   modules
    api/index
 
 
