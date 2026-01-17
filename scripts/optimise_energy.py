@@ -48,7 +48,7 @@ if __name__ == "__main__":
     del energy_controller
     logging.info("Energy optimisation completed!")
 
-    logging.info("Starting quadrupole optimization with energy results...")
+    logging.info("Starting quadrupole optimisation with energy results...")
     # quad_controller = Controller(
     #     QUAD_OPT_SETTINGS,
     #     show_plots=True,  # initial_knob_strengths=energy_knobs

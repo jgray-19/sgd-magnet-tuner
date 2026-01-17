@@ -18,13 +18,13 @@ if __name__ == "__main__":
     mp.set_start_method("fork")
 
     # Step 1: Optimise energy (dp/p) first
-    logging.info("Starting energy optimization...")
+    logging.info("Starting energy optimisation...")
     # energy_controller = Controller(DPP_OPT_SETTINGS, show_plots=True)
     # energy_knobs = energy_controller.run()
     # del energy_controller
 
     # Step 2: Optimise quadrupoles using energy results as starting point
-    logging.info("Starting quadrupole optimization with energy results...")
+    logging.info("Starting quadrupole optimisation with energy results...")
 
     # Create config objects (placeholder - adjust based on actual data)
     sequence_config = SequenceConfig.for_lhc_beam(
@@ -58,11 +58,11 @@ if __name__ == "__main__":
     # )
 
     # Step 3: Optimise sextupoles using quadrupole results as starting point
-    # logging.info("Starting sextupole optimization with quadrupole results...")
+    # logging.info("Starting sextupole optimisation with quadrupole results...")
     # sext_controller = Controller(SEXT_OPT_SETTINGS, show_plots=True, initial_knob_strengths=quad_knobs)
     # final_knobs = sext_controller.run()
     # del sext_controller
 
-    logging.info("All optimization stages completed!")
+    logging.info("All optimisation stages completed!")
     # logging.info(f"Final optimised knobs: {len(final_knobs)} parameters")
     logging.info(f"Final optimised knobs: {len(quad_knobs)} parameters")

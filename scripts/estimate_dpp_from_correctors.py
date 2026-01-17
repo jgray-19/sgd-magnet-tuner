@@ -26,15 +26,11 @@ import tfs
 from nxcals.spark_session_builder import (  # pyright: ignore[reportMissingImports]
     get_or_create,
 )
-from pylhc.corrector_extraction import (  # pyright: ignore[reportMissingImports]
-    NXCalResult,
-    get_mcb_vals,
-)
-from pylhc.nxcal_knobs import get_energy  # pyright: ignore[reportMissingImports]
 from uncertainties import ufloat
 
 from aba_optimiser.config import PROJECT_ROOT
 from aba_optimiser.dispersion.dispersion_estimation import estimate_corrector_dispersions
+from aba_optimiser.measurements.knob_extraction import get_energy, get_mcb_vals
 
 # Configure logging
 logging.basicConfig(
