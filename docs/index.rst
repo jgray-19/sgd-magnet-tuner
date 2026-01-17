@@ -10,7 +10,8 @@ and analysis.
    :caption: Contents
 
    getting_started
-   api/index
+   modules
+   api_reference
 
 
 Indices and tables

@@ -1,54 +1,119 @@
 # sgd-magnet-tuner
 
-This repository demonstrates the application of the Adam optimisation algorithm, based on stochastic gradient descent (SGD), in combination with the MAD-NG simulation code for the identification of magnetic field errors in the Large Hadron Collider (LHC) using beam orbit response. 
+[![Coverage Status](https://github.com/jgray-19/sgd-magnet-tuner/actions/workflows/coverage.yml/badge.svg)](https://github.com/jgray-19/sgd-magnet-tuner/actions/workflows/coverage.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/jgray-19/sgd-magnet-tuner/python-coverage-comment-action-data/endpoint.json)](https://htmlpreview.github.io/?https://github.com/jgray-19/sgd-magnet-tuner/blob/python-coverage-comment-action-data/htmlcov/index.html)
 
-## Overview
+Tools for optimising accelerator magnet knob strengths using gradient-based methods with MAD-NG.
 
-Magnetic field imperfections in accelerator lattices contribute to orbit distortions and can reduce beam lifetime by enhancing particle loss mechanisms and limiting dynamic aperture. Effective compensation of these errors requires a model that sufficiently reflects the underlying field deviations to guide correction strategies.
+## Modules
 
-### Key Features
-- **Gradient-Based Optimisation**: Utilises MAD-NG to provide fast evaluation of the derivatives of particle coordinates with respect to magnet strengths, enabling efficient and effective optimisation.
-- **Adam Optimisation Algorithm**: Combines stochastic gradient descent with adaptive learning rates for robust and efficient parameter tuning.
-- **Application to LHC Optics**: Demonstrates the method on the Large Hadron Collider optics, addressing real-world challenges in magnetic error modelling.
-- **Broad Applicability**: Suitable for a wide class of accelerators requiring improved magnetic error modelling for orbit correction and machine tuning.
+Config
+------
+Configuration constants and dataclasses for the optimisation pipeline.
 
-## Use Case
+Dataframes
+----------
+Utilities for working with dataframes in the optimisation workflow.
 
-This method is designed for:
-- Identifying magnetic field errors in accelerators.
-- Developing correction strategies to mitigate orbit distortions.
-- Enhancing machine tuning and improving beam lifetime.
+Dispersion
+----------
+Dispersion estimation at corrector magnets using MAD-NG tracking.
 
-## Dependencies
+Filtering
+---------
+Measurement preprocessing and noise suppression routines.
 
-- **MAD-NG**: A simulation code for accelerator physics that provides fast derivative evaluations.
+IO
+--
+Input/output utilities for reading and writing data files.
+
+MAD
+---
+MAD-NG interface modules for accelerator simulation.
+
+Matching
+--------
+Tools for matching beta functions to target models.
+
+Measurements
+------------
+Data acquisition helpers for turn-by-turn measurements and optics data.
+
+Model Creator
+-------------
+Utilities for creating LHC accelerator models.
+
+Momentum Recon
+--------------
+Momentum reconstruction utilities for transverse and dispersive calculations.
+
+Optimisers
+----------
+Gradient descent optimiser implementations (Adam, AMSGrad, L-BFGS).
+
+Physics
+-------
+Analytical helpers for beam dynamics and accelerator physics.
+
+Plotting
+--------
+Visualisation helpers for optimisation diagnostics.
+
+Simulation
+----------
+Components for creating simulated accelerator data.
+
+Training
+--------
+Orchestration of the complete optimisation workflow.
+
+Training Optics
+---------------
+Controller for optics function optimisation tasks.
+
+Workers
+-------
+Worker process implementations for parallel computation.
+
+Xsuite
+------
+Xsuite integration utilities for particle tracking and simulations.
 
 ## Installation
 
-To use this repository, follow these steps:
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/jgray-19/sgd-magnet-tuner.git
-   ```
-2. Install the required dependencies (specific dependencies for MAD-NG and other tools will need to be added here).
+```bash
+git clone https://github.com/jgray-19/sgd-magnet-tuner.git
+cd sgd-magnet-tuner
+pip install -e .
+```
+
+For development:
+```bash
+pip install -e .[test,docs,tracking]
+```
 
 ## Usage
 
-1. Configure the simulation environment and input files for your accelerator model.
-2. Run the optimisation script to identify magnetic field errors:
-   ```bash
-   python scripts/run_optimiser.py
-   ```
-3. Review the output and apply the correction strategies suggested by the model.
+```bash
+python scripts/run_optimiser.py
+python scripts/optimise_energy.py
+python scripts/plot_results.py
+```
+
+## Testing
+
+```bash
+pytest tests/
+pytest tests/ --cov=aba_optimiser
+```
 
 ## Documentation
 
-The project ships with Sphinx documentation configured for automatic API
-extraction. Install the documentation extras and build the site with::
+Build the documentation:
+```bash
+pip install -e .[docs]
+cd docs
+make html
+```
 
-   pip install -e .[docs]
-   cd docs
-   make html
-
-Open ``docs/_build/html/index.html`` in a browser to explore usage tutorials and
-API reference material generated from the source code docstrings.
+View at `docs/_build/html/index.html`.
