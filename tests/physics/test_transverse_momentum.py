@@ -13,8 +13,6 @@ pytest.importorskip("matplotlib")
 
 from typing import TYPE_CHECKING
 
-from xobjects import ContextCpu  # noqa: E402
-
 from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 from aba_optimiser.model_creator.config import (
     AC_MARKER_PATTERN,
@@ -26,13 +24,9 @@ from aba_optimiser.simulation.magnet_perturbations import (
     apply_magnet_perturbations,
 )
 from aba_optimiser.simulation.optics import perform_orbit_correction
-from aba_optimiser.xsuite.xsuite_tools import (
-    create_xsuite_environment,
-    initialise_env,
-    insert_ac_dipole,
-    insert_particle_monitors_at_pattern,
-    line_to_dataframes,
-)
+from aba_optimiser.xsuite.acd import run_ac_dipole_tracking_with_particles
+from aba_optimiser.xsuite.env import create_xsuite_environment, initialise_env
+from aba_optimiser.xsuite.monitors import process_tracking_data
 
 from .momentum_test_utils import (  # noqa: E402
     verify_pz_reconstruction,
@@ -60,6 +54,7 @@ def _setup_xsuite_simulation(
     mad = BaseMadInterface()
     mad.load_sequence(sequence_file, "lhcb1")
     mad.setup_beam(beam_energy=6800)
+    mad.mad["zero_twiss", "_"] = mad.mad.twiss(sequence="loaded_sequence")  # ty:ignore[invalid-assignment]
 
     magnet_strengths = {}
     if do_apply_magnet_perturbations:
@@ -85,15 +80,15 @@ def _setup_xsuite_simulation(
     corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
 
     env = initialise_env(
-        matched_tunes=matched_tunes,
-        magnet_strengths=magnet_strengths,
-        corrector_table=corrector_table,
-        json_file=json_path,
+        matched_tunes,
+        magnet_strengths,
+        corrector_table,  # ty:ignore[invalid-argument-type]
         sequence_file=sequence_file,
+        json_file=json_path,
         seq_name="lhcb1",
     )
 
-    baseline_line = env["lhcb1"].copy()
+    baseline_line = env["lhcb1"].copy()  # ty:ignore[not-subscriptable]
     xsuite_tws = baseline_line.twiss(method="4d", delta0=delta_p)
 
     qx = float(xsuite_tws.qx % 1)
@@ -103,39 +98,34 @@ def _setup_xsuite_simulation(
 
     ramp_turns = 1000
     flattop_turns = 100
-    ac_line = insert_ac_dipole(
+
+    # Use generalized tracking function
+    particle_coords = {
+        "x": [0],
+        "px": [0],
+        "y": [0],
+        "py": [0],
+        "delta": [delta_p],
+    }
+
+    monitored_line = run_ac_dipole_tracking_with_particles(
         line=baseline_line,
         tws=xsuite_tws,
         beam=1,
-        acd_ramp=ramp_turns,
-        total_turns=flattop_turns + ramp_turns,
+        ramp_turns=ramp_turns,
+        flattop_turns=flattop_turns,
         driven_tunes=[0.27, 0.322],
+        bpm_pattern=r"(?i)bpm.*",
+        particle_coords=particle_coords,
     )
 
-    monitored_line = insert_particle_monitors_at_pattern(
-        line=ac_line,
-        pattern=r"(?i)bpm.*",
-        num_turns=ramp_turns + flattop_turns,
-        num_particles=1,
+    tracking_df = process_tracking_data(
+        monitored_line,
+        ramp_turns=ramp_turns,
+        flattop_turns=flattop_turns,
+        delta_p=delta_p,
+        add_variance_columns=False,
     )
-
-    ctx = ContextCpu()
-    particles = monitored_line.build_particles(
-        _context=ctx,
-        x=0,
-        y=0,
-        px=0,
-        py=0,
-        delta=delta_p,
-    )
-
-    monitored_line.track(particles, num_turns=flattop_turns + ramp_turns, with_progress=False)
-
-    tracking_df = line_to_dataframes(monitored_line)[0]
-    tracking_df = tracking_df[tracking_df["turn"] >= ramp_turns].copy()
-    tracking_df["turn"] = tracking_df["turn"] - ramp_turns
-    tracking_df = tracking_df.reset_index(drop=True)
-
     tracking_df["var_x"] = 1.0
     tracking_df["var_y"] = 1.0
     tracking_df["kick_plane"] = "both"
@@ -155,7 +145,7 @@ def test_calculate_pz_recovers_true_momenta(json_b1, seq_b1):
         seq_name="lhcb1",
     )
 
-    baseline_line: Line = env["lhcb1"].copy()
+    baseline_line: Line = env["lhcb1"].copy()  # ty:ignore[not-subscriptable]
     ng = baseline_line.to_madng()
     tws = baseline_line.twiss(method="4d")
 
@@ -195,40 +185,34 @@ local a = seq:replace({{
 
     ramp_turns = 1000
     flattop_turns = 100
-    ac_line = insert_ac_dipole(
+
+    # Use generalized tracking function
+    particle_coords = {
+        "x": [0],
+        "px": [0],
+        "y": [0],
+        "py": [0],
+        "delta": [0.0],
+    }
+
+    monitored_line = run_ac_dipole_tracking_with_particles(
         line=baseline_line,
         tws=tws,
         beam=1,
-        acd_ramp=ramp_turns,
-        total_turns=flattop_turns + ramp_turns,
+        ramp_turns=ramp_turns,
+        flattop_turns=flattop_turns,
         driven_tunes=[qxd, qyd],
+        bpm_pattern=r"(?i)bpm.*",
+        particle_coords=particle_coords,
     )
 
-    monitored_line = insert_particle_monitors_at_pattern(
-        line=ac_line,
-        pattern=r"(?i)bpm.*",
-        num_turns=ramp_turns + flattop_turns,
-        num_particles=1,
+    tracking_df = process_tracking_data(
+        monitored_line,
+        ramp_turns=ramp_turns,
+        flattop_turns=flattop_turns,
+        delta_p=0.0,
+        add_variance_columns=False,
     )
-
-    ctx = ContextCpu()
-    particles = monitored_line.build_particles(
-        _context=ctx,
-        x=0,
-        y=0,
-        px=0,
-        py=0,
-    )
-
-    monitored_line.track(particles, num_turns=flattop_turns + ramp_turns, with_progress=False)
-
-    tracking_df = line_to_dataframes(monitored_line)[0]
-    # Delete the first 100 ramp turns and then reset turn count
-    tracking_df = tracking_df[tracking_df["turn"] >= ramp_turns].copy()
-    tracking_df["turn"] = tracking_df["turn"] - ramp_turns
-    tracking_df = tracking_df.reset_index(drop=True)
-
-    # Add weights and kick plane info
     tracking_df["var_x"] = 1.0
     tracking_df["var_y"] = 1.0
     tracking_df["kick_plane"] = "both"

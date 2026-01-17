@@ -19,11 +19,11 @@ from aba_optimiser.momentum_recon.transverse import (  # noqa: E402
 from aba_optimiser.momentum_recon.transverse import (
     inject_noise_xy,
 )
+from aba_optimiser.xsuite.acd import run_acd_track
 
 from .momentum_test_utils import (  # noqa: E402
     get_truth_and_twiss,
     rmse,
-    setup_ac_dipole_tracking,
 )
 
 
@@ -36,7 +36,7 @@ def test_dispersive_momentum_on_momentum(json_b1, seq_b1):
     """
     json_path = json_b1
 
-    tracking_df, tws, baseline_line = setup_ac_dipole_tracking(
+    tracking_df, tws, baseline_line = run_acd_track(
         json_path=json_path,
         sequence_file=seq_b1,
         delta_p=0.0,
@@ -110,7 +110,7 @@ def test_dispersive_momentum_off_momentum(json_b1, seq_b1, delta_p):
     """
     json_path = json_b1
 
-    tracking_df, tws, baseline_line = setup_ac_dipole_tracking(
+    tracking_df, tws, baseline_line = run_acd_track(
         json_path=json_path,
         sequence_file=seq_b1,
         delta_p=delta_p,
@@ -182,7 +182,7 @@ def test_dispersive_momentum_off_momentum_with_noise(json_b1, seq_b1, delta_p):
     """
     json_path = json_b1
 
-    tracking_df, tws, baseline_line = setup_ac_dipole_tracking(
+    tracking_df, tws, baseline_line = run_acd_track(
         json_path=json_path,
         sequence_file=seq_b1,
         delta_p=delta_p,
