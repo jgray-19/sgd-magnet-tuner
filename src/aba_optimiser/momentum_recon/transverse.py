@@ -48,7 +48,7 @@ from aba_optimiser.momentum_recon.neighbors import (
 LOGGER = logging.getLogger(__name__)
 
 
-def _subtract_bpm_means(df: tfs.TfsDataFrame, info: bool) -> None:
+def _subtract_bpm_means(df: pd.DataFrame, info: bool) -> None:
     bpm_means = df.groupby("name", observed=False)[["x", "y"]].mean()
     if info:
         print("BPM means (x, y):")
@@ -61,7 +61,7 @@ def _subtract_bpm_means(df: tfs.TfsDataFrame, info: bool) -> None:
         df[col] = df_[col]
 
 
-def _add_bpm_means(*dfs: tfs.TfsDataFrame) -> None:
+def _add_bpm_means(*dfs: pd.DataFrame) -> None:
     for df in dfs:
         if "x_mean" in df.columns and "y_mean" in df.columns:
             df["x"] += df["x_mean"]
@@ -71,7 +71,7 @@ def _add_bpm_means(*dfs: tfs.TfsDataFrame) -> None:
             df["py"] += df["py_mean"]
 
 
-def _cleanup_mean_cols(*dfs: tfs.TfsDataFrame) -> None:
+def _cleanup_mean_cols(*dfs: pd.DataFrame) -> None:
     for df in dfs:
         for column in ("x_mean", "y_mean", "px_mean", "py_mean"):
             if column in df.columns:
@@ -170,14 +170,14 @@ def _measurement_neighbor_tables(
 
 
 def calculate_pz(
-    orig_data: tfs.TfsDataFrame,
-    tws: tfs.TfsDataFrame,
+    orig_data: pd.DataFrame,
+    tws: pd.DataFrame,
     inject_noise: bool | float = True,
     info: bool = True,
     rng: np.random.Generator | None = None,
     low_noise_bpms: list[str] | None = None,
     subtract_mean: bool = False,
-) -> tfs.TfsDataFrame:
+) -> pd.DataFrame:
     low_noise_bpms = list(low_noise_bpms or [])
     LOGGER.info(
         "Calculating transverse momentum - inject_noise=%s, low_noise_bpms=%d BPMs",
@@ -248,7 +248,7 @@ def calculate_pz_from_measurements(
     data: pd.DataFrame,
     analysis_dir: str | Path,
     subtract_mean: bool = False,
-    tws: tfs.TfsDataFrame | None = None,
+    tws: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     raise DeprecationWarning(
         "This function is deprecated and will be removed in a future version."

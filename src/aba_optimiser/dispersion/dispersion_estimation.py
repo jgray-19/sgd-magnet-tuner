@@ -9,7 +9,8 @@ MAD-NG's differential algebra tracking capabilities.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import multiprocessing as mp
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
@@ -79,6 +80,7 @@ def find_closest_bpms_for_correctors(
     bpms: Sequence[str],
     twiss_elements: pd.DataFrame,
     num_closest: int = 5,
+    beam: int = 1,
 ) -> dict[str, list[tuple[str, int]]]:
     """For each corrector, find the closest BPMs, considering ring wrapping.
 
@@ -87,6 +89,7 @@ def find_closest_bpms_for_correctors(
         bpms: List of BPM element names
         twiss_elements: DataFrame with element positions (must have 'S' column and 'LENGTH' header)
         num_closest: Number of closest BPMs to find for each corrector
+        beam: Beam number (1 or 2), affects direction calculation for beam 2
 
     Returns:
         Dictionary mapping corrector names to list of (bpm_name, direction) tuples,
@@ -112,6 +115,10 @@ def find_closest_bpms_for_correctors(
             else:
                 min_d = d_backward
                 sdir = -1  # Track backward from BPM to corrector
+
+            # For beam 2, flip the direction due to reversed sequence
+            if beam == 2:
+                sdir = -sdir
 
             bpm_distances.append((bpm, sdir, min_d))
 
@@ -143,8 +150,9 @@ def _has_valid_optics_at_bpm(
     return all(np.isfinite(df.loc[bpm, col]) for df, cols in optics_data for col in cols)
 
 
-def estimate_corrector_dispersion(
-    corrector_bpms: dict[str, list[tuple[str, int]]],
+def _process_corrector_worker(
+    corrector: str,
+    bpm_info: list[tuple[str, int]],
     beta_x: pd.DataFrame,
     beta_y: pd.DataFrame,
     alfa_x: pd.DataFrame,
@@ -152,37 +160,39 @@ def estimate_corrector_dispersion(
     disp_x: pd.DataFrame,
     disp_y: pd.DataFrame,
     sequence_file: Path,
-    seq_name: str = "lhcb1",
-    beam_energy_gev: float = 6800,
-    particle: str = "proton",
-    plane: str = "x",
-) -> dict[str, list[float]]:
-    """Estimate dispersion at correctors using MAD-NG differential algebra tracking.
+    seq_name: str,
+    beam: int,
+    beam_energy_gev: float,
+    particle: str,
+    plane: str,
+) -> tuple[str, list[float]]:
+    """Process a single corrector in a parallel worker.
 
-    For each corrector, this function:
-    1. Initializes a differential algebra map at each nearby BPM using measured optics
-    2. Tracks the map from the BPM to the corrector
-    3. Extracts the dispersion at the corrector from the tracked map
+    This function is called by each worker process to estimate dispersion
+    at one corrector using all its nearby BPMs.
 
     Args:
-        corrector_bpms: Mapping of corrector names to list of (bpm, direction) tuples
-        beta_x: DataFrame with horizontal beta function at BPMs (must have 'BETX' column)
-        beta_y: DataFrame with vertical beta function at BPMs (must have 'BETY' column)
-        alfa_x: DataFrame with horizontal alpha function at BPMs (must have 'ALFX' column)
-        alfa_y: DataFrame with vertical alpha function at BPMs (must have 'ALFY' column)
-        disp_x: DataFrame with horizontal dispersion at BPMs (must have 'DX', 'DPX' columns)
-        disp_y: DataFrame with vertical dispersion at BPMs (must have 'DY', 'DPY' columns)
+        corrector: Name of the corrector element
+        bpm_info: List of (bpm_name, direction) tuples for this corrector
+        beta_x: DataFrame with horizontal beta function at BPMs
+        beta_y: DataFrame with vertical beta function at BPMs
+        alfa_x: DataFrame with horizontal alpha function at BPMs
+        alfa_y: DataFrame with vertical alpha function at BPMs
+        disp_x: DataFrame with horizontal dispersion at BPMs
+        disp_y: DataFrame with vertical dispersion at BPMs
         sequence_file: Path to the MAD-X sequence file
-        seq_name: Name of the sequence in the MAD-X file
+        seq_name: Name of the sequence
         beam_energy_gev: Beam energy in GeV
-        particle: Particle type (e.g., "proton")
-        plane: Dispersion plane to extract ("x" or "y")
+        particle: Particle type
+        plane: Dispersion plane ("x" or "y")
 
     Returns:
-        Dictionary mapping corrector names to lists of estimated dispersion values
-        (one estimate per nearby BPM)
+        Tuple of (corrector_name, list_of_estimates)
     """
+    # Create MAD instance for this worker
     mad_interface = BaseMadInterface()
+    mad_interface.mad.MADX[f"b{beam}_re_ip7_knob"] = 0.0  # To avoid warnings
+    mad_interface.mad.MADX[f"b{beam}_im_ip7_knob"] = 0.0  # To avoid warnings
     mad_interface.load_sequence(sequence_file, seq_name)
     mad_interface.setup_beam(beam_energy=beam_energy_gev, particle=particle)
 
@@ -195,22 +205,18 @@ loaded_sequence:deselect(observed)
 loaded_sequence:select(observed, {pattern="MCB"})
     """)
 
-    corrector_dispersion_estimates: dict[str, list[float]] = {}
+    estimates = []
+    for bpm, sdir in bpm_info:
+        # Skip BPMs with invalid optics data
+        if not _has_valid_optics_at_bpm(bpm, beta_x, beta_y, alfa_x, alfa_y, disp_x, disp_y):
+            continue
 
-    for corrector, bpm_info in corrector_bpms.items():
-        corrector_dispersion_estimates[corrector] = []
+        tracking_range = f"{bpm}/{corrector}"
+        mad["tracking_range"] = tracking_range
+        mad["sdir"] = sdir
 
-        for bpm, sdir in bpm_info:
-            # Skip BPMs with invalid optics data
-            if not _has_valid_optics_at_bpm(bpm, beta_x, beta_y, alfa_x, alfa_y, disp_x, disp_y):
-                continue
-
-            tracking_range = f"{bpm}/{corrector}"
-            mad["tracking_range"] = tracking_range
-            mad["sdir"] = sdir
-
-            # Initialize differential algebra map at BPM with measured optics
-            mad.send("""
+        # Initialize differential algebra map at BPM with measured optics
+        mad.send("""
 shush()
     local B0 = MAD.beta0 {
         beta11=py:recv(),
@@ -225,36 +231,117 @@ shush()
     }
     da_x0 = MAD.gphys.bet2map(B0, da_x0_base)
 unshush()
-            """)
-            mad.send(beta_x.loc[bpm, "BETX"])
-            mad.send(beta_y.loc[bpm, "BETY"])
-            mad.send(alfa_x.loc[bpm, "ALFX"])
-            mad.send(alfa_y.loc[bpm, "ALFY"])
-            mad.send(disp_x.loc[bpm, "DX"])
-            mad.send(disp_x.loc[bpm, "DPX"])
-            mad.send(disp_y.loc[bpm, "DY"])
-            mad.send(disp_y.loc[bpm, "DPY"])
+        """)
+        mad.send(beta_x.loc[bpm, "BETX"])
+        mad.send(beta_y.loc[bpm, "BETY"])
+        mad.send(alfa_x.loc[bpm, "ALFX"])
+        mad.send(alfa_y.loc[bpm, "ALFY"])
+        mad.send(disp_x.loc[bpm, "DX"])
+        mad.send(disp_x.loc[bpm, "DPX"])
+        mad.send(disp_y.loc[bpm, "DY"])
+        mad.send(disp_y.loc[bpm, "DPY"])
 
-            # Track from BPM to corrector and extract dispersion
-            mad.send(f"""
-local trk, flw = MAD.track{{
+        # Track from BPM to corrector and extract dispersion
+        mad.send(f"""
+local _, flw = MAD.track{{
     sequence = loaded_sequence,
     range = tracking_range,
     observe=1,
     dir = sdir,
     X0 = da_x0,
-    save=true,
-    savemap=true,
+    save=false,
+    savemap=false,
 }}
-assert(#trk < 50, "tracking is taking too long! with sdir=" .. sdir .. " and range=" .. tracking_range)
-B1 = MAD.gphys.map2bet(trk["{corrector}"].__map, 6, nil, nil, sdir)
+B1 = MAD.gphys.map2bet(flw[1], 6, nil, nil, sdir)
 py:send(B1.d{plane})
 """)
-            estimated_dispersion = mad.receive()
-            corrector_dispersion_estimates[corrector].append(estimated_dispersion)
+        estimated_dispersion: float = mad.receive()  # ty:ignore[invalid-assignment]
+        estimates.append(estimated_dispersion)
 
+    mad.send("shush()")
     del mad_interface
-    return corrector_dispersion_estimates
+    return corrector, estimates
+
+
+def estimate_corrector_dispersion(
+    corrector_bpms: dict[str, list[tuple[str, int]]],
+    beta_x: pd.DataFrame,
+    beta_y: pd.DataFrame,
+    alfa_x: pd.DataFrame,
+    alfa_y: pd.DataFrame,
+    disp_x: pd.DataFrame,
+    disp_y: pd.DataFrame,
+    sequence_file: Path,
+    seq_name: str = "lhcb1",
+    beam: Literal[1, 2] = 1,
+    beam_energy_gev: float = 6800,
+    particle: str = "proton",
+    plane: str = "x",
+    n_processes: int | None = None,
+) -> dict[str, list[float]]:
+    """Estimate dispersion at correctors using MAD-NG differential algebra tracking.
+
+    For each corrector, this function:
+    1. Initializes a differential algebra map at each nearby BPM using measured optics
+    2. Tracks the map from the BPM to the corrector
+    3. Extracts the dispersion at the corrector from the tracked map
+
+    This function uses parallel processing to speed up the computation, with each
+    worker process having its own MAD-NG instance.
+
+    Args:
+        corrector_bpms: Mapping of corrector names to list of (bpm, direction) tuples
+        beta_x: DataFrame with horizontal beta function at BPMs (must have 'BETX' column)
+        beta_y: DataFrame with vertical beta function at BPMs (must have 'BETY' column)
+        alfa_x: DataFrame with horizontal alpha function at BPMs (must have 'ALFX' column)
+        alfa_y: DataFrame with vertical alpha function at BPMs (must have 'ALFY' column)
+        disp_x: DataFrame with horizontal dispersion at BPMs (must have 'DX', 'DPX' columns)
+        disp_y: DataFrame with vertical dispersion at BPMs (must have 'DY', 'DPY' columns)
+        sequence_file: Path to the MAD-X sequence file
+        seq_name: Name of the sequence in the MAD-X file
+        beam_energy_gev: Beam energy in GeV
+        particle: Particle type (e.g., "proton")
+        plane: Dispersion plane to extract ("x" or "y")
+        n_processes: Number of parallel processes to use (default: number of CPU cores)
+
+    Returns:
+        Dictionary mapping corrector names to lists of estimated dispersion values
+        (one estimate per nearby BPM)
+    """
+    if n_processes is None:
+        n_processes = max(int(mp.cpu_count() / 2), 1)  # Use half available cores by default
+
+    logger.info(
+        f"Processing {len(corrector_bpms)} correctors using {n_processes} parallel processes"
+    )
+
+    # Prepare arguments for parallel processing
+    args_list = [
+        (
+            corrector,
+            bpm_info,
+            beta_x,
+            beta_y,
+            alfa_x,
+            alfa_y,
+            disp_x,
+            disp_y,
+            sequence_file,
+            seq_name,
+            beam,
+            beam_energy_gev,
+            particle,
+            plane,
+        )
+        for corrector, bpm_info in corrector_bpms.items()
+    ]
+
+    # Process correctors in parallel
+    with mp.Pool(processes=n_processes) as pool:
+        results = pool.starmap(_process_corrector_worker, args_list)
+
+    # Combine results
+    return dict(results)
 
 
 def calculate_dispersion_statistics(
@@ -295,10 +382,12 @@ def estimate_corrector_dispersions(
     sequence_file: Path,
     model_dir: Path,
     seq_name: str = "lhcb1",
+    beam: Literal[1, 2] = 1,
     beam_energy_gev: float = 6800,
     particle: str = "proton",
     num_closest_bpms: int = 10,
     plane: str = "x",
+    n_processes: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Estimate dispersion at all correctors using optics analysis data.
 
@@ -312,10 +401,12 @@ def estimate_corrector_dispersions(
         sequence_file: Path to the MAD-X sequence file
         model_dir: Directory containing the model twiss_elements.dat file
         seq_name: Name of the sequence in the MAD-X file
+        beam: Beam number (1 or 2)
         beam_energy_gev: Beam energy in GeV
         particle: Particle type (e.g., "proton")
         num_closest_bpms: Number of nearby BPMs to use for each corrector estimate
         plane: Dispersion plane to extract ("x" or "y")
+        n_processes: Number of parallel processes to use (default: number of CPU cores)
 
     Returns:
         Tuple of (dispersion_df, statistics_df) where:
@@ -366,7 +457,7 @@ def estimate_corrector_dispersions(
     twiss_elements = tfs.read(model_dir / TWISS_ELEMENTS_DAT, index="NAME")
 
     # Get corrector list
-    corrector_list = twiss_elements[twiss_elements.index.str.match(r"MCB[A-Z]?[HV]\.")].index
+    corrector_list = twiss_elements[twiss_elements.index.str.match(r"MCB[A-Z]?[HV]\.")].index  # ty:ignore[unresolved-attribute]
     logger.info(f"Found {len(corrector_list)} correctors")
 
     # Find closest BPMs for each corrector
@@ -376,7 +467,11 @@ def estimate_corrector_dispersions(
         bpm_list,
         twiss_elements,
         num_closest=num_closest_bpms,
+        beam=beam,
     )
+
+    # Set sequence name based on beam
+    seq_name = f"lhcb{beam}"
 
     # Estimate dispersion
     logger.info("Estimating dispersion at correctors via MAD-NG tracking")
@@ -390,9 +485,11 @@ def estimate_corrector_dispersions(
         disp_y,
         sequence_file,
         seq_name=seq_name,
+        beam=beam,
         beam_energy_gev=beam_energy_gev,
         particle=particle,
         plane=plane,
+        n_processes=n_processes,
     )
 
     # Calculate statistics

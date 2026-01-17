@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers only
-    import tfs
+    import pandas as pd
 
 
 def _column_or_zeros(frame, column: str, template: np.ndarray) -> np.ndarray:
@@ -20,7 +20,7 @@ def _require_columns(frame, cols: set[str], context: str) -> None:
         raise KeyError(f"Missing columns for {context}: {sorted(missing)}")
 
 
-def momenta_from_prev(data_p: tfs.TfsDataFrame, dpp_est: float = 0.0) -> tfs.TfsDataFrame:
+def momenta_from_prev(data_p: pd.DataFrame, dpp_est: float = 0.0) -> pd.DataFrame:
     _require_columns(
         data_p,
         {"x", "y", "prev_x", "prev_y", "var_x", "var_y", "prev_x_var", "prev_y_var"},
@@ -94,7 +94,7 @@ def momenta_from_prev(data_p: tfs.TfsDataFrame, dpp_est: float = 0.0) -> tfs.Tfs
     return data_p
 
 
-def momenta_from_next(data_n: tfs.TfsDataFrame, dpp_est: float = 0.0) -> tfs.TfsDataFrame:
+def momenta_from_next(data_n: pd.DataFrame, dpp_est: float = 0.0) -> pd.DataFrame:
     _require_columns(
         data_n,
         {"x", "y", "next_x", "next_y", "var_x", "var_y", "next_x_var", "next_y_var"},

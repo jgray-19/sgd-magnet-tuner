@@ -77,6 +77,10 @@ def _generate_nonoise_track(
     # Create unique corrector file path based on destination
     corrector_file = tmp_dir / f"correctors_b{beam}.tfs"
 
+    if beam == 2:
+        mad.mad.MADX["dQx.b2_op"] = -4.13993e-06  # For 12cm beam 2, speed up convergence
+        mad.mad.MADX["dQy.b2_op"] = -2.92699e-06  # For 12cm beam 2, speed up convergence
+
     # Perform orbit correction for off-momentum beam (delta = 2e-4)
     matched_tunes = perform_orbit_correction(
         mad=mad.mad,
@@ -291,10 +295,54 @@ def beam_data(
 
 
 @pytest.mark.slow
-def test_dispersion(
-    beam_data: tuple[Literal[1, 2], Path, Path, Path],
+def test_dispersion_b1(
+    seq_b1: Path,
+    model_dir_b1: Path,
     loaded_interface_with_beam: BaseMadInterface,
-    loaded_interface_with_beam2: BaseMadInterface,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Test that dispersion estimation reproduces model values at correctors.
+
+    This test:
+    1. Generates tracking data with off-momentum particles
+    2. Analyzes the tracking to extract optics at BPMs
+    3. Estimates dispersion at correctors by tracking from nearby BPMs
+    4. Validates estimates match model within tolerance
+    """
+    beam = 1
+    tmp_dir = tmp_path_factory.mktemp("dispersion_beam_1")
+
+    # Generate tracking data and analyze optics
+    optics_dir = _generate_nonoise_track(
+        loaded_interface_with_beam, tmp_dir, model_dir_b1, seq_b1, 6600, beam, None
+    )
+
+    # Load model twiss for validation
+    twiss_elements = tfs.read(model_dir_b1 / TWISS_ELEMENTS_DAT, index="NAME")
+
+    # Estimate horizontal dispersion at all correctors
+    dispersion_df, _statistics_df = estimate_corrector_dispersions(
+        optics_dir=optics_dir,
+        sequence_file=seq_b1,
+        model_dir=model_dir_b1,
+        seq_name=f"lhcb{beam}",
+        beam=beam,
+        beam_energy_gev=6800,
+        particle="proton",
+        num_closest_bpms=30,
+        plane="x",
+    )
+
+    # Validate estimates against model
+    _validate_dispersion_estimates(dispersion_df, twiss_elements, beam, tmp_dir)
+
+
+@pytest.mark.slow
+def test_dispersion_b2(
+    seq_b2: Path,
+    model_dir_b2: Path,
+    beam2_interface: BaseMadInterface,
+    tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
     """Test that dispersion estimation reproduces model values at correctors.
 
@@ -305,19 +353,21 @@ def test_dispersion(
     4. Validates estimates match model within tolerance
     """
 
-    beam, sequence_file, model_dir, tmp_dir = beam_data
-    mad = loaded_interface_with_beam if beam == 1 else loaded_interface_with_beam2
+    beam = 2
+    tmp_dir = tmp_path_factory.mktemp("dispersion_beam_2")
     # Generate tracking data and analyze optics
-    optics_dir = _generate_nonoise_track(mad, tmp_dir, model_dir, sequence_file, 6600, beam, None)
+    optics_dir = _generate_nonoise_track(
+        beam2_interface, tmp_dir, model_dir_b2, seq_b2, 6600, beam, None
+    )
 
     # Load model twiss for validation
-    twiss_elements = tfs.read(model_dir / TWISS_ELEMENTS_DAT, index="NAME")
+    twiss_elements = tfs.read(model_dir_b2 / TWISS_ELEMENTS_DAT, index="NAME")
 
     # Estimate horizontal dispersion at all correctors
     dispersion_df, _statistics_df = estimate_corrector_dispersions(
         optics_dir=optics_dir,
-        sequence_file=sequence_file,
-        model_dir=model_dir,
+        sequence_file=seq_b2,
+        model_dir=model_dir_b2,
         seq_name=f"lhcb{beam}",
         beam=beam,
         beam_energy_gev=6800,

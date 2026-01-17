@@ -486,7 +486,7 @@ def create_worker_payloads(
         bpm_pairs: List of (start_bpm, end_bpm) tuples defining tracking ranges
         bad_bpms: Optional list of BPM names to exclude from analysis
         template_config: Template configuration to use for all workers
-        use_errors: Whether to use measurement errors in optimization
+        use_errors: Whether to use measurement errors in optimisation
 
     Returns:
         List of (WorkerConfig, OpticsData) tuples for each worker

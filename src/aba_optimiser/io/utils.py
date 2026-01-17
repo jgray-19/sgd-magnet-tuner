@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from aba_optimiser.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    import numpy as np
 
 def get_lhc_file_path(beam: int) -> Path:
     """
@@ -65,8 +68,8 @@ def save_knobs(knobs: dict[str, float], filepath: Path) -> None:
 def save_results(
     knob_names: list[str],
     knob_strengths: dict[str, float],
-    uncertainties: list[float],
-    output_path: str,
+    uncertainties: np.ndarray,
+    output_path: str | Path,
 ) -> None:
     """
     Save the final knob strengths and uncertainties to a file.

@@ -1,6 +1,6 @@
-"""Optics optimization training module for beta function optimization.
+"""Optics optimisation training module for beta function optimisation.
 
-This module provides specialised controllers and managers for optics optimization
+This module provides specialised controllers and managers for optics optimisation
 using quadrupole strengths to fit measured beta functions across the whole ring.
 """
 

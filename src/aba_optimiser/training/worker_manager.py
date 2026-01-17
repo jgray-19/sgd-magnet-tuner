@@ -8,6 +8,7 @@ of loss functions and gradients across multiple worker processes.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import multiprocessing as mp
 from typing import TYPE_CHECKING
@@ -144,6 +145,7 @@ class WorkerManager:
                     sdir,
                     machine_deltaps,
                     arrays_cache,
+                    track_data,
                 )
 
                 for arr in (pos, mom, pos_var, mom_var):
@@ -193,7 +195,7 @@ class WorkerManager:
         if len(file_usage) < num_files:
             LOGGER.warning(
                 f"Only {len(file_usage)}/{num_files} measurement files are being used by workers! "
-                f"This may lead to poor optimization if different files have different deltap values."
+                f"This may lead to poor optimisation if different files have different deltap values."
             )
 
         return payloads
@@ -201,7 +203,6 @@ class WorkerManager:
     def _extract_arrays(self, df: pd.DataFrame) -> dict[str, np.ndarray]:
         """Extract numpy arrays from DataFrame once for memory efficiency."""
         return {
-            "df": df,
             "x": df["x"].to_numpy(dtype="float64", copy=False),
             "y": df["y"].to_numpy(dtype="float64", copy=False),
             "px": df["px"].to_numpy(dtype="float64", copy=False),
@@ -222,6 +223,7 @@ class WorkerManager:
         sdir: int,
         machine_deltaps: list[float],
         arrays_cache: dict[int, dict[str, np.ndarray]],
+        track_data: dict[int, pd.DataFrame],
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Create arrays for worker payload."""
         n_turns = len(turn_batch)
@@ -236,7 +238,7 @@ class WorkerManager:
         for i, turn in enumerate(turn_batch):
             file_idx = file_turn_map[turn]
             cache = arrays_cache[file_idx]
-            df = cache["df"]
+            df = track_data[file_idx]
             arr_x, arr_y, arr_px, arr_py = cache["x"], cache["y"], cache["px"], cache["py"]
             arr_vx, arr_vy, arr_vpx, arr_vpy = (
                 cache["var_x"],
@@ -253,8 +255,6 @@ class WorkerManager:
                 start_pos = self._get_pos(df, turn, start_bpm)
                 end_pos = start_pos + n_data_points - 1
                 init_turn = self.get_turn(df, end_pos)
-                if init_turn != turn:
-                    LOGGER.warning(f"Reversed init turn {turn} -> {init_turn}")
 
             init_pos = self._get_pos(df, init_turn, init_bpm)
 
@@ -326,7 +326,7 @@ class WorkerManager:
         )
         LOGGER.info(f"Starting {len(payloads)} workers...")
 
-        # Select worker class based on whether momenta optimization is enabled
+        # Select worker class based on whether momenta optimisation is enabled
         if simulation_config.optimise_momenta:
             worker_class = TrackingWorker
             LOGGER.info("Using TrackingWorker (position + momentum)")
@@ -360,39 +360,42 @@ class WorkerManager:
                 - agg_grad: per-knob averaged gradient array
         """
         total_loss = 0.0
-        agg_grad = None
-        contrib_count = None  # Count of non-zero contributions per knob
+        agg_grad = np.zeros_like(self.optimise_knobs, dtype=np.float64)
+        # contrib_count = None  # Count of non-zero contributions per knob
+        if len(self.parent_conns) == 0:
+            raise RuntimeError("No workers to collect results from!")
 
-        for conn in self.parent_conns:
+        for i, conn in enumerate(self.parent_conns):
             _, grad, loss = conn.recv()
             grad_flat = grad.flatten()
 
-            if agg_grad is None:
+            if i == 0:
                 agg_grad = grad_flat.copy()
-                contrib_count = (grad_flat != 0).astype(np.float64)
+                # contrib_count = (grad_flat != 0).astype(np.float64)
             else:
                 agg_grad += grad_flat
-                contrib_count += (grad_flat != 0).astype(np.float64)
+                # contrib_count += (grad_flat != 0).astype(np.float64)
 
             total_loss += loss
 
         # Average each knob's gradient by the number of workers that contributed
         # to it (avoiding division by zero for knobs with no contributions)
-        contrib_count = np.maximum(contrib_count, 1.0)
-        avg_grad = agg_grad / contrib_count
+        # contrib_count = np.maximum(contrib_count, 1.0)
+        # avg_grad = agg_grad  / contrib_count
 
-        return total_loss / total_turns, avg_grad
+        return total_loss / total_turns, agg_grad
 
     def terminate_workers(self) -> None:
         """Terminate all workers and clean up processes."""
         LOGGER.info("Terminating workers...")
         for conn in self.parent_conns:
-            conn.send((None, None))
+            with contextlib.suppress(BrokenPipeError, EOFError):
+                conn.send((None, None))
 
         for w in self.workers:
             w.join()
 
-    def termination_and_hessian(self) -> np.ndarray:
+    def termination_and_hessian(self, n_knobs: int) -> np.ndarray:
         """Terminate all workers and collect final Hessian information.
 
         Returns:
@@ -406,7 +409,14 @@ class WorkerManager:
         for conn in self.parent_conns:
             conn.send((None, None))
 
-        hessians = [conn.recv() for conn in self.parent_conns]
+        hessians = []
+        for conn in self.parent_conns:
+            try:
+                h = conn.recv()
+            except EOFError:
+                # Worker already terminated, use zero Hessian
+                h = np.zeros((n_knobs, n_knobs))
+            hessians.append(h)
         for w in self.workers:
             w.join()
 

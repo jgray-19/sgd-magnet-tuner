@@ -17,7 +17,7 @@ class SequenceConfig:
     Attributes:
         sequence_file_path: Path to the MAD-NG sequence file
         magnet_range: Range of magnets to optimize (e.g., "BPM.9R2.B1/BPM.9L3.B1")
-        bpm_range: Range of BPMs for optimization (None to use magnet_range)
+        bpm_range: Range of BPMs for optimisation (None to use magnet_range)
         first_bpm: First BPM in the sequence (None for auto-detection)
         seq_name: Sequence name in MAD-NG file (None for auto-detection)
         beam_energy: Beam energy in GeV
@@ -53,7 +53,7 @@ class SequenceConfig:
             sequence_path: Optional custom sequence file path
             beam_energy: Beam energy in GeV
             bad_bpms: List of bad BPMs to exclude
-            bpm_range: Optional BPM range for optimization (defaults to magnet_range)
+            bpm_range: Optional BPM range for optimisation (defaults to magnet_range)
             optimise_knobs: List of global knob names to optimise
 
         Returns:
@@ -90,9 +90,9 @@ class MeasurementConfig:
         flattop_turns: Number of turns recorded on the flat top
     """
 
-    measurement_files: list[Path]
-    corrector_files: list[Path] | None = None
-    tune_knobs_files: list[Path] | None = None
+    measurement_files: list[Path] | Path
+    corrector_files: list[Path | None] | None | Path = None
+    tune_knobs_files: list[Path | None] | None | Path = None
     machine_deltaps: list[float] | float = 0.0
     bunches_per_file: int = 3
     flattop_turns: int = 6600

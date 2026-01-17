@@ -1,7 +1,7 @@
 """Particle tracking worker for multi-turn beam dynamics simulations.
 
 This module implements the TrackingWorker class which performs particle
-tracking simulations and computes gradients for optimization. It handles
+tracking simulations and computes gradients for optimisation. It handles
 both position and momentum observables with full symmetry between x/y planes.
 """
 
@@ -67,7 +67,7 @@ class TrackingWorker(AbstractWorker[TrackingData]):
 
     This worker performs particle tracking through accelerator lattices,
     computing positions and momenta at each BPM. It calculates gradients
-    of the loss function with respect to optimization knobs using
+    of the loss function with respect to optimisation knobs using
     differential algebra techniques.
 
     Supports two modes:
@@ -227,23 +227,10 @@ class TrackingWorker(AbstractWorker[TrackingData]):
             py=split_array_to_batches(self.py_weights_full, num_batches),
         )
 
-    def get_bpm_range(self, sdir: int) -> str:
-        """Get BPM range string for MAD-NG tracking.
-
-        Args:
-            sdir: Direction of propagation (+1 forward, -1 backward)
-
-        Returns:
-            BPM range in format "start/end" or "end/start" for backward
-        """
-        if sdir == -1:
-            return f"{self.config.end_bpm}/{self.config.start_bpm}"
-        return f"{self.config.start_bpm}/{self.config.end_bpm}"
-
     def setup_mad_sequence(self, mad: MAD) -> None:
         """Configure MAD-NG sequence for tracking.
 
-        Sets batch size, number of batches, and optimization flags.
+        Sets batch size, number of batches, and optimisation flags.
         For arc-by-arc mode, also sets single-turn tracking.
 
         Args:
@@ -257,7 +244,7 @@ class TrackingWorker(AbstractWorker[TrackingData]):
             # Single-turn tracking for arc-by-arc mode
             mad["n_run_turns"] = 1
             # Set tracking range (starts at turn 0 for single turn)
-            mad["tracking_range"] = self.get_bpm_range(self.config.sdir)
+            mad["tracking_range"] = self.tracking_range
 
     def _setup_da_maps(self, mad: MAD) -> None:
         """Setup differential algebra maps for tracking.
@@ -456,11 +443,12 @@ end
         """Main worker run loop with Hessian calculation.
 
         Extends the base run method to compute approximate Hessian
-        after the main optimization loop completes.
+        after the main optimisation loop completes.
         """
         # Initial handshake
         self.conn.recv()
         knob_values, batch = self.conn.recv()
+        n_knobs = len(knob_values)
 
         # Setup MAD interface
         mad, nbpms = self.setup_mad_interface(knob_values)
@@ -473,32 +461,53 @@ end
 
         LOGGER.debug(f"Worker {self.worker_id}: Ready for computation with {nbpms} BPMs")
 
+        computation_success = True
+
         # Main computation loop
         while knob_values is not None:
-            # Compute gradients and loss
-            grad, loss = self.compute_gradients_and_loss(mad, knob_values, batch)
+            try:
+                # Compute gradients and loss
+                grad, loss = self.compute_gradients_and_loss(mad, knob_values, batch)
 
-            # Normalize and send results
-            self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
+                # Normalize and send results
+                self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
+            except RuntimeError as e:
+                LOGGER.error(f"Worker {self.worker_id}: Error during computation: {e}")
+                # Send error signal to main process
+                zero_grad: np.ndarray = np.zeros(n_knobs)
+                self.conn.send((self.worker_id, zero_grad, float("inf")))
+                computation_success = False
+                break
 
             # Wait for next knob values
             knob_values, batch = self.conn.recv()
 
-        # Compute Hessian approximation
-        LOGGER.debug(f"Worker {self.worker_id}: Computing Hessian approximation")
-        mad.send("""
+        # Compute Hessian approximation only if computation was successful
+        if computation_success:
+            LOGGER.debug(f"Worker {self.worker_id}: Computing Hessian approximation")
+            try:
+                mad.send("""
 weights_x = python:recv()
 weights_px = python:recv()
 weights_y = python:recv()
 weights_py = python:recv()
 """)
-        mad.send(self.hessian_weight_x.tolist())
-        mad.send(self.hessian_weight_px.tolist())
-        mad.send(self.hessian_weight_y.tolist())
-        mad.send(self.hessian_weight_py.tolist())
-        mad.send(HESSIAN_SCRIPT.read_text())
-        h_part = mad.recv()
-        self.conn.send(h_part)  # shape (n_knobs, n_knobs)
+                mad.send(self.hessian_weight_x.tolist())
+                mad.send(self.hessian_weight_px.tolist())
+                mad.send(self.hessian_weight_y.tolist())
+                mad.send(self.hessian_weight_py.tolist())
+                mad.send(HESSIAN_SCRIPT.read_text())
+                h_part = mad.recv()
+                self.conn.send(h_part)  # shape (n_knobs, n_knobs)
+            except RuntimeError as e:
+                LOGGER.error(f"Worker {self.worker_id}: Error during Hessian computation: {e}")
+                # Send zero Hessian
+                self.conn.send(np.zeros((n_knobs, n_knobs)))
+        else:
+            # If computation failed, send zero Hessian to indicate failure
+            self.conn.send(np.zeros((n_knobs, n_knobs)))
+
+        # Cleanup
 
         # Cleanup
         LOGGER.debug(f"Worker {self.worker_id}: Terminating")

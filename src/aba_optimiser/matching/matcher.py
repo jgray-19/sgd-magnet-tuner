@@ -763,14 +763,14 @@ end
 
         This method is not used in the current MAD-NG based matching approach.
         """
-        raise NotImplementedError("Using MAD-NG match command instead of external optimization")
+        raise NotImplementedError("Using MAD-NG match command instead of external optimisation")
 
     def _compute_objective(self, knob_values: dict[str, float]) -> float:
         """Compute the objective function value (difference from model).
 
         This method is not used in the current MAD-NG based matching approach.
         """
-        raise NotImplementedError("Using MAD-NG match command instead of external optimization")
+        raise NotImplementedError("Using MAD-NG match command instead of external optimisation")
 
     def _save_results(
         self,

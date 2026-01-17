@@ -30,7 +30,7 @@ class ResultManager:
     def __init__(
         self,
         knob_names: list[str],
-        elem_spos: np.ndarray,
+        elem_spos: list[float],
         simulation_config: SimulationConfig,
         show_plots: bool = True,
         output_knobs_path: Path | None = None,

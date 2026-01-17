@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 
 def apply_magnet_perturbations(
-    mad: MAD, rel_k1_std_dev: float, seed: int = 42
-) -> tuple[list[str], list[str], list[str], dict[str, float]]:
+    mad: MAD, rel_k1_std_dev: float = 1e-4, seed: int = 42, magnet_type: str | list[str] = "all"
+) -> tuple[dict[str, float], dict[str, float]]:
     """
     Apply perturbations to magnets in the MAD sequence.
 
@@ -31,13 +31,13 @@ def apply_magnet_perturbations(
         mad: MAD instance
         rel_k1_std_dev: Relative standard deviation for K1 perturbations
         seed: Random seed for reproducibility
-
+        magnet_type: Magnet types to apply perturbations to. Can be "all" or a list like ["q", "s"] ("q" for quadrupoles, "s" for sextupoles, "d" for dipoles)
     Returns:
-        Tuple of (bend_names, quad_names, sext_names, true_strengths)
+        Tuple of (magnet_strengths, true_strengths)
     """
     rng = np.random.default_rng(seed)
     bend_errors_table = tfs.read(BEND_ERROR_FILE)
-    bend_errors_dict = bend_errors_table["K0L"].to_dict()
+    bend_errors_dict = bend_errors_table["K0L"].to_dict()  # ty:ignore[unresolved-attribute]
     logger.info("Scanning sequence for quadrupoles and sextupoles")
     magnet_strengths = {}
     true_strengths = {}
@@ -45,9 +45,18 @@ def apply_magnet_perturbations(
     num_quads = 0
     num_sexts = 0
 
+    if isinstance(magnet_type, str):
+        magnet_types = list("qsd") if magnet_type == "all" else list(magnet_type)
+    else:
+        magnet_types = magnet_type
+
+    dodip_err = "d" in magnet_types
+    doquad_err = "q" in magnet_types
+    dosext_err = "s" in magnet_types
+
     for elm in mad.loaded_sequence:
         # Dipoles
-        if elm.kind == "sbend" and elm.k0 != 0 and elm.name[:3] == "MB.":
+        if dodip_err and elm.kind == "sbend" and elm.k0 != 0 and elm.name[:3] == "MB.":
             if elm.name not in bend_errors_dict:
                 raise ValueError(
                     f"Bend error for {elm.name} not found in {BEND_ERROR_FILE}"
@@ -64,20 +73,20 @@ def apply_magnet_perturbations(
             # num_bends += 1
 
         # Quadrupoles
-        if elm.kind == "quadrupole" and elm.k1 != 0:
+        if doquad_err and elm.kind == "quadrupole" and elm.k1 != 0:
             if elm.name[:3] == "MQ.":
                 elm.k1 = elm.k1 + rng.normal(0, abs(elm.k1 * rel_k1_std_dev))
                 magnet_strengths[elm.name + ".k1"] = elm.k1
                 true_strengths[elm.name] = elm.k1
                 num_quads += 1
-            elif elm.name[:3] != "MQT":
-                elm.k1 = elm.k1 + rng.normal(0, abs(elm.k1 * 1e-4))
-                magnet_strengths[elm.name + ".k1"] = elm.k1
-                true_strengths[elm.name] = elm.k1
-                num_quads += 1
+            # elif elm.name[:3] != "MQT":
+            #     elm.k1 = elm.k1 + rng.normal(0, abs(elm.k1 * 1e-4))
+            #     magnet_strengths[elm.name + ".k1"] = elm.k1
+            #     true_strengths[elm.name] = elm.k1
+            #     num_quads += 1
 
         # Sextupoles
-        elif elm.kind == "sextupole" and elm.k2 != 0 and elm.name[:3] == "MS.":
+        elif dosext_err and elm.kind == "sextupole" and elm.k2 != 0 and elm.name[:3] == "MS.":
             elm.k2 = elm.k2 + rng.normal(0, abs(elm.k2 * 1e-4))
             magnet_strengths[elm.name + ".k2"] = elm.k2
             true_strengths[elm.name] = elm.k2
@@ -100,33 +109,3 @@ def apply_magnet_perturbations(
         )
 
     return magnet_strengths, true_strengths
-
-
-def apply_magnet_strengths_to_mad(
-    mad: MAD,
-    main_bend_names: list[str],
-    main_quad_names: list[str],
-    main_sext_names: list[str],
-    reference_mad: MAD,
-) -> None:
-    """
-    Apply magnet strengths from a reference MAD instance to another MAD instance.
-
-    Args:
-        mad: Target MAD instance
-        main_bend_names: list of bend magnet names
-        main_quad_names: list of quadrupole names
-        main_sext_names: list of sextupole names
-        reference_mad: Reference MAD instance to copy strengths from
-    """
-    # Apply bend strengths
-    for name in main_bend_names:
-        mad[f"MADX['{name}'].k0"] = reference_mad[f"MADX['{name}'].k0"]
-
-    # Apply quadrupole strengths
-    for name in main_quad_names:
-        mad[f"MADX['{name}'].k1"] = reference_mad[f"MADX['{name}'].k1"]
-
-    # Apply sextupole strengths
-    for name in main_sext_names:
-        mad[f"MADX['{name}'].k2"] = reference_mad[f"MADX['{name}'].k2"]

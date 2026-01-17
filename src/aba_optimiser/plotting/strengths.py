@@ -266,7 +266,7 @@ def plot_strengths_comparison(
 
 
 def plot_strengths_vs_position(
-    elem_spos: np.ndarray,
+    elem_spos: list[float],
     final_vals: np.ndarray,
     true_vals: np.ndarray,
     uncertainties: np.ndarray,
@@ -294,7 +294,7 @@ def plot_strengths_vs_position(
     )
 
     # Ensure numpy arrays for boolean mask indexing (elem_spos may be a list)
-    elem_spos = np.asarray(elem_spos)
+    spos_arr = np.asarray(elem_spos)
 
     if magnet_names is not None:
         families, _, _, is_mq, is_ms, is_mb = _get_family_colors_and_masks(magnet_names)
@@ -314,7 +314,7 @@ def plot_strengths_vs_position(
         marker = "s" if series == "True" else "o"
         if series == "True":
             ax.plot(
-                elem_spos[mask],
+                spos_arr[mask],
                 true_plot[mask],
                 marker,
                 label=label,
@@ -326,7 +326,7 @@ def plot_strengths_vs_position(
         else:  # Final
             if show_errorbars:
                 ax.errorbar(
-                    elem_spos[mask],
+                    spos_arr[mask],
                     final_plot[mask],
                     yerr=uncertainties_on_plot[mask],
                     fmt=marker,
@@ -339,7 +339,7 @@ def plot_strengths_vs_position(
                 )
             else:
                 ax.plot(
-                    elem_spos[mask],
+                    spos_arr[mask],
                     final_plot[mask],
                     marker,
                     label=label,
@@ -397,6 +397,7 @@ def plot_strengths_vs_position(
         ax.set_ylabel("Relative difference ($\\times10^{-4}$)")
 
     if magnet_names is not None:
+        assert families is not None
         unique_families = set(families)
         handles = []
         for fam in ["MQ", "MS", "MB"]:

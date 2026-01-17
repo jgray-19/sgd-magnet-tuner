@@ -88,9 +88,14 @@ def perform_orbit_correction(
     target_qy: float,
     corrector_file: Path,
     beam: int = 1,
-) -> None:
+    twiss_name: str = "zero_twiss",
+) -> dict[str, float]:
     """
     Perform orbit correction and tune rematching with off-momentum twiss.
+
+    If you have already performed a twiss calculation with the desired target
+    orbit, you can specify its name via the `twiss_name` argument. By default,
+    the function uses the 'zero_twiss' twiss as target.
 
     Args:
         mad: MAD instance
@@ -98,6 +103,7 @@ def perform_orbit_correction(
         target_qx: Target horizontal tune
         target_qy: Target vertical tune
         corrector_file: Path to save corrector strengths
+        twiss_name: Name of the twiss to use as target for orbit correction
     """
     logger.info(f"Setting machine deltap: {machine_deltap}")
     mad["machine_deltap"] = machine_deltap
@@ -110,11 +116,11 @@ def perform_orbit_correction(
 local correct, option in MAD
 
 io.write("*** orbit correction using off momentum twiss\n")
-local tbl = twiss {{ sequence=loaded_sequence, deltap=machine_deltap }}
+local tws_offmom = twiss {{ sequence=loaded_sequence, deltap=machine_deltap }}
 
 ! Increase file numerical formatting
 local fmt = option.numfmt ; option.numfmt = "% -.16e"
-correct {{ sequence=loaded_sequence, model=tbl, method="micado", info=1, plane="x" }} :write(correct_file)
+correct {{ sequence=loaded_sequence, model=tws_offmom, target={twiss_name}, method="svd", info=1, plane="x" }} :write(correct_file)
 option.numfmt = fmt ! restore formatting
 
 io.write("*** rematching tunes for off-momentum twiss\n")

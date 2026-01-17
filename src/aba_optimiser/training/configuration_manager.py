@@ -48,10 +48,10 @@ class ConfigurationManager:
         bpm_range: str | None = None,
         optimise_knobs: list[str] | None = None,
     ):
-        self.mad_iface: OptimisationMadInterface | None = None
+        self.mad_iface: OptimisationMadInterface = None
         self.knob_names: list[str] = []
-        self.elem_spos: np.ndarray = np.array([])
-        self.all_bpms: np.ndarray = np.array([])
+        self.elem_spos: list[float] = []
+        self.all_bpms: list[str] = []
         self.initial_strengths: np.ndarray = np.array([])
         self.bpm_ranges: list[str] = []
 
@@ -65,7 +65,7 @@ class ConfigurationManager:
     def setup_mad_interface(
         self,
         sequence_file_path: str,
-        first_bpm: str,
+        first_bpm: str | None,
         bad_bpms: list[str] | None,
         seq_name: str | None = None,
         beam_energy: float = BEAM_ENERGY,
@@ -134,7 +134,7 @@ class ConfigurationManager:
 
         if provided_initial_knobs is not None:
             # Use provided initial knobs where available, fill missing ones from MAD
-            LOGGER.info("Using provided initial knob strengths from previous optimization")
+            LOGGER.info("Using provided initial knob strengths from previous optimisation")
             # First get the default MAD values for all knobs
             self.mad_iface.update_knob_values(provided_initial_knobs)
         initial_strengths = self.mad_iface.receive_knob_values()

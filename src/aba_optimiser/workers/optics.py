@@ -1,4 +1,4 @@
-"""Optics function worker for phase optimization.
+"""Optics function worker for phase optimisation.
 
 This module implements the OpticsWorker class which computes phase advances
 between consecutive BPMs and their gradients for optics matching. Phase advances
@@ -62,7 +62,7 @@ class OpticsWorker(AbstractWorker[OpticsData]):
 
     This worker computes phase advances between consecutive BPMs and
     beta functions at each BPM, along with their gradients with respect
-    to optimization knobs. It uses differential algebra for automatic
+    to optimisation knobs. It uses differential algebra for automatic
     differentiation.
 
     Since phase advances are measured between BPM pairs, there are
@@ -134,19 +134,6 @@ class OpticsWorker(AbstractWorker[OpticsData]):
         self.run_track_script = TRACK_OPTICS_SCRIPT.read_text()
         self.run_track_init_path = TRACK_OPTICS_INIT
 
-    def get_bpm_range(self, sdir: int) -> str:
-        """Get BPM range string for MAD-NG tracking.
-
-        Args:
-            sdir: Direction of propagation (+1 forward, -1 backward)
-
-        Returns:
-            BPM range in format "start/end" or "end/start" for backward
-        """
-        if sdir == -1:
-            return f"{self.config.end_bpm}/{self.config.start_bpm}"
-        return f"{self.config.start_bpm}/{self.config.end_bpm}"
-
     def setup_mad_sequence(self, mad: MAD) -> None:
         """Configure MAD-NG sequence for optics computation.
 
@@ -155,7 +142,7 @@ class OpticsWorker(AbstractWorker[OpticsData]):
         Args:
             mad: MAD-NG interface object
         """
-        mad["tracking_range"] = self.get_bpm_range(self.config.sdir)
+        mad["tracking_range"] = self.tracking_range
 
     def _setup_da_maps(self, mad: MAD) -> None:
         """Setup differential algebra maps for optics computation.

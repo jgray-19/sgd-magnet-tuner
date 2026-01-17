@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 import numpy as np
+
+# NEW: we need pandas for the aligned return
+import pandas as pd
 
 from aba_optimiser.config import FILE_COLUMNS
 from aba_optimiser.io.utils import get_lhc_file_path
@@ -15,12 +18,6 @@ from aba_optimiser.physics.bpm_phases import (
     prev_bpm_to_pi,
     prev_bpm_to_pi_2,
 )
-
-if TYPE_CHECKING:
-    import tfs  # type: ignore[import-not-found]
-
-# NEW: we need pandas for the aligned return
-import pandas as pd
 
 LOGGER = logging.getLogger(__name__)
 OUT_COLS = list(FILE_COLUMNS)
@@ -33,11 +30,11 @@ DEN_TOL = 1e-10
 
 @dataclass(frozen=True)
 class TwissMaps:
-    sqrt_betax: dict
+    sqrt_betax: dict[str, float]
     dx: dict
 
 
-def _ensure_twiss(tws: tfs.TfsDataFrame | None, info: bool) -> tfs.TfsDataFrame:
+def _ensure_twiss(tws: pd.DataFrame | None, info: bool) -> pd.DataFrame:
     if tws is not None:
         return tws
     # If no Twiss provided, we provide LHC beam 1 twiss
@@ -54,7 +51,7 @@ def _ensure_twiss(tws: tfs.TfsDataFrame | None, info: bool) -> tfs.TfsDataFrame:
     return tws
 
 
-def _twiss_maps(tws: tfs.TfsDataFrame) -> TwissMaps:
+def _twiss_maps(tws: pd.DataFrame) -> TwissMaps:
     sqrt_betax = np.sqrt(tws["beta11"]).to_dict()
     dx = tws["dx"].to_dict()
     return TwissMaps(sqrt_betax=sqrt_betax, dx=dx)
@@ -178,8 +175,8 @@ def _maybe_log_stats(delta: np.ndarray, info: bool, label: str = "") -> None:
 
 
 def _calculate_dpp_direction_aligned(
-    data: tfs.TfsDataFrame,
-    tws: tfs.TfsDataFrame,
+    data: pd.DataFrame,
+    tws: pd.DataFrame,
     maps: TwissMaps,
     direction: Direction,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -234,8 +231,8 @@ def _calculate_dpp_direction_aligned(
 
 
 def calculate_dpp_both(
-    data: tfs.TfsDataFrame,
-    tws: None | tfs.TfsDataFrame = None,
+    data: pd.DataFrame,
+    tws: None | pd.DataFrame = None,
     info: bool = True,
 ) -> pd.DataFrame:
     """
@@ -281,9 +278,7 @@ def calculate_dpp_both(
     )
 
 
-def get_mean_dpp(
-    data: tfs.TfsDataFrame, tws: None | tfs.TfsDataFrame = None, info: bool = True
-) -> float:
+def get_mean_dpp(data: pd.DataFrame, tws: None | pd.DataFrame = None, info: bool = True) -> float:
     """
     Compute mean δ using BOTH 'prev' and 'next' partner BPM triplets.
     Returns a single float value representing the mean δ across all valid measurements.

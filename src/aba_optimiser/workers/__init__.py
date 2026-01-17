@@ -1,7 +1,7 @@
 """Worker processes for distributed tracking and optimisation workloads.
 
 This package provides worker process implementations for parallel computation
-of accelerator physics simulations and optimizations. Workers communicate with
+of accelerator physics simulations and optimisations. Workers communicate with
 the main process via pipes and compute gradients and loss functions.
 
 Available Workers:

@@ -161,7 +161,7 @@ def create_bpm_range_specs(
     fixed_start: str | None = None,
     fixed_end: str | None = None,
 ) -> list[tuple[str, str, int]]:
-    """Create BPM range specifications for optimization workers.
+    """Create BPM range specifications for optimisation workers.
 
     Args:
         bpm_start_points: List of starting BPM names

@@ -6,13 +6,13 @@ import numpy as np
 
 from aba_optimiser.physics.bpm_phases import next_bpm_to_pi_2, prev_bpm_to_pi_2
 
-if TYPE_CHECKING:  # pragma: no cover - typing helpers only
-    import tfs
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 def build_lattice_neighbor_tables(
-    tws: tfs.TfsDataFrame,
-) -> tuple[tfs.TfsDataFrame, tfs.TfsDataFrame, tfs.TfsDataFrame, tfs.TfsDataFrame]:
+    tws: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     prev_x = prev_bpm_to_pi_2(tws["mu1"], tws.q1).rename(
         columns={"prev_bpm": "prev_bpm_x", "delta": "delta_x"}
     )
@@ -29,8 +29,8 @@ def build_lattice_neighbor_tables(
 
 
 def compute_turn_wraps(
-    data_p: tfs.TfsDataFrame,
-    data_n: tfs.TfsDataFrame,
+    data_p: pd.DataFrame,
+    data_n: pd.DataFrame,
     bpm_index: dict[str, int],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     cur_i_p = data_p["name"].map(bpm_index)
@@ -49,13 +49,13 @@ def compute_turn_wraps(
 
 
 def merge_neighbor_coords(
-    data_p: tfs.TfsDataFrame,
-    data_n: tfs.TfsDataFrame,
+    data_p: pd.DataFrame,
+    data_n: pd.DataFrame,
     turn_x_p: np.ndarray,
     turn_y_p: np.ndarray,
     turn_x_n: np.ndarray,
     turn_y_n: np.ndarray,
-) -> tuple[tfs.TfsDataFrame, tfs.TfsDataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     required = {"var_x", "var_y"}
     missing_p = required.difference(data_p.columns)
     missing_n = required.difference(data_n.columns)

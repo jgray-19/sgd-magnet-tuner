@@ -14,7 +14,7 @@ OUT_COLS = list(FILE_COLUMNS)
 if TYPE_CHECKING:  # pragma: no cover - typing helpers only
     from collections.abc import Mapping, Sequence
 
-    import tfs
+    import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -33,7 +33,7 @@ class LatticeMaps:
     coy: Mapping[str, float] | None = None
 
 
-def validate_input(df: tfs.TfsDataFrame) -> tuple[bool, bool]:
+def validate_input(df: pd.DataFrame) -> tuple[bool, bool]:
     required = {"name", "turn", "x", "y"}
     missing = required.difference(df.columns)
     if missing:
@@ -46,8 +46,8 @@ def get_rng(rng: np.random.Generator | None) -> np.random.Generator:
 
 
 def inject_noise_xy(
-    df: tfs.TfsDataFrame,
-    orig_df: tfs.TfsDataFrame,
+    df: pd.DataFrame,
+    orig_df: pd.DataFrame,
     rng: np.random.Generator,
     low_noise_bpms: Sequence[str],
     noise_std: float = POSITION_STD_DEV,
@@ -72,7 +72,7 @@ def inject_noise_xy(
 
 
 def build_lattice_maps(
-    tws: tfs.TfsDataFrame,
+    tws: pd.DataFrame,
     *,
     include_dispersion: bool = False,
     include_orbit: bool = False,
@@ -96,7 +96,7 @@ def build_lattice_maps(
     return LatticeMaps(**params)
 
 
-def attach_lattice_columns(df: tfs.TfsDataFrame, maps: LatticeMaps) -> None:
+def attach_lattice_columns(df: pd.DataFrame, maps: LatticeMaps) -> None:
     df["sqrt_betax"] = df["name"].map(maps.sqrt_betax)
     df["sqrt_betay"] = df["name"].map(maps.sqrt_betay)
     df["betax"] = df["name"].map(maps.betax)
@@ -130,9 +130,7 @@ def weights(
     return 1.0 / f
 
 
-def weighted_average_from_weights(
-    data_p: tfs.TfsDataFrame, data_n: tfs.TfsDataFrame
-) -> tfs.TfsDataFrame:
+def weighted_average_from_weights(data_p: pd.DataFrame, data_n: pd.DataFrame) -> pd.DataFrame:
     # Align dataframes by sorting on name and turn, preserving original order
     data_p_aligned = data_p.sort_values(["name", "turn"]).reset_index(drop=True)
     data_n_aligned = data_n.sort_values(["name", "turn"]).reset_index(drop=True)
@@ -225,11 +223,11 @@ def weighted_average_from_weights(
 
 
 def weighted_average_from_angles(
-    data_p: tfs.TfsDataFrame,
-    data_n: tfs.TfsDataFrame,
+    data_p: pd.DataFrame,
+    data_n: pd.DataFrame,
     beta_x_map: Mapping[str, float],
     beta_y_map: Mapping[str, float],
-) -> tfs.TfsDataFrame:
+) -> pd.DataFrame:
     # Align dataframes by sorting on name and turn, preserving original order
     data_p_aligned = data_p.sort_values(["name", "turn"]).reset_index(drop=True)
     data_n_aligned = data_n.sort_values(["name", "turn"]).reset_index(drop=True)
@@ -281,7 +279,7 @@ def weighted_average_from_angles(
     return data_avg
 
 
-def sync_endpoints(data_p: tfs.TfsDataFrame, data_n: tfs.TfsDataFrame) -> None:
+def sync_endpoints(data_p: pd.DataFrame, data_n: pd.DataFrame) -> None:
     data_n.iloc[-1, data_n.columns.get_loc("px")] = data_p.iloc[
         -1, data_p.columns.get_loc("px")
     ]

@@ -71,7 +71,7 @@ class Controller(BaseController):
             mad_logfile (Path | None, optional): Path to MAD log file. Defaults to None.
         """
 
-        # Log optimization targets
+        # Log optimisation targets
         logger.info("Optimising energy")
         if simulation_config.optimise_quadrupoles:
             logger.info("Optimising quadrupoles")
@@ -80,7 +80,7 @@ class Controller(BaseController):
         if simulation_config.optimise_momenta:
             logger.info("Including momenta (px, py) in loss function")
         else:
-            logger.info("Using position-only optimization (x, y only)")
+            logger.info("Using position-only optimisation (x, y only)")
 
         # Normalize and validate multi-config inputs
         measurement_files, corrector_files, tune_knobs_files, machine_deltaps = (
@@ -101,7 +101,7 @@ class Controller(BaseController):
         # Set bpm_range to magnet_range if not provided
         bpm_range = sequence_config.bpm_range or sequence_config.magnet_range
 
-        # Initialize base controller (handles config manager, optimization loop, result manager)
+        # Initialize base controller (handles config manager, optimisation loop, result manager)
         super().__init__(
             optimiser_config=optimiser_config,
             simulation_config=simulation_config,
@@ -177,11 +177,17 @@ class Controller(BaseController):
                 run_start,
                 total_turns,
             )
+
+            total_hessian = self.worker_manager.termination_and_hessian(len(self.final_knobs))
+        except RuntimeError as e:
+            logger.error(f"optimisation failed: {e}")
+            self.worker_manager.terminate_workers()
+            raise RuntimeError(f"Worker error during optimisation: {e}") from e
         except KeyboardInterrupt:
             logger.warning("\nKeyboardInterrupt detected. Terminating early and writing results.")
+            self.worker_manager.terminate_workers()
             self.final_knobs = self.initial_knobs
-        finally:
-            total_hessian = self.worker_manager.termination_and_hessian()
+            total_hessian = np.zeros((len(self.final_knobs), len(self.final_knobs)))
         uncertainties = self._save_results(total_hessian, writer)
         uncertainties = dict(zip(self.final_knobs.keys(), uncertainties))
 
@@ -192,7 +198,7 @@ class Controller(BaseController):
         del self.data_manager
         gc.collect()
 
-    def _convert_pt2dp(self, uncertainties: np.ndarray):
+    def _convert_pt2dp(self, uncertainties: np.ndarray) -> None:
         self.final_knobs["deltap"] = self.config_manager.mad_iface.pt2dp(self.final_knobs.pop("pt"))
         if "pt" in self.config_manager.initial_strengths:
             self.filtered_true_strengths["deltap"] = self.config_manager.mad_iface.pt2dp(
@@ -205,7 +211,7 @@ class Controller(BaseController):
         self,
         total_hessian: np.ndarray,
         writer: SummaryWriter,
-    ) -> None:
+    ) -> np.ndarray:
         """Clean up resources and save final results."""
         # Calculate uncertainties
         cov = np.linalg.inv(total_hessian + 1e-8 * np.eye(total_hessian.shape[0]))
@@ -339,7 +345,7 @@ class Controller(BaseController):
         return initial_knob_strengths
 
     def _init_managers_with_tracking_config(self) -> None:
-        """Re-initialize optimization and result managers with tracking-specific config."""
+        """Re-initialize optimisation and result managers with tracking-specific config."""
         from aba_optimiser.training.optimisation_loop import OptimisationLoop
         from aba_optimiser.training.result_manager import ResultManager
 

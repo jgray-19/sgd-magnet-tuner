@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from aba_optimiser.measurements.twiss_from_measurement import build_twiss_from_measurements
 from aba_optimiser.momentum_recon.core import (
     OUT_COLS,
     attach_lattice_columns,
     build_lattice_maps,
     diagnostics,
-    get_rng,
-    inject_noise_xy,
     sync_endpoints,
     validate_input,
 )
@@ -26,35 +26,38 @@ from aba_optimiser.physics.dpp_calculation import get_mean_dpp
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers only
     import pandas as pd
-    from numpy.random import Generator
 
 LOGGER = logging.getLogger(__name__)
 
 
-def calculate_pz(
+def calculate_pz_measurement(
     orig_data: pd.DataFrame,
-    tws: pd.DataFrame,
-    inject_noise: bool = True,
+    measurement_folder: str | Path,
     info: bool = True,
-    rng: Generator | None = None,
-    low_noise_bpms: list[str] | None = None,
 ) -> pd.DataFrame:
-    low_noise_bpms = list(low_noise_bpms or [])
     LOGGER.info(
-        "Calculating dispersive transverse momentum - inject_noise=%s, low_noise_bpms=%d BPMs",
-        inject_noise,
-        len(low_noise_bpms),
+        "Calculating dispersive transverse momentum from measurements - measurement_folder=%s",
+        measurement_folder,
     )
 
     has_px, has_py = validate_input(orig_data)
     data = orig_data.copy(deep=True)
-    rng = get_rng(rng)
-
-    if inject_noise:
-        inject_noise_xy(data, orig_data, rng, low_noise_bpms)
 
     bpm_list = data["name"].unique().tolist()
+    tws = build_twiss_from_measurements(Path(measurement_folder), include_errors=False)
     tws = tws[tws.index.isin(bpm_list)]
+
+    # Rename columns to match expected names in downstream functions
+    tws = tws.rename(columns={
+        "BETX": "beta11",
+        "BETY": "beta22",
+        "ALFX": "alfa11",
+        "ALFY": "alfa22",
+        "MUX": "mu1",
+        "MUY": "mu2",
+    })
+    tws.columns = [col.lower() for col in tws.columns]
+    tws.headers = {key.lower(): value for key, value in tws.headers.items()}
 
     dpp_est = get_mean_dpp(data, tws, info)
     maps = build_lattice_maps(tws, include_dispersion=True)

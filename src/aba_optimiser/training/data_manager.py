@@ -37,15 +37,15 @@ class DataManager:
         self.flattop_turns = flattop_turns
 
         # Available turns will be populated after loading track data
-        self.available_turns: list[int] = []
+        self.available_turns: list[int]
 
-        self.turn_batches: list[list[int]] = []
-        self.tracks_per_worker: int = 0  # set in prepare_turn_batches
-        self.num_workers: int = 0  # set in prepare_turn_batches
+        self.turn_batches: list[list[int]]
+        self.tracks_per_worker: int  # set in prepare_turn_batches
+        self.num_workers: int  # set in prepare_turn_batches
 
         # Track data per measurement file (indexed by file index)
-        self.track_data: dict[int, pd.DataFrame] | None = None
-        self.file_map: dict[int, int] | None = None  # {turn -> file_index}
+        self.track_data: dict[int, pd.DataFrame]
+        self.file_map: dict[int, int]  # {turn -> file_index}
 
     # ---------- Internals ----------
 
@@ -281,6 +281,16 @@ class DataManager:
 
         self.num_workers = len(self.turn_batches)
         LOGGER.info(f"Created {self.num_workers} batches from {len(self.track_data)} files")
+
+        total_available_turns = len(self.available_turns)
+        total_used_turns = sum(len(batch) for batch in self.turn_batches)
+        unused_turns = total_available_turns - total_used_turns
+        unused_percentage = (
+            (unused_turns / total_available_turns * 100) if total_available_turns > 0 else 0
+        )
+        LOGGER.info(
+            f"Unused turns: {unused_turns} out of {total_available_turns} ({unused_percentage:.1f}%)"
+        )
 
     def get_total_turns(self) -> int:
         """Calculate total number of turns to process."""

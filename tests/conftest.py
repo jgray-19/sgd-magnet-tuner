@@ -101,7 +101,8 @@ def corrector_table(corrector_file: Path) -> tfs.TfsDataFrame:
     """Load and filter corrector table, removing monitor elements."""
     corrector_table = tfs.read(corrector_file)
     # Filter out monitor elements from the corrector table
-    return corrector_table[corrector_table["kind"] != "monitor"]
+    return corrector_table[corrector_table["kind"] != "monitor"]  # ty:ignore[invalid-return-type]
+
 
 @pytest.fixture(scope="function")
 def interface() -> Generator[BaseMadInterface, None, None]:
@@ -124,6 +125,13 @@ def loaded_interface_with_beam(loaded_interface: BaseMadInterface) -> BaseMadInt
     """Fixture that returns an interface with the example sequence loaded and beam set up."""
     loaded_interface.setup_beam(particle="proton", beam_energy=6800.0)
     return loaded_interface
+
+@pytest.fixture(scope="function")
+def beam2_interface(interface: BaseMadInterface, seq_b2: Path) -> BaseMadInterface:
+    """Fixture that returns an interface with the example sequence loaded and beam set up."""
+    interface.load_sequence(seq_b2, "lhcb2")
+    interface.setup_beam(particle="proton", beam_energy=6800.0)
+    return interface
 
 
 @pytest.fixture(scope="function")

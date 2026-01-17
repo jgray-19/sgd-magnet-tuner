@@ -38,9 +38,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def load_files(files: list[str | Path]) -> TbtData:
+def load_files(files: list[str | Path]) -> list[TbtData]:
     """Load and concatenate multiple Parquet files into a single DataFrame."""
-    measurements = []
+    measurements: list[TbtData] = []
     for file in files:
         logger.info("Loading data from %s", file)
         meas_tbt = read_tbt(file, datatype="lhc")
@@ -65,7 +65,7 @@ def convert_measurements(
     The final combined DataFrame will have no index, and columns: ['name', 'turn', 'x', 'y'] (x and y in metres).
     The name column should be a category dtype for efficiency.
     """
-    all_data = []
+    all_data: list[pd.DataFrame] = []
     turn_offset = 1
     for meas in measurements:
         if not combine_measurements:
@@ -199,6 +199,7 @@ def run_analysis(
     """Load, combine, and process data from multiple files."""
     analysis_dir = Path(analysis_dir)
     analysis_dir.mkdir(parents=True, exist_ok=True)
+    files: list[Path] = [Path(f) for f in files]
     bunches = [32, 1228, 2000] if beam == 2 else [0, 1138, 1968]
     hole_in_one_entrypoint(
         harpy=True,
@@ -227,8 +228,7 @@ def run_analysis(
         turns=[0, 50000],
         clean=True,
     )
-
-    analysed_files = [
+    analysed_files: list[Path] = [
         analysis_dir / "lin_files" / f"{f.name}_bunchID{bunch_id}"
         for f in files
         for bunch_id in bunches
@@ -262,7 +262,7 @@ def run_analysis(
         year="2025",
     )
 
-    bad_bpms = []
+    bad_bpms: list[str] = []
     for file in analysed_files:
         bpm_summary_file_x = file.parent / (file.name + ".bad_bpms_x")
         bpm_summary_file_y = file.parent / (file.name + ".bad_bpms_y")
@@ -277,7 +277,7 @@ def run_analysis(
     return bad_bpms
 
 
-def build_dict_from_nxcal_result(result: list[NXCALSResult]) -> dict[str, float]:  # type: ignore
+def build_dict_from_nxcal_result(result: list[NXCALSResult]) -> dict[str, float]:
     """Convert NXCALSResult to a dictionary of magnet strengths."""
     return {res.name: res.value for res in result}
 
@@ -310,7 +310,7 @@ def _process_single_dataframe(
     df = svd_clean_measurements(df)
 
     # Remove BPMs not in twiss data
-    df = df[df["name"].isin(tws.index)]
+    df: pd.DataFrame = df[df["name"].isin(tws.index)]
 
     # Compute variances
     if use_uniform_vars:
@@ -319,8 +319,8 @@ def _process_single_dataframe(
         df = compute_vars_from_known_noise(df, bad_bpms)
 
     # Subtract closed orbit
-    x_co = tws["x"].to_dict()
-    y_co = tws["y"].to_dict()
+    x_co: dict[str, float] = tws["x"].to_dict()
+    y_co: dict[str, float] = tws["y"].to_dict()
     df["x"] = df["x"] - df["name"].map(x_co)
     df["y"] = df["y"] - df["name"].map(y_co)
 
@@ -433,7 +433,7 @@ def detect_bad_bpms(
 
 
 def process_measurements(
-    files: list[Path],
+    files: list[str | Path],
     analysis_dir: Path,
     model_dir: str,
     beam: int,
@@ -485,7 +485,7 @@ def process_measurements(
     # Process DataFrames in parallel using threads to avoid Spark context inheritance issues
     # ThreadPoolExecutor shares memory space and doesn't inherit problematic global state like ProcessPoolExecutor
     logger.info(f"Processing {len(combined)} DataFrames in parallel with threads...")
-    processed_results = [None] * len(combined)
+    processed_results: list[pd.DataFrame | None] = [None] * len(combined)
 
     # Use ThreadPoolExecutor instead of ProcessPoolExecutor to avoid Spark context conflicts
     # Limit to max 9 threads to avoid overloading the system
@@ -521,7 +521,10 @@ def process_measurements(
             processed_results[idx] = processed_df
             logger.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
 
-    combined = processed_results
+    if any(res is None for res in processed_results):
+        raise RuntimeError("Some dataframes failed to process.")
+
+    combined: list[pd.DataFrame] = processed_results  # ty:ignore[invalid-assignment]
     if combine_files:
         pzs = pd.concat(combined, ignore_index=True)
         pzs["name"] = pzs["name"].astype("category")
@@ -533,7 +536,7 @@ def process_measurements(
         # Group by file: each file has multiple bunches combined
         num_files = len(files)
         num_bunches_per_file = len(combined) // num_files
-        pzs = []
+        pzs: list[pd.DataFrame] = []
         for i in range(num_files):
             start = i * num_bunches_per_file
             end = (i + 1) * num_bunches_per_file
@@ -554,6 +557,7 @@ def process_measurements(
     del mad_iface
 
     if combine_files:
+        assert isinstance(pzs, pd.DataFrame)  # for ty
         pzs["name"] = pzs["name"].astype("category")
 
         detect_bad_bpms(pzs, all_bpms, bad_bpms, log_individual=True)
@@ -572,7 +576,7 @@ def process_measurements(
     logger.info(f"Total bad BPMs: {len(bad_bpms)}")
 
     if filename:
-        file_paths = []
+        file_paths: list[Path] = []
         for i, pz in enumerate(pzs):
             file_path = analysis_dir / f"{Path(filename).stem}_{i}.parquet"
             pz.to_parquet(file_path)

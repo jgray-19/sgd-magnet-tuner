@@ -31,7 +31,7 @@ WorkerDataType = TypeVar("WorkerDataType")
 class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
     """Abstract base class for all worker process implementations.
 
-    This class provides the core infrastructure for running optimization workers
+    This class provides the core infrastructure for running optimisation workers
     in separate processes. It handles:
     - Process lifecycle management
     - MAD-NG interface initialization
@@ -39,7 +39,6 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
     - Common configuration and logging
 
     Subclasses must implement:
-    - get_bpm_range(): Define BPM range for tracking
     - setup_mad_sequence(): Configure MAD-NG sequence parameters
     - send_initial_conditions(): Initialize particle states in MAD-NG
     - compute_gradients_and_loss(): Core computation logic
@@ -71,6 +70,11 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         self.conn = conn
         self.config = config
         self.simulation_config = simulation_config
+        self.bpm_range = f"{config.start_bpm}/{config.end_bpm}"
+
+        self.tracking_range = self.bpm_range
+        if config.sdir < 0:
+            self.tracking_range = f"{config.end_bpm}/{config.start_bpm}"
 
         LOGGER.debug(
             f"Initializing worker {worker_id} for BPM range {config.start_bpm} -> {config.end_bpm}"
@@ -88,18 +92,6 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
 
         Args:
             data: Worker-specific data structure
-        """
-        pass
-
-    @abstractmethod
-    def get_bpm_range(self, sdir: int) -> str:
-        """Get the BPM range string for MAD-NG tracking.
-
-        Args:
-            sdir: Direction of propagation (+1 forward, -1 backward)
-
-        Returns:
-            BPM range string in MAD-NG format (e.g., "BPM1/BPM2")
         """
         pass
 
@@ -147,7 +139,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         """Create a base differential algebra (DA) map in MAD-NG.
 
         The DA map is used for automatic differentiation of tracking
-        with respect to optimization knobs.
+        with respect to optimisation knobs.
 
         Args:
             mad: MAD-NG interface object
@@ -166,7 +158,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         computation.
 
         Args:
-            init_knobs: Initial values for all optimization knobs
+            init_knobs: Initial values for all optimisation knobs
 
         Returns:
             Tuple of (MAD interface object, number of BPMs)
@@ -175,9 +167,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             ValueError: If knob names from MAD don't match initial knobs
         """
         LOGGER.debug(f"Worker {self.worker_id}: Setting up MAD interface")
-
-        bpm_range = self.get_bpm_range(sdir=1)
-        LOGGER.debug(f"Worker {self.worker_id}: Using BPM range {bpm_range}")
+        LOGGER.debug(f"Worker {self.worker_id}: Using BPM range {self.bpm_range}")
 
         # Adapt logfile path to include worker ID if provided
         worker_logfile = None
@@ -196,7 +186,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             py_name="python",
             seq_name=self.config.seq_name,
             magnet_range=self.config.magnet_range,
-            bpm_range=bpm_range,
+            bpm_range=self.bpm_range,
             simulation_config=self.simulation_config,
             bad_bpms=self.config.bad_bpms,
             corrector_strengths=self.config.corrector_strengths,

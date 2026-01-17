@@ -344,11 +344,9 @@ def run_parallel_tracking(
         true_dfs = retrieve_tracking_data(interfaces)
         interfaces.clear()
     else:
-        from aba_optimiser.xsuite.xsuite_tools import (
-            initialise_env,
-            line_to_dataframes,
-            start_tracking_xsuite_batch,
-        )
+        from aba_optimiser.xsuite.env import initialise_env
+        from aba_optimiser.xsuite.monitors import line_to_dataframes
+        from aba_optimiser.xsuite.tracking import start_tracking_xsuite_batch
 
         # Create xsuite environment
         logger.info("Creating xsuite environment")

@@ -38,7 +38,7 @@ class OptimisationLoop:
         self.knob_names = knob_names
         self.true_strengths = true_strengths
         self.use_true_strengths = len(true_strengths) > 0
-        self.smoothed_grad_norm: float | None = None
+        self.smoothed_grad_norm: float = 0.0
         self.grad_norm_alpha = optimiser_config.grad_norm_alpha
 
         self.max_epochs = optimiser_config.max_epochs
@@ -62,7 +62,7 @@ class OptimisationLoop:
         )
         self.num_batches = simulation_config.num_batches
 
-    def _init_optimiser(self, shape: tuple, optimiser_type: str) -> None:
+    def _init_optimiser(self, shape: tuple[int, ...], optimiser_type: str) -> None:
         """Initialise the optimiser based on type."""
         optimiser_kwargs = {
             "shape": shape,
@@ -96,11 +96,13 @@ class OptimisationLoop:
         if "pt" in current_knobs and current_knobs["pt"] == 0.0:
             current_knobs["pt"] = 1e-6  # Initialise pt to non-zero
 
+        prev_loss = None
+
         for epoch in range(self.max_epochs):
             epoch_start = time.time()
 
             epoch_loss = 0.0
-            epoch_grad = None
+            epoch_grad = np.zeros(len(self.knob_names))
             lr = self.scheduler(epoch)
             prev_knobs = current_knobs.copy()
 
@@ -111,10 +113,7 @@ class OptimisationLoop:
 
                 batch_loss, batch_grad = self._collect_batch_results(parent_conns)
                 epoch_loss += batch_loss
-                if epoch_grad is None:
-                    epoch_grad = batch_grad
-                else:
-                    epoch_grad += batch_grad
+                epoch_grad += batch_grad
 
                 # Update knobs after each batch
                 current_knobs = self._update_knobs(current_knobs, batch_grad, lr)
@@ -123,7 +122,7 @@ class OptimisationLoop:
             epoch_loss /= total_turns
             epoch_grad /= total_turns
 
-            grad_norm = np.linalg.norm(epoch_grad[epoch_grad != 0.0])
+            grad_norm = float(np.linalg.norm(epoch_grad[epoch_grad != 0.0]))
             self._update_smoothed_grad_norm(grad_norm)
 
             self._log_epoch_stats(
@@ -137,18 +136,27 @@ class OptimisationLoop:
                 current_knobs,
             )
 
+            if prev_loss is not None:
+                rel_loss_change = (
+                    abs(epoch_loss - prev_loss) / abs(prev_loss) if prev_loss != 0 else 0
+                )
+                if rel_loss_change < 1e-6 and epoch > 10:
+                    LOGGER.info(f"\nLoss change below threshold. Stopping early at epoch {epoch}.")
+                    break
+            prev_loss = epoch_loss
+
             if self.smoothed_grad_norm < self.gradient_converged_value:
                 LOGGER.info(
                     f"\nGradient norm below threshold: {self.smoothed_grad_norm:.3e}. Stopping early at epoch {epoch}."
                 )
                 break
-            avg_rel_knob_change = sum(
+            max_rel_knob_change = max(
                 abs(current_knobs[k] - prev_knobs[k]) / abs(prev_knobs[k])
                 if prev_knobs[k] != 0
                 else 0
                 for k in self.knob_names
-            ) / len(self.knob_names)
-            if avg_rel_knob_change < 1e-9 and epoch > 10:
+            )
+            if max_rel_knob_change < 1e-8 and epoch > 10:
                 LOGGER.info(f"\nKnob updates below threshold. Stopping early at epoch {epoch}.")
                 break
 
@@ -164,28 +172,20 @@ class OptimisationLoop:
         to magnets in the middle (which contribute gradients from all workers).
         """
         total_loss = 0.0
-        agg_grad: None | np.ndarray = None
-        # contrib_count: None | np.ndarray = None  # Count of non-zero contributions per knob
+        agg_grad = np.zeros(len(self.knob_names), dtype=float)
 
         for conn in parent_conns:
             _, grad, loss = conn.recv()
+            if loss == float("inf"):
+                LOGGER.error("Worker error detected, stopping optimisation immediately.")
+                raise RuntimeError("Worker error detected during optimisation")
+
             grad_flat = grad.flatten()
 
-            if agg_grad is None:
-                agg_grad = grad_flat.copy()
-                # contrib_count = (grad_flat != 0).astype(np.float64)
-            else:
-                agg_grad += grad_flat
-                # contrib_count += (grad_flat != 0).astype(np.float64)
-
+            agg_grad += grad_flat
             total_loss += loss
 
-        # Average each knob's gradient by the number of workers that contributed
-        # to it (avoiding division by zero for knobs with no contributions)
-        # contrib_count = np.maximum(contrib_count, 1.0)
-        avg_grad = agg_grad  # / contrib_count
-
-        return total_loss, avg_grad
+        return total_loss, agg_grad
 
     def _update_knobs(
         self, current_knobs: dict[str, float], agg_grad: np.ndarray, lr: float
@@ -197,7 +197,7 @@ class OptimisationLoop:
 
     def _update_smoothed_grad_norm(self, grad_norm: float) -> None:
         """Update the exponential moving average of the gradient norm."""
-        if self.smoothed_grad_norm is None:
+        if self.smoothed_grad_norm == 0.0:  # Exact 0 case for first update
             self.smoothed_grad_norm = grad_norm
         else:
             self.smoothed_grad_norm = (

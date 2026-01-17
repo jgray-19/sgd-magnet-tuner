@@ -1,9 +1,9 @@
 """Position-only particle tracking worker for beam dynamics simulations.
 
 This module implements the PositionOnlyTrackingWorker class which performs particle
-tracking simulations and computes gradients for optimization using only position
+tracking simulations and computes gradients for optimisation using only position
 observables (x, y). This is useful when momentum data (px, py) is unreliable or
-not needed for optimization.
+not needed for optimisation.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ class PositionOnlyTrackingWorker(TrackingWorker):
 
     Inherits from TrackingWorker but only tracks positions (x, y),
     ignoring momenta (px, py). This reduces memory usage and computation
-    time when momentum data is not needed for optimization.
+    time when momentum data is not needed for optimisation.
     """
 
     def prepare_data(self, data: TrackingData) -> None:
