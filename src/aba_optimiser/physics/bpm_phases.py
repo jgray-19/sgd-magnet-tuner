@@ -41,9 +41,12 @@ def prev_bpm_to_pi_2(mu: pd.Series, tune: float) -> pd.DataFrame:
     """
     For each BPM_i find the previous BPM_j whose backward phase advance
     (mu_i - mu_j) is closest to pi/2 phase advance.
-    Returns a DataFrame indexed by BPM_i with columns:
-      - prev_bpm : name of BPM_j
-      - delta    : (mu_i - mu_j - 0.25) signed error in turns
+
+    Returns:
+        DataFrame indexed by BPM_i with columns:
+
+        - prev_bpm : name of BPM_j
+        - delta    : (mu_i - mu_j - 0.25) signed error in turns
     """
     return _find_bpm_phase(mu, tune, 0.25, forward=False, name="prev_bpm")
 
@@ -60,9 +63,12 @@ def prev_bpm_to_pi(mu: pd.Series, tune: float) -> pd.DataFrame:
     """
     For each BPM_i find the previous BPM_j whose backward phase advance
     (mu_i - mu_j) is closest to pi phase advance.
-    Returns a DataFrame indexed by BPM_i with columns:
-      - prev_bpm : name of BPM_j
-      - delta    : (mu_i - mu_j - 0.5) signed error in turns
+
+    Returns:
+        DataFrame indexed by BPM_i with columns:
+
+        - prev_bpm : name of BPM_j
+        - delta    : (mu_i - mu_j - 0.5) signed error in turns
     """
     return _find_bpm_phase(mu, tune, 0.5, forward=False, name="prev_bpm")
 

@@ -392,12 +392,13 @@ end
         Args:
             n_steps: Number of iterative linear correction steps to perform.
             svd_cutoff: If provided, use SVD with singular value cutoff for regularization.
-                        Singular values below svd_cutoff * max(singular_value) are set to zero.
+                Singular values below svd_cutoff times max(singular_value) are set to zero.
 
         Returns:
             Tuple of (final_knob_values, uncertainties) where:
-                - final_knob_values: Dictionary mapping knob names to optimised values
-                - uncertainties: Dictionary mapping knob names to their uncertainties
+
+            - final_knob_values: Dictionary mapping knob names to optimised values
+            - uncertainties: Dictionary mapping knob names to their uncertainties
         """
         logger.info(f"Starting linear beta matching procedure with {n_steps} steps")
 

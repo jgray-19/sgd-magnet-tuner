@@ -226,18 +226,16 @@ BEND_ERROR_FILE = PROJECT_ROOT / "data/bend_errors.tfs"
 # TODO AND NOTES
 # =============================================================================
 
-"""
-This has the current problem of no matter the number of files included in the simulation,
-I cannot reduce the error on the final result significantly. I am still limited to 5e-4.
-Potentially, I can get better results by doing the following method:
-1. Optimise the Main Quadrupoles
-3. Optimise the skew quadrupoles ???
-
-S location as a degree of freedom?
-Find out where individual errors might be reduced most.
-
-TODO:
-- Look at adding two more simulations with off momentum errors.
-- Look at understanding the uncertainty - mathematically, where it arises, and
-    which parameters reduce it and how.
-"""
+# Note: This has the current problem of no matter the number of files included in the simulation,
+# I cannot reduce the error on the final result significantly. I am still limited to 5e-4.
+# Potentially, I can get better results by doing the following method:
+# 1. Optimise the Main Quadrupoles
+# 3. Optimise the skew quadrupoles ???
+#
+# S location as a degree of freedom?
+# Find out where individual errors might be reduced most.
+#
+# TODO:
+# - Look at adding two more simulations with off momentum errors.
+# - Look at understanding the uncertainty - mathematically, where it arises, and
+#     which parameters reduce it and how.

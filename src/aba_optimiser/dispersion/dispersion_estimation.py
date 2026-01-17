@@ -31,7 +31,7 @@ def find_common_bpms(*dataframes: pd.DataFrame) -> list[str]:
     """Find common BPMs across multiple dataframes.
 
     Args:
-        *dataframes: Variable number of DataFrames with BPM names as index
+        dataframes: Variable number of DataFrames with BPM names as index
 
     Returns:
         List of common BPM names in the order they appear in the first dataframe
@@ -56,8 +56,8 @@ def load_optics_files(
 
     Args:
         optics_dir: Directory containing the optics TFS files
-        file_specs: Dict mapping keys to (prefix, suffix) tuples
-            Example: {"beta_x": ("beta_phase_", "x")} -> beta_phase_x.tfs
+        file_specs: Dict mapping keys to (prefix, suffix) tuples.
+            Example: ``{"beta_x": ("beta_phase_", "x")}`` will load ``beta_phase_x.tfs``
 
     Returns:
         Dictionary mapping keys to loaded DataFrames
@@ -410,6 +410,7 @@ def estimate_corrector_dispersions(
 
     Returns:
         Tuple of (dispersion_df, statistics_df) where:
+
         - dispersion_df: DataFrame with columns ['CORRECTOR', 'S', 'DISPERSION', 'STD']
         - statistics_df: DataFrame with all individual estimates for debugging
 

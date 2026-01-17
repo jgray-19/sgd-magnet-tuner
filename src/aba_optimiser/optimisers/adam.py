@@ -11,7 +11,8 @@ class AdamOptimiser:
     """
     Implements the Adam optimisation algorithm as a stateful optimiser.
 
-    Usage:
+    Usage::
+
         optim = AdamOptimiser(shape=params.shape,
                               beta1=0.9,
                               beta2=0.999,

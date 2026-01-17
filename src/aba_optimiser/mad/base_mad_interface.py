@@ -78,7 +78,7 @@ class BaseMadInterface:
         Initialise base MAD interface.
 
         Args:
-            **mad_kwargs: Keyword arguments passed to pymadng.MAD()
+            mad_kwargs: Keyword arguments passed to pymadng.MAD()
         """
         self.mad = MAD(**mad_kwargs)
         logger.debug("Initialised base MAD interface")
@@ -243,7 +243,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
         it defaults to 1 (observing observed elements every turn).
 
         Args:
-            **twiss_kwargs: Additional arguments for twiss calculation
+            twiss_kwargs: Additional arguments for twiss calculation
 
         Returns:
             TFS DataFrame with twiss results
@@ -268,7 +268,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
         Set multiple MAD variables.
 
         Args:
-            **kwargs: Variable names and their values
+            kwargs: Variable names and their values
         """
         self.mad.send_vars(**kwargs)
 
@@ -277,7 +277,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
         Set multiple MADX variables.
 
         Args:
-            **kwargs: Variable names and their values
+            kwargs: Variable names and their values
         """
         kwargs = {f"MADX['{key}']": value for key, value in kwargs.items()}
         self.set_variables(**kwargs)
