@@ -11,6 +11,7 @@ and analysis.
 
    getting_started
    modules
+   api_reference
 
 
 Indices and tables
