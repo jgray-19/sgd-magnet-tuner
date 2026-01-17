@@ -2,7 +2,7 @@
 Tracking interface for beam dynamics simulations.
 
 This module provides a specialised interface for tracking simulations that builds
-on the base MAD interface without unnecessary optimization setup.
+on the base MAD interface without unnecessary optimisation setup.
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@ MAD-NG interface modules for accelerator simulation.
 
 This package provides different interfaces for working with MAD-NG:
 - BaseMadInterface: Core functionality without automatic setup
-- OptimizationMadInterface: For accelerator optimization workflows
+- optimisationMadInterface: For accelerator optimisation workflows
 - TrackingMadInterface: Lightweight interface for tracking simulations
 """
 

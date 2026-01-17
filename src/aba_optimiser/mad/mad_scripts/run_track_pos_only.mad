@@ -1,4 +1,5 @@
-! run_track.mad
+! run_track_pos_only.mad
+! Position-only tracking script (no momentum data sent)
 
 ! Assumes the following variables are defined:
 ! loaded_sequence: the sequence to be used for tracking
@@ -16,11 +17,6 @@
 
 
 reset_before_tracking()
-print("Starting position-only tracking")
-io.write("Tracking range: " .. tracking_range .. "\n")
-io.write("Number of particles: " .. batch_size .. "\n")
-io.write("Sdir: " .. sdir .. "\n")
-io.flush()
 local _, mflw= track{
     sequence=loaded_sequence,
     X0=da_x0_c[batch],
@@ -33,10 +29,6 @@ local _, mflw= track{
 ! assert(mflw.tpar == mflw.npar, "Lost some particles during tracking")
 python:send(x, true)
 python:send(y, true)
-python:send(px, true)
-python:send(py, true)
 python:send(dx_dk, true)
 python:send(dy_dk, true)
-python:send(dpx_dk, true)
-python:send(dpy_dk, true)
 !collectgarbage("collect")  -- Clean up memory after sending data

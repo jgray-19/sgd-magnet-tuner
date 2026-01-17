@@ -60,7 +60,7 @@ class OptimisationMadInterface(BaseMadInterface):
 
     def __init__(
         self,
-        sequence_file: str,
+        sequence_file: str | Path,
         seq_name: str | None = None,
         magnet_range: str = "$start/$end",
         bpm_range: str | None = None,
@@ -71,14 +71,14 @@ class OptimisationMadInterface(BaseMadInterface):
         corrector_strengths: Path | None = CORRECTOR_STRENGTHS,
         tune_knobs_file: Path | None = TUNE_KNOBS_FILE,
         start_bpm: str | None = None,
-        py_name: str = "python",
+        py_name: str = "py",
         debug: bool = False,
         mad_logfile: Path | None = None,
         discard_mad_output: bool = False,
         optimise_knobs: list[str] | None = None,
     ):
         """
-        Initialise optimization MAD interface with automatic setup.
+        Initialise optimisation MAD interface with automatic setup.
 
         Args:
             sequence_file: Path to the MAD-X sequence file
@@ -154,7 +154,7 @@ class OptimisationMadInterface(BaseMadInterface):
         else:
             LOGGER.info("Skipping knob creation (no simulation config provided)")
 
-        # Setup optimization-specific functionality
+        # Setup optimisation-specific functionality
         self._observe_bpms(bad_bpms)
         self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
 
@@ -194,16 +194,19 @@ class OptimisationMadInterface(BaseMadInterface):
             corrector_table = tfs.read(corrector_strengths)
 
             # Filter out monitor elements from the corrector table
-            corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
+            non_monitors = corrector_table["kind"] != "monitor"
+            corrector_table: tfs.TfsDataFrame = corrector_table[non_monitors]  # type: ignore[assignment, not-subscriptable]
 
             # Log how many non-zero correctors are being applied
-            nonzero = (corrector_table["hkick"] != 0) | (corrector_table["vkick"] != 0)
+            changed = (corrector_table["hkick"] != corrector_table["hkick_old"]) | (
+                corrector_table["vkick"] != corrector_table["vkick_old"]
+            )
             LOGGER.info(
-                f"Applying {nonzero.sum()} non-zero corrector strengths from {corrector_strengths}"
+                f"Applying {changed.sum()} non-zero corrector strengths from {corrector_strengths}"  # ty:ignore[unresolved-attribute]
             )
 
             # Apply corrector strengths for non-zero correctors only
-            self.apply_corrector_strengths(corrector_table[nonzero])
+            self.apply_corrector_strengths(corrector_table[changed])  # ty:ignore[invalid-argument-type]
         except (tfs.TfsFormatError, UnboundLocalError) as e:
             LOGGER.error(f"Error reading or applying corrector strengths: {e}, assuming knobs")
             knobs = read_knobs(corrector_strengths)
@@ -248,7 +251,8 @@ class OptimisationMadInterface(BaseMadInterface):
         bend_dict = {self.py_name}:recv()
         print("Retrieved " .. MAD.tostring(bend_dict))
         """)
-        self.mad.send(normalise_lhcbend_magnets(self.mad.recv()))
+
+        self.mad.send(normalise_lhcbend_magnets(self.mad.recv()))  # type: ignore[arg-type]
 
     def _make_adj_knobs(self, simulation_config: SimulationConfig) -> None:
         """

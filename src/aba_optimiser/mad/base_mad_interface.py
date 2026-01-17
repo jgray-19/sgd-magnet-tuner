@@ -8,13 +8,12 @@ extended for specific use cases without unnecessary automatic setup.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pymadng import MAD
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     import tfs
 
 logger = logging.getLogger(__name__)
@@ -95,8 +94,9 @@ class BaseMadInterface:
             seq_name: Name of the sequence to load
         """
         logger.debug(f"Loading sequence from {sequence_file}")
+        file_path = Path(sequence_file).resolve()
         self.mad.send("shush()")
-        self.mad.send(f'MADX:load("{sequence_file}")')
+        self.mad.send(f'MADX:load("{file_path}")')
         if self.mad.MADX[seq_name] == 0:
             raise ValueError(f"Sequence '{seq_name}' not found in MAD file '{sequence_file}'")
         self.mad.send(f"loaded_sequence = MADX.{seq_name}")
@@ -173,7 +173,7 @@ loaded_sequence:select(observed, {{pattern="{pattern}"}})
         Args:
             elements: List of element names to unobserve
         """
-        logger.debug(f"Unobserving elements: {elements}")
+        logger.debug(f"Unobserving elements: {', '.join(elements)}")
         for elem in elements:
             self.mad.send(f"""
 local observed in MAD.element.flags
@@ -202,7 +202,7 @@ loaded_sequence:deselect(observed, {{pattern="{elem}"}})
             raise RuntimeError("Cycle failed - check MAD output for details") from e
 
     def install_marker(
-        self, element_name: str, marker_name: str = None, offset: float = -1e-10
+        self, element_name: str, marker_name: str | None = None, offset: float = -1e-10
     ) -> str:
         """
         Install a marker element near an existing element.
@@ -253,7 +253,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
             twiss_kwargs["observe"] = 1  # Default to no observation if not set
 
         try:
-            self.mad["tws", "flw"] = self.mad.twiss(sequence="loaded_sequence", **twiss_kwargs)
+            self.mad["tws", "flw"] = self.mad.twiss(sequence="loaded_sequence", **twiss_kwargs)  # ty:ignore[invalid-assignment]
         except ValueError as e:
             logger.error(f"Error during twiss calculation: {e}")
             raise RuntimeError("Twiss failed - check MAD output for details") from e
@@ -282,7 +282,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
         kwargs = {f"MADX['{key}']": value for key, value in kwargs.items()}
         self.set_variables(**kwargs)
 
-    def get_variables(self, *names: str) -> float:
+    def get_variables(self, *names: str) -> tuple[float, ...]:
         """
         Get MAD variable values.
 
@@ -424,7 +424,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
             X0={"x": x, "px": px, "y": y, "py": py, "t": t, "pt": pt},
             nturn=nturns,
             **kwargs,
-        )
+        )  # ty:ignore[invalid-assignment]
 
     def get_tracking_data(self) -> tfs.TfsDataFrame:
         """
@@ -450,10 +450,3 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
         )
         self.mad.send(dp)
         return self.mad.recv()
-
-    def __del__(self) -> None:
-        """Clean up the MAD-NG session on object destruction."""
-        # Tell MAD to to shush when deleting to avoid noisy output
-        # self.mad.send("shush()")
-        if hasattr(self, "mad"):
-            del self.mad

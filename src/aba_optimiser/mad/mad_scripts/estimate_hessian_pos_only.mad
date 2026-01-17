@@ -1,0 +1,56 @@
+! estimate_hessian_pos_only.mad
+! Position-only Hessian estimation (no momentum terms)
+
+! Assumes the following variables are defined:
+! tracking_sequence: the sequence to be used for tracking
+! batch_size: a table with the number of particles for each starting bpm
+! nbpms: the number of BPMs to track
+! knob_names: a table with the names of the knobs
+! coord_names: a table with the names of the coordinates
+! da_x0_c: a table with the initial conditions for each starting bpm
+! range: the range of elements to track as a string
+! knob_monomials: a table with the monomial definitions for each knob
+! weights_x: inverse-variance weights for the x coordinate (length = nbpms)
+! weights_y: inverse-variance weights for the y coordinate (length = nbpms)
+! vector: a MAD vector object for creating vectors
+! matrix: a MAD matrix object for creating matrices
+! python: a Python interface object for sending data
+assert(
+    loaded_sequence and batch_size and nbpms and reset_before_tracking and
+    knob_names and coord_names and da_x0_c and knob_monomials and
+    weights_x and weights_y and vector and matrix and python and n_run_turns,
+    "Missing required variables for tracking"
+)
+
+local matrix, vector in MAD
+
+local matrix_size = optimise_energy and (num_knobs + 1) or num_knobs
+local Htot = matrix(matrix_size, matrix_size):zeros()
+local W_x_vec = vector(weights_x)
+local W_y_vec = vector(weights_y)
+
+local W_x = W_x_vec:diag()
+local W_y = W_y_vec:diag()
+collectgarbage("collect")
+
+for batch=1,num_batches do
+    reset_before_tracking()
+    local _, mflw= track{
+        sequence = loaded_sequence,
+        X0 = da_x0_c[batch],
+        nturn = n_run_turns,
+        save=false,
+        atexit=save_data,
+        range=tracking_range,
+        dir=sdir,
+    }
+
+    for part = 1, batch_size do
+        local jx = dx_dk[part]
+        local jy = dy_dk[part]
+        local Gx = jx * (W_x * jx:t())
+        local Gy = jy * (W_y * jy:t())
+        Htot = Htot + (Gx + Gy)
+    end
+end
+python:send(Htot, true)
