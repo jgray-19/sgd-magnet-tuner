@@ -1,7 +1,7 @@
 # sgd-magnet-tuner
 
-[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/jgray-19/sgd-magnet-tuner/python-coverage-comment-action-data.json)](https://github.com/jgray-19/sgd-magnet-tuner/actions/workflows/coverage.yml)
 [![Coverage Status](https://github.com/jgray-19/sgd-magnet-tuner/actions/workflows/coverage.yml/badge.svg)](https://github.com/jgray-19/sgd-magnet-tuner/actions/workflows/coverage.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/jgray-19/sgd-magnet-tuner/python-coverage-comment-action-data/endpoint.json)](https://htmlpreview.github.io/?https://github.com/jgray-19/sgd-magnet-tuner/blob/python-coverage-comment-action-data/htmlcov/index.html)
 
 This repository provides tools for optimising accelerator magnet knob strengths using gradient-based methods with the MAD-NG simulation code.
 
@@ -27,7 +27,7 @@ Input/output utilities for reading and writing data files.
 ### `mad`
 MAD-NG interface modules for accelerator simulation:
 - `BaseMadInterface`: Core functionality without automatic setup
-- `OptimisationMadInterface`: For accelerator optimisation workflows  
+- `OptimisationMadInterface`: For accelerator optimisation workflows
 - `TrackingMadInterface`: Lightweight interface for tracking simulations
 
 Also contains MAD-NG scripts and LHC sequence definitions.
