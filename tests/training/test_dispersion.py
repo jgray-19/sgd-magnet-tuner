@@ -8,92 +8,71 @@ by tracking from nearby BPMs using measured optics parameters.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 import tfs
 from omc3.hole_in_one import hole_in_one_entrypoint
 from omc3.model.constants import TWISS_ELEMENTS_DAT
+from scipy import stats
 from turn_by_turn import convert_to_tbt, write_tbt
+from turn_by_turn.structures import TbtData
 
-from aba_optimiser.config import BEND_ERROR_FILE
 from aba_optimiser.dispersion.dispersion_estimation import estimate_corrector_dispersions
 from aba_optimiser.io.utils import save_knobs
-from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
 from aba_optimiser.simulation.optics import perform_orbit_correction
-from aba_optimiser.xsuite.xsuite_tools import (
-    initialise_env,
-    insert_ac_dipole,
-    insert_particle_monitors_at_pattern,
-    run_tracking,
-)
+from aba_optimiser.xsuite.acd import run_ac_dipole_tracking_with_particles
+from aba_optimiser.xsuite.env import initialise_env
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pandas as pd
+
+    from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 
 logger = logging.getLogger(__name__)
 
 
 def _generate_nonoise_track(
+    mad: BaseMadInterface,
     tmp_dir: Path,
     model_dir: Path,
     sequence_file: Path,
     flattop_turns: int,
-    beam: int = 1,
-    perturb_quads: bool = False,
-    perturb_bends: bool = False,
+    beam: Literal[1, 2] = 1,
+    peturbed_magnets: str | None = "qd",
     magnet_range: str = "$start/$end",
 ) -> Path:
     """Generate a parquet file containing noiseless tracking data for the requested BPMs.
 
     Args:
+        mad: Loaded MAD interface with beam setup
         tmp_dir: Temporary directory for outputs
         model_dir: Directory containing model files
         sequence_file: Path to MAD-X sequence file
         flattop_turns: Number of turns for tracking
         beam: Beam number (1 or 2)
-        perturb_quads: Whether to add quadrupole errors
-        perturb_bends: Whether to add bending errors
+        magnet_types: Types of magnets to perturb ("q" for quadrupoles, "d" for dipoles, "s" for sextupoles)
         magnet_range: Range of magnets to perturb
-
     Returns:
         Path to analysis directory containing optics results
     """
     seq_name = f"lhcb{beam}"
 
-    # Create MAD interface and load sequence
-    mad = BaseMadInterface()  # stdout="/dev/null", redirect_stderr=True
-    mad.load_sequence(sequence_file, seq_name)
-    mad.setup_beam(beam_energy=6800)
-
+    mad.mad["zero_twiss", "_"] = mad.mad.twiss(sequence="loaded_sequence")  # ty:ignore[invalid-assignment]
     # Apply magnet perturbations
     magnet_strengths = {}
-    if perturb_quads:
-        mad.mad.send(f"""
-local randseed, randn, abs in MAD.gmath
-new_magnet_values = {{}}
-for _, elm in loaded_sequence:iter('{magnet_range}') do
-if elm.kind == 'quadrupole' and elm.k1 ~= 0.0 and elm.name:match("MQ%.") then
-    elm.k1 = elm.k1 + 1e-4 * randn() * abs(elm.k1)
-    new_magnet_values[elm.name .. ".k1"] = elm.k1
-end
-end
-py:send(new_magnet_values, true)
-        """)
-        magnet_strengths = mad.mad.recv()
-    if perturb_bends:
-        bend_errors_table = tfs.read(BEND_ERROR_FILE)
-        bend_errors_dict = bend_errors_table["K0L"].to_dict()
-        for elm in mad.mad.loaded_sequence:
-            # Dipoles
-            if elm.kind == "sbend" and elm.k0 != 0 and elm.name[:3] == "MB.":
-                name_in_dict = elm.name.replace("B2", "B1")
-                if name_in_dict not in bend_errors_dict:
-                    raise ValueError(f"Bend error for {elm.name} not found in {BEND_ERROR_FILE}")
-                k0l_error = bend_errors_dict[name_in_dict]
-                elm.k0 += k0l_error / elm.l
-                magnet_strengths[elm.name + ".k0"] = elm.k0
+    if peturbed_magnets is not None:
+        magnet_strengths, _ = apply_magnet_perturbations(
+            mad.mad,
+            rel_k1_std_dev=1e-4,
+            seed=42,
+            magnet_type=peturbed_magnets,
+        )
 
     # Create unique corrector file path based on destination
     corrector_file = tmp_dir / f"correctors_b{beam}.tfs"
@@ -115,7 +94,8 @@ py:send(new_magnet_values, true)
     env = initialise_env(
         matched_tunes=matched_tunes,
         magnet_strengths=magnet_strengths,
-        corrector_table=corrector_table,
+        corrector_table=corrector_table,  # ty:ignore[invalid-argument-type]
+        beam=beam,
         json_file=tmp_dir / f"env_config_b{beam}.json",
         sequence_file=sequence_file,
         seq_name=seq_name,
@@ -125,49 +105,40 @@ py:send(new_magnet_values, true)
     tune_knobs_file = tmp_dir / f"tune_knobs_b{beam}.txt"
     save_knobs(matched_tunes, tune_knobs_file)
 
-    # Compute twiss for ACD insertion
-    tws = env[seq_name].twiss(method="4d")
-
-    # Insert AC dipole
+    # Insert AC dipole and track with different momentum offsets
     acd_ramp = 1000
-    total_turns = flattop_turns + acd_ramp
     driven_tunes = [0.27, 0.322]
     output_files = []
+    action_list = [1e-10, 1e-10, 1e-10]
+    angle_list = [np.pi / 4, np.pi / 2, 3 * np.pi / 4]
+    delta_values = [-5e-4, 0.0, 5e-4]
+
     for lag in [np.pi / 3]:
-        line = insert_ac_dipole(
-            env[seq_name],
-            tws,
+        monitored_line = run_ac_dipole_tracking_with_particles(
+            line=env[seq_name],  # ty:ignore[not-subscriptable]
             beam=beam,
-            acd_ramp=acd_ramp,
-            total_turns=total_turns,
+            ramp_turns=acd_ramp,
+            flattop_turns=flattop_turns,
             driven_tunes=driven_tunes,
             lag=lag,
+            bpm_pattern="bpm.*[^k]",
+            action_list=action_list,
+            angle_list=angle_list,
+            delta_values=delta_values,
         )
 
-        insert_particle_monitors_at_pattern(
-            line,
-            pattern="bpm.*[^k]",
-            num_turns=flattop_turns,
-            num_particles=1,
-            inplace=True,
-        )
-        for dpp in [-5e-4, 0.0, 5e-4]:
-            particles = line.build_particles(
-                x=[1e-4],
-                px=[-1e-6],
-                y=[1e-4],
-                py=[-1e-6],
-                delta=[dpp],
+        tbt_data = convert_to_tbt(monitored_line)
+        for idx, matrix in enumerate(tbt_data.matrices):
+            dpp = delta_values[idx]
+            single_tbt = TbtData(
+                matrices=[matrix],
+                nturns=tbt_data.nturns,
+                bunch_ids=[tbt_data.bunch_ids[idx] if tbt_data.bunch_ids else idx],
+                meta=tbt_data.meta,
             )
-            run_tracking(
-                line=line,
-                particles=particles,
-                nturns=flattop_turns,
-            )
-            sdds = convert_to_tbt(line)
             output_file = tmp_dir / f"track_result_b{beam}_{dpp}_{lag}.sdds"
             output_files.append(output_file)
-            write_tbt(output_file, sdds, noise=1e-4)
+            write_tbt(output_file, single_tbt, noise=1e-4)
 
     linfile_dir = tmp_dir / f"linfiles_b{beam}"
     hole_in_one_entrypoint(
@@ -176,7 +147,7 @@ py:send(new_magnet_values, true)
         tbt_datatype="lhc",
         outputdir=linfile_dir,
         to_write=["lin", "spectra"],
-        opposite_direction=False,
+        opposite_direction=beam == 2,  # Tracked beam 4, model beam 2!
         driven_excitation="acd",
         tunes=driven_tunes + [0.0],
         nattunes=[0.28, 0.31, 0.0],
@@ -201,120 +172,131 @@ py:send(new_magnet_values, true)
 
 
 def _validate_dispersion_estimates(
-    dispersion_df: tfs.TfsDataFrame,
-    twiss_elements: tfs.TfsDataFrame,
+    dispersion_df: pd.DataFrame,
+    twiss_elements: pd.DataFrame,
     beam: int,
+    tmp_dir: Path,
 ) -> None:
-    """Validate dispersion estimates against model values.
+    """Validate dispersion estimates against model values by checking z-score statistics.
 
     Args:
         dispersion_df: DataFrame with estimated dispersions
         twiss_elements: DataFrame with model twiss values
         beam: Beam number for logging
+        tmp_dir: Temporary directory for saving debug plots
 
     Raises:
-        pytest.fail: If validation fails for any correctors
+        pytest.fail: If mean or std of z-scores are out of acceptable range
     """
-    num_validated = 0
-    num_failed = 0
+    # Calculate z-scores
+    z_scores = np.array(
+        [
+            (dispersion_df.loc[c, "DISPERSION"] - twiss_elements.loc[c, "DX"])
+            / dispersion_df.loc[c, "STD"]
+            for c in dispersion_df.index
+        ]
+    )
+
+    # Plot z-scores for debugging
+    plt.figure(figsize=(8, 6))
+    plt.hist(z_scores, bins=20, alpha=0.7, edgecolor="black")
+    plt.axvline(0, color="red", linestyle="--", label="Expected mean")
+    plt.xlabel("Z-score")
+    plt.ylabel("Frequency")
+    plt.title(f"Z-scores Distribution for Beam {beam}")
+    plt.legend()
+    plt.grid(visible=True, alpha=0.3)
+    plt.savefig(tmp_dir / f"z_scores_beam_{beam}.png")
+    plt.close()
+
+    # Compute z-score statistics
+    n = len(z_scores)
+    mean_z = np.mean(z_scores)
+    std_z = np.std(z_scores)
+
+    # Define coverage thresholds and expected probabilities
+    coverage_checks = [
+        (1, 2 * stats.norm.cdf(1) - 1),
+        (2, 2 * stats.norm.cdf(2) - 1),
+        (3, 2 * stats.norm.cdf(3) - 1),
+    ]
+    tail_checks = [
+        (3, 1 - (2 * stats.norm.cdf(3) - 1)),
+    ]
+
+    # Compute tolerances (3 sigma for binomial distribution)
+    def compute_tol(p, n):
+        return 3 * np.sqrt(p * (1 - p) / n)
+
+    # Log basic statistics
+    logger.info(f"Beam {beam}: Number of correctors: {n}")
+    logger.info(f"Beam {beam}: Mean z-score: {mean_z:.3f}")
+    logger.info(f"Beam {beam}: Std z-score: {std_z:.3f}")
+    ks_stat, p_value = stats.kstest(z_scores, "norm", args=(0, 1))
+    logger.info(f"Beam {beam}: KS test statistic: {ks_stat:.3f}, p-value: {p_value:.3f}")
+
+    # Check coverage and log
     failures = []
+    for sigma, p_expected in coverage_checks:
+        frac = np.mean(np.abs(z_scores) <= sigma)
+        tol = compute_tol(p_expected, n)
+        logger.info(
+            f"Beam {beam}: Fraction within |z| <= {sigma}: {frac:.4f} (expected {p_expected:.4f} ± {tol:.4f})"
+        )
+        if not (max(0, p_expected - tol) <= frac <= min(1, p_expected + tol)):
+            logger.error(f"Beam {beam}: Fraction within |z| <= {sigma} out of range")
+            failures.append(f"coverage_{sigma}σ")
 
-    for corrector in dispersion_df.index:
-        estimated_disp = dispersion_df.loc[corrector, "DISPERSION"]
-        std = dispersion_df.loc[corrector, "STD"]
-        twiss_disp = twiss_elements.loc[corrector, "DX"]
+    # Check tails and log
+    for sigma, p_expected in tail_checks:
+        frac = np.mean(np.abs(z_scores) > sigma)
+        tol = compute_tol(p_expected, n)
+        logger.info(
+            f"Beam {beam}: Fraction with |z| > {sigma}: {frac:.4f} (expected {p_expected:.4f} ± {tol:.4f})"
+        )
+        if frac > p_expected + tol:
+            logger.error(f"Beam {beam}: Fraction with |z| > {sigma} exceeds threshold")
+            failures.append(f"tail_{sigma}σ")
 
-        diff = abs(estimated_disp - twiss_disp)
-        is_close_rtol = np.isclose(estimated_disp, twiss_disp, rtol=6e-2)
-        is_within_std = diff <= std
+    # Check mean and std
+    mean_tol = 3 / np.sqrt(n)
+    std_tol = 0.095
+    if abs(mean_z) > mean_tol:
+        logger.error(f"Beam {beam}: |Mean z-score| ({abs(mean_z):.3f}) > {mean_tol:.3f}")
+        failures.append("mean_bias")
+    if abs(std_z - 1) > std_tol:
+        logger.error(f"Beam {beam}: |Std z-score - 1| ({abs(std_z - 1):.3f}) > {std_tol:.3f}")
+        failures.append("std_deviation")
 
-        if is_close_rtol or is_within_std:
-            num_validated += 1
-        else:
-            num_failed += 1
-            failures.append(
-                f"Dispersion mismatch for {corrector}:\n"
-                f"  Estimated: {estimated_disp:.6e}\n"
-                f"  Twiss:     {twiss_disp:.6e}\n"
-                f"  Difference: {diff:.6e}\n"
-                f"  Std:       {std:.6e}\n"
-                f"  Within 6% rtol: {is_close_rtol}\n"
-                f"  Within 1 std:   {is_within_std}"
-            )
-
-    # Report summary
-    logger.info(f"Beam {beam}: Validated {num_validated}/{len(dispersion_df)} correctors")
-    logger.info(f"Beam {beam}: Failed {num_failed}/{len(dispersion_df)} correctors")
-
-    # Fail test if any correctors don't match
+    # Fail if any check fails
     if failures:
-        failure_msg = "\n\n".join(failures[:5])  # Show first 5 failures
-        if len(failures) > 5:
-            failure_msg += f"\n\n... and {len(failures) - 5} more failures"
         pytest.fail(
-            f"Beam {beam}: Dispersion estimation failed for {num_failed} correctors:\n\n{failure_msg}"
+            f"Beam {beam}: Z-score validation failed ({', '.join(failures)}). Mean: {mean_z:.3f}, Std: {std_z:.3f}"
         )
 
-
-@pytest.fixture(scope="module")
-def tmp_dir(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> Path:
-    return tmp_path_factory.mktemp("aba_controller_disp")
-
-
-@pytest.mark.slow
-def test_dispersion_beam1(
-    tmp_dir: Path,
+@pytest.fixture(scope="module", params=[1, 2], ids=["beam1", "beam2"])
+def beam_data(
+    request: pytest.FixtureRequest,
     seq_b1: Path,
+    seq_b2: Path,
     model_dir_b1: Path,
-) -> None:
-    """Test that dispersion estimation reproduces model values at correctors for Beam 1.
-
-    This test:
-    1. Generates tracking data with off-momentum particles
-    2. Analyzes the tracking to extract optics at BPMs
-    3. Estimates dispersion at correctors by tracking from nearby BPMs
-    4. Validates estimates match model within tolerance
-    """
-    beam = 1
-    # Generate tracking data and analyze optics
-    optics_dir = _generate_nonoise_track(
-        tmp_dir,
-        model_dir_b1,
-        seq_b1,
-        6600,
-        beam=beam,
-        perturb_quads=True,
-        perturb_bends=True,
-    )
-
-    # Load model twiss for validation
-    twiss_elements = tfs.read(model_dir_b1 / TWISS_ELEMENTS_DAT, index="NAME")
-
-    # Estimate horizontal dispersion at all correctors
-    dispersion_df, _statistics_df = estimate_corrector_dispersions(
-        optics_dir=optics_dir,
-        sequence_file=seq_b1,
-        model_dir=model_dir_b1,
-        seq_name=f"lhcb{beam}",
-        beam_energy_gev=6800,
-        particle="proton",
-        num_closest_bpms=30,
-        plane="x",
-    )
-
-    # Validate estimates against model
-    _validate_dispersion_estimates(dispersion_df, twiss_elements, beam)
+    model_dir_b2: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[int, Path, Path, Path]:
+    beam = request.param
+    tmp_dir = tmp_path_factory.mktemp(f"dispersion_beam_{beam}")
+    if beam == 1:
+        return beam, seq_b1, model_dir_b1, tmp_dir
+    return beam, seq_b2, model_dir_b2, tmp_dir
 
 
 @pytest.mark.slow
-def test_dispersion_beam2(
-    tmp_dir: Path,
-    seq_b2: Path,
-    model_dir_b2: Path,
+def test_dispersion(
+    beam_data: tuple[Literal[1, 2], Path, Path, Path],
+    loaded_interface_with_beam: BaseMadInterface,
+    loaded_interface_with_beam2: BaseMadInterface,
 ) -> None:
-    """Test that dispersion estimation reproduces model values at correctors for Beam 2.
+    """Test that dispersion estimation reproduces model values at correctors.
 
     This test:
     1. Generates tracking data with off-momentum particles
@@ -322,26 +304,22 @@ def test_dispersion_beam2(
     3. Estimates dispersion at correctors by tracking from nearby BPMs
     4. Validates estimates match model within tolerance
     """
-    beam = 2
+
+    beam, sequence_file, model_dir, tmp_dir = beam_data
+    mad = loaded_interface_with_beam if beam == 1 else loaded_interface_with_beam2
     # Generate tracking data and analyze optics
-    optics_dir = _generate_nonoise_track(
-        tmp_dir,
-        model_dir_b2,
-        seq_b2,
-        6600,
-        beam=beam,
-        perturb_quads=True,
-        perturb_bends=True,
-    )
+    optics_dir = _generate_nonoise_track(mad, tmp_dir, model_dir, sequence_file, 6600, beam, None)
 
     # Load model twiss for validation
-    twiss_elements = tfs.read(model_dir_b2 / TWISS_ELEMENTS_DAT, index="NAME")
+    twiss_elements = tfs.read(model_dir / TWISS_ELEMENTS_DAT, index="NAME")
+
     # Estimate horizontal dispersion at all correctors
     dispersion_df, _statistics_df = estimate_corrector_dispersions(
         optics_dir=optics_dir,
-        sequence_file=seq_b2,
-        model_dir=model_dir_b2,
+        sequence_file=sequence_file,
+        model_dir=model_dir,
         seq_name=f"lhcb{beam}",
+        beam=beam,
         beam_energy_gev=6800,
         particle="proton",
         num_closest_bpms=30,
@@ -349,4 +327,4 @@ def test_dispersion_beam2(
     )
 
     # Validate estimates against model
-    _validate_dispersion_estimates(dispersion_df, twiss_elements, beam)
+    _validate_dispersion_estimates(dispersion_df, twiss_elements, beam, tmp_dir)

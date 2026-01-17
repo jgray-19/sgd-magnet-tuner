@@ -11,15 +11,17 @@ import pytest
 import tfs
 from omc3.scripts.fake_measurement_from_model import generate as fake_measurement
 
-from aba_optimiser.config import BEND_ERROR_FILE, OptimiserConfig
+from aba_optimiser.config import OptimiserConfig
 from aba_optimiser.io.utils import save_knobs
-from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
 from aba_optimiser.simulation.optics import perform_orbit_correction
 from aba_optimiser.training.controller_config import BPMConfig, SequenceConfig
 from aba_optimiser.training_optics import OpticsController
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 
 logger = logging.getLogger(__name__)
 
@@ -38,58 +40,39 @@ TRACK_COLUMNS = (
 )
 
 
-def _generate_nonoise_track(
+def _generate_fake_measurement(
     tmp_dir: Path,
     model_dir: Path,
-    sequence_file: Path,
+    interface: BaseMadInterface,
     flattop_turns: int,
     dpp_value: float,
     magnet_range: str,
     perturb_quads: bool = False,
     perturb_bends: bool = False,
-) -> tuple[Path, dict, Path | None]:
+) -> tuple[Path, dict, Path | None, Path]:
     """Generate a parquet file containing noiseless tracking data for the requested BPMs."""
-    # Create MAD interface and load sequence
-    mad = BaseMadInterface()  # stdout="/dev/null", redirect_stderr=True
-    mad.load_sequence(sequence_file, "lhcb1")
-    mad.setup_beam(beam_energy=6800)
-
     # Create unique corrector file path based on destination
     corrector_file = tmp_dir / "correctors.tfs"
+    interface.mad["zero_twiss", "_"] = interface.mad.twiss(sequence="loaded_sequence")  # ty:ignore[invalid-assignment]
 
     # Perform orbit correction for off-momentum beam (delta = 2e-4)
     magnet_strengths = {}
-    if perturb_quads:
-        mad.mad.send(f"""
-local randseed, randn, abs in MAD.gmath
-new_magnet_values = {{}}
-for _, elm in loaded_sequence:iter('{magnet_range}') do
-if elm.kind == 'quadrupole' and elm.k1 ~= 0.0 and elm.name:match("MQ%.") then
-    elm.k1 = elm.k1 + 1e-4 * randn() * abs(elm.k1)
-    new_magnet_values[elm.name .. ".k1"] = elm.k1
-end
-end
-py:send(new_magnet_values, true)
-        """)
-        magnet_strengths = mad.mad.recv()
-    if perturb_bends:
-        bend_errors_table = tfs.read(BEND_ERROR_FILE)
-        bend_errors_dict = bend_errors_table["K0L"].to_dict()
-        for elm in mad.mad.loaded_sequence:
-            # Dipoles
-            if elm.kind == "sbend" and elm.k0 != 0 and elm.name[:3] == "MB.":
-                if elm.name not in bend_errors_dict:
-                    raise ValueError(f"Bend error for {elm.name} not found in {BEND_ERROR_FILE}")
-                k0l_error = bend_errors_dict[elm.name]
-                elm.k0 += k0l_error / elm.l
-                magnet_strengths[elm.name + ".k0"] = elm.k0
+    magnet_type = ("q" if perturb_quads else "") + ("d" if perturb_bends else "")
+    if magnet_type:
+        magnet_strengths, _ = apply_magnet_perturbations(
+            interface.mad,
+            rel_k1_std_dev=1e-4,
+            seed=42,
+            magnet_type=magnet_type,
+        )
 
     matched_tunes = perform_orbit_correction(
-        mad=mad.mad,
+        mad=interface.mad,
         machine_deltap=dpp_value,
         target_qx=0.28,
         target_qy=0.31,
         corrector_file=corrector_file,
+        beam=1,
     )
     # Read corrector table
     corrector_table = tfs.read(corrector_file)
@@ -101,8 +84,8 @@ py:send(new_magnet_values, true)
 
     analysis_dir = tmp_dir / "analysis"
 
-    mad.observe_elements()
-    twiss = mad.run_twiss(coupling=True)
+    interface.observe_elements()
+    twiss = interface.run_twiss(coupling=True)
 
     # Convert all the columns to uppercase
     twiss.columns = [col.upper() for col in twiss.columns]
@@ -132,20 +115,20 @@ def tmp_dir(
 def test_controller_opt(
     tmp_dir: Path,
     seq_b1: Path,
+    loaded_interface_with_beam: BaseMadInterface,
     model_dir_b1: Path,
 ) -> None:
     """Test that the controller initializes correctly with custom num_tracks and flattop_turns."""
     magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
 
-    corrector_file, magnet_strengths, tune_knobs_file, analysis_dir = _generate_nonoise_track(
+    corrector_file, magnet_strengths, tune_knobs_file, analysis_dir = _generate_fake_measurement(
         tmp_dir,
         model_dir_b1,
-        seq_b1,
+        loaded_interface_with_beam,
         6600,
         0e-4,
         magnet_range,
         perturb_quads=True,
-        # perturb_bends=True,
     )
 
     # Constants for the test
@@ -189,7 +172,7 @@ def test_controller_opt(
         optics_folder=analysis_dir,
         bpm_config=bpm_config,
         optimiser_config=optimiser_config,
-        show_plots=True,
+        show_plots=False,
         corrector_file=corrector_file,
         tune_knobs_file=tune_knobs_file,
         true_strengths=magnet_strengths,

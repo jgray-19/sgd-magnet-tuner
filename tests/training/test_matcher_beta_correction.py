@@ -21,6 +21,8 @@ from tests.training.helpers import (
 if TYPE_CHECKING:
     import pandas as pd
 
+    from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+
 
 def _plot_beta_beating_comparison(
     twiss_errs: pd.DataFrame,
@@ -69,9 +71,6 @@ def _plot_beta_beating_comparison(
     plt.savefig(plot_file, dpi=150, bbox_inches="tight")
     print(f"Beta beating plot saved to: {plot_file}")
 
-    # Show plot (will display even if test fails)
-    plt.show()
-
 
 @pytest.fixture(scope="module")
 def tmp_dir(
@@ -81,21 +80,30 @@ def tmp_dir(
 
 
 @pytest.mark.slow
-def test_matcher_beta_correction(tmp_dir: Path, seq_b1: Path, json_b1: Path, estimated_strengths_file: Path) -> None:
+def test_matcher_beta_correction(
+    tmp_dir: Path,
+    seq_b1: Path,
+    json_b1: Path,
+    estimated_strengths_file: Path,
+    loaded_interface_with_beam: BaseMadInterface,
+) -> None:
     """Test beta matching using estimated quadrupole strengths from controller."""
     # Generate model with errors for validation (same setup as controller)
     corrector_file = tmp_dir / "corrector_track_off_magnet.tfs"
-    env, magnet_strengths, twiss_errs, tune_knobs_file = generate_model_with_errors(
+    magnet_strengths, matched_tunes, _ = generate_model_with_errors(
+        loaded_interface_with_beam,
         sequence_file=seq_b1,
         json_file=json_b1,
         dpp_value=0,
         magnet_range="$start/$end",
         corrector_file=corrector_file,
+        beam=1,
         perturb_quads=True,
         perturb_bends=True,
     )
     # Select only BPMs from the twiss with errors
-    twiss_errs = twiss_errs[twiss_errs["ename"].str.startswith("BPM")]
+    loaded_interface_with_beam.observe_elements()
+    twiss_errs = loaded_interface_with_beam.run_twiss(observe=1)  # Observe all elements
 
     # Read estimated strengths from file (written by test_quad_conv_with_errs)
     if not estimated_strengths_file.exists():
@@ -115,14 +123,11 @@ def test_matcher_beta_correction(tmp_dir: Path, seq_b1: Path, json_b1: Path, est
     model_twiss_file = tmp_dir / "model_twiss.tfs"
     tfs.write(model_twiss_file, tws_no_err, save_index=True)
 
-    # Read the tune knobs from the generated file
-    from aba_optimiser.io.utils import read_knobs
-    tune_knobs = read_knobs(tune_knobs_file)
-    print(f"Using {len(tune_knobs)} tune knobs from {tune_knobs_file}")
-
     # Get beta correctors from omc3 package
     import omc3
 
+    if omc3.__file__ is None:
+        raise ValueError("omc3.__file__ is None")
     omc3_path = Path(omc3.__file__).parent
     knobs_file = (
         omc3_path
@@ -145,7 +150,7 @@ def test_matcher_beta_correction(tmp_dir: Path, seq_b1: Path, json_b1: Path, est
         model_twiss_file=model_twiss_file,
         estimated_strengths=all_estimates,
         knobs_list=knobs_list,
-        tune_knobs=tune_knobs,
+        tune_knobs=matched_tunes,
         sequence_file_path=seq_b1,
         seq_name="lhcb1",
         magnet_range="$start/$end",
@@ -156,11 +161,11 @@ def test_matcher_beta_correction(tmp_dir: Path, seq_b1: Path, json_b1: Path, est
     matcher = BetaMatcher(matcher_config, show_plots=False)
     # final_knobs, uncertainties = matcher.run_lbfgs_match()
     final_knobs, uncertainties = matcher.run_linear_match(n_steps=1, svd_cutoff=1e-6)
-
     print(f"Final knobs: {final_knobs}")
 
     # Compute twiss with estimated strengths + final knobs using BaseMadInterface
     from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+
     interface = BaseMadInterface()
     interface.load_sequence(seq_b1, "lhcb1")
     interface.setup_beam(6800)
@@ -168,15 +173,14 @@ def test_matcher_beta_correction(tmp_dir: Path, seq_b1: Path, json_b1: Path, est
     interface.set_madx_variables(**final_knobs)  # This includes both beta and tune knobs
     interface.observe_elements()
     tws_corrected = interface.run_twiss(observe=1)  # Observe all elements
-    tws_corrected = tws_corrected[tws_corrected["ename"].str.startswith("BPM")]
 
     # Plot beta beating comparison (uncomment to enable plotting)
     _plot_beta_beating_comparison(twiss_errs, tws_no_err, tws_corrected, tmp_dir)
 
     # Check beta beating after correction
     # Compare to model twiss (tws_no_err)
-    tws_corrected_betax = (tws_corrected["beta11"] - tws_no_err["beta11"]) / tws_no_err["beta11"]
-    tws_corrected_betay = (tws_corrected["beta22"] - tws_no_err["beta22"]) / tws_no_err["beta22"]
+    tws_corrected_betax = (tws_corrected["beta11"] - tws_no_err["beta11"]) / tws_no_err["beta11"]  # ty:ignore[unsupported-operator]
+    tws_corrected_betay = (tws_corrected["beta22"] - tws_no_err["beta22"]) / tws_no_err["beta22"]  # ty:ignore[unsupported-operator]
 
     # Compute RMS beta beat
     rms_betax = (tws_corrected_betax.pow(2).mean()) ** 0.5
@@ -196,12 +200,16 @@ def test_matcher_beta_correction(tmp_dir: Path, seq_b1: Path, json_b1: Path, est
     corrected_q2 = tws_corrected.headers["q2"]
     print(f"Target Q1: {target_q1}, Corrected Q1: {corrected_q1}")
     print(f"Target Q2: {target_q2}, Corrected Q2: {corrected_q2}")
-    assert abs(corrected_q1 - target_q1) < 1e-3, f"Q1 error {abs(corrected_q1 - target_q1)} exceeds 1e-3"
-    assert abs(corrected_q2 - target_q2) < 1e-3, f"Q2 error {abs(corrected_q2 - target_q2)} exceeds 1e-3"
+    assert abs(corrected_q1 - target_q1) < 1e-3, (
+        f"Q1 error {abs(corrected_q1 - target_q1)} exceeds 1e-3"
+    )
+    assert abs(corrected_q2 - target_q2) < 1e-3, (
+        f"Q2 error {abs(corrected_q2 - target_q2)} exceeds 1e-3"
+    )
 
     # Check that the original beta beating was larger
-    tws_errs_betax = (twiss_errs["beta11"] - tws_no_err["beta11"]) / tws_no_err["beta11"]
-    tws_errs_betay = (twiss_errs["beta22"] - tws_no_err["beta22"]) / tws_no_err["beta22"]
+    tws_errs_betax = (twiss_errs["beta11"] - tws_no_err["beta11"]) / tws_no_err["beta11"]  # ty:ignore[unsupported-operator]
+    tws_errs_betay = (twiss_errs["beta22"] - tws_no_err["beta22"]) / tws_no_err["beta22"]  # ty:ignore[unsupported-operator]
     rms_errs_betax = (tws_errs_betax.pow(2).mean()) ** 0.5
     rms_errs_betay = (tws_errs_betay.pow(2).mean()) ** 0.5
     print(f"RMS BetaX error before correction: {rms_errs_betax * 100:.2f}%")

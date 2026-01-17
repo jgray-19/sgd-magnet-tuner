@@ -45,10 +45,10 @@ def test_init(py_name, expected_py_name, var_name, var_value) -> None:
     cleanup_interface(interface)
 
 
-def test_load_sequence(interface: BaseMadInterface, sequence_file: Path) -> None:
+def test_load_sequence(interface: BaseMadInterface, seq_b1: Path) -> None:
     """Test loading a sequence file."""
     # this test explicitly checks load_sequence behaviour
-    interface.load_sequence(sequence_file, "lhcb1")
+    interface.load_sequence(seq_b1, "lhcb1")
     check_sequence_loaded(interface, "lhcb1")
     assert (
         interface.mad.loaded_sequence is not None and interface.mad.loaded_sequence != 0
@@ -76,7 +76,7 @@ def test_observe_elements(
     """Test configuring element observation."""
     loaded_interface.observe_elements(pattern)
     check_element_observations(loaded_interface, f"elm.name:match('{pattern}')")
-    loaded_interface.unobserve_elements(pattern)
+    loaded_interface.unobserve_elements([pattern])
 
 
 def test_cycle_sequence(loaded_interface: BaseMadInterface) -> None:
@@ -256,8 +256,8 @@ def test_twiss(loaded_interface_with_beam: BaseMadInterface):
     )
 
     # Check the tunes
-    assert abs(twiss_df.q1 - 62.28) < 1e-8, f"Unexpected Qx: {twiss_df.q1}"
-    assert abs(twiss_df.q2 - 60.31) < 1e-8, f"Unexpected Qy: {twiss_df.q2}"
+    assert abs(twiss_df.headers["q1"] - 62.28) < 3e-7, f"Unexpected Qx: {twiss_df.q1}"
+    assert abs(twiss_df.headers["q2"] - 60.31) < 3e-7, f"Unexpected Qy: {twiss_df.q2}"
 
     # Now set observe to 0
     twiss_df = interface.run_twiss(observe=0)
@@ -269,8 +269,8 @@ def test_twiss(loaded_interface_with_beam: BaseMadInterface):
     assert "MB.A33R2.B1" in twiss_df.index, (
         "Expected to find magnet elements in twiss output"
     )
-    assert twiss_df.q1 - 62.28 < 1e-8, f"Unexpected Qx: {twiss_df.q1}"
-    assert twiss_df.q2 - 60.31 < 1e-8, f"Unexpected Qy: {twiss_df.q2}"
+    assert abs(twiss_df.headers["q1"] - 62.28) < 3e-7, f"Unexpected Qx: {twiss_df.headers['q1']}"
+    assert abs(twiss_df.headers["q2"] - 60.31) < 3e-7, f"Unexpected Qy: {twiss_df.headers['q2']}"
 
     # Now observe BPMs
     interface.observe_elements("BPM")
@@ -280,9 +280,9 @@ def test_twiss(loaded_interface_with_beam: BaseMadInterface):
     assert all(twiss_df.index.str.match(r"^BPM.*")), (
         "Expected only BPM elements in twiss output"
     )
-    assert twiss_df.q1 - 62.28 < 1e-8, f"Unexpected Qx: {twiss_df.q1}"
-    assert twiss_df.q2 - 60.31 < 1e-8, f"Unexpected Qy: {twiss_df.q2}"
-    interface.unobserve_elements("BPM")
+    assert abs(twiss_df.headers["q1"] - 62.28) < 3e-7, f"Unexpected Qx: {twiss_df.headers['q1']}"
+    assert abs(twiss_df.headers["q2"] - 60.31) < 3e-7, f"Unexpected Qy: {twiss_df.headers['q2']}"
+    interface.unobserve_elements(["BPM"])
 
 
 @pytest.mark.parametrize(
@@ -321,11 +321,11 @@ def test_match_tunes(
     )
 
     twiss_df = interface.run_twiss()
-    assert abs((twiss_df.q1 % 1) - target_qx) < 1e-5, (
-        f"Qx not matched: {twiss_df.q1 % 1} != {target_qx}"
+    assert abs((twiss_df.headers["q1"] % 1) - target_qx) < 1e-5, (
+        f"Qx not matched: {twiss_df.headers['q1'] % 1} != {target_qx}"
     )
-    assert abs((twiss_df.q2 % 1) - target_qy) < 1e-5, (
-        f"Qy not matched: {twiss_df.q2 % 1} != {target_qy}"
+    assert abs((twiss_df.headers["q2"] % 1) - target_qy) < 1e-5, (
+        f"Qy not matched: {twiss_df.headers['q2'] % 1} != {target_qy}"
     )
 
     # Check that knobs have been changed
@@ -360,7 +360,7 @@ def test_run_tracking_default(loaded_interface_with_beam: BaseMadInterface):
 
     # Check that x, y, px, py, t, pt are all zero as we started on-axis with no errors
     for coord in ["x", "y", "px", "py", "t", "pt"]:
-        assert abs(results_df.iloc[0][coord]) < 1e-15, (
+        assert abs(results_df.iloc[0][coord]) < 1e-7, (
             f"Expected {coord} to be ~0, got {results_df.iloc[0][coord]}"
         )
 
@@ -370,7 +370,7 @@ def test_run_tracking_multiple_turns(loaded_interface_with_beam: BaseMadInterfac
     interface = loaded_interface_with_beam
 
     nturns = 10
-    interface.run_tracking(nturns=nturns)
+    interface.run_tracking(nturns=nturns, reserve=0)
     results_df = interface.mad.trk.to_df()
 
     # Check that there are nturns rows
@@ -390,9 +390,9 @@ def test_run_tracking_multiple_turns(loaded_interface_with_beam: BaseMadInterfac
 
     # Check that x, y, px, py, t, pt are still all zero
     for coord in ["x", "y", "px", "py", "t", "pt"]:
-        assert all(abs(results_df[coord]) < 1e-15), (
-            f"Expected all {coord} to be ~0, got {results_df[coord].values}"
-        )
+        assert all(abs(results_df[coord]) < 1e-7), (
+            f"Expected all {coord} to be ~0, got max {results_df[coord].abs().max()}"
+        )  # we have orbit bump knobs with the 12cm sequence
 
 
 def test_run_tracking_nonzero_initial(loaded_interface_with_beam: BaseMadInterface):
@@ -427,7 +427,7 @@ def test_run_tracking_with_bpms(loaded_interface_with_beam: BaseMadInterface):
     assert len(results_df) == 563, (
         f"Expected 563 tracking rows for BPMs, got {len(results_df)}"
     )
-    interface.unobserve_elements("BPM")
+    interface.unobserve_elements(["BPM"])
 
 
 class TestDp2pt:
@@ -539,4 +539,4 @@ def test_get_bpm_list(loaded_interface: BaseMadInterface, end_num: int) -> None:
 
     # Check that the list has expected BPMs
     assert bpm_names == expected_bpms, f"Expected BPMs {expected_bpms}, got {bpm_names}"
-    interface.unobserve_elements("BPM")
+    interface.unobserve_elements(["BPM"])

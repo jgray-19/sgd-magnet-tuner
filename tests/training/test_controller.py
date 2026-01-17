@@ -11,29 +11,27 @@ import numpy as np
 import pytest
 
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
-from aba_optimiser.simulation.coordinates import create_initial_conditions
+from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig, SequenceConfig
-from aba_optimiser.xsuite.xsuite_tools import (
-    insert_particle_monitors_at_pattern,
-    line_to_dataframes,
-    run_tracking,
-)
-from tests.training.helpers import TRACK_COLUMNS, generate_model_with_errors
+from aba_optimiser.xsuite.monitors import line_to_dataframes
+from aba_optimiser.xsuite.tracking import run_tracking_without_ac_dipole
+from tests.training.helpers import TRACK_COLUMNS, generate_xsuite_env_with_errors
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     import pandas as pd
-    import tfs
+    import xtrack as xt
+
+    from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 
 logger = logging.getLogger(__name__)
 
 
 def _run_track_with_model(
-    env: dict,
-    twiss_data: tfs.TfsDataFrame,
+    env: xt.Environment,
     flattop_turns: int,
     destination: Path,
     dpp_value: float,
@@ -47,7 +45,6 @@ def _run_track_with_model(
 
     Args:
         env: xsuite environment dictionary
-        twiss_data: Twiss data from MAD-NG
         flattop_turns: Number of turns to track
         destination: Path to save the parquet file (or base path for multiple files)
         dpp_value: Momentum deviation
@@ -63,54 +60,20 @@ def _run_track_with_model(
     if len(angle_list) != num_particles:
         raise ValueError("action_list and angle_list must have the same length")
 
-    insert_particle_monitors_at_pattern(
-        env["lhcb1"],
-        pattern="bpm.*[^k]",
-        num_turns=flattop_turns,
-        num_particles=num_particles,
-        inplace=True,
+    line: xt.Line = env["lhcb1"]  # ty:ignore[not-subscriptable]
+
+    monitored_line = run_tracking_without_ac_dipole(
+        line=line,
+        tws=line.twiss4d(),
+        flattop_turns=flattop_turns,
+        bpm_pattern="bpm.*[^k]",
+        action_list=action_list,
+        angle_list=angle_list,
+        delta_values=[dpp_value] * num_particles,
+        start_marker=start_marker,
     )
 
-    if start_marker is not None:
-        env["lhcb1"].cycle(name_first_element=start_marker.lower(), inplace=True)
-
-    xs = []
-    pxs = []
-    ys = []
-    pys = []
-    deltas = []
-    logger.info(f"Generating tracking for {num_particles} particles.")
-    logger.info(f"Starting BPM: {env['lhcb1'].element_names[0].upper()}")
-    logger.info(f"DPP value: {dpp_value}")
-    for i in range(num_particles):
-        x0 = create_initial_conditions(
-            i,
-            action_list,
-            angle_list,
-            twiss_data,
-            kick_both_planes=True,
-            starting_bpm=env["lhcb1"].element_names[0].upper(),
-        )
-        xs.append(x0["x"])
-        pxs.append(x0["px"])
-        ys.append(x0["y"])
-        pys.append(x0["py"])
-        deltas.append(dpp_value + 0)
-
-    particles = env["lhcb1"].build_particles(
-        x=xs,
-        px=pxs,
-        y=ys,
-        py=pys,
-        delta=deltas,
-    )
-    run_tracking(
-        line=env["lhcb1"],
-        particles=particles,
-        nturns=flattop_turns,
-    )
-    true_dfs = line_to_dataframes(env["lhcb1"])
-
+    true_dfs = line_to_dataframes(monitored_line)
     # Process dataframes
     processed_dfs = []
     for true_df in true_dfs:
@@ -143,6 +106,7 @@ def _run_track_with_model(
 
 
 def _generate_nonoise_track(
+    interface_with_beam: BaseMadInterface,
     sequence_file: Path,
     json_file: Path,
     flattop_turns: int,
@@ -158,17 +122,22 @@ def _generate_nonoise_track(
     """Generate a parquet file containing noiseless tracking data for the requested BPMs."""
     # Create unique corrector file path based on destination
     corrector_file = destination.parent / f"corrector_{destination.stem}.tfs"
+    tune_knobs_file = destination.parent / f"tune_knobs_{destination.stem}.txt"
 
     # Generate model with errors
-    env, magnet_strengths, twiss_data, tune_knobs_file = generate_model_with_errors(
+    env, magnet_strengths, matched_tunes, corrector_table = generate_xsuite_env_with_errors(
+        interface_with_beam,
         sequence_file=sequence_file,
         json_file=json_file,
         dpp_value=dpp_value,
         magnet_range=magnet_range,
         corrector_file=corrector_file,
+        beam=1,
         perturb_quads=perturb_quads,
         perturb_bends=perturb_bends,
     )
+
+    save_knobs(matched_tunes, tune_knobs_file)
 
     # Create action and angle lists
     action = 4e-8  # action for larger kick
@@ -190,7 +159,6 @@ def _generate_nonoise_track(
     # Run tracking with the model
     _run_track_with_model(
         env=env,
-        twiss_data=twiss_data,
         flattop_turns=flattop_turns,
         destination=destination,
         dpp_value=dpp_value,
@@ -270,6 +238,7 @@ def test_controller_energy_opt(
     seq_b1: Path,
     json_b1: Path,
     dpp_value: float,
+    loaded_interface_with_beam: BaseMadInterface,
 ) -> None:
     """Test that the controller initialises correctly with custom num_tracks and flattop_turns."""
     optimiser_config = _make_optimiser_config_energy()
@@ -279,13 +248,13 @@ def test_controller_energy_opt(
     magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
 
     corrector_file, _, tune_knobs_file = _generate_nonoise_track(
+        loaded_interface_with_beam,
         seq_b1,
         json_b1,
         flattop_turns,
         off_dpp_path,
         dpp_value,
         magnet_range,
-        perturb_quads=False,
     )
 
     # Constants for the test
@@ -327,6 +296,7 @@ def test_controller_energy_opt(
         bpm_config=bpm_config,
         show_plots=False,
         true_strengths=None,
+        mad_logfile=tmp_dir / "controller_energy_opt.log",
     )
 
     estimate, unc = ctrl.run()  # Ensure that run works without errors
@@ -343,16 +313,20 @@ def test_controller_energy_opt(
 @pytest.mark.slow
 @pytest.mark.parametrize("start_marker", ["MSIA.EXIT.B1", "E.CELL.12.B1"])
 def test_controller_quad_opt_simple(
-    tmp_dir: Path, seq_b1: Path, json_b1: Path, start_marker: str
+    tmp_dir: Path,
+    seq_b1: Path,
+    json_b1: Path,
+    start_marker: str,
+    loaded_interface_with_beam: BaseMadInterface,
 ) -> None:
     """Test quadrupole optimisation using the simple opt script logic."""
     # Constants for the test
     magnet_range = "BPM.9R1.B1/BPM.9L2.B1"
-    bpm_start_points = [
+    bpm_start_points: list[str] = [
         "BPM.9R1.B1",
         "BPM.10R1.B1",
     ]
-    bpm_end_points = [
+    bpm_end_points: list[str] = [
         "BPM.9L2.B1",
         "BPM.10L2.B1",
     ]
@@ -361,6 +335,7 @@ def test_controller_quad_opt_simple(
     off_magnet_path = tmp_dir / "track_off_magnet.parquet"
 
     corrector_file, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
+        loaded_interface_with_beam,
         seq_b1,
         json_b1,
         flattop_turns,

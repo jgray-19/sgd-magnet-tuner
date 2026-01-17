@@ -17,6 +17,7 @@ import tfs
 
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.filtering.svd import svd_clean_measurements
+from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.momentum_recon import (
     calculate_dispersive_pz,
     calculate_transverse_pz,
@@ -25,24 +26,24 @@ from aba_optimiser.momentum_recon import (
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig, SequenceConfig
-from aba_optimiser.xsuite.xsuite_tools import (
-    insert_ac_dipole,
-    insert_particle_monitors_at_pattern,
-    line_to_dataframes,
-    run_tracking,
-)
+from aba_optimiser.xsuite.acd import run_ac_dipole_tracking_with_particles
+from aba_optimiser.xsuite.monitors import line_to_dataframes
 from tests.training.helpers import (
     TRACK_COLUMNS,
-    generate_model_with_errors,
+    generate_xsuite_env_with_errors,
     get_twiss_without_errors,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from xtrack import xt
+
+    from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+
 
 def _run_track_with_acd(
-    env: dict,
+    env: xt.Environment,
     flattop_turns: int,
     acd_ramp: int,
     destination: Path,
@@ -65,56 +66,39 @@ def _run_track_with_acd(
     Returns:
         List of Path objects for each generated parquet file, or list of DataFrames if return_dataframes=True
     """
-    # Compute twiss for ACD insertion
-
     # AC dipole parameters
-    total_turns = flattop_turns + acd_ramp
     driven_tunes = [0.27, 0.322]
 
     processed_dfs = []
     output_files = []
     destination.parent.mkdir(parents=True, exist_ok=True)
+    line: xt.Line = env["lhcb1"]  # ty:ignore[not-subscriptable]
+    tws = line.twiss(method="4d", delta0=0)
 
     for idx, lag in enumerate(lags):
-        tws = env["lhcb1"].twiss(method="4d", delta0=0)
-        # Insert AC dipole with this lag value
-        line = insert_ac_dipole(
-            env["lhcb1"],
-            tws,
+        # Run tracking with AC dipole using the generalized function
+        particle_coords = {
+            "x": [0.0],
+            "px": [0.0],
+            "y": [0.0],
+            "py": [0.0],
+            "delta": [dpp_values[idx]],
+        }
+
+        monitored_line = run_ac_dipole_tracking_with_particles(
+            line=line,
+            tws=tws,
             beam=1,
-            acd_ramp=acd_ramp,
-            total_turns=total_turns,
+            ramp_turns=acd_ramp,
+            flattop_turns=flattop_turns,
             driven_tunes=driven_tunes,
             lag=lag,
-        )
-
-        # Insert monitors for flattop turns only (after ramp)
-        insert_particle_monitors_at_pattern(
-            line,
-            pattern="bpm.*[^k]",
-            num_turns=total_turns,  # Monitor all turns, we'll filter later
-            num_particles=1,
-            inplace=True,
-        )
-
-        # Build particle at small initial offset
-        particles = line.build_particles(
-            x=[0.0],
-            px=[0.0],
-            y=[0.0],
-            py=[0.0],
-            delta=[dpp_values[idx]],
-        )
-
-        # Run tracking for total turns (ramp + flattop)
-        run_tracking(
-            line=line,
-            particles=particles,
-            nturns=total_turns,
+            bpm_pattern="bpm.*[^k]",
+            particle_coords=particle_coords,
         )
 
         # Get data from line
-        true_dfs = line_to_dataframes(line)
+        true_dfs = line_to_dataframes(monitored_line)
 
         # Process dataframe - only keep flattop turns (after ramp)
         for true_df in true_dfs:
@@ -167,34 +151,36 @@ def _make_simulation_config_bend() -> SimulationConfig:
     )
 
 
-@pytest.fixture(scope="module")
-def tmp_dir(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> Path:
-    return tmp_path_factory.mktemp("aba_controller_tracks_quad_conv")
-
-
 @pytest.mark.skipif(multiprocessing.cpu_count() < 60, reason="Requires at least 60 CPU cores")
 @pytest.mark.slow
 def test_controller_bend_opt_simple(
-    tmp_dir: Path, seq_b1: Path, json_b1: Path, estimated_strengths_file: Path
+    tmp_dir_quad_conv: Path,
+    seq_b1: Path,
+    json_b1: Path,
+    estimated_strengths_file: Path,
+    loaded_interface_with_beam: BaseMadInterface,
 ) -> None:
     """Test bend optimisation using AC dipole excitation with different lag values."""
     flattop_turns = 2_000
     acd_ramp = 1_000  # Ramp turns for AC dipole
-    off_magnet_path = tmp_dir / "track_off_magnet.parquet"
-    corrector_file = tmp_dir / "corrector_track_off_magnet.tfs"
+    off_magnet_path = tmp_dir_quad_conv / "track_off_magnet.parquet"
+    corrector_file = tmp_dir_quad_conv / "corrector_track_off_magnet.tfs"
+    tune_knobs_file = tmp_dir_quad_conv / "tune_knobs_track_off_magnet.json"
 
     # Generate model with errors for all arcs
-    env, magnet_strengths, twiss_errs, tune_knobs_file = generate_model_with_errors(
+    env, magnet_strengths, matched_tunes, _ = generate_xsuite_env_with_errors(
+        loaded_interface_with_beam,
         sequence_file=seq_b1,
         json_file=json_b1,
         dpp_value=0,
         magnet_range="$start/$end",
         corrector_file=corrector_file,
+        beam=1,
         perturb_quads=True,
         perturb_bends=True,
     )
+    twiss_errs = loaded_interface_with_beam.run_twiss(observe=1)  # Observe all elements
+    save_knobs(matched_tunes, tune_knobs_file)
 
     # Get clean twiss for pz calculation
     tws_no_err = get_twiss_without_errors(seq_b1, just_bpms=False)
@@ -211,7 +197,7 @@ def test_controller_bend_opt_simple(
         lags=lags,
         return_dataframes=True,
     )
-    xsuite_tws = env["lhcb1"].twiss4d().to_pandas()
+    xsuite_tws = env["lhcb1"].twiss4d().to_pandas()  # ty:ignore[not-subscriptable]
     xsuite_tws = xsuite_tws.set_index("name")
     # convert name to be upper case to match measurement files
     xsuite_tws.index = xsuite_tws.index.str.upper()
@@ -301,7 +287,7 @@ def test_controller_bend_opt_simple(
         processed_files.append(output_path)
 
     # Create empty corrector file
-    corrector_file = tmp_dir / "corrector_file.txt"
+    corrector_file = tmp_dir_quad_conv / "corrector_file.txt"
     corrector_file.write_text("")
 
     measurement_files = processed_files
@@ -354,7 +340,7 @@ def test_controller_bend_opt_simple(
         )
 
         # Create arc-specific plots directory
-        arc_plots_dir = tmp_dir / f"arc_{arc_num}_plots"
+        arc_plots_dir = tmp_dir_quad_conv / f"arc_{arc_num}_plots"
 
         ctrl = Controller(
             optimiser_config=optimiser_config,
@@ -386,19 +372,20 @@ def test_controller_bend_opt_simple(
         json.dump(all_estimates, f)
 
     # Plot beta function errors
-    tws_errs_betax = (twiss_errs["beta11"] - tws_no_err["beta11"]) / tws_no_err["beta11"]
-    tws_errs_betay = (twiss_errs["beta22"] - tws_no_err["beta22"]) / tws_no_err["beta22"]
+    # fmt: off
+    tws_errs_betax = (twiss_errs.loc[:, "beta11"] - tws_no_err.loc[:, "beta11"]) / tws_no_err.loc[:, "beta11"]
+    tws_errs_betay = (twiss_errs.loc[:, "beta22"] - tws_no_err.loc[:, "beta22"]) / tws_no_err.loc[:, "beta22"]
 
     # Save beta beating data before corrections
     beta_beating_before = pd.DataFrame(
         {
-            "s": twiss_errs["s"],
+            "s": twiss_errs.loc[:, "s"],
             "name": twiss_errs.index,
             "betax_error_percent": tws_errs_betax * 100,
             "betay_error_percent": tws_errs_betay * 100,
         }
     )
-    beta_beating_before_file = tmp_dir / "beta_beating_before_correction.tfs"
+    beta_beating_before_file = tmp_dir_quad_conv / "beta_beating_before_correction.tfs"
     tfs.write(beta_beating_before_file, beta_beating_before)
 
     tws_est = get_twiss_without_errors(
@@ -408,8 +395,9 @@ def test_controller_bend_opt_simple(
         corrector_file=corrector_file,
         tune_knobs_file=tune_knobs_file,
     )
-    tws_est_betax = (twiss_errs["beta11"] - tws_est["beta11"]) / tws_est["beta11"]
-    tws_est_betay = (twiss_errs["beta22"] - tws_est["beta22"]) / tws_est["beta22"]
+    tws_est_betax = (twiss_errs.loc[:, "beta11"] - tws_est.loc[:, "beta11"]) / tws_est.loc[:, "beta11"]
+    tws_est_betay = (twiss_errs.loc[:, "beta22"] - tws_est.loc[:, "beta22"]) / tws_est.loc[:, "beta22"]
+    # fmt: on
 
     # Save beta beating data after corrections
     beta_beating_after = pd.DataFrame(
@@ -420,7 +408,7 @@ def test_controller_bend_opt_simple(
             "betay_error_percent": tws_est_betay * 100,
         }
     )
-    beta_beating_after_file = tmp_dir / "beta_beating_after_correction.tfs"
+    beta_beating_after_file = tmp_dir_quad_conv / "beta_beating_after_correction.tfs"
     tfs.write(beta_beating_after_file, beta_beating_after)
 
     assert all(tws_est_betax.abs() < 0.0025), "BetaX errors exceed 0.25% after optimisation"

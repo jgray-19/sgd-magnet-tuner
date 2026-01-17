@@ -85,10 +85,12 @@ def simulation_config() -> SimulationConfig:
 
 
 @pytest.fixture(scope="function")
-def optimising_interface(sequence_file: Path, simulation_config: SimulationConfig) -> Generator[OptimisationMadInterface, None, None]:
+def optimising_interface(
+    seq_b1: Path, simulation_config: SimulationConfig
+) -> Generator[OptimisationMadInterface, None, None]:
     """Create a fresh OptimisationMadInterface for each test."""
     iface = OptimisationMadInterface(
-        sequence_file=str(sequence_file),
+        sequence_file=str(seq_b1),
         simulation_config=simulation_config,
         corrector_strengths=None,
         tune_knobs_file=None,
@@ -106,15 +108,19 @@ class TestOptimisationMadInterfaceInit:
             (6500, "lhcb1"),
         ],
     )
-    def test_default(self, sequence_file: Path, beam_energy: float, seq_name: str) -> None:
+    def test_default(self, seq_b1: Path, beam_energy: float | None, seq_name: str | None) -> None:
         """Test initialisation of OptimisationMadInterface with default parameters."""
-        kwargs = {}
-        if beam_energy is not None or seq_name is not None:
-            kwargs = {
-                "beam_energy": beam_energy,
-                "seq_name": seq_name,
-            }
-        interface = OptimisationMadInterface(sequence_file=str(sequence_file), corrector_strengths=None, tune_knobs_file=None, **kwargs)
+        kwargs: dict[str, float | str] = {}
+        if beam_energy is not None:
+            kwargs["beam_energy"] = beam_energy
+        if seq_name is not None:
+            kwargs["seq_name"] = seq_name
+        interface = OptimisationMadInterface(
+            sequence_file=str(seq_b1),
+            corrector_strengths=None,
+            tune_knobs_file=None,
+            **kwargs,  # ty:ignore[invalid-argument-type]
+        )
         bpm_pattern = r"^BPM"
         check_interface_basic_init(interface, "py")
 
@@ -143,10 +149,10 @@ class TestOptimisationMadInterfaceInit:
 
         cleanup_interface(interface)
 
-    def test_bpm_magnet_pattern(self, sequence_file: Path) -> None:
+    def test_bpm_magnet_pattern(self, seq_b1: Path) -> None:
         """Test that MAD variables are set correctly for default ranges and patterns."""
         interface = OptimisationMadInterface(
-            sequence_file=str(sequence_file),
+            sequence_file=str(seq_b1),
             corrector_strengths=None,
             tune_knobs_file=None,
             discard_mad_output=True,
@@ -169,9 +175,11 @@ class TestOptimisationMadInterfaceInit:
 
         cleanup_interface(interface)
 
-    def test_custom_bpm_pattern(self, sequence_file: Path) -> None:
+    def test_custom_bpm_pattern(self, seq_b1: Path) -> None:
         """Test that MAD variables are set correctly for custom patterns."""
-        interface, twiss_df = setup_and_check_interface(sequence_file, "BPM.10L1.B1/BPM.20L1.B1", "$start/$end", r"^BPM%.10.*")
+        interface, twiss_df = setup_and_check_interface(
+            seq_b1, "BPM.10L1.B1/BPM.20L1.B1", "$start/$end", r"^BPM%.10.*"
+        )
 
         # Filter BPMs to match the custom pattern (BPMs starting with "BPM.10")
         expected_bpms = [name for name in interface.all_bpms if name.startswith("BPM.10")]
@@ -183,9 +191,11 @@ class TestOptimisationMadInterfaceInit:
 
         cleanup_interface(interface)
 
-    def test_custom_bpm_range(self, sequence_file: Path) -> None:
+    def test_custom_bpm_range(self, seq_b1: Path) -> None:
         """Test that MAD variables are set correctly for custom BPM ranges."""
-        interface, twiss_df = setup_and_check_interface(sequence_file, "$start/$end", "BPM.10L1.B1/BPM.10R1.B1", r"^BPM")
+        interface, twiss_df = setup_and_check_interface(
+            seq_b1, "$start/$end", "BPM.10L1.B1/BPM.10R1.B1", r"^BPM"
+        )
 
         # Extract the BPM range boundaries
         first_bpm, second_bpm = "BPM.10L1.B1", "BPM.10R1.B1"
@@ -210,7 +220,7 @@ class TestOptimisationMadInterfaceInit:
     )
     def test_with_simulation_config(
         self,
-        sequence_file: Path,
+        seq_b1: Path,
         simulation_config: SimulationConfig,
         optimise_energy: bool,
         optimise_quadrupoles: bool,
@@ -224,14 +234,14 @@ class TestOptimisationMadInterfaceInit:
             optimise_bends=optimise_bends,
         )
         interface = OptimisationMadInterface(
-            sequence_file=str(sequence_file),
+            sequence_file=str(seq_b1),
             simulation_config=simulation_config,
             corrector_strengths=None,
             tune_knobs_file=None,
             discard_mad_output=True,
         )
         check_interface_basic_init(interface, "py")
-        # Check that knobs were created for energy optimization
+        # Check that knobs were created for energy optimisation
         if optimise_energy:
             assert "pt" in interface.knob_names
 
@@ -258,14 +268,14 @@ class TestOptimisationMadInterfaceInit:
     @pytest.mark.parametrize("apply_correctors", [True, False])
     def test_with_corrector_settings(
         self,
-        sequence_file: Path,
+        seq_b1: Path,
         corrector_file: Path,
         corrector_table,
         apply_correctors: bool,
     ) -> None:
         """Test initialization with different corrector strength settings."""
         interface = OptimisationMadInterface(
-            sequence_file=str(sequence_file),
+            sequence_file=str(seq_b1),
             corrector_strengths=corrector_file if apply_correctors else None,
             tune_knobs_file=None,
         )
@@ -277,20 +287,22 @@ class TestOptimisationMadInterfaceInit:
 
         cleanup_interface(interface)
 
-    def test_knob_files(self, sequence_file: Path, corrector_knobs_file: Path, tune_knobs_file: Path) -> None:
+    def test_knob_files(
+        self, seq_b1: Path, corrector_knobs_file: Path, tune_knobs_file: Path
+    ) -> None:
         """Test initialization with knob for tunes and corrector files."""
         corrector_knob_file = corrector_knobs_file
         tune_knob_file = tune_knobs_file
 
         no_knob_interface = OptimisationMadInterface(
-            sequence_file=str(sequence_file),
+            sequence_file=str(seq_b1),
             corrector_strengths=None,
             tune_knobs_file=None,
         )
         original_mqt_strength = no_knob_interface.mad["MADX['MQT.14R3.B1'].k1"]
 
         knob_interface = OptimisationMadInterface(
-            sequence_file=str(sequence_file),
+            sequence_file=str(seq_b1),
             corrector_strengths=corrector_knob_file,
             tune_knobs_file=tune_knob_file,
         )
@@ -319,10 +331,10 @@ class TestOptimisationMadInterfaceInit:
         ],
         ids=["none", "empty_list", "single_bpm", "two_bpms", "three_bpms"],
     )
-    def test_bad_bpms(self, sequence_file: Path, bad_bpms: list[str] | None) -> None:
+    def test_bad_bpms(self, seq_b1: Path, bad_bpms: list[str] | None) -> None:
         """Test that bad_bpms are properly unobserved."""
         interface = OptimisationMadInterface(
-            sequence_file=str(sequence_file),
+            sequence_file=str(seq_b1),
             corrector_strengths=None,
             tune_knobs_file=None,
             bad_bpms=bad_bpms,

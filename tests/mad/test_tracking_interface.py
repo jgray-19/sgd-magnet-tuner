@@ -58,14 +58,14 @@ def test_init_without_logging() -> None:
 )
 def test_setup_for_tracking(
     loaded_tracking_interface: TrackingMadInterface,
-    sequence_file: Path,
+    seq_b1: Path,
     beam_energy: float,
     observe_pattern: str,
 ) -> None:
     """Test setup_for_tracking method."""
     interface = loaded_tracking_interface
     interface.setup_for_tracking(
-        sequence_file=sequence_file,
+        sequence_file=seq_b1,
         seq_name="lhcb1",
         beam_energy=beam_energy,
         observe_pattern=observe_pattern,

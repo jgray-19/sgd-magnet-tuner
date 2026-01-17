@@ -4,18 +4,19 @@ Shared helper functions for controller integration tests.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import tfs
 
-from aba_optimiser.config import BEND_ERROR_FILE
-from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.mad import BaseMadInterface, OptimisationMadInterface
+from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
 from aba_optimiser.simulation.optics import perform_orbit_correction
-from aba_optimiser.xsuite.xsuite_tools import initialise_env
+from aba_optimiser.xsuite.env import initialise_env
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import xtrack as xt
 
 TRACK_COLUMNS = (
     "turn",
@@ -44,14 +45,16 @@ end
 
 
 def generate_model_with_errors(
+    loaded_interface_with_beam: BaseMadInterface,
     sequence_file: Path,
     json_file: Path,
     dpp_value: float,
     magnet_range: str,
     corrector_file: Path,
+    beam: Literal[1, 2] = 1,
     perturb_quads: bool = False,
     perturb_bends: bool = False,
-) -> tuple[dict, dict[str, float], tfs.TfsDataFrame, Path]:
+) -> tuple[dict[str, float], dict, tfs.TfsDataFrame]:
     """
     Generate a MAD model with errors and return the xsuite environment.
 
@@ -65,76 +68,95 @@ def generate_model_with_errors(
         perturb_bends: Whether to perturb bends
 
     Returns:
-        Tuple of (env, magnet_strengths, twiss_data, tune_knobs_file)
+        Tuple of (magnet_strengths, matched_tunes, corrector_table)
     """
     # Create MAD interface and load sequence
-    mad = BaseMadInterface()
-    beam = 1 if "lhcb1" in sequence_file.name else 2
-    seq_name = f"lhcb{beam}"
-    mad.load_sequence(sequence_file, seq_name)
-    mad.setup_beam(beam_energy=6800)
+    interface = loaded_interface_with_beam
+    interface.mad["zero_twiss", "_"] = interface.mad.twiss(sequence="loaded_sequence")  # ty:ignore[invalid-assignment]
 
     # Perform orbit correction for off-momentum beam
+    # Perform orbit correction for off-momentum beam (delta = 2e-4)
     magnet_strengths = {}
-    if perturb_quads:
-        mad.mad.send(f"""
-local randseed, randn, abs in MAD.gmath
-new_magnet_values = {{}}
-for _, elm in loaded_sequence:iter('{magnet_range}') do
-    if elm.kind == 'quadrupole' and elm.k1 ~= 0.0 and elm.name:match("MQ%.") then
-        elm.k1 = elm.k1 + 1e-4 * randn() * abs(elm.k1)
-        new_magnet_values[elm.name .. ".k1"] = elm.k1
-    end
-end
-py:send(new_magnet_values, true)
-        """)
-        magnet_strengths = mad.mad.recv()
-    if perturb_bends:
-        bend_errors_table = tfs.read(BEND_ERROR_FILE)
-        bend_errors_dict = bend_errors_table["K0L"].to_dict()
-        for elm in mad.mad.loaded_sequence:
-            # Dipoles
-            if elm.kind == "sbend" and elm.k0 != 0 and elm.name[:3] == "MB.":
-                if elm.name not in bend_errors_dict:
-                    raise ValueError(f"Bend error for {elm.name} not found in {BEND_ERROR_FILE}")
-                k0l_error = bend_errors_dict[elm.name]
-                elm.k0 += k0l_error / elm.l
-                magnet_strengths[elm.name + ".k0"] = elm.k0
+    magnet_type = ("q" if perturb_quads else "") + ("d" if perturb_bends else "")
+    if magnet_type:
+        magnet_strengths, _ = apply_magnet_perturbations(
+            interface.mad,
+            rel_k1_std_dev=1e-4,
+            seed=42,
+            magnet_type=magnet_type,
+        )
 
     # Convert all rbends into true rbends to ensure correct tracking
     # convert_rbends_to_true_rbends(mad)
 
     matched_tunes = perform_orbit_correction(
-        mad=mad.mad,
+        mad=interface.mad,
         machine_deltap=dpp_value,
         target_qx=0.28,
         target_qy=0.31,
         corrector_file=corrector_file,
         beam=beam,
     )
-    # Run twiss to get closed orbit and optics
-    twiss_data = mad.run_twiss(observe=0)
 
     # Read corrector table
     corrector_table = tfs.read(corrector_file)
-    corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
+    corrector_table = corrector_table.loc[corrector_table.loc[:, "kind"] != "monitor"]
 
+    return magnet_strengths, matched_tunes, corrector_table
+
+
+def generate_xsuite_env_with_errors(
+    loaded_interface_with_beam: BaseMadInterface,
+    sequence_file: Path,
+    json_file: Path,
+    dpp_value: float,
+    magnet_range: str,
+    corrector_file: Path,
+    beam: Literal[1, 2] = 1,
+    perturb_quads: bool = False,
+    perturb_bends: bool = False,
+) -> tuple[xt.Environment, dict[str, float], dict, tfs.TfsDataFrame]:
+    """
+    Generate a MAD model with errors and return the xsuite environment.
+
+    Args:
+        sequence_file: Path to the sequence file
+        json_file: Path to the xsuite JSON file
+        dpp_value: Momentum deviation value
+        magnet_range: Range of magnets to perturb
+        corrector_file: Path to save corrector strengths
+        perturb_quads: Whether to perturb quadrupoles
+        perturb_bends: Whether to perturb bends
+
+    Returns:
+        Tuple of (env, magnet_strengths, matched_tunes, corrector_table)
+    """
+    magnet_strengths, matched_tunes, corrector_table = generate_model_with_errors(
+        loaded_interface_with_beam,
+        sequence_file,
+        json_file,
+        dpp_value,
+        magnet_range,
+        corrector_file,
+        beam,
+        perturb_quads,
+        perturb_bends,
+    )
+
+    seq_name = f"lhcb{beam}"
     # Create xsuite environment with orbit correction applied
     env = initialise_env(
         matched_tunes=matched_tunes,
         magnet_strengths=magnet_strengths,
         corrector_table=corrector_table,
+        beam=beam,
         json_file=json_file,
         sequence_file=sequence_file,
         seq_name=seq_name,
         beam_energy=6800,
     )
 
-    # save the tune knobs to file with unique name
-    tune_knobs_file = corrector_file.parent / f"tune_knobs_{corrector_file.stem}.txt"
-    save_knobs(matched_tunes, tune_knobs_file)
-
-    return env, magnet_strengths, twiss_data, tune_knobs_file
+    return env, magnet_strengths, matched_tunes, corrector_table
 
 
 def get_twiss_without_errors(

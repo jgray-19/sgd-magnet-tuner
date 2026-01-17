@@ -18,15 +18,10 @@ from aba_optimiser.config import (
     BEAM_ENERGY,
     LHCB1_SEQ_NAME,
 )
-from aba_optimiser.xsuite.xsuite_tools import (
-    create_xsuite_environment,
-    initialise_env,
-    insert_ac_dipole,
-    insert_particle_monitors_at_pattern,
-    line_to_dataframes,
-    run_acd_twiss,
-    run_tracking,
-)
+from aba_optimiser.xsuite.acd import insert_ac_dipole, run_acd_twiss
+from aba_optimiser.xsuite.env import create_xsuite_environment, initialise_env
+from aba_optimiser.xsuite.monitors import insert_particle_monitors_at_pattern, line_to_dataframes
+from aba_optimiser.xsuite.tracking import run_tracking
 
 
 @pytest.fixture(scope="function")
