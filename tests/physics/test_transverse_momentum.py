@@ -148,10 +148,10 @@ def _setup_xsuite_simulation(
 
 
 @pytest.mark.slow
-def test_calculate_pz_recovers_true_momenta(json_b1, sequence_file):
+def test_calculate_pz_recovers_true_momenta(json_b1, seq_b1):
     env = create_xsuite_environment(
         json_file=json_b1,
-        sequence_file=sequence_file,
+        sequence_file=seq_b1,
         seq_name="lhcb1",
     )
 
@@ -342,7 +342,7 @@ def test_calculate_pz_with_corrections_and_perturbations(
     px_divisor,
     py_divisor,
     json_b1_corrected,
-    sequence_file,
+    seq_b1,
     tmp_path,
 ):
     """Test momentum reconstruction with orbit correction and/or magnet perturbations.
@@ -359,7 +359,7 @@ def test_calculate_pz_with_corrections_and_perturbations(
         do_apply_magnet_perturbations,
         magnet_seed,
         json_path,
-        sequence_file,
+        seq_b1,
         tmp_path,
         test_id,
     )

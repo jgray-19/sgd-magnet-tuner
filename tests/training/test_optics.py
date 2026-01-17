@@ -131,7 +131,7 @@ def tmp_dir(
 @pytest.mark.slow
 def test_controller_opt(
     tmp_dir: Path,
-    sequence_file: Path,
+    seq_b1: Path,
     model_dir_b1: Path,
 ) -> None:
     """Test that the controller initializes correctly with custom num_tracks and flattop_turns."""
@@ -140,7 +140,7 @@ def test_controller_opt(
     corrector_file, magnet_strengths, tune_knobs_file, analysis_dir = _generate_nonoise_track(
         tmp_dir,
         model_dir_b1,
-        sequence_file,
+        seq_b1,
         6600,
         0e-4,
         magnet_range,
@@ -174,7 +174,7 @@ def test_controller_opt(
     )
 
     sequence_config = SequenceConfig(
-        sequence_file_path=sequence_file,
+        sequence_file_path=seq_b1,
         magnet_range=magnet_range,
         seq_name="lhcb1",
     )

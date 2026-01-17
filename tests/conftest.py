@@ -24,79 +24,84 @@ if TYPE_CHECKING:
 logging.getLogger("xdeps").setLevel(logging.WARNING)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def data_dir() -> Path:
     """Path to the example corrector file used by several tests."""
     return Path(__file__).parent / "data"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def seq_b1(data_dir: Path) -> Path:
     """Path to the example sequence file for beam 1 used by several tests."""
     return data_dir / "sequences" / "lhcb1.seq"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
+def seq_b2(data_dir: Path) -> Path:
+    """Path to the example sequence file for beam 2 used by a test."""
+    return data_dir / "sequences" / "lhcb2.seq"
+
+
+@pytest.fixture(scope="session")
 def json_b1(data_dir: Path) -> Path:
     """Path to the pre-generated xsuite JSON for beam 1."""
     return data_dir / "sequences" / "lhcb1.json"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def json_b1_corrected(data_dir: Path) -> Path:
     """Path to the corrected xsuite JSON for beam 1."""
     return data_dir / "sequences" / "lhcb1_corrected.json"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def tune_knobs_file(data_dir: Path) -> Path:
     """Path to the tune knobs file."""
     return data_dir / "strengths" / "tune_knobs.txt"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def corrector_knobs_file(data_dir: Path) -> Path:
     """Path to the corrector knobs file."""
     return data_dir / "correctors" / "corrector_knobs.txt"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def corrector_file(data_dir: Path) -> Path:
     """Path to the corrector table file."""
     return data_dir / "correctors" / "corrector_table.tfs"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def tracking_path(data_dir: Path) -> Path:
     """Path to the tracking data directory."""
     return data_dir / "analysis" / "tracking"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def estimated_strengths_file(data_dir: Path) -> Path:
     """Path to the estimated quadrupole strengths file."""
     return data_dir / "strengths" / "estimated_quad_strengths.json"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def model_dir_b1() -> Path:
     """Path to the beam 1 model directory."""
     return Path(__file__).parent.parent / "models" / "lhcb1_12cm"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
+def model_dir_b2() -> Path:
+    """Path to the beam 2 model directory."""
+    return Path(__file__).parent.parent / "models" / "lhcb2_12cm"
+
+
+@pytest.fixture(scope="session")
 def corrector_table(corrector_file: Path) -> tfs.TfsDataFrame:
     """Load and filter corrector table, removing monitor elements."""
     corrector_table = tfs.read(corrector_file)
     # Filter out monitor elements from the corrector table
     return corrector_table[corrector_table["kind"] != "monitor"]
-
-
-@pytest.fixture(scope="module")
-def sequence_file(seq_b1: Path) -> Path:
-    """Path to the example sequence file used by several tests."""
-    return seq_b1
-
 
 @pytest.fixture(scope="function")
 def interface() -> Generator[BaseMadInterface, None, None]:
@@ -108,9 +113,9 @@ def interface() -> Generator[BaseMadInterface, None, None]:
 
 
 @pytest.fixture(scope="function")
-def loaded_interface(interface: BaseMadInterface, sequence_file: Path) -> BaseMadInterface:
+def loaded_interface(interface: BaseMadInterface, seq_b1: Path) -> BaseMadInterface:
     """Fixture that returns an interface with the example sequence loaded."""
-    interface.load_sequence(sequence_file, "lhcb1")
+    interface.load_sequence(seq_b1, "lhcb1")
     return interface
 
 
@@ -132,10 +137,10 @@ def tracking_interface() -> Generator[TrackingMadInterface, None, None]:
 
 @pytest.fixture(scope="function")
 def loaded_tracking_interface(
-    tracking_interface: TrackingMadInterface, sequence_file: Path
+    tracking_interface: TrackingMadInterface, seq_b1: Path
 ) -> TrackingMadInterface:
     """Fixture that returns a tracking interface with the example sequence loaded."""
-    tracking_interface.load_sequence(sequence_file, "lhcb1")
+    tracking_interface.load_sequence(seq_b1, "lhcb1")
     return tracking_interface
 
 

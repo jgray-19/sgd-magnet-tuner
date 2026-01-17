@@ -28,7 +28,7 @@ from .momentum_test_utils import (  # noqa: E402
 
 
 @pytest.mark.slow
-def test_dispersive_momentum_on_momentum(json_b1, sequence_file):
+def test_dispersive_momentum_on_momentum(json_b1, seq_b1):
     """Test dispersive momentum reconstruction for on-momentum beam.
 
     For on-momentum particles (δp=0), dispersive and transverse methods
@@ -38,7 +38,7 @@ def test_dispersive_momentum_on_momentum(json_b1, sequence_file):
 
     tracking_df, tws, baseline_line = setup_ac_dipole_tracking(
         json_path=json_path,
-        sequence_file=sequence_file,
+        sequence_file=seq_b1,
         delta_p=0.0,
         ramp_turns=1000,
         flattop_turns=100,
@@ -98,7 +98,7 @@ def test_dispersive_momentum_on_momentum(json_b1, sequence_file):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("delta_p", [-5e-4, 4e-4])
-def test_dispersive_momentum_off_momentum(json_b1, sequence_file, delta_p):
+def test_dispersive_momentum_off_momentum(json_b1, seq_b1, delta_p):
     """Test dispersive momentum reconstruction for off-momentum beam.
 
     For off-momentum particles (δp≠0), the dispersive method should correct
@@ -112,7 +112,7 @@ def test_dispersive_momentum_off_momentum(json_b1, sequence_file, delta_p):
 
     tracking_df, tws, baseline_line = setup_ac_dipole_tracking(
         json_path=json_path,
-        sequence_file=sequence_file,
+        sequence_file=seq_b1,
         delta_p=delta_p,
         ramp_turns=1000,
         flattop_turns=100,
@@ -174,7 +174,7 @@ def test_dispersive_momentum_off_momentum(json_b1, sequence_file, delta_p):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("delta_p", [-5e-4, 4e-4])
-def test_dispersive_momentum_off_momentum_with_noise(json_b1, sequence_file, delta_p):
+def test_dispersive_momentum_off_momentum_with_noise(json_b1, seq_b1, delta_p):
     """Test dispersive momentum reconstruction with noise for off-momentum beam.
 
     For off-momentum particles (δp≠0), verify that SVD cleaning improves
@@ -184,7 +184,7 @@ def test_dispersive_momentum_off_momentum_with_noise(json_b1, sequence_file, del
 
     tracking_df, tws, baseline_line = setup_ac_dipole_tracking(
         json_path=json_path,
-        sequence_file=sequence_file,
+        sequence_file=seq_b1,
         delta_p=delta_p,
         ramp_turns=1000,
         flattop_turns=100,

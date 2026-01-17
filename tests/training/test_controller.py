@@ -267,7 +267,7 @@ def _make_simulation_config_quad() -> SimulationConfig:
 def test_controller_energy_opt(
     tmp_dir: Path,
     flattop_turns: int,
-    sequence_file: Path,
+    seq_b1: Path,
     json_b1: Path,
     dpp_value: float,
 ) -> None:
@@ -279,7 +279,7 @@ def test_controller_energy_opt(
     magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
 
     corrector_file, _, tune_knobs_file = _generate_nonoise_track(
-        sequence_file,
+        seq_b1,
         json_b1,
         flattop_turns,
         off_dpp_path,
@@ -301,7 +301,7 @@ def test_controller_energy_opt(
     ]
 
     sequence_config = SequenceConfig(
-        sequence_file_path=sequence_file,
+        sequence_file_path=seq_b1,
         magnet_range=magnet_range,
         beam_energy=6800,
     )
@@ -343,7 +343,7 @@ def test_controller_energy_opt(
 @pytest.mark.slow
 @pytest.mark.parametrize("start_marker", ["MSIA.EXIT.B1", "E.CELL.12.B1"])
 def test_controller_quad_opt_simple(
-    tmp_dir: Path, sequence_file: Path, json_b1: Path, start_marker: str
+    tmp_dir: Path, seq_b1: Path, json_b1: Path, start_marker: str
 ) -> None:
     """Test quadrupole optimisation using the simple opt script logic."""
     # Constants for the test
@@ -361,7 +361,7 @@ def test_controller_quad_opt_simple(
     off_magnet_path = tmp_dir / "track_off_magnet.parquet"
 
     corrector_file, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
-        sequence_file,
+        seq_b1,
         json_b1,
         flattop_turns,
         off_magnet_path,
@@ -376,7 +376,7 @@ def test_controller_quad_opt_simple(
     true_values = magnet_strengths.copy()
 
     sequence_config = SequenceConfig(
-        sequence_file_path=sequence_file,
+        sequence_file_path=seq_b1,
         magnet_range=magnet_range,
         beam_energy=6800,
         first_bpm=start_marker,

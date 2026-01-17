@@ -91,12 +91,12 @@ def twiss_table(test_line):
 
 
 @pytest.mark.slow
-def test_create_xsuite_environment(tmp_path, sequence_file, json_b1):
+def test_create_xsuite_environment(tmp_path, seq_b1, json_b1):
     # Test basic creation
     json_file = json_b1
     json_file.unlink(missing_ok=True)
     env = create_xsuite_environment(
-        sequence_file=sequence_file, seq_name=LHCB1_SEQ_NAME, json_file=json_b1
+        sequence_file=seq_b1, seq_name=LHCB1_SEQ_NAME, json_file=json_b1
     )
     assert LHCB1_SEQ_NAME in env.lines
     assert json_file.exists()
@@ -107,14 +107,14 @@ def test_create_xsuite_environment(tmp_path, sequence_file, json_b1):
     # Test rerun_madx flag
     mod_time_before = json_file.stat().st_mtime
     env2 = create_xsuite_environment(
-        sequence_file=sequence_file, seq_name=LHCB1_SEQ_NAME, json_file=json_b1
+        sequence_file=seq_b1, seq_name=LHCB1_SEQ_NAME, json_file=json_b1
     )
     mod_time_after = json_file.stat().st_mtime
     assert mod_time_before == mod_time_after
     assert LHCB1_SEQ_NAME in env2.lines
 
     env3 = create_xsuite_environment(
-        sequence_file=sequence_file, seq_name=LHCB1_SEQ_NAME, rerun_madx=True, json_file=json_b1
+        sequence_file=seq_b1, seq_name=LHCB1_SEQ_NAME, rerun_madx=True, json_file=json_b1
     )
     mod_time_after_rerun = json_file.stat().st_mtime
     assert mod_time_after_rerun > mod_time_after
@@ -122,7 +122,9 @@ def test_create_xsuite_environment(tmp_path, sequence_file, json_b1):
 
     # Test custom json and energy
     temp_json = tmp_path / "temp_xsuite.json"
-    env4 = create_xsuite_environment(sequence_file=sequence_file, seq_name=LHCB1_SEQ_NAME, json_file=temp_json, beam_energy=450)
+    env4 = create_xsuite_environment(
+        sequence_file=seq_b1, seq_name=LHCB1_SEQ_NAME, json_file=temp_json, beam_energy=450
+    )
     assert LHCB1_SEQ_NAME in env4.lines
     line4 = env4.lines[LHCB1_SEQ_NAME]
     assert np.isclose(line4.particle_ref.energy0[0], 450e9, rtol=1e-10)
@@ -132,9 +134,9 @@ def test_create_xsuite_environment(tmp_path, sequence_file, json_b1):
     mod_time_before = json_file.stat().st_mtime
     # Make sequence file appear newer
     future_time = time.time() + 1
-    os.utime(str(sequence_file), (future_time, future_time))
+    os.utime(str(seq_b1), (future_time, future_time))
     env5 = create_xsuite_environment(
-        sequence_file=sequence_file, seq_name=LHCB1_SEQ_NAME, json_file=json_b1
+        sequence_file=seq_b1, seq_name=LHCB1_SEQ_NAME, json_file=json_b1
     )
     mod_time_after = json_file.stat().st_mtime
     assert mod_time_after > mod_time_before
@@ -152,7 +154,7 @@ def test_create_xsuite_environment(tmp_path, sequence_file, json_b1):
         "Init test case 2",
     ],
 )
-def test_initialise_env(corrector_table, sequence_file, json_b1, qx, qy, k1_mqy, k0_mb, k2_mcs):
+def test_initialise_env(corrector_table, seq_b1, json_b1, qx, qy, k1_mqy, k0_mb, k2_mcs):
     """Test initialise_env function."""
     json_file = json_b1
     json_file.unlink(missing_ok=True)  # Ensure fresh environment
@@ -167,7 +169,7 @@ def test_initialise_env(corrector_table, sequence_file, json_b1, qx, qy, k1_mqy,
         matched_tunes=matched_tunes,
         magnet_strengths=magnet_strengths,
         corrector_table=corrector_table,
-        sequence_file=sequence_file,
+        sequence_file=seq_b1,
         beam_energy=BEAM_ENERGY,
         seq_name=LHCB1_SEQ_NAME,
         json_file=json_file,

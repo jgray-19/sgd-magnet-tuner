@@ -191,7 +191,7 @@ def get_truth_and_twiss(
 
     # Convert twiss to expected format
     ng = baseline_line.to_madng()
-    ng["tws", "flw"] = ng.twiss(sequence=ng.seq)
+    ng["tws", "flw"] = ng.twiss(sequence=ng.seq, coupling=True)
     tws: tfs.TfsDataFrame = (
         ng.tws.to_df()
         .set_index("name")
