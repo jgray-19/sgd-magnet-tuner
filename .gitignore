@@ -170,7 +170,8 @@ analysis*/
 data/
 b1_flat_60_18cm/
 docs/api/
-mad_scripts/
+/mad_scripts/
+!src/aba_optimiser/mad/mad_scripts/
 *_results/
 *_analysis*/
 models/**

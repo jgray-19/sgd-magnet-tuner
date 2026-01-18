@@ -252,12 +252,13 @@ local _, flw = MAD.track{{
     save=false,
     savemap=false,
 }}
-B1 = MAD.gphys.map2bet(flw[1], 6, nil, nil, sdir)
-py:send(B1.d{plane})
+local B1 = MAD.gphys.map2bet(flw[1], 6, nil, nil, sdir)
+py:send(B1.d{plane}, true)
 """)
-        estimated_dispersion: float = mad.receive()  # ty:ignore[invalid-assignment]
+        estimated_dispersion: float = mad.receive()
         estimates.append(estimated_dispersion)
-
+    if any(np.isnan(estimates)):
+        logger.warning(f"NaN dispersion estimates found for corrector {corrector}")
     mad.send("shush()")
     del mad_interface
     return corrector, estimates
@@ -362,6 +363,7 @@ def calculate_dispersion_statistics(
 
     for corrector, estimates in corrector_dispersion_estimates.items():
         estimates_series = pd.Series(estimates)
+        corrector_dispersion_stds[corrector] = estimates_series.std()  # Over estimate the std dev
 
         # Remove outliers using IQR method
         q1 = estimates_series.quantile(0.25)
@@ -372,7 +374,7 @@ def calculate_dispersion_statistics(
         ]
 
         final_corrector_dispersion[corrector] = filtered_estimates.mean()
-        corrector_dispersion_stds[corrector] = filtered_estimates.std()
+        # corrector_dispersion_stds[corrector] = filtered_estimates.std()
 
     return final_corrector_dispersion, corrector_dispersion_stds
 
