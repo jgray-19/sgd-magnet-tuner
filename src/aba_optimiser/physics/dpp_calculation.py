@@ -237,12 +237,15 @@ def calculate_dpp_both(
 ) -> pd.DataFrame:
     """
     Compute δ using BOTH 'prev' and 'next' partner BPM triplets.
-    Returns a DataFrame aligned to the input rows with columns:
+
+    Returns:
+        DataFrame aligned to the input rows with columns:
+
         - 'delta_prev'
         - 'delta_next'
         - 'delta_avg'  (simple unweighted average where both are valid; NaN otherwise)
 
-    This leaves the original `calculate_dpp` API untouched.
+    This leaves the original calculate_dpp API untouched.
     """
     LOGGER.info("Calculating δ using BOTH directions (prev + next)")
 

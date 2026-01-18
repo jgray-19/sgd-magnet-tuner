@@ -8,7 +8,8 @@ class LRScheduler:
     """
     Cosine-decay learning-rate scheduler with cosine warmup.
 
-    Usage:
+    Usage::
+
         scheduler = LRScheduler(
             warmup_epochs=2000,
             decay_epochs=3000,
