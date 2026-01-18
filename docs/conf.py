@@ -48,10 +48,10 @@ autodoc_default_options = {
     "show-inheritance": True,
 }
 autodoc_typehints = "description"
-# Suppress duplicate object warnings from autosummary
-suppress_warnings = ["autosummary", "ref.python"]
+# Suppress duplicate object warnings from autosummary and docutils formatting warnings
+suppress_warnings = ["autosummary", "ref.python", "docutils"]
 # Mock imports for optional dependencies
-autodoc_mock_imports = ["omc3", "xtrack", "xobjects", "xpart", "xdeps", "nxcals", "psutil", "cpymad"]
+autodoc_mock_imports = ["omc3", "xtrack", "xobjects", "xpart", "xdeps", "nxcals", "psutil", "cpymad", "pyspark"]
 napoleon_google_docstring = False
 napoleon_numpy_docstring = True
 napoleon_use_param = False

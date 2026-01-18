@@ -57,7 +57,7 @@ def load_optics_files(
     Args:
         optics_dir: Directory containing the optics TFS files
         file_specs: Dict mapping keys to (prefix, suffix) tuples.
-            Example: ``{"beta_x": ("beta_phase_", "x")}`` will load ``beta_phase_x.tfs``
+            For example, ``{"beta_x": ("beta_phase_", "x")}`` will load ``beta_phase_x.tfs``
 
     Returns:
         Dictionary mapping keys to loaded DataFrames
