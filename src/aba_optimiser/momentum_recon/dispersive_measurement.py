@@ -182,6 +182,9 @@ def calculate_pz_measurement(
     tws = build_twiss_from_measurements(Path(measurement_folder), include_errors=include_errors)
     tws = tws[tws.index.isin(bpm_list)]
 
+    # Reduce the original data to only BPMs present in the twiss
+    data = data[data["name"].isin(tws.index)]
+
     # Check for errors upfront - if any error column exists, all must exist
     has_errors = _check_and_log_errors(tws)
     if include_errors and not has_errors:

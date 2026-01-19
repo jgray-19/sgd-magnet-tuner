@@ -35,6 +35,11 @@ def seq_b1(data_dir: Path) -> Path:
     """Path to the example sequence file for beam 1 used by several tests."""
     return data_dir / "sequences" / "lhcb1.seq"
 
+@pytest.fixture(scope="session")
+def seq_b1_crossing(data_dir: Path) -> Path:
+    """Path to the example sequence file for beam 1 with crossing used by several tests."""
+    return data_dir / "sequences" / "b1_120cm_crossing.seq"
+
 
 @pytest.fixture(scope="session")
 def seq_b2(data_dir: Path) -> Path:

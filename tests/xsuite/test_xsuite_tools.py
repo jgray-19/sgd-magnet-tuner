@@ -86,12 +86,12 @@ def twiss_table(test_line):
 
 
 @pytest.mark.slow
-def test_create_xsuite_environment(tmp_path, seq_b1, json_b1):
+def test_create_xsuite_environment(tmp_path, seq_b1):
     # Test basic creation
-    json_file = json_b1
+    json_file = tmp_path / "lhcb1.json"
     json_file.unlink(missing_ok=True)
     env = create_xsuite_environment(
-        sequence_file=seq_b1, seq_name=LHCB1_SEQ_NAME, json_file=json_b1
+        sequence_file=seq_b1, seq_name=LHCB1_SEQ_NAME, json_file=json_file
     )
     assert LHCB1_SEQ_NAME in env.lines
     assert json_file.exists()
@@ -102,14 +102,14 @@ def test_create_xsuite_environment(tmp_path, seq_b1, json_b1):
     # Test rerun_madx flag
     mod_time_before = json_file.stat().st_mtime
     env2 = create_xsuite_environment(
-        sequence_file=seq_b1, seq_name=LHCB1_SEQ_NAME, json_file=json_b1
+        sequence_file=seq_b1, seq_name=LHCB1_SEQ_NAME, json_file=json_file
     )
     mod_time_after = json_file.stat().st_mtime
     assert mod_time_before == mod_time_after
     assert LHCB1_SEQ_NAME in env2.lines
 
     env3 = create_xsuite_environment(
-        sequence_file=seq_b1, seq_name=LHCB1_SEQ_NAME, rerun_madx=True, json_file=json_b1
+        sequence_file=seq_b1, seq_name=LHCB1_SEQ_NAME, rerun_madx=True, json_file=json_file
     )
     mod_time_after_rerun = json_file.stat().st_mtime
     assert mod_time_after_rerun > mod_time_after
@@ -131,7 +131,7 @@ def test_create_xsuite_environment(tmp_path, seq_b1, json_b1):
     future_time = time.time() + 1
     os.utime(str(seq_b1), (future_time, future_time))
     env5 = create_xsuite_environment(
-        sequence_file=seq_b1, seq_name=LHCB1_SEQ_NAME, json_file=json_b1
+        sequence_file=seq_b1, seq_name=LHCB1_SEQ_NAME, json_file=json_file
     )
     mod_time_after = json_file.stat().st_mtime
     assert mod_time_after > mod_time_before
@@ -149,9 +149,9 @@ def test_create_xsuite_environment(tmp_path, seq_b1, json_b1):
         "Init test case 2",
     ],
 )
-def test_initialise_env(corrector_table, seq_b1, json_b1, qx, qy, k1_mqy, k0_mb, k2_mcs):
+def test_initialise_env(corrector_table, seq_b1, qx, qy, k1_mqy, k0_mb, k2_mcs, tmp_path):
     """Test initialise_env function."""
-    json_file = json_b1
+    json_file = tmp_path / "temp_xsuite.json"
     json_file.unlink(missing_ok=True)  # Ensure fresh environment
     matched_tunes = {"dqx_b1_op": qx, "dqy_b1_op": qy}
     magnet_strengths = {
@@ -169,17 +169,17 @@ def test_initialise_env(corrector_table, seq_b1, json_b1, qx, qy, k1_mqy, k0_mb,
         seq_name=LHCB1_SEQ_NAME,
         json_file=json_file,
     )
-    assert env["dqx.b1_op"] == qx
-    assert env["dqy.b1_op"] == qy
-    assert np.isclose(env["mqy.b5l2.b1"].k1, k1_mqy)
-    assert np.isclose(env["mb.b8r2.b1"].k0, k0_mb)
-    assert np.isclose(env["mcs.b8r2.b1"].k2, k2_mcs)
+    assert env["dqx.b1_op"] == qx  # ty:ignore[not-subscriptable]
+    assert env["dqy.b1_op"] == qy  # ty:ignore[not-subscriptable]
+    assert np.isclose(env["mqy.b5l2.b1"].k1, k1_mqy)  # ty:ignore[not-subscriptable]
+    assert np.isclose(env["mb.b8r2.b1"].k0, k0_mb)  # ty:ignore[not-subscriptable]
+    assert np.isclose(env["mcs.b8r2.b1"].k2, k2_mcs)  # ty:ignore[not-subscriptable]
 
     for row in corrector_table.itertuples():
-        assert len(env[row.ename.lower()].knl) == 1
-        assert np.isclose(env[row.ename.lower()].knl[0], -row.hkick)
-        assert len(env[row.ename.lower()].ksl) == 1
-        assert np.isclose(env[row.ename.lower()].ksl[0], row.vkick)
+        assert len(env[row.ename.lower()].knl) == 1  # ty:ignore[not-subscriptable]
+        assert np.isclose(env[row.ename.lower()].knl[0], -row.hkick)  # ty:ignore[not-subscriptable]
+        assert len(env[row.ename.lower()].ksl) == 1  # ty:ignore[not-subscriptable]
+        assert np.isclose(env[row.ename.lower()].ksl[0], row.vkick)  # ty:ignore[not-subscriptable]f
 
 
 @pytest.mark.parametrize(
@@ -227,9 +227,7 @@ def test_insert_particle_monitors_at_pattern(
         assert new_line is not test_line
 
     num_matches = sum(1 for name in test_line.element_names if re.match(pattern, name))
-    expected_add = (
-        num_matches if not pre_add_existing else num_matches - 1
-    )  # since one replaced
+    expected_add = num_matches if not pre_add_existing else num_matches - 1  # since one replaced
     assert len(new_line.elements) == initial_num_elements + expected_add
 
     # Check that monitors exist with correct properties
@@ -251,9 +249,7 @@ def test_insert_ac_dipole(test_line: xt.Line, twiss_table: xt.TwissTable):
     driven_tunes = [0.16, 0.18]
 
     initial_num_elements = len(test_line.elements)
-    new_line = insert_ac_dipole(
-        test_line, twiss_table, beam, acd_ramp, total_turns, driven_tunes
-    )
+    new_line = insert_ac_dipole(test_line, twiss_table, beam, acd_ramp, total_turns, driven_tunes)
 
     # Check that a new line is returned (function copies)
     assert new_line is not test_line
@@ -298,9 +294,7 @@ def test_insert_ac_dipole(test_line: xt.Line, twiss_table: xt.TwissTable):
     pd_twiss = pd_twiss[pd_twiss["name"] != acdv_name]
     pd_twiss.reset_index(drop=True, inplace=True)
 
-    pd.testing.assert_frame_equal(
-        twiss_table.to_pandas(), pd_twiss, check_exact=False, rtol=1e-10
-    )
+    pd.testing.assert_frame_equal(twiss_table.to_pandas(), pd_twiss, check_exact=False, rtol=1e-10)
 
 
 def test_run_acd_twiss(test_line: xt.Line):
