@@ -180,13 +180,6 @@ def flattop_turns() -> int:
     return 256
 
 
-@pytest.fixture(scope="module")
-def tmp_dir(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> Path:
-    return tmp_path_factory.mktemp("aba_controller_tracks")
-
-
 def _make_optimiser_config_energy() -> OptimiserConfig:
     return OptimiserConfig(
         max_epochs=1000,
@@ -233,10 +226,9 @@ def _make_simulation_config_quad() -> SimulationConfig:
 
 @pytest.mark.slow
 def test_controller_energy_opt(
-    tmp_dir: Path,
+    tmp_path: Path,
     flattop_turns: int,
     seq_b1: Path,
-    json_b1: Path,
     dpp_value: float,
     loaded_interface_with_beam: BaseMadInterface,
 ) -> None:
@@ -244,13 +236,13 @@ def test_controller_energy_opt(
     optimiser_config = _make_optimiser_config_energy()
     simulation_config = _make_simulation_config_energy()
 
-    off_dpp_path = tmp_dir / "track_off_dpp.parquet"
+    off_dpp_path = tmp_path / "track_off_dpp.parquet"
     magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
 
     corrector_file, _, tune_knobs_file = _generate_nonoise_track(
         loaded_interface_with_beam,
         seq_b1,
-        json_b1,
+        tmp_path / "lhcb1.json",
         flattop_turns,
         off_dpp_path,
         dpp_value,
@@ -296,7 +288,7 @@ def test_controller_energy_opt(
         bpm_config=bpm_config,
         show_plots=False,
         true_strengths=None,
-        mad_logfile=tmp_dir / "controller_energy_opt.log",
+        mad_logfile=tmp_path / "controller_energy_opt.log",
     )
 
     estimate, unc = ctrl.run()  # Ensure that run works without errors
@@ -313,9 +305,8 @@ def test_controller_energy_opt(
 @pytest.mark.slow
 @pytest.mark.parametrize("start_marker", ["MSIA.EXIT.B1", "E.CELL.12.B1"])
 def test_controller_quad_opt_simple(
-    tmp_dir: Path,
+    tmp_path: Path,
     seq_b1: Path,
-    json_b1: Path,
     start_marker: str,
     loaded_interface_with_beam: BaseMadInterface,
 ) -> None:
@@ -332,12 +323,12 @@ def test_controller_quad_opt_simple(
     ]
 
     flattop_turns = 1000
-    off_magnet_path = tmp_dir / "track_off_magnet.parquet"
+    off_magnet_path = tmp_path / "track_off_magnet.parquet"
 
     corrector_file, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
         loaded_interface_with_beam,
         seq_b1,
-        json_b1,
+        tmp_path / "lhcb1.json",
         flattop_turns,
         off_magnet_path,
         0.0,
@@ -376,12 +367,12 @@ def test_controller_quad_opt_simple(
         measurement_config=measurement_config,
         bpm_config=bpm_config,
         show_plots=False,
-        plots_dir=tmp_dir / "plots",
+        plots_dir=tmp_path / "plots",
         true_strengths=true_values,
         debug=False,
-        mad_logfile=tmp_dir / "mad_logfile.log",
+        mad_logfile=tmp_path / "mad_logfile.log",
     )
-    logger.info(f"Starting controller with logfile at {tmp_dir / 'mad_logfile.log'}")
+    logger.info(f"Starting controller with logfile at {tmp_path / 'mad_logfile.log'}")
     estimate, unc = ctrl.run()
     for magnet, value in estimate.items():
         rel_diff = (

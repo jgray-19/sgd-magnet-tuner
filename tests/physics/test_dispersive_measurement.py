@@ -18,9 +18,9 @@ from .momentum_test_utils import get_truth_and_twiss, rmse
 
 @pytest.mark.slow
 @pytest.mark.parametrize("delta_p", [0.0, 4e-4])
-def test_dispersive_measurement_recovers_dpp(json_b1, seq_b1, tmp_path_factory, delta_p):
+def test_dispersive_measurement_recovers_dpp(seq_b1, tmp_path, delta_p):
     """Test that calculate_pz_measurement recovers the true DPP from measurements."""
-    json_path = json_b1
+    json_path = tmp_path / f"lhcb1_offmomentum{delta_p}.json"
 
     tracking_df, tws, baseline_line = run_acd_track(
         json_path=json_path,
@@ -38,7 +38,7 @@ def test_dispersive_measurement_recovers_dpp(json_b1, seq_b1, tmp_path_factory, 
     tws = convert_tfs_to_madx(tws)
 
     # Generate fake measurements from the twiss
-    temp_dir = tmp_path_factory.mktemp("dispersive_measurement")
+    temp_dir = tmp_path / "dispersive_measurement"
     generate_fake_measurement(
         twiss=tws,
         outputdir=temp_dir,
@@ -71,5 +71,5 @@ def test_dispersive_measurement_recovers_dpp(json_b1, seq_b1, tmp_path_factory, 
     px_rmse = rmse(merged["px_true"].to_numpy(), merged["px"].to_numpy())
     py_rmse = rmse(merged["py_true"].to_numpy(), merged["py"].to_numpy())
 
-    assert px_rmse < 3e-7, f"px RMSE {px_rmse:.2e} > 3e-7"
-    assert py_rmse < 3e-7, f"py RMSE {py_rmse:.2e} > 3e-7"
+    assert px_rmse < 2e-7, f"px RMSE {px_rmse:.2e} > 2e-7"
+    assert py_rmse < 2e-7, f"py RMSE {py_rmse:.2e} > 2e-7"

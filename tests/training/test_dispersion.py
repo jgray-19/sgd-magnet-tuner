@@ -264,28 +264,13 @@ def _validate_dispersion_estimates(
             f"Beam {beam}: Z-score validation failed ({', '.join(failures)}). Mean: {mean_z:.3f}, Std: {std_z:.3f}"
         )
 
-@pytest.fixture(scope="module", params=[1, 2], ids=["beam1", "beam2"])
-def beam_data(
-    request: pytest.FixtureRequest,
-    seq_b1: Path,
-    seq_b2: Path,
-    model_dir_b1: Path,
-    model_dir_b2: Path,
-    tmp_path_factory: pytest.TempPathFactory,
-) -> tuple[int, Path, Path, Path]:
-    beam = request.param
-    tmp_dir = tmp_path_factory.mktemp(f"dispersion_beam_{beam}")
-    if beam == 1:
-        return beam, seq_b1, model_dir_b1, tmp_dir
-    return beam, seq_b2, model_dir_b2, tmp_dir
-
 
 @pytest.mark.slow
 def test_dispersion_b1(
+    tmp_path: Path,
     seq_b1: Path,
     model_dir_b1: Path,
     loaded_interface_with_beam: BaseMadInterface,
-    tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
     """Test that dispersion estimation reproduces model values at correctors.
 
@@ -296,7 +281,7 @@ def test_dispersion_b1(
     4. Validates estimates match model within tolerance
     """
     beam = 1
-    tmp_dir = tmp_path_factory.mktemp("dispersion_beam_1")
+    tmp_dir = tmp_path / "dispersion_beam_1"
 
     # Generate tracking data and analyze optics
     optics_dir = _generate_nonoise_track(
@@ -325,10 +310,10 @@ def test_dispersion_b1(
 
 @pytest.mark.slow
 def test_dispersion_b2(
+    tmp_path: Path,
     seq_b2: Path,
     model_dir_b2: Path,
     beam2_interface: BaseMadInterface,
-    tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
     """Test that dispersion estimation reproduces model values at correctors.
 
@@ -340,7 +325,7 @@ def test_dispersion_b2(
     """
 
     beam = 2
-    tmp_dir = tmp_path_factory.mktemp("dispersion_beam_2")
+    tmp_dir = tmp_path / "dispersion_beam_2"
     # Generate tracking data and analyze optics
     optics_dir = _generate_nonoise_track(
         beam2_interface, tmp_dir, model_dir_b2, seq_b2, 6600, beam, None

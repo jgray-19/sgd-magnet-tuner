@@ -28,13 +28,13 @@ from .momentum_test_utils import (  # noqa: E402
 
 
 @pytest.mark.slow
-def test_dispersive_momentum_on_momentum(json_b1, seq_b1):
+def test_dispersive_momentum_on_momentum(seq_b1, tmp_path):
     """Test dispersive momentum reconstruction for on-momentum beam.
 
     For on-momentum particles (δp=0), dispersive and transverse methods
     should produce nearly identical results.
     """
-    json_path = json_b1
+    json_path = tmp_path / "lhcb1_onmomentum.json"
 
     tracking_df, tws, baseline_line = run_acd_track(
         json_path=json_path,
@@ -98,7 +98,7 @@ def test_dispersive_momentum_on_momentum(json_b1, seq_b1):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("delta_p", [-5e-4, 4e-4])
-def test_dispersive_momentum_off_momentum(json_b1, seq_b1, delta_p):
+def test_dispersive_momentum_off_momentum(seq_b1, delta_p, tmp_path):
     """Test dispersive momentum reconstruction for off-momentum beam.
 
     For off-momentum particles (δp≠0), the dispersive method should correct
@@ -108,7 +108,7 @@ def test_dispersive_momentum_off_momentum(json_b1, seq_b1, delta_p):
     The py reconstruction should be unaffected by dispersion and both methods
     should perform equally well.
     """
-    json_path = json_b1
+    json_path = tmp_path / f"lhcb1_offmomentum{delta_p}.json"
 
     tracking_df, tws, baseline_line = run_acd_track(
         json_path=json_path,
@@ -174,13 +174,13 @@ def test_dispersive_momentum_off_momentum(json_b1, seq_b1, delta_p):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("delta_p", [-5e-4, 4e-4])
-def test_dispersive_momentum_off_momentum_with_noise(json_b1, seq_b1, delta_p):
+def test_dispersive_momentum_off_momentum_with_noise(seq_b1, delta_p, tmp_path):
     """Test dispersive momentum reconstruction with noise for off-momentum beam.
 
     For off-momentum particles (δp≠0), verify that SVD cleaning improves
     reconstruction quality for noisy data compared to noisy reconstruction.
     """
-    json_path = json_b1
+    json_path = tmp_path / f"lhcb1_offmomentum{delta_p}.json"
 
     tracking_df, tws, baseline_line = run_acd_track(
         json_path=json_path,

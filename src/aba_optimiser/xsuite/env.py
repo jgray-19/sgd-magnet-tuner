@@ -18,16 +18,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
-def get_default_json_path(sequence_file: Path, model_dir: Path | None = None) -> Path:
-    """Compute the default xsuite JSON path for a MAD-X sequence file."""
-    if model_dir is None:
-        model_dir = PROJECT_ROOT / "models"
-    xsuite_dir = model_dir / "xsuite"
-    xsuite_dir.mkdir(exist_ok=True)
-    return xsuite_dir / f"{sequence_file.stem}.json"
-
-
 def create_xsuite_environment(
     beam: int | None = None,
     sequence_file: Path | None = None,

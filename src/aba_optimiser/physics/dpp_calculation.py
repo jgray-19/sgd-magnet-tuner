@@ -10,8 +10,6 @@ import numpy as np
 import pandas as pd
 
 from aba_optimiser.config import FILE_COLUMNS
-from aba_optimiser.io.utils import get_lhc_file_path
-from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.physics.bpm_phases import (
     next_bpm_to_pi,
     next_bpm_to_pi_2,
@@ -31,44 +29,25 @@ DEN_TOL = 1e-10
 @dataclass(frozen=True)
 class TwissMaps:
     sqrt_betax: dict[str, float]
-    dx: dict
-
-
-def _ensure_twiss(tws: pd.DataFrame | None, info: bool) -> pd.DataFrame:
-    if tws is not None:
-        return tws
-    # If no Twiss provided, we provide LHC beam 1 twiss
-    mad = OptimisationMadInterface(
-        get_lhc_file_path(beam=1), bpm_pattern="BPM", corrector_strengths=None, tune_knobs_file=None
-    )
-    tws = mad.run_twiss()
-    if info:
-        LOGGER.info(
-            "Found tunes: q1=%s q2=%s",
-            getattr(tws, "q1", None),
-            getattr(tws, "q2", None),
-        )
-    return tws
+    dx: dict[str, float]
+    x_co: dict[str, float]
 
 
 def _twiss_maps(tws: pd.DataFrame) -> TwissMaps:
     sqrt_betax = np.sqrt(tws["beta11"]).to_dict()
     dx = tws["dx"].to_dict()
-    return TwissMaps(sqrt_betax=sqrt_betax, dx=dx)
+    x_co = tws.get("x", pd.Series(0.0, index=tws.index)).to_dict()
+    return TwissMaps(sqrt_betax=sqrt_betax, dx=dx, x_co=x_co)
 
 
 def _partner_tables(direction: Direction, mu1, q1):
     if direction == "next":
-        tbl_pi = next_bpm_to_pi(mu1, q1).rename(
-            columns={"next_bpm": "bpm_bar", "delta": "d_pi"}
-        )
+        tbl_pi = next_bpm_to_pi(mu1, q1).rename(columns={"next_bpm": "bpm_bar", "delta": "d_pi"})
         tbl_pi2 = next_bpm_to_pi_2(mu1, q1).rename(
             columns={"next_bpm": "bpm_tilde", "delta": "d_pi2"}
         )
     else:
-        tbl_pi = prev_bpm_to_pi(mu1, q1).rename(
-            columns={"prev_bpm": "bpm_bar", "delta": "d_pi"}
-        )
+        tbl_pi = prev_bpm_to_pi(mu1, q1).rename(columns={"prev_bpm": "bpm_bar", "delta": "d_pi"})
         tbl_pi2 = prev_bpm_to_pi_2(mu1, q1).rename(
             columns={"prev_bpm": "bpm_tilde", "delta": "d_pi2"}
         )
@@ -92,23 +71,32 @@ def _wrap_turns(
 
 def _merge_partner_coords(df):
     coords = df[["turn", "name", "x"]]
-    coords_bar = coords.rename(
-        columns={"turn": "turn_bar", "name": "bpm_bar", "x": "x_bar"}
-    )[["turn_bar", "bpm_bar", "x_bar"]]
+    coords_bar = coords.rename(columns={"turn": "turn_bar", "name": "bpm_bar", "x": "x_bar"})[
+        ["turn_bar", "bpm_bar", "x_bar"]
+    ]
     coords_tilde = coords.rename(
         columns={"turn": "turn_tilde", "name": "bpm_tilde", "x": "x_tilde"}
     )[["turn_tilde", "bpm_tilde", "x_tilde"]]
     df = df.merge(coords_bar, on=["turn_bar", "bpm_bar"], how="left", copy=False)
     df = df.merge(coords_tilde, on=["turn_tilde", "bpm_tilde"], how="left", copy=False)
-    df["x_bar"] = df["x_bar"].fillna(0.0)
-    df["x_tilde"] = df["x_tilde"].fillna(0.0)
+
+    if df[["x_bar", "x_tilde"]].isnull().any().any():
+        # Check that the turn of the null values is either 0 (prev) or max turn (next), otherwise log
+        max_turn = df["turn"].max()
+        null_rows = df[df["x_bar"].isnull() | df["x_tilde"].isnull()]
+        for _, row in null_rows.iterrows():
+            if row["turn"] != 0 and row["turn"] != max_turn:
+                LOGGER.warning(
+                    "Missing partner coordinates for BPM %s at turn %d",
+                    row["name"],
+                    row["turn"],
+                )
+    # Clean up
     df.drop(columns=["turn_bar", "turn_tilde"], inplace=True)
     return df
 
 
-def _phases_radians(
-    d_pi: np.ndarray, d_pi2: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
+def _phases_radians(d_pi: np.ndarray, d_pi2: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     psi_bar = (d_pi + 0.5) * 2.0 * np.pi
     psi_tilde = (d_pi2 + 0.25) * 2.0 * np.pi
     return psi_bar, psi_tilde
@@ -169,9 +157,7 @@ def _maybe_log_stats(delta: np.ndarray, info: bool, label: str = "") -> None:
         LOGGER.info(prefix + "δ min:  %s", np.nanmin(delta))
         LOGGER.info(prefix + "δ max:  %s", np.nanmax(delta))
     else:
-        LOGGER.warning(
-            prefix + "All samples were filtered out (check dx/den tolerances)."
-        )
+        LOGGER.warning(prefix + "All samples were filtered out (check dx/den tolerances).")
 
 
 def _calculate_dpp_direction_aligned(
@@ -208,9 +194,9 @@ def _calculate_dpp_direction_aligned(
 
     psi_bar, psi_tilde = _phases_radians(df["d_pi"].to_numpy(), df["d_pi2"].to_numpy())
 
-    x1 = df["x"].to_numpy()
-    x_bar = df["x_bar"].to_numpy()
-    x_tilde = df["x_tilde"].to_numpy()
+    x1 = df["x"].to_numpy() - df["name"].map(maps.x_co).to_numpy()
+    x_bar = df["x_bar"].to_numpy() - df["bpm_bar"].map(maps.x_co).to_numpy()
+    x_tilde = df["x_tilde"].to_numpy() - df["bpm_tilde"].map(maps.x_co).to_numpy()
 
     _, den, delta_all = _compute_delta(
         x1,
@@ -232,7 +218,7 @@ def _calculate_dpp_direction_aligned(
 
 def calculate_dpp_both(
     data: pd.DataFrame,
-    tws: None | pd.DataFrame = None,
+    tws: pd.DataFrame,
     info: bool = True,
 ) -> pd.DataFrame:
     """
@@ -245,8 +231,13 @@ def calculate_dpp_both(
     This leaves the original `calculate_dpp` API untouched.
     """
     LOGGER.info("Calculating δ using BOTH directions (prev + next)")
+    if tws.index.name != "name":
+        tws = tws.set_index("name")
 
-    tws = _ensure_twiss(tws, info)
+    # Reduce data and tws rows based on BPMs present in data
+    bpms_in_data = data["name"].unique().tolist()
+    tws = tws.loc[tws.index.isin(bpms_in_data)]
+
     maps = _twiss_maps(tws)
 
     # Per-direction, aligned arrays and masks
@@ -278,7 +269,7 @@ def calculate_dpp_both(
     )
 
 
-def get_mean_dpp(data: pd.DataFrame, tws: None | pd.DataFrame = None, info: bool = True) -> float:
+def get_mean_dpp(data: pd.DataFrame, tws: pd.DataFrame, info: bool = True) -> float:
     """
     Compute mean δ using BOTH 'prev' and 'next' partner BPM triplets.
     Returns a single float value representing the mean δ across all valid measurements.
@@ -288,50 +279,3 @@ def get_mean_dpp(data: pd.DataFrame, tws: None | pd.DataFrame = None, info: bool
     if info:
         LOGGER.info("Mean δ across all valid measurements: %s", mean_dpp)
     return mean_dpp if np.isfinite(mean_dpp) else 0.0
-
-
-if __name__ == "__main__":
-    import pandas as pd
-    from matplotlib import pyplot as plt
-
-    from aba_optimiser.config import CLEANED_FILE, NO_NOISE_FILE, NOISY_FILE
-
-    # Setup info logging
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s"
-    )
-
-    # Example usage
-    df = pd.read_parquet(
-        NO_NOISE_FILE,
-        columns=["name", "turn", "x"],
-        filters=[("turn", "in", list(range(1, 1001)))],
-    )
-
-    noisy_df = pd.read_parquet(
-        NOISY_FILE,
-        columns=["name", "turn", "x"],
-        filters=[("turn", "in", list(range(1, 1001)))],
-    )
-
-    cleaned_df = pd.read_parquet(
-        CLEANED_FILE,
-        columns=["name", "turn", "x"],
-        filters=[("turn", "in", list(range(1, 1001)))],
-    )
-    # Now both directions
-    dpp_both = calculate_dpp_both(df)
-    noisy_both = calculate_dpp_both(noisy_df)
-    cleaned_both = calculate_dpp_both(cleaned_df)
-
-    plt.plot(
-        dpp_both["delta_avg"].dropna().reset_index(drop=True),
-        label="clean prev/next avg",
-    )
-    # plt.plot(noisy_both["delta_avg"], label="noisy prev/next avg")
-    plt.plot(
-        cleaned_both["delta_avg"].dropna().reset_index(drop=True),
-        label="filtered prev/next avg",
-    )
-    plt.legend()
-    plt.show()

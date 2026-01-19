@@ -1,8 +1,6 @@
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pandas as pd
-import pytest
 from omc3.scripts.fake_measurement_from_model import generate
 
 from aba_optimiser.model_creator import convert_tfs_to_madx
@@ -14,13 +12,9 @@ from src.aba_optimiser.physics.bpm_phases import (
     prev_bpm_to_pi_2,
 )
 
-if TYPE_CHECKING:
-    import tfs
 
-
-@pytest.fixture(scope="module")
-def twiss_and_measurements(seq_b1, tmp_path_factory):
-    """Fixture to create twiss and fake measurements once per module."""
+def _setup_twiss_and_measurements(tmp_path: Path, seq_b1: Path) -> tuple[pd.DataFrame, Path]:
+    """Set up twiss data and fake measurements for testing."""
     from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 
     interface = BaseMadInterface()
@@ -29,24 +23,26 @@ def twiss_and_measurements(seq_b1, tmp_path_factory):
 
     # Run twiss using MAD interface
     interface.observe_elements("BPM.*%.B1$")
-    twiss_df: tfs.TfsDataFrame = interface.run_twiss(coupling=True)
+    twiss_df: pd.DataFrame = interface.run_twiss(coupling=True)
     twiss_df = convert_tfs_to_madx(twiss_df)
 
     # Generate fake measurements
-    temp_dir = tmp_path_factory.mktemp("twiss_measurement")
+    temp_dir = tmp_path / "twiss_measurement"
+    temp_dir.mkdir()
     generate(
         twiss=twiss_df,
         outputdir=temp_dir,
         parameters=["BETX", "BETY", "DX", "DY", "X", "Y", "PHASEX", "PHASEY"],
     )
 
-    measurement_dir = Path(temp_dir)
+    measurement_dir = temp_dir
     return twiss_df, measurement_dir
 
 
-def test_twiss_from_measurement_mu(twiss_and_measurements):
+def test_twiss_from_measurement_mu(tmp_path, seq_b1):
     """Test that build_twiss_from_measurements produces correct MU columns."""
-    twiss_df, measurement_dir = twiss_and_measurements
+    twiss_df, measurement_dir = _setup_twiss_and_measurements(tmp_path, seq_b1)
+
     twiss_from_meas = build_twiss_from_measurements(measurement_dir, include_errors=False)
 
     q1 = twiss_df.headers["Q1"]
@@ -72,9 +68,10 @@ def test_twiss_from_measurement_mu(twiss_and_measurements):
     pd.testing.assert_frame_equal(result_original_next, result_meas_next)
 
 
-def test_twiss_from_measurement_other_columns(twiss_and_measurements):
+def test_twiss_from_measurement_other_columns(tmp_path, seq_b1):
     """Test that build_twiss_from_measurements produces correct beta, alpha, dispersion columns."""
-    twiss_df, measurement_dir = twiss_and_measurements
+    twiss_df, measurement_dir = _setup_twiss_and_measurements(tmp_path, seq_b1)
+
     twiss_from_meas = build_twiss_from_measurements(measurement_dir, include_errors=False)
 
     # Check beta columns

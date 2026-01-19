@@ -41,7 +41,7 @@ TRACK_COLUMNS = (
 
 
 def _generate_fake_measurement(
-    tmp_dir: Path,
+    tmp_path: Path,
     model_dir: Path,
     interface: BaseMadInterface,
     flattop_turns: int,
@@ -52,7 +52,7 @@ def _generate_fake_measurement(
 ) -> tuple[Path, dict, Path | None, Path]:
     """Generate a parquet file containing noiseless tracking data for the requested BPMs."""
     # Create unique corrector file path based on destination
-    corrector_file = tmp_dir / "correctors.tfs"
+    corrector_file = tmp_path / "correctors.tfs"
     interface.mad["zero_twiss", "_"] = interface.mad.twiss(sequence="loaded_sequence")  # ty:ignore[invalid-assignment]
 
     # Perform orbit correction for off-momentum beam (delta = 2e-4)
@@ -79,10 +79,10 @@ def _generate_fake_measurement(
     corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
 
     # save the tune knobs to file with unique name
-    tune_knobs_file = tmp_dir / "tune_knobs.txt"
+    tune_knobs_file = tmp_path / "tune_knobs.txt"
     save_knobs(matched_tunes, tune_knobs_file)
 
-    analysis_dir = tmp_dir / "analysis"
+    analysis_dir = tmp_path / "analysis"
 
     interface.observe_elements()
     twiss = interface.run_twiss(coupling=True)
@@ -104,16 +104,9 @@ def _generate_fake_measurement(
     return corrector_file, magnet_strengths, tune_knobs_file, analysis_dir
 
 
-@pytest.fixture(scope="module")
-def tmp_dir(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> Path:
-    return tmp_path_factory.mktemp("aba_controller_tracks")
-
-
 @pytest.mark.slow
 def test_controller_opt(
-    tmp_dir: Path,
+    tmp_path: Path,
     seq_b1: Path,
     loaded_interface_with_beam: BaseMadInterface,
     model_dir_b1: Path,
@@ -122,7 +115,7 @@ def test_controller_opt(
     magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
 
     corrector_file, magnet_strengths, tune_knobs_file, analysis_dir = _generate_fake_measurement(
-        tmp_dir,
+        tmp_path,
         model_dir_b1,
         loaded_interface_with_beam,
         6600,

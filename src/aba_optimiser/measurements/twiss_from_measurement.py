@@ -77,6 +77,7 @@ def build_twiss_from_measurements(
 
     # Build the twiss dataframe
     twiss_df = tfs.TfsDataFrame(index=sorted_index)
+    twiss_df.index.name = NAME
 
     # S position
     twiss_df[S] = beta_x.loc[sorted_index, S]
@@ -107,8 +108,8 @@ def build_twiss_from_measurements(
 
     # Optionally include errors
     if include_errors:
-        twiss_df[f"{ERR}X"] = orbit_x.loc[sorted_index, f"{ERR}X"]
-        twiss_df[f"{ERR}Y"] = orbit_y.loc[sorted_index, f"{ERR}Y"]
+        twiss_df[f"{ERR}{ORBIT}X"] = orbit_x.loc[sorted_index, f"{ERR}{ORBIT}X"]
+        twiss_df[f"{ERR}{ORBIT}Y"] = orbit_y.loc[sorted_index, f"{ERR}{ORBIT}Y"]
         twiss_df[f"{ERR}{BETA}X"] = beta_x.loc[sorted_index, f"{ERR}{BETA}X"]
         twiss_df[f"{ERR}{BETA}Y"] = beta_y.loc[sorted_index, f"{ERR}{BETA}Y"]
         twiss_df[f"{ERR}{ALPHA}X"] = beta_x.loc[sorted_index, f"{ERR}{ALPHA}X"]
@@ -130,7 +131,9 @@ def build_twiss_from_measurements(
     return twiss_df
 
 
-def _compute_cumulative_phase(phase_df: tfs.TfsDataFrame, sorted_index: list, phase_col: str) -> tuple[np.ndarray, np.ndarray]:
+def _compute_cumulative_phase(
+    phase_df: tfs.TfsDataFrame, sorted_index: pd.Index, phase_col: str
+) -> tuple[np.ndarray, np.ndarray]:
     """Compute cumulative phase advance from the start of the lattice."""
     mu = np.zeros(len(sorted_index))
     err_mu = np.zeros(len(sorted_index))

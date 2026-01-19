@@ -154,16 +154,15 @@ def _make_simulation_config_bend() -> SimulationConfig:
 @pytest.mark.skipif(multiprocessing.cpu_count() < 60, reason="Requires at least 60 CPU cores")
 @pytest.mark.slow
 def test_controller_bend_opt_simple(
-    tmp_path_factory: pytest.TempPathFactory,
+    tmp_path: Path,
     seq_b1: Path,
-    json_b1: Path,
     estimated_strengths_file: Path,
     loaded_interface_with_beam: BaseMadInterface,
 ) -> None:
     """Test bend optimisation using AC dipole excitation with different lag values."""
     flattop_turns = 2_000
     acd_ramp = 1_000  # Ramp turns for AC dipole
-    tmp_dir_quad_conv = tmp_path_factory.mktemp("quad_conv_with_errs")
+    tmp_dir_quad_conv = tmp_path / "quad_conv_with_errs"
 
     off_magnet_path = tmp_dir_quad_conv / "track_off_magnet.parquet"
     corrector_file = tmp_dir_quad_conv / "corrector_track_off_magnet.tfs"
@@ -173,7 +172,7 @@ def test_controller_bend_opt_simple(
     env, magnet_strengths, matched_tunes, _ = generate_xsuite_env_with_errors(
         loaded_interface_with_beam,
         sequence_file=seq_b1,
-        json_file=json_b1,
+        json_file=tmp_dir_quad_conv / "lhcb1.json",
         dpp_value=0,
         magnet_range="$start/$end",
         corrector_file=corrector_file,

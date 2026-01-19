@@ -72,28 +72,20 @@ def _plot_beta_beating_comparison(
     print(f"Beta beating plot saved to: {plot_file}")
 
 
-@pytest.fixture(scope="module")
-def tmp_dir(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> Path:
-    return tmp_path_factory.mktemp("aba_matcher_beta_correction")
-
-
 @pytest.mark.slow
 def test_matcher_beta_correction(
-    tmp_dir: Path,
+    tmp_path: Path,
     seq_b1: Path,
-    json_b1: Path,
     estimated_strengths_file: Path,
     loaded_interface_with_beam: BaseMadInterface,
 ) -> None:
     """Test beta matching using estimated quadrupole strengths from controller."""
     # Generate model with errors for validation (same setup as controller)
-    corrector_file = tmp_dir / "corrector_track_off_magnet.tfs"
+    corrector_file = tmp_path / "corrector_track_off_magnet.tfs"
     magnet_strengths, matched_tunes, _ = generate_model_with_errors(
         loaded_interface_with_beam,
         sequence_file=seq_b1,
-        json_file=json_b1,
+        json_file=tmp_path / "lhcb1.json",
         dpp_value=0,
         magnet_range="$start/$end",
         corrector_file=corrector_file,
@@ -120,7 +112,7 @@ def test_matcher_beta_correction(
 
     # Get clean twiss as model twiss
     tws_no_err = get_twiss_without_errors(seq_b1, just_bpms=True)
-    model_twiss_file = tmp_dir / "model_twiss.tfs"
+    model_twiss_file = tmp_path / "model_twiss.tfs"
     tfs.write(model_twiss_file, tws_no_err, save_index=True)
 
     # Get beta correctors from omc3 package
@@ -155,7 +147,7 @@ def test_matcher_beta_correction(
         seq_name="lhcb1",
         magnet_range="$start/$end",
         beam_energy=6800,
-        output_dir=tmp_dir / "matcher_output",
+        output_dir=tmp_path / "matcher_output",
     )
 
     matcher = BetaMatcher(matcher_config, show_plots=False)
@@ -180,7 +172,7 @@ def test_matcher_beta_correction(
     # tws_corrected = loaded_interface_with_beam.run_twiss(observe=1)  # Observe all elements
 
     # Plot beta beating comparison (uncomment to enable plotting)
-    _plot_beta_beating_comparison(twiss_errs, tws_no_err, tws_corrected, tmp_dir)
+    _plot_beta_beating_comparison(twiss_errs, tws_no_err, tws_corrected, tmp_path)
 
     # Check beta beating after correction
     # Compare to model twiss (tws_no_err)

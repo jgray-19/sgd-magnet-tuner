@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 def rmse(actual: np.ndarray, predicted: np.ndarray) -> float:
     """Compute root mean squared error."""
-    return float(np.sqrt(np.nanmean((predicted - actual) ** 2)))
+    return float(np.sqrt(np.mean((predicted - actual) ** 2)))
 
 
 def get_truth_and_twiss(
@@ -63,8 +63,8 @@ def verify_pz_reconstruction(
     truth: pd.DataFrame,
     tws: pd.DataFrame,
     calculate_pz_func: Callable[..., pd.DataFrame],  # Assuming return type is Any; adjust if needed
-    px_clean_max: float,
-    py_clean_max: float,
+    px_nonoise_max: float,
+    py_nonoise_max: float,
     px_noisy_min: float,
     px_noisy_max: float,
     py_noisy_min: float,
@@ -91,16 +91,16 @@ def verify_pz_reconstruction(
         Twiss parameters.
     calculate_pz_func : callable
         Function to calculate momentum (e.g., calculate_pz or calculate_transverse_pz).
-    px_clean_max : float
-        Maximum acceptable RMSE for clean px reconstruction.
-    py_clean_max : float
-        Maximum acceptable RMSE for clean py reconstruction.
-    px_noisy_min : float or str
-        Minimum expected RMSE for noisy px (or "px_rmse_clean" to use clean value).
+    px_nonoise_max : float
+        Maximum acceptable RMSE for nonoise px reconstruction.
+    py_nonoise_max : float
+        Maximum acceptable RMSE for nonoise py reconstruction.
+    px_noisy_min : float
+        Minimum expected RMSE for noisy px.
     px_noisy_max : float
         Maximum acceptable RMSE for noisy px.
-    py_noisy_min : float or str
-        Minimum expected RMSE for noisy py (or "py_rmse_clean" to use clean value).
+    py_noisy_min : float
+        Minimum expected RMSE for noisy py.
     py_noisy_max : float
         Maximum acceptable RMSE for noisy py.
     px_divisor : float
@@ -165,11 +165,11 @@ def verify_pz_reconstruction(
     assert len(merged_noisy) == len(truth)
     assert len(merged_cleaned) == len(truth)
 
-    px_rmse_clean = rmse(
+    px_rmse_nonoise = rmse(
         merged_no_noise["px_true"].to_numpy(),
         merged_no_noise["px_calc"].to_numpy(),
     )
-    py_rmse_clean = rmse(
+    py_rmse_nonoise = rmse(
         merged_no_noise["py_true"].to_numpy(),
         merged_no_noise["py_calc"].to_numpy(),
     )
@@ -190,18 +190,10 @@ def verify_pz_reconstruction(
         merged_cleaned["py_calc"].to_numpy(),
     )
 
-    assert px_rmse_clean < px_clean_max
-    assert py_rmse_clean < py_clean_max
-    if isinstance(px_noisy_min, str) and px_noisy_min == "px_rmse_clean":
-        px_noisy_min_val = px_rmse_clean
-    else:
-        px_noisy_min_val = px_noisy_min
-    if isinstance(py_noisy_min, str) and py_noisy_min == "py_rmse_clean":
-        py_noisy_min_val = py_rmse_clean
-    else:
-        py_noisy_min_val = py_noisy_min
-    assert px_noisy_min_val < px_rmse_noisy < px_noisy_max
-    assert py_noisy_min_val < py_rmse_noisy < py_noisy_max
+    assert px_rmse_nonoise < px_nonoise_max
+    assert py_rmse_nonoise < py_nonoise_max
+    assert px_noisy_min < px_rmse_noisy < px_noisy_max
+    assert py_noisy_min < py_rmse_noisy < py_noisy_max
     # Check cleaned is better than noisy
     assert px_rmse_cleaned < px_rmse_noisy / px_divisor
     assert py_rmse_cleaned < py_rmse_noisy / py_divisor

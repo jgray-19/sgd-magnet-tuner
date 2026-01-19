@@ -41,19 +41,6 @@ def seq_b2(data_dir: Path) -> Path:
     """Path to the example sequence file for beam 2 used by a test."""
     return data_dir / "sequences" / "lhcb2.seq"
 
-
-@pytest.fixture(scope="session")
-def json_b1(data_dir: Path) -> Path:
-    """Path to the pre-generated xsuite JSON for beam 1."""
-    return data_dir / "sequences" / "lhcb1.json"
-
-
-@pytest.fixture(scope="session")
-def json_b1_corrected(data_dir: Path) -> Path:
-    """Path to the corrected xsuite JSON for beam 1."""
-    return data_dir / "sequences" / "lhcb1_corrected.json"
-
-
 @pytest.fixture(scope="session")
 def tune_knobs_file(data_dir: Path) -> Path:
     """Path to the tune knobs file."""

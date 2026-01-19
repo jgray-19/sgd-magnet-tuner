@@ -6,7 +6,6 @@ from .acd import (  # noqa: F401
 )
 from .env import (  # noqa: F401
     create_xsuite_environment,
-    get_default_json_path,
     initialise_env,
 )
 from .monitors import (  # noqa: F401

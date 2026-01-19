@@ -138,9 +138,10 @@ def _setup_xsuite_simulation(
 
 
 @pytest.mark.slow
-def test_calculate_pz_recovers_true_momenta(json_b1, seq_b1):
+def test_calculate_pz_recovers_true_momenta(seq_b1, tmp_path):
+    """Test that calculate_pz reconstructs true momenta for on-momentum beam."""
     env = create_xsuite_environment(
-        json_file=json_b1,
+        json_file=tmp_path / "lhcb1.json",
         sequence_file=seq_b1,
         seq_name="lhcb1",
     )
@@ -232,12 +233,12 @@ local a = seq:replace({{
         tracking_df,
         truth,
         tws,
-        px_clean_max=2e-7,
-        py_clean_max=2e-7,
-        px_noisy_min="px_rmse_clean",
-        px_noisy_max=3e-6,
-        py_noisy_min="py_rmse_clean",
-        py_noisy_max=3e-6,
+        px_nonoise_max=1.4e-7,
+        py_nonoise_max=1.25e-7,
+        px_noisy_min=1e-7,
+        px_noisy_max=2.4e-6,
+        py_noisy_min=1e-7,
+        py_noisy_max=2.4e-6,
         px_divisor=4.5,
         py_divisor=4.5,
         rng_seed=42,
@@ -249,8 +250,8 @@ def _verify_pz_reconstruction(
     tracking_df,
     truth,
     tws,
-    px_clean_max,
-    py_clean_max,
+    px_nonoise_max,
+    py_nonoise_max,
     px_noisy_min,
     px_noisy_max,
     py_noisy_min,
@@ -266,8 +267,8 @@ def _verify_pz_reconstruction(
         truth,
         tws,
         calculate_pz,
-        px_clean_max,
-        py_clean_max,
+        px_nonoise_max,
+        py_nonoise_max,
         px_noisy_min,
         px_noisy_max,
         py_noisy_min,
@@ -280,34 +281,18 @@ def _verify_pz_reconstruction(
 
 
 @pytest.mark.parametrize(
-    "delta_p, do_apply_magnet_perturbations, magnet_seed, px_clean_max, py_clean_max, px_noisy_min, px_noisy_max, py_noisy_min, py_noisy_max, px_divisor, py_divisor",
+    "delta_p, do_apply_magnet_perturbations, magnet_seed",
     [
         pytest.param(
             2e-4,
             False,
             None,
-            3e-6,
-            6e-7,
-            3e-6,
-            3.5e-6,
-            6e-7,
-            3e-6,
-            1.4,
-            3.0,
             id="orbit_correction_off_momentum",
         ),
         pytest.param(
             0.0,
             True,
             123,
-            3e-6,
-            6e-7,
-            "px_rmse_clean",
-            4e-6,
-            "py_rmse_clean",
-            3e-6,
-            1.4,
-            3.0,
             id="magnet_perturbations_on_momentum",
         ),
     ],
@@ -317,15 +302,6 @@ def test_calculate_pz_with_corrections_and_perturbations(
     delta_p,
     do_apply_magnet_perturbations,
     magnet_seed,
-    px_clean_max,
-    py_clean_max,
-    px_noisy_min,
-    px_noisy_max,
-    py_noisy_min,
-    py_noisy_max,
-    px_divisor,
-    py_divisor,
-    json_b1_corrected,
     seq_b1,
     tmp_path,
 ):
@@ -335,7 +311,30 @@ def test_calculate_pz_with_corrections_and_perturbations(
     - orbit_correction_off_momentum: Verify reconstruction with corrected orbits
     - magnet_perturbations_on_momentum: Verify robustness to random magnet errors
     """
-    json_path = json_b1_corrected
+    # DO NOT EVER INCREASE THESE TOLERANCES, IF THE TESTS START FAILING, FIX THE UNDERLYING ISSUE
+    tolerance_values = {
+        (2e-4, False, None): {
+            "px_nonoise_max": 2.2e-6,
+            "py_nonoise_max": 6e-7,
+            "px_noisy_min": 3e-6,
+            "px_noisy_max": 3.5e-6,
+            "py_noisy_min": 2e-6,
+            "py_noisy_max": 3e-6,
+            "px_divisor": 1.4,
+            "py_divisor": 3.2,
+        },
+        (0.0, True, 123): {
+            "px_nonoise_max": 3e-6,
+            "py_nonoise_max": 6e-7,
+            "px_noisy_min": 3e-6,
+            "px_noisy_max": 4e-6,
+            "py_noisy_min": 6e-7,
+            "py_noisy_max": 3e-6,
+            "px_divisor": 1.4,
+            "py_divisor": 3.0,
+        },
+    }
+    json_path = tmp_path / "lhcb1.json"
     test_id = f"test_{delta_p}_{do_apply_magnet_perturbations}"
 
     tracking_df, truth, tws = _setup_xsuite_simulation(
@@ -348,18 +347,12 @@ def test_calculate_pz_with_corrections_and_perturbations(
         test_id,
     )
 
+    tol_dict = tolerance_values[(delta_p, do_apply_magnet_perturbations, magnet_seed)]
     _verify_pz_reconstruction(
         tracking_df,
         truth,
         tws,
-        px_clean_max,
-        py_clean_max,
-        px_noisy_min,
-        px_noisy_max,
-        py_noisy_min,
-        py_noisy_max,
-        px_divisor,
-        py_divisor,
+        **tol_dict,
         rng_seed=42,
         subtract_mean=True,
     )

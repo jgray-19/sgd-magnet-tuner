@@ -10,11 +10,10 @@ from __future__ import annotations
 
 from .dispersive import calculate_pz as calculate_dispersive_pz
 from .transverse import calculate_pz as calculate_transverse_pz
-from .transverse import calculate_pz_from_measurements, inject_noise_xy
+from .transverse import inject_noise_xy
 
 __all__ = [
     "calculate_dispersive_pz",
     "calculate_transverse_pz",
-    "calculate_pz_from_measurements",
     "inject_noise_xy",
 ]
