@@ -18,7 +18,7 @@ from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 from aba_optimiser.mad.tracking_interface import TrackingMadInterface
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
 
 # Configure logging for tests
 logging.getLogger("xdeps").setLevel(logging.WARNING)
@@ -151,3 +151,32 @@ def loaded_tracking_interface_with_beam(
     """Fixture that returns a tracking interface with the example sequence loaded and beam set up."""
     loaded_tracking_interface.setup_beam(particle="proton", beam_energy=6800.0)
     return loaded_tracking_interface
+
+
+@pytest.fixture(scope="session")
+def xsuite_json_cache(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """Cache for xsuite JSON files by sequence file name.
+
+    This fixture provides a session-scoped dictionary that maps sequence file names
+    to their cached JSON paths. This avoids regenerating expensive xsuite JSON files
+    across multiple tests.
+    """
+    cache_dir = tmp_path_factory.mktemp("xsuite_cache")
+    return {"_cache_dir": cache_dir}
+
+
+@pytest.fixture(scope="session")
+def xsuite_json_path(xsuite_json_cache: dict) -> Callable[[str], Path]:
+    """Get or create a cached xsuite JSON path for a given sequence file.
+
+    Returns a callable that takes a sequence file name (e.g., "lhcb1.seq")
+    and returns the path where its JSON should be cached.
+    """
+    cache_dir = xsuite_json_cache["_cache_dir"]
+
+    def _get_json_path(seq_file: str) -> Path:
+        # Extract base name without extension and create JSON path in cache
+        base_name = Path(seq_file).stem
+        return cache_dir / f"{base_name}.json"
+
+    return _get_json_path

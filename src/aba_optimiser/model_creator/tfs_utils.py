@@ -2,10 +2,11 @@
 
 from pathlib import Path
 
+import pandas as pd
 import tfs
 
 
-def convert_tfs_to_madx(tfs_df: tfs.TfsDataFrame) -> tfs.TfsDataFrame:
+def convert_tfs_to_madx(tfs_df: pd.DataFrame, remove_drifts=True) -> pd.DataFrame:
     """
     Convert TFS DataFrame from MAD-NG format to MAD-X format.
 
@@ -17,7 +18,7 @@ def convert_tfs_to_madx(tfs_df: tfs.TfsDataFrame) -> tfs.TfsDataFrame:
 
     Parameters
     ----------
-    tfs_df : tfs.TfsDataFrame
+    tfs_df : pd.DataFrame
         Input TFS DataFrame in MAD-NG format.
 
     Returns
@@ -43,12 +44,13 @@ def convert_tfs_to_madx(tfs_df: tfs.TfsDataFrame) -> tfs.TfsDataFrame:
     )
 
     # Renumber drift elements consecutively
-    drifts = tfs_df[
-        (tfs_df["KIND"] == "drift") & (tfs_df["NAME"].str.lower().str.startswith("drift"))
-    ]
-    if not drifts.empty:
-        new_drift_names = [f"DRIFT_{i}" for i in range(len(drifts))]
-        tfs_df.loc[tfs_df["KIND"] == "drift", "NAME"] = new_drift_names
+    if remove_drifts:
+        drifts = tfs_df[
+            (tfs_df["KIND"] == "drift") & (tfs_df["NAME"].str.lower().str.startswith("drift"))
+        ]
+        if not drifts.empty:
+            new_drift_names = [f"DRIFT_{i}" for i in range(len(drifts))]
+            tfs_df.loc[tfs_df["KIND"] == "drift", "NAME"] = new_drift_names
 
     # Set NAME as index and filter out special markers
     tfs_df = tfs_df.set_index("NAME")

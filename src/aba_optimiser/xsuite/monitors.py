@@ -120,10 +120,10 @@ def process_tracking_data(
     tracking_df = tracking_df.reset_index(drop=True)
 
     if add_variance_columns:
-        tracking_df["var_x"] = 1.0
-        tracking_df["var_y"] = 1.0
-        tracking_df["var_px"] = 1.0
-        tracking_df["var_py"] = 1.0
+        tracking_df["var_x"] = 1e-4**2
+        tracking_df["var_y"] = 1e-4**2
+        tracking_df["var_px"] = 3e-6**2
+        tracking_df["var_py"] = 3e-6**2
         tracking_df["kick_plane"] = "both"
 
     return tracking_df

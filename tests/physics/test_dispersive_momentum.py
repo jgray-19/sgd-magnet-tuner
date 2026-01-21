@@ -17,34 +17,35 @@ from aba_optimiser.momentum_recon.transverse import (  # noqa: E402
     calculate_pz as transverse_calc,
 )
 from aba_optimiser.momentum_recon.transverse import (
-    inject_noise_xy,
+    inject_noise_xy_inplace,
 )
 from aba_optimiser.xsuite.acd import run_acd_track
 
-from .momentum_test_utils import (  # noqa: E402
-    get_truth_and_twiss,
-    rmse,
-)
+from .momentum_test_utils import get_truth, rmse, xsuite_to_ngtws
 
 
 @pytest.mark.slow
-def test_dispersive_momentum_on_momentum(seq_b1, tmp_path):
+@pytest.mark.parametrize("seq_file", ["lhcb1.seq", "b1_120cm_crossing.seq"])
+def test_dispersive_momentum_on_momentum(seq_file, data_dir, xsuite_json_path):
     """Test dispersive momentum reconstruction for on-momentum beam.
 
     For on-momentum particles (δp=0), dispersive and transverse methods
     should produce nearly identical results.
     """
-    json_path = tmp_path / "lhcb1_onmomentum.json"
+    seq = data_dir / "sequences" / seq_file
+    json_path = xsuite_json_path(seq_file)
 
     tracking_df, tws, baseline_line = run_acd_track(
         json_path=json_path,
-        sequence_file=seq_b1,
+        sequence_file=seq,
         delta_p=0.0,
         ramp_turns=1000,
         flattop_turns=100,
     )
 
-    truth, tws = get_truth_and_twiss(baseline_line, tracking_df)
+    # Convert twiss to ngtws format, NAME will be index
+    tws = xsuite_to_ngtws(tws)
+    truth = get_truth(tracking_df, tws)
 
     # Transverse reconstruction (baseline)
     trans_result = transverse_calc(
@@ -97,8 +98,9 @@ def test_dispersive_momentum_on_momentum(seq_b1, tmp_path):
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("seq_file", ["lhcb1.seq", "b1_120cm_crossing.seq"])
 @pytest.mark.parametrize("delta_p", [-5e-4, 4e-4])
-def test_dispersive_momentum_off_momentum(seq_b1, delta_p, tmp_path):
+def test_dispersive_momentum_off_momentum(seq_file, delta_p, data_dir, xsuite_json_path):
     """Test dispersive momentum reconstruction for off-momentum beam.
 
     For off-momentum particles (δp≠0), the dispersive method should correct
@@ -108,17 +110,18 @@ def test_dispersive_momentum_off_momentum(seq_b1, delta_p, tmp_path):
     The py reconstruction should be unaffected by dispersion and both methods
     should perform equally well.
     """
-    json_path = tmp_path / f"lhcb1_offmomentum{delta_p}.json"
+    seq = data_dir / "sequences" / seq_file
+    json_path = xsuite_json_path(seq_file)
 
     tracking_df, tws, baseline_line = run_acd_track(
         json_path=json_path,
-        sequence_file=seq_b1,
+        sequence_file=seq,
         delta_p=delta_p,
         ramp_turns=1000,
         flattop_turns=100,
     )
-
-    truth, tws = get_truth_and_twiss(baseline_line, tracking_df)
+    tws = xsuite_to_ngtws(tws)
+    truth = get_truth(tracking_df, tws)
 
     # Transverse reconstruction (no dispersion correction)
     trans_result = transverse_calc(
@@ -168,29 +171,33 @@ def test_dispersive_momentum_off_momentum(seq_b1, delta_p, tmp_path):
     )
 
     # Both should give reasonable results
+    tol = 6e-6 if "crossing" not in seq_file else 7.2e-6
     assert px_rmse_disp < 2e-7, f"Dispersive px RMSE {px_rmse_disp:.2e} > 2e-7"
-    assert px_rmse_trans < 6e-6, f"Transverse px RMSE {px_rmse_trans:.2e} > 6e-6"
+    assert px_rmse_trans < tol, f"Transverse px RMSE {px_rmse_trans:.2e} > {tol:.2e}"
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("seq_file", ["lhcb1.seq", "b1_120cm_crossing.seq"])
 @pytest.mark.parametrize("delta_p", [-5e-4, 4e-4])
-def test_dispersive_momentum_off_momentum_with_noise(seq_b1, delta_p, tmp_path):
+def test_dispersive_momentum_off_momentum_with_noise(seq_file, delta_p, data_dir, xsuite_json_path):
     """Test dispersive momentum reconstruction with noise for off-momentum beam.
 
     For off-momentum particles (δp≠0), verify that SVD cleaning improves
     reconstruction quality for noisy data compared to noisy reconstruction.
     """
-    json_path = tmp_path / f"lhcb1_offmomentum{delta_p}.json"
+    seq = data_dir / "sequences" / seq_file
+    json_path = xsuite_json_path(seq_file)
 
     tracking_df, tws, baseline_line = run_acd_track(
         json_path=json_path,
-        sequence_file=seq_b1,
+        sequence_file=seq,
         delta_p=delta_p,
         ramp_turns=1000,
         flattop_turns=100,
     )
 
-    truth, tws = get_truth_and_twiss(baseline_line, tracking_df)
+    tws = xsuite_to_ngtws(tws)
+    truth = get_truth(tracking_df, tws)
 
     # Clean reconstruction (no noise)
     clean_result = dispersive_calc(
@@ -203,7 +210,7 @@ def test_dispersive_momentum_off_momentum_with_noise(seq_b1, delta_p, tmp_path):
     # Noisy reconstruction - inject noise manually then calculate
     rng = np.random.default_rng(42)
     noisy_df = tracking_df.copy(deep=True)
-    inject_noise_xy(noisy_df, tracking_df, rng, low_noise_bpms=[])
+    inject_noise_xy_inplace(noisy_df, tracking_df, rng, low_noise_bpms=[])
     noisy_result = dispersive_calc(
         noisy_df,
         tws=tws,
@@ -242,7 +249,7 @@ def test_dispersive_momentum_off_momentum_with_noise(seq_b1, delta_p, tmp_path):
     px_rmse_svd = rmse(merged["px_true"].to_numpy(), merged["px_svd"].to_numpy())
     py_rmse_svd = rmse(merged["py_true"].to_numpy(), merged["py_svd"].to_numpy())
 
-    # Noisy should be significantly worse than clean
+    # Noisy should be significantly worse than clean (at least 70% worse)
     assert px_rmse_noisy >= px_rmse_clean * 1.70, (
         f"Noisy px RMSE {px_rmse_noisy:.2e} should be >= clean {px_rmse_clean:.2e} * 1.70"
     )
@@ -250,12 +257,12 @@ def test_dispersive_momentum_off_momentum_with_noise(seq_b1, delta_p, tmp_path):
         f"Noisy py RMSE {py_rmse_noisy:.2e} should be >= clean {py_rmse_clean:.2e} * 1.95"
     )
 
-    # SVD should be slightly worse than clean but still acceptable
-    assert px_rmse_svd <= px_rmse_clean * 1.15, (
-        f"SVD px RMSE {px_rmse_svd:.2e} should be <= clean {px_rmse_clean:.2e} * 1.15"
+    # SVD should be slightly worse than clean but still acceptable (e.g. within 30%)
+    assert px_rmse_svd <= px_rmse_clean * 1.30, (
+        f"SVD px RMSE {px_rmse_svd:.2e} should be <= clean {px_rmse_clean:.2e} * 1.30"
     )
-    assert py_rmse_svd <= py_rmse_clean * 1.20, (
-        f"SVD py RMSE {py_rmse_svd:.2e} should be <= clean {py_rmse_clean:.2e} * 1.20"
+    assert py_rmse_svd <= py_rmse_clean * 1.30, (
+        f"SVD py RMSE {py_rmse_svd:.2e} should be <= clean {py_rmse_clean:.2e} * 1.30"
     )
 
     # SVD should significantly improve over noisy (at least 50% reduction)

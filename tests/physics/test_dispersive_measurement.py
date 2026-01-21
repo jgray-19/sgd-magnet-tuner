@@ -13,44 +13,48 @@ from aba_optimiser.model_creator import convert_tfs_to_madx
 from aba_optimiser.momentum_recon.dispersive_measurement import calculate_pz_measurement
 from aba_optimiser.xsuite.acd import run_acd_track
 
-from .momentum_test_utils import get_truth_and_twiss, rmse
+from .momentum_test_utils import get_truth, rmse, xsuite_to_ngtws
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("seq_file", ["lhcb1.seq", "b1_120cm_crossing.seq"])
 @pytest.mark.parametrize("delta_p", [0.0, 4e-4])
-def test_dispersive_measurement_recovers_dpp(seq_b1, tmp_path, delta_p):
+def test_dispersive_measurement_recovers_dpp(
+    data_dir, seq_file, tmp_path, delta_p, xsuite_json_path
+):
     """Test that calculate_pz_measurement recovers the true DPP from measurements."""
-    json_path = tmp_path / f"lhcb1_offmomentum{delta_p}.json"
+    seq = data_dir / "sequences" / seq_file
+    json_path = xsuite_json_path(seq_file)
 
-    tracking_df, tws, baseline_line = run_acd_track(
+    tracking_df, full_tws, baseline_line = run_acd_track(
         json_path=json_path,
-        sequence_file=seq_b1,
+        sequence_file=seq,
         delta_p=delta_p,
         ramp_turns=1000,
         flattop_turns=100,
     )
 
-    truth, tws = get_truth_and_twiss(baseline_line, tracking_df)
-    # Select only BPMs that match ^BPM.*\.B1$
-    bpm_names = tws[tws.index.str.match(r"^BPM.*\.B1$")].index.tolist()
-    tws = tws[tws.index.isin(bpm_names)]
+    ng_tws = xsuite_to_ngtws(full_tws)
+    truth = get_truth(tracking_df, ng_tws)
 
-    tws = convert_tfs_to_madx(tws)
+    # Since the above gets only BPMs, we disable drift removal to keep names consistent
+    # Drop mu1 and mu2 to avoid issues in conversion
+    madx_tws = convert_tfs_to_madx(ng_tws.drop(columns=["mu1", "mu2"]), remove_drifts=False)
 
     # Generate fake measurements from the twiss
-    temp_dir = tmp_path / "dispersive_measurement"
+    meas_dir = tmp_path / "dispersive_measurement_uncertainties"
     generate_fake_measurement(
-        twiss=tws,
-        outputdir=temp_dir,
+        twiss=madx_tws,
+        outputdir=meas_dir,
         parameters=["BETX", "BETY", "DX", "DY", "PHASEX", "PHASEY", "X", "Y"],
     )
 
-    measurement_dir = temp_dir
-
     # Call the measurement-based function
+    # The function now handles closed orbit removal and px/py restoration internally
     result = calculate_pz_measurement(
         orig_data=tracking_df.copy(deep=True),
-        measurement_folder=str(measurement_dir),
+        measurement_folder=str(meas_dir),
+        model_tws=ng_tws,
         info=False,
     )
 
@@ -71,5 +75,10 @@ def test_dispersive_measurement_recovers_dpp(seq_b1, tmp_path, delta_p):
     px_rmse = rmse(merged["px_true"].to_numpy(), merged["px"].to_numpy())
     py_rmse = rmse(merged["py_true"].to_numpy(), merged["py"].to_numpy())
 
-    assert px_rmse < 2e-7, f"px RMSE {px_rmse:.2e} > 2e-7"
-    assert py_rmse < 2e-7, f"py RMSE {py_rmse:.2e} > 2e-7"
+    print(f"Dispersive measurement px RMSE: {px_rmse:.2e}, py RMSE: {py_rmse:.2e}")
+    if "crossing" in seq_file:
+        assert px_rmse < 1.01e-7, f"px RMSE {px_rmse:.2e} > 1.01e-7"
+        assert py_rmse < 1.01e-7, f"py RMSE {py_rmse:.2e} > 1.01e-7"
+    else:
+        assert px_rmse < 1.6e-7, f"px RMSE {px_rmse:.2e} > 1.6e-7"
+        assert py_rmse < 1.5e-7, f"py RMSE {py_rmse:.2e} > 1.5e-7"

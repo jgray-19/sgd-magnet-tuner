@@ -162,17 +162,18 @@ cython_debug/
 # remove the tensorboard logs
 runs/
 
-betabeat/
-plots/
-*.out
+**/acc-models-lhc/
+*_analysis*/
+*_results/
 analysis*/
-*.png
-data/
 b1_flat_60_18cm/
+betabeat/
+data/
 docs/api/
 /mad_scripts/
+models/**
+plots/
+*.out
+*.png
 !src/aba_optimiser/mad/mad_scripts/
 !tests/data
-*_results/
-*_analysis*/
-models/**

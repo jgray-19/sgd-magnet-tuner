@@ -388,7 +388,7 @@ def run_parallel_tracking(
                     (
                         batch_start + i,
                         true_dfs[i],
-                        # twiss_data,
+                        twiss_data,
                         track_queue,
                         noise_queue,
                         cleaned_queue,

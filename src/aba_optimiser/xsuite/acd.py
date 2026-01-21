@@ -152,7 +152,7 @@ def run_acd_track(
         seq_name=f"lhcb{beam}",
     )
     baseline_line: xt.Line = env[f"lhcb{beam}"].copy()  # ty:ignore[not-subscriptable]
-    tws_input: xt.TwissTable = baseline_line.twiss4d(delta0=delta_p)
+    tws_input: xt.TwissTable = baseline_line.twiss4d()
 
     qx = float(tws_input.qx % 1)
     qy = float(tws_input.qy % 1)

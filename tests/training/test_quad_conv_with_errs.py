@@ -21,7 +21,7 @@ from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.momentum_recon import (
     calculate_dispersive_pz,
     calculate_transverse_pz,
-    # inject_noise_xy,
+    # inject_noise_xy_inplace,
 )
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
@@ -214,7 +214,7 @@ def test_controller_bend_opt_simple(
     for idx, track_df in enumerate(track_dfs):
         # Add noise to the tracking data and apply SVD cleaning
         track_df_noisy = track_df.copy(deep=True)
-        # inject_noise_xy(
+        # inject_noise_xy_inplace(
         #     track_df_noisy,
         #     track_df,
         #     np.random.default_rng(42 + idx),

@@ -194,14 +194,10 @@ def _calculate_dpp_direction_aligned(
 
     psi_bar, psi_tilde = _phases_radians(df["d_pi"].to_numpy(), df["d_pi2"].to_numpy())
 
-    x1 = df["x"].to_numpy() - df["name"].map(maps.x_co).to_numpy()
-    x_bar = df["x_bar"].to_numpy() - df["bpm_bar"].map(maps.x_co).to_numpy()
-    x_tilde = df["x_tilde"].to_numpy() - df["bpm_tilde"].map(maps.x_co).to_numpy()
-
     _, den, delta_all = _compute_delta(
-        x1,
-        x_bar,
-        x_tilde,
+        df["x"].to_numpy(),
+        df["x_bar"].to_numpy(),
+        df["x_tilde"].to_numpy(),
         sqrt_beta_1,
         sqrt_beta_bar,
         sqrt_beta_tilde,
@@ -239,6 +235,9 @@ def calculate_dpp_both(
     tws = tws.loc[tws.index.isin(bpms_in_data)]
 
     maps = _twiss_maps(tws)
+
+    # remove closed orbit
+    data["x"] = data["x"] - data["name"].map(maps.x_co)
 
     # Per-direction, aligned arrays and masks
     next_all, next_valid = _calculate_dpp_direction_aligned(data, tws, maps, "next")

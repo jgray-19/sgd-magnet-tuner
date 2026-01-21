@@ -20,7 +20,7 @@ from aba_optimiser.config import MOMENTUM_STD_DEV, POSITION_STD_DEV
 from aba_optimiser.filtering.svd import svd_clean_measurements
 
 # from aba_optimiser.physics.dispersive_momentum_reconstruction import calculate_pz
-from aba_optimiser.momentum_recon.transverse import calculate_pz, inject_noise_xy
+from aba_optimiser.momentum_recon.transverse import calculate_pz, inject_noise_xy_inplace
 
 from .coordinates import get_kick_plane_category
 
@@ -68,7 +68,7 @@ def single_writer_loop(queue: mp.Queue, out_path: str) -> None:
 def process_track_with_queue(
     ntrk: int,
     true_df: pd.DataFrame,
-    # tws: tfs.TfsDataFrame,
+    tws: tfs.TfsDataFrame,
     track_q: mp.Queue,
     noise_q: mp.Queue,
     cleaned_q: mp.Queue,
@@ -123,13 +123,11 @@ def process_track_with_queue(
         # del noise_table
 
         noisy_df = true_df.copy()
-        inject_noise_xy(noisy_df, true_df, np.random.default_rng(), [])
+        inject_noise_xy_inplace(noisy_df, true_df, np.random.default_rng(), [])
 
         # Filter the noisy data and enqueue cleaned data
         cleaned_df = svd_clean_measurements(noisy_df)
-        cleaned_df = calculate_pz(
-            cleaned_df, inject_noise=False, info=False, subtract_mean=True
-        )
+        cleaned_df = calculate_pz(cleaned_df, tws, inject_noise=False, info=False)
         del noisy_df  # Clean up noisy_df after its last use
 
         cleaned_df["name"] = cleaned_df["name"].astype(str)
@@ -173,7 +171,7 @@ def process_track_with_queue(
 def process_track(
     ntrk: int,
     true_df: pd.DataFrame,
-    # tws: tfs.TfsDataFrame,
+    tws: tfs.TfsDataFrame,
     track_q: mp.Queue,
     noise_q: mp.Queue,
     cleaned_q: mp.Queue,
@@ -195,7 +193,7 @@ def process_track(
     # Import configuration at runtime to avoid circular imports
     # Use the single-writer queue approach for better I/O efficiency
     return process_track_with_queue(
-        ntrk, true_df, track_q, noise_q, cleaned_q, flattop_turns, kick_both_planes
+        ntrk, true_df, tws, track_q, noise_q, cleaned_q, flattop_turns, kick_both_planes
     )
 
 

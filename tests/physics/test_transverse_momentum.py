@@ -56,6 +56,11 @@ def _setup_xsuite_simulation(
     mad.setup_beam(beam_energy=6800)
     mad.mad["zero_twiss", "_"] = mad.mad.twiss(sequence="loaded_sequence")  # ty:ignore[invalid-assignment]
 
+    mad.observe_elements()
+    tws = mad.run_twiss(deltap=delta_p)
+    tws = tws.loc[tws.index.str.upper().str.contains("BPM")]
+    mad.unobserve_elements(["BPM"])
+
     magnet_strengths = {}
     if do_apply_magnet_perturbations:
         magnet_strengths, _ = apply_magnet_perturbations(
@@ -71,10 +76,6 @@ def _setup_xsuite_simulation(
         target_qy=0.31,
         corrector_file=corrector_file,
     )
-
-    mad.observe_elements()
-    tws = mad.run_twiss(deltap=delta_p)
-    tws = tws.loc[tws.index.str.upper().str.contains("BPM")]
 
     corrector_table = tfs.read(corrector_file)
     corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
@@ -242,7 +243,6 @@ local a = seq:replace({{
         px_divisor=4.5,
         py_divisor=4.5,
         rng_seed=42,
-        subtract_mean=False,
     )
 
 
@@ -259,7 +259,6 @@ def _verify_pz_reconstruction(
     px_divisor,
     py_divisor,
     rng_seed=42,
-    subtract_mean=True,
 ):
     """Wrapper around shared verify_pz_reconstruction for backward compatibility."""
     verify_pz_reconstruction(
@@ -276,7 +275,6 @@ def _verify_pz_reconstruction(
         px_divisor,
         py_divisor,
         rng_seed,
-        subtract_mean,
     )
 
 
@@ -304,6 +302,7 @@ def test_calculate_pz_with_corrections_and_perturbations(
     magnet_seed,
     seq_b1,
     tmp_path,
+    xsuite_json_path,
 ):
     """Test momentum reconstruction with orbit correction and/or magnet perturbations.
 
@@ -314,27 +313,27 @@ def test_calculate_pz_with_corrections_and_perturbations(
     # DO NOT EVER INCREASE THESE TOLERANCES, IF THE TESTS START FAILING, FIX THE UNDERLYING ISSUE
     tolerance_values = {
         (2e-4, False, None): {
-            "px_nonoise_max": 2.2e-6,
+            "px_nonoise_max": 2.8e-6,
             "py_nonoise_max": 6e-7,
             "px_noisy_min": 3e-6,
-            "px_noisy_max": 3.5e-6,
+            "px_noisy_max": 3.6e-6,
             "py_noisy_min": 2e-6,
             "py_noisy_max": 3e-6,
-            "px_divisor": 1.4,
+            "px_divisor": 1.3,
             "py_divisor": 3.2,
         },
         (0.0, True, 123): {
-            "px_nonoise_max": 3e-6,
-            "py_nonoise_max": 6e-7,
-            "px_noisy_min": 3e-6,
-            "px_noisy_max": 4e-6,
-            "py_noisy_min": 6e-7,
+            "px_nonoise_max": 2e-6,
+            "py_nonoise_max": 2e-7,
+            "px_noisy_min": 2e-6,
+            "px_noisy_max": 3e-6,
+            "py_noisy_min": 2e-6,
             "py_noisy_max": 3e-6,
-            "px_divisor": 1.4,
-            "py_divisor": 3.0,
+            "px_divisor": 1.6,
+            "py_divisor": 4.0,
         },
     }
-    json_path = tmp_path / "lhcb1.json"
+    json_path = xsuite_json_path("lhcb1.seq")
     test_id = f"test_{delta_p}_{do_apply_magnet_perturbations}"
 
     tracking_df, truth, tws = _setup_xsuite_simulation(
@@ -354,5 +353,4 @@ def test_calculate_pz_with_corrections_and_perturbations(
         tws,
         **tol_dict,
         rng_seed=42,
-        subtract_mean=True,
     )

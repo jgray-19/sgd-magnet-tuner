@@ -5,11 +5,11 @@ from typing import TYPE_CHECKING
 
 from aba_optimiser.momentum_recon.core import (
     OUT_COLS,
-    attach_lattice_columns,
-    build_lattice_maps,
     diagnostics,
     get_rng,
-    inject_noise_xy,
+    inject_noise_xy_inplace,
+    remove_closed_orbit_inplace,
+    restore_closed_orbit_and_reference_momenta_inplace,
     sync_endpoints,
     validate_input,
 )
@@ -18,9 +18,9 @@ from aba_optimiser.momentum_recon.core import (
 )
 from aba_optimiser.momentum_recon.momenta import momenta_from_next, momenta_from_prev
 from aba_optimiser.momentum_recon.neighbors import (
-    build_lattice_neighbor_tables,
     compute_turn_wraps,
     merge_neighbor_coords,
+    prepare_neighbor_views,
 )
 from aba_optimiser.physics.dpp_calculation import get_mean_dpp
 
@@ -46,40 +46,22 @@ def calculate_pz(
         len(low_noise_bpms),
     )
 
-    has_px, has_py = validate_input(orig_data)
+    features = validate_input(orig_data)
     data = orig_data.copy(deep=True)
     rng = get_rng(rng)
 
     if inject_noise:
-        inject_noise_xy(data, orig_data, rng, low_noise_bpms)
+        inject_noise_xy_inplace(data, orig_data, rng, low_noise_bpms)
 
-    bpm_list = data["name"].unique().tolist()
-    tws = tws[tws.index.isin(bpm_list)]
+    # Get the shared list of data and twiss BPMs
+    tws_bpm_names = set(tws.index).intersection(data["name"].unique())
+    data = data[data["name"].isin(tws_bpm_names)]
+    tws = tws.loc[tws.index.isin(tws_bpm_names)]
+
+    remove_closed_orbit_inplace(data, tws)
 
     dpp_est = get_mean_dpp(data, tws, info)
-    maps = build_lattice_maps(tws, include_dispersion=True)
-    prev_x_df, prev_y_df, next_x_df, next_y_df = build_lattice_neighbor_tables(tws)
-
-    bpm_index = {bpm: idx for idx, bpm in enumerate(bpm_list)}
-
-    data_p = data.join(prev_x_df, on="name", rsuffix="_px")
-    data_p = data_p.join(prev_y_df, on="name", rsuffix="_py")
-    data_n = data.join(next_x_df, on="name", rsuffix="_nx")
-    data_n = data_n.join(next_y_df, on="name", rsuffix="_ny")
-
-    attach_lattice_columns(data_p, maps)
-    attach_lattice_columns(data_n, maps)
-
-    data_p["sqrt_betax_p"] = data_p["prev_bpm_x"].map(maps.sqrt_betax)
-    data_p["sqrt_betay_p"] = data_p["prev_bpm_y"].map(maps.sqrt_betay)
-    data_n["sqrt_betax_n"] = data_n["next_bpm_x"].map(maps.sqrt_betax)
-    data_n["sqrt_betay_n"] = data_n["next_bpm_y"].map(maps.sqrt_betay)
-
-    if maps.dx is None or maps.dpx is None:
-        raise RuntimeError("Dispersion maps were not initialised correctly")
-
-    data_p["dx_prev"] = data_p["prev_bpm_x"].map(maps.dx)
-    data_n["dx_next"] = data_n["next_bpm_x"].map(maps.dx)
+    data_p, data_n, bpm_index, _maps = prepare_neighbor_views(data, tws, include_dispersion=True)
 
     turn_x_p, turn_y_p, turn_x_n, turn_y_n = compute_turn_wraps(
         data_p, data_n, bpm_index
@@ -95,8 +77,10 @@ def calculate_pz(
 
     data_avg = weighted_average(data_p, data_n)
 
+    restore_closed_orbit_and_reference_momenta_inplace(data_avg, tws)
+
     # Add to the header the dpp used
     data_avg.attrs["DPP_EST"] = dpp_est
 
-    diagnostics(orig_data, data_p, data_n, data_avg, info, has_px, has_py)
+    diagnostics(orig_data, data_p, data_n, data_avg, info, features)
     return data_avg[OUT_COLS]

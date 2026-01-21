@@ -125,3 +125,22 @@ extend-select = [
 # Allow fix for all enabled rules (when `--fix`) is provided.
 fixable = ["ALL"]
 unfixable = []
+
+
+[tool.ty.src]
+exclude = [
+    "**/acc-models-lhc/",
+    "*_analysis*/",
+    "*_results/",
+    "analysis*/",
+    "b1_flat_60_18cm/",
+    "betabeat/",
+    "data/",
+    "docs/api/",
+    "/mad_scripts/",
+    "models/**",
+    "plots/",
+    "*.out",
+    "*.png",
+
+]

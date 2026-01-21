@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
+import tfs
 
 from aba_optimiser.filtering.svd import svd_clean_measurements
-from aba_optimiser.momentum_recon import inject_noise_xy
+from aba_optimiser.momentum_recon import inject_noise_xy_inplace
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -15,16 +17,41 @@ if TYPE_CHECKING:
     import pandas as pd
     import xtrack as xt
 
+LOGGER = logging.getLogger(__name__)
+
 
 def rmse(actual: np.ndarray, predicted: np.ndarray) -> float:
     """Compute root mean squared error."""
     return float(np.sqrt(np.mean((predicted - actual) ** 2)))
 
+def xsuite_to_ngtws(tbl: xt.Table) -> pd.DataFrame:
+    """Convert xsuite twiss table to ngtws format DataFrame.
 
-def get_truth_and_twiss(
-    baseline_line: xt.Line,
-    tracking_df: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+    Args:
+        line: xsuite Line object containing the twiss table.
+
+    Returns:
+        DataFrame in ngtws format.
+    """
+    df = tbl.to_pandas()
+    df["beta11"] = df["betx"]
+    df["beta22"] = df["bety"]
+    df["alfa11"] = df["alfx"]
+    df["alfa22"] = df["alfy"]
+    df["mu1"] = df["mux"]
+    df["mu2"] = df["muy"]
+    df = tfs.TfsDataFrame(
+        df,
+        headers={"q1": tbl.qx, "q2": tbl.qy},
+    )
+    # remove
+    df["name"] = df["name"].str.upper()  # ty:ignore[unresolved-attribute]
+    df = df.set_index("name")
+    bpm_names = df[df.index.str.match(r"^BPM.*\.B1$")].index.tolist()
+    return df[df.index.isin(bpm_names)]
+
+
+def get_truth(tracking_df: pd.DataFrame, tws: pd.DataFrame) -> pd.DataFrame:
     """Extract truth momenta and prepare twiss from baseline line.
 
     Parameters
@@ -38,24 +65,12 @@ def get_truth_and_twiss(
     -------
     truth : pd.DataFrame
         DataFrame with true momenta (px_true, py_true).
-    tws : pd.DataFrame
-        Twiss parameters indexed by BPM names.
     """
-    truth = tracking_df[["name", "turn", "px", "py"]].rename(
+    df = tracking_df[["name", "turn", "px", "py"]].rename(
         columns={"px": "px_true", "py": "py_true"}
     )
-
-    # Convert twiss to expected format
-    ng = baseline_line.to_madng()
-    ng["tws", "flw"] = ng.twiss(sequence=ng.seq, coupling=True)
-    tws: pd.DataFrame = (
-        ng.tws.to_df()
-        .set_index("name")
-        .rename(index=str.upper)
-        .loc[lambda df: df.index.str.contains("BPM")]
-    )
-
-    return truth, tws
+    # Ensure only BPMs present in twiss are included
+    return df[df["name"].isin(tws.index)]
 
 
 def verify_pz_reconstruction(
@@ -72,7 +87,6 @@ def verify_pz_reconstruction(
     px_divisor: float,
     py_divisor: float,
     rng_seed: int = 42,
-    subtract_mean: bool = True,
 ):
     """Verify momentum reconstruction with noise and SVD cleaning.
 
@@ -109,20 +123,17 @@ def verify_pz_reconstruction(
         Divisor to verify SVD improvement for py.
     rng_seed : int
         Random seed for noise generation.
-    subtract_mean : bool
-        Whether to subtract mean in the calculation function.
     """
     no_noise_result = calculate_pz_func(
         tracking_df.copy(deep=True),
         tws=tws,
         inject_noise=False,
         info=True,
-        subtract_mean=subtract_mean,
     ).rename(columns={"px": "px_calc", "py": "py_calc"})
 
     rng = np.random.default_rng(rng_seed)
     noisy_df = tracking_df.copy(deep=True)
-    inject_noise_xy(
+    inject_noise_xy_inplace(
         noisy_df,
         tracking_df,
         rng,
@@ -134,7 +145,6 @@ def verify_pz_reconstruction(
         tws=tws,
         inject_noise=False,
         info=True,
-        subtract_mean=subtract_mean,
     ).rename(columns={"px": "px_calc", "py": "py_calc"})
 
     # Apply SVD cleaning to noisy data
@@ -144,7 +154,6 @@ def verify_pz_reconstruction(
         tws=tws,
         inject_noise=False,
         info=True,
-        subtract_mean=subtract_mean,
     ).rename(columns={"px": "px_calc", "py": "py_calc"})
 
     merged_no_noise = truth.merge(
@@ -188,6 +197,13 @@ def verify_pz_reconstruction(
     py_rmse_cleaned = rmse(
         merged_cleaned["py_true"].to_numpy(),
         merged_cleaned["py_calc"].to_numpy(),
+    )
+
+    LOGGER.info(
+        f"PX RMSE no noise: {px_rmse_nonoise:.2e}, noisy: {px_rmse_noisy:.2e}, cleaned: {px_rmse_cleaned:.2e}"
+    )
+    LOGGER.info(
+        f"PY RMSE no noise: {py_rmse_nonoise:.2e}, noisy: {py_rmse_noisy:.2e}, cleaned: {py_rmse_cleaned:.2e}"
     )
 
     assert px_rmse_nonoise < px_nonoise_max

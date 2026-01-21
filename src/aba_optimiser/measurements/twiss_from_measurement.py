@@ -101,10 +101,14 @@ def build_twiss_from_measurements(
     twiss_df[f"{MOMENTUM_DISPERSION}Y"] = disp_y.loc[sorted_index, f"{MOMENTUM_DISPERSION}Y"]
 
     # Phase advances (cumulative from start)
-    mu_x, err_mu_x = _compute_cumulative_phase(phase_x, sorted_index, f"{PHASE}X")
-    mu_y, err_mu_y = _compute_cumulative_phase(phase_y, sorted_index, f"{PHASE}Y")
+    mu_x, var_mu_x, total_var_x = _compute_cumulative_phase(phase_x, sorted_index, f"{PHASE}X")
+    mu_y, var_mu_y, total_var_y = _compute_cumulative_phase(phase_y, sorted_index, f"{PHASE}Y")
     twiss_df[f"{PHASE_ADV}X"] = mu_x
     twiss_df[f"{PHASE_ADV}Y"] = mu_y
+
+    # Always store variance; cheap and avoids later mistakes
+    twiss_df["mu1_var"] = var_mu_x
+    twiss_df["mu2_var"] = var_mu_y
 
     # Optionally include errors
     if include_errors:
@@ -118,11 +122,13 @@ def build_twiss_from_measurements(
         twiss_df[f"{ERR}{DISPERSION}Y"] = disp_y.loc[sorted_index, f"{ERR}{DISPERSION}Y"]
         twiss_df[f"{ERR}{MOMENTUM_DISPERSION}X"] = disp_x.loc[sorted_index, f"{ERR}{MOMENTUM_DISPERSION}X"]
         twiss_df[f"{ERR}{MOMENTUM_DISPERSION}Y"] = disp_y.loc[sorted_index, f"{ERR}{MOMENTUM_DISPERSION}Y"]
-        twiss_df[f"{ERR}{PHASE_ADV}X"] = err_mu_x
-        twiss_df[f"{ERR}{PHASE_ADV}Y"] = err_mu_y
+        twiss_df[f"{ERR}{PHASE_ADV}X"] = np.sqrt(var_mu_x)
+        twiss_df[f"{ERR}{PHASE_ADV}Y"] = np.sqrt(var_mu_y)
 
-    # Headers: tunes if available
+    # Headers: tunes if available and total variances
     headers: dict[str, float] = {}
+    headers["MU1_TOTAL_VAR"] = total_var_x
+    headers["MU2_TOTAL_VAR"] = total_var_y
     if "Q1" in beta_x.headers:
         headers["Q1"] = beta_x.headers["Q1"]
     if "Q2" in beta_x.headers:
@@ -132,21 +138,40 @@ def build_twiss_from_measurements(
 
 
 def _compute_cumulative_phase(
-    phase_df: tfs.TfsDataFrame, sorted_index: pd.Index, phase_col: str
-) -> tuple[np.ndarray, np.ndarray]:
-    """Compute cumulative phase advance from the start of the lattice."""
-    mu = np.zeros(len(sorted_index))
-    err_mu = np.zeros(len(sorted_index))
-    current_mu = 0.0
-    current_err_sq = 0.0
-    for i, name in enumerate(sorted_index):
-        mu[i] = current_mu
-        err_mu[i] = np.sqrt(current_err_sq)
-        # Find the segment starting from this name
-        segment = phase_df.loc[phase_df.index == name]
-        if not segment.empty:
-            phase_val = segment.iloc[0][phase_col]
-            err_val = segment.iloc[0][f"{ERR}{phase_col}"]
-            current_mu += phase_val
-            current_err_sq += err_val ** 2
-    return mu, err_mu
+    phase_df: pd.DataFrame, sorted_index: pd.Index, phase_col: str
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """
+    Compute cumulative phase (turns) and cumulative variance (turns^2)
+    assuming each row provides the phase advance from NAME -> NAME2 and its error.
+
+    I don't like this function because it recalculates the phase advances from differences,
+    instead we could just use these differences directly when deciding the bpms with the correct
+    phase advance (pi/2 or pi). For now this is only used in testing so it's acceptable.
+
+    Returns:
+        mu: cumulative phase at each BPM in sorted_index (turns)
+        var_mu: cumulative variance of mu at each BPM (turns^2)
+        total_var: total variance around ring (turns^2)
+
+    """
+    # Step phase advance for each BPM in lattice order
+    step = phase_df[phase_col].reindex(sorted_index).to_numpy(float)
+    step_err = phase_df[f"{ERR}{phase_col}"].reindex(sorted_index).to_numpy(float)
+
+    # If there can be missing BPMs, decide policy:
+    # - missing step means "no information": treat as 0 with 0 error
+    step = np.nan_to_num(step, nan=0.0)
+    step_err = np.nan_to_num(step_err, nan=0.0)
+
+    step_var = step_err**2
+    total_var = float(step_var.sum())
+
+    # mu at BPM i is sum of steps from BPM 0 up to i-1
+    # so shift the cumulative sum by 1
+    mu = np.zeros(len(sorted_index), dtype=float)
+    var_mu = np.zeros(len(sorted_index), dtype=float)
+    if len(sorted_index) > 1:
+        mu[1:] = np.cumsum(step[:-1])
+        var_mu[1:] = np.cumsum(step_var[:-1])
+
+    return mu, var_mu, total_var
