@@ -20,14 +20,11 @@ import logging
 from typing import TYPE_CHECKING
 
 from omc3.machine_data_extraction.lsa_utils import calc_k_from_iref
-from omc3.machine_data_extraction.mqt_extraction import generate_mqt_names, get_mqt_vals
+from omc3.machine_data_extraction.mqt_extraction import get_mqt_vals
 from omc3.machine_data_extraction.nxcals_knobs import (
     NXCALSResult,
     get_energy,
     get_knob_vals,
-    get_raw_vars,
-    map_pc_name_to_madx,
-    strip_i_meas,
 )
 
 if TYPE_CHECKING:
@@ -40,13 +37,8 @@ logger = logging.getLogger(__name__)
 # Re-export commonly used items for backward compatibility
 __all__ = [
     "NXCALSResult",
-    "get_knob_vals",
-    "get_raw_vars",
     "get_energy",
     "calc_k_from_iref",
-    "strip_i_meas",
-    "map_pc_name_to_madx",
-    "generate_mqt_names",
     "get_mqt_vals",
     "get_mb_vals",
     "get_ms_vals",

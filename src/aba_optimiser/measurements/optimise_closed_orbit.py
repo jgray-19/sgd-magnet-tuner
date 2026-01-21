@@ -52,6 +52,64 @@ def weighted_mean(values: list[float], uncertainties: list[float]) -> float:
     return numerator / sum(weights)
 
 
+def compute_weighted_mean_and_variance(
+    sub: pd.DataFrame, value_col: str, var_col: str, include_scatter: bool = True
+) -> tuple[float, float]:
+    """Compute inverse-variance weighted mean and its variance.
+
+    Args:
+        sub: DataFrame subset for a single BPM
+        value_col: Column name for values to average
+        var_col: Column name for variances
+        include_scatter: If True, include observed scatter in variance estimate
+
+    Returns:
+        Tuple of (weighted_mean, variance_of_mean)
+    """
+    vals = sub[value_col].to_numpy()
+    vars_ = sub[var_col].to_numpy()
+    mask = np.isfinite(vals) & np.isfinite(vars_) & (vars_ > 0)
+    vals = vals[mask]
+    vars_ = vars_[mask]
+
+    # Fallback when no valid variances are available
+    if vals.size == 0:
+        mu = float(sub[value_col].mean())
+        n = sub[value_col].count()
+        if n >= 2:
+            v_unw = float(np.var(sub[value_col].to_numpy(), ddof=1))
+            var_mean = v_unw / n
+        else:
+            var_mean = np.nan
+        return mu, var_mean
+
+    w = 1.0 / vars_
+    sum_w = float(np.sum(w))
+    mu = float(np.sum(w * vals) / sum_w)
+
+    # Variance of weighted mean from reported measurement variances
+    var_from_meas = 1.0 / sum_w
+
+    if not include_scatter:
+        return mu, var_from_meas
+
+    # Weighted sample variance (unbiased) of the scatter across points
+    resid = vals - mu
+    num = float(np.sum(w * resid * resid))
+    sum_w2 = float(np.sum(w * w))
+    denom = sum_w - (sum_w2 / sum_w) if sum_w > 0 else np.nan
+    v_unbiased = num / denom if denom and denom > 0 else np.nan
+    n_eff = (sum_w * sum_w) / sum_w2 if sum_w2 > 0 else 0.0
+    var_from_scatter = (
+        v_unbiased / n_eff if (n_eff and n_eff > 1 and np.isfinite(v_unbiased)) else np.nan
+    )
+
+    # Combine conservatively: include scatter if it exceeds propagated measurement variance
+    candidates = [c for c in [var_from_meas, var_from_scatter] if np.isfinite(c) and c > 0]
+    var_mean = max(candidates) if candidates else var_from_meas
+    return mu, var_mean
+
+
 def optimise_ranges(
     range_config: RangeConfig,
     range_type: str,
@@ -245,6 +303,7 @@ def process_single_config(
     date: str,
     skip_reload: bool,
     use_fixed_bpm: bool = True,
+    include_scatter: bool = True,
 ) -> None:
     """Process a single measurement configuration.
 
@@ -255,6 +314,8 @@ def process_single_config(
         skip_reload: If True, skip reloading strengths from LSA and reuse existing analysis
         use_fixed_bpm: If True (default), use fixed reference BPM approach.
                        If False, create all combinations of start/end BPMs (Cartesian product).
+        include_scatter: If True (default), include observed scatter in variance estimates.
+                        If False, use only propagated measurement variance.
     """
     results_dir = PROJECT_ROOT / f"b{config.beam}co_results"
     tune_knobs_file = results_dir / f"tune_knobs_{config.title}.txt"
@@ -309,14 +370,34 @@ def process_single_config(
         filename=None,
         bad_bpms=bad_bpms,
     )
+    if isinstance(pzs, list) or isinstance(ana_dir, list):
+        raise ValueError("process_measurements returned unexpected list type.")
+
     file_path = ana_dir / measurement_filename
 
-    # Compute averages per BPM
-    averaged = (
-        pzs.groupby("name")[["x", "px", "y", "py", "var_x", "var_y", "var_px", "var_py"]]
-        .mean()
-        .reset_index()
-    )
+    # Compute weighted averages per BPM with proper variance of the mean
+    rows = []
+    for name, sub in pzs.groupby("name"):
+        mu_x, vm_x = compute_weighted_mean_and_variance(sub, "x", "var_x", include_scatter)
+        mu_y, vm_y = compute_weighted_mean_and_variance(sub, "y", "var_y", include_scatter)
+        mu_px, vm_px = compute_weighted_mean_and_variance(sub, "px", "var_px", include_scatter)
+        mu_py, vm_py = compute_weighted_mean_and_variance(sub, "py", "var_py", include_scatter)
+        rows.append(
+            {
+                "name": name,
+                "x": mu_x,
+                "y": mu_y,
+                "px": mu_px,
+                "py": mu_py,
+                # Store the variance of the weighted mean for downstream weighting
+                "var_x": vm_x,
+                "var_y": vm_y,
+                "var_px": vm_px,
+                "var_py": vm_py,
+            }
+        )
+
+    averaged = pd.DataFrame(rows)
     print(
         averaged["var_x"].describe(),
         averaged["var_y"].describe(),
@@ -440,6 +521,11 @@ def main():
         action="store_true",
         help="Disable fixed BPM for start/end points, pair BPMs element-wise instead",
     )
+    parser.add_argument(
+        "--no-scatter",
+        action="store_true",
+        help="Exclude observed scatter from variance estimates, use only propagated measurement variance",
+    )
     args = parser.parse_args()
 
     # Define date
@@ -457,12 +543,15 @@ def main():
     # Temporary analysis directory
     temp_analysis_dir = PROJECT_ROOT / f"temp_analysis_co_{args.beam}"
 
-    # Determine use_fixed_bpm from args
+    # Determine use_fixed_bpm and include_scatter from args
     use_fixed_bpm = not args.no_fixed_bpm
+    include_scatter = not args.no_scatter
 
     # Process each configuration
     for config in configs:
-        process_single_config(config, temp_analysis_dir, date, args.skip_reload, use_fixed_bpm)
+        process_single_config(
+            config, temp_analysis_dir, date, args.skip_reload, use_fixed_bpm, include_scatter
+        )
 
     # Delete temp_analysis_dir if not skipping reload
     if not args.skip_reload:
