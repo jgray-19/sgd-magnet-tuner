@@ -13,7 +13,7 @@ from aba_optimiser.model_creator import convert_tfs_to_madx
 from aba_optimiser.momentum_recon.dispersive_measurement import calculate_pz_measurement
 from aba_optimiser.xsuite.acd import run_acd_track
 
-from .momentum_test_utils import get_truth, rmse, xsuite_to_ngtws
+from .momentum_test_utils import add_error_to_orbit_measurement, get_truth, rmse, xsuite_to_ngtws
 
 
 @pytest.mark.slow
@@ -48,6 +48,9 @@ def test_dispersive_measurement_recovers_dpp(
         outputdir=meas_dir,
         parameters=["BETX", "BETY", "DX", "DY", "PHASEX", "PHASEY", "X", "Y"],
     )
+
+    # Add a nonzero orbit error
+    add_error_to_orbit_measurement(meas_dir)
 
     # Call the measurement-based function
     # The function now handles closed orbit removal and px/py restoration internally

@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from aba_optimiser.momentum_recon.pipeline import (
+from aba_optimiser.momentum_recon.measurement_pipeline import (
     aggregate_results,
     attach_errors_inplace,
     calculate_momenta,

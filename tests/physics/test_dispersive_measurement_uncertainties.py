@@ -16,7 +16,7 @@ from aba_optimiser.momentum_recon import inject_noise_xy_inplace
 from aba_optimiser.momentum_recon.dispersive_measurement import calculate_pz_measurement
 from aba_optimiser.xsuite.acd import run_acd_track
 
-from .momentum_test_utils import get_truth, rmse, xsuite_to_ngtws
+from .momentum_test_utils import add_error_to_orbit_measurement, get_truth, rmse, xsuite_to_ngtws
 
 
 @pytest.mark.slow
@@ -78,6 +78,8 @@ def test_dispersive_measurement_with_uncertainties(
         randomize=["values", "errors"] if add_noise else [],
         seed=1234,
     )
+
+    add_error_to_orbit_measurement(temp_dir)
 
     # Prepare data for calculation
     calc_df = tracking_df.copy(deep=True)

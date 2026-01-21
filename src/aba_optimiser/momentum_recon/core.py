@@ -297,7 +297,7 @@ def weighted_average_from_angles(
     return data_avg
 
 
-def sync_endpoints(data_p: pd.DataFrame, data_n: pd.DataFrame) -> None:
+def sync_endpoints_inplace(data_p: pd.DataFrame, data_n: pd.DataFrame) -> None:
     for col in CORE_MOM_COLS:
         data_n.iloc[-1, data_n.columns.get_loc(col)] = data_p.iloc[-1, data_p.columns.get_loc(col)]
         data_p.iloc[0, data_p.columns.get_loc(col)] = data_n.iloc[0, data_n.columns.get_loc(col)]
@@ -383,19 +383,25 @@ def diagnostics(
             LOGGER.info("py_diff mean (avg rel): No significant py values")
 
 
-def remove_closed_orbit_inplace(data: pd.DataFrame, tws: pd.DataFrame) -> None:
+def remove_closed_orbit_inplace(data: pd.DataFrame, co: pd.DataFrame) -> None:
     """Remove closed orbit from tracking data in-place."""
-    tws_dict = tws.to_dict()
-    data["x"] = data["x"] - data["name"].map(tws_dict["x"])
-    data["y"] = data["y"] - data["name"].map(tws_dict["y"])
+    x_dict = co["x"].to_dict()
+    y_dict = co["y"].to_dict()
+    # Ensure arithmetic is performed on float dtype, not categorical
+    data["x"] = data["x"].astype(float) - data["name"].map(x_dict).astype(float)
+    data["y"] = data["y"].astype(float) - data["name"].map(y_dict).astype(float)
 
 
 def restore_closed_orbit_and_reference_momenta_inplace(
-    data: pd.DataFrame, tws: pd.DataFrame
+    data: pd.DataFrame, co: pd.DataFrame
 ) -> None:
     """Restore closed orbit and add reference momenta to data in-place."""
-    tws_dict = tws.to_dict()
-    data["x"] = data["x"] + data["name"].map(tws_dict["x"])
-    data["y"] = data["y"] + data["name"].map(tws_dict["y"])
-    data["px"] = data["px"] + data["name"].map(tws_dict["px"])
-    data["py"] = data["py"] + data["name"].map(tws_dict["py"])
+    co_dict = co.to_dict()
+    data["x"] = data["x"] + data["name"].map(co_dict["x"])
+    data["y"] = data["y"] + data["name"].map(co_dict["y"])
+    data["px"] = data["px"] + data["name"].map(co_dict["px"])
+    data["py"] = data["py"] + data["name"].map(co_dict["py"])
+
+    if "var_px" in co.columns and "var_py" in co.columns:
+        data["var_px"] = data["var_px"] + data["name"].map(co_dict["var_px"])
+        data["var_py"] = data["var_py"] + data["name"].map(co_dict["var_py"])

@@ -110,10 +110,12 @@ def build_twiss_from_measurements(
     twiss_df["mu1_var"] = var_mu_x
     twiss_df["mu2_var"] = var_mu_y
 
+    # Always include orbit errors
+    twiss_df[f"{ERR}{ORBIT}X"] = orbit_x.loc[sorted_index, f"{ERR}{ORBIT}X"]
+    twiss_df[f"{ERR}{ORBIT}Y"] = orbit_y.loc[sorted_index, f"{ERR}{ORBIT}Y"]
+
     # Optionally include errors
     if include_errors:
-        twiss_df[f"{ERR}{ORBIT}X"] = orbit_x.loc[sorted_index, f"{ERR}{ORBIT}X"]
-        twiss_df[f"{ERR}{ORBIT}Y"] = orbit_y.loc[sorted_index, f"{ERR}{ORBIT}Y"]
         twiss_df[f"{ERR}{BETA}X"] = beta_x.loc[sorted_index, f"{ERR}{BETA}X"]
         twiss_df[f"{ERR}{BETA}Y"] = beta_y.loc[sorted_index, f"{ERR}{BETA}Y"]
         twiss_df[f"{ERR}{ALPHA}X"] = beta_x.loc[sorted_index, f"{ERR}{ALPHA}X"]

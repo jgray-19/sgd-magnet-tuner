@@ -28,6 +28,9 @@ MEASUREMENT_RENAME_MAPPING: dict[str, str] = {
     f"{MOMENTUM_DISPERSION}Y": "dpy",
     f"{ORBIT}X": "x",
     f"{ORBIT}Y": "y",
+    # Always include orbit errors!
+    f"{ERR}{ORBIT}X": "x_err",
+    f"{ERR}{ORBIT}Y": "y_err",
 }
 
 ERROR_RENAME_MAPPING: dict[str, str] = {

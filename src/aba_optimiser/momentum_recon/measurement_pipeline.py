@@ -21,7 +21,7 @@ from aba_optimiser.momentum_recon.core import (
     diagnostics,
     remove_closed_orbit_inplace,
     restore_closed_orbit_and_reference_momenta_inplace,
-    sync_endpoints,
+    sync_endpoints_inplace,
     validate_input,
 )
 from aba_optimiser.momentum_recon.core import (
@@ -157,16 +157,18 @@ def setup_momentum_calculation(
     Args:
         data: Tracking data.
         tws_meas: Processed measurement twiss data.
-        model_tws: Model twiss data for closed orbit.
+        model_tws: Model twiss data for closed orbit
         info: Whether to log info.
 
     Returns:
-        Tuple of (data_p, data_n, dpp_est).
+        Tuple of (data_p, data_n, dpp_est, closed_orbit).
     """
-    # Remove closed orbit from tracking data before calculation
+    # Estimate DPP from the model
+    dpp_est = get_mean_dpp(data, tws_meas, info)
+
+    # Remove the closed orbit expected from the model.
     remove_closed_orbit_inplace(data, model_tws)
 
-    dpp_est = get_mean_dpp(data, tws_meas, info)
     data_p, data_n, bpm_index, maps = prepare_neighbor_views(
         data,
         tws_meas,
@@ -200,7 +202,7 @@ def calculate_momenta(
     data_p = momenta_from_prev(data_p, dpp_est, include_optics_errors=include_optics_errors)
     data_n = momenta_from_next(data_n, dpp_est, include_optics_errors=include_optics_errors)
 
-    sync_endpoints(data_p, data_n)
+    sync_endpoints_inplace(data_p, data_n)
 
     return data_p, data_n
 
@@ -216,7 +218,8 @@ def aggregate_results(
     Args:
         data_p: Previous neighbor data with momenta.
         data_n: Next neighbor data with momenta.
-        model_tws: Model twiss data.
+        model_tws: Model twiss data for closed orbit.
+        closed_orbit: Closed orbit data.
         dpp_est: Estimated DPP.
 
     Returns:
@@ -224,7 +227,7 @@ def aggregate_results(
     """
     data_avg = weighted_average(data_p, data_n)
 
-    # Restore closed orbit to x and y
+    # Restore closed orbit to x, px, y, py
     # Add reference momenta from twiss
     restore_closed_orbit_and_reference_momenta_inplace(data_avg, model_tws)
 

@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from aba_optimiser.config import FILE_COLUMNS
+from aba_optimiser.momentum_recon.closed_orbit import estimate_closed_orbit
 from aba_optimiser.physics.bpm_phases import (
     next_bpm_to_pi,
     next_bpm_to_pi_2,
@@ -36,7 +37,7 @@ class TwissMaps:
 def _twiss_maps(tws: pd.DataFrame) -> TwissMaps:
     sqrt_betax = np.sqrt(tws["beta11"]).to_dict()
     dx = tws["dx"].to_dict()
-    x_co = tws.get("x", pd.Series(0.0, index=tws.index)).to_dict()
+    x_co = tws["x"].to_dict()
     return TwissMaps(sqrt_betax=sqrt_betax, dx=dx, x_co=x_co)
 
 
@@ -194,10 +195,14 @@ def _calculate_dpp_direction_aligned(
 
     psi_bar, psi_tilde = _phases_radians(df["d_pi"].to_numpy(), df["d_pi2"].to_numpy())
 
+    x1 = df["x"].to_numpy()
+    x_bar = df["x_bar"].to_numpy()
+    x_tilde = df["x_tilde"].to_numpy()
+
     _, den, delta_all = _compute_delta(
-        df["x"].to_numpy(),
-        df["x_bar"].to_numpy(),
-        df["x_tilde"].to_numpy(),
+        x1,
+        x_bar,
+        x_tilde,
         sqrt_beta_1,
         sqrt_beta_bar,
         sqrt_beta_tilde,
@@ -227,6 +232,10 @@ def calculate_dpp_both(
     This leaves the original `calculate_dpp` API untouched.
     """
     LOGGER.info("Calculating δ using BOTH directions (prev + next)")
+    # Make a copy to avoid modifying input
+    data = data.copy(deep=True)
+
+    # Ensure tws is indexed by BPM name
     if tws.index.name != "name":
         tws = tws.set_index("name")
 
@@ -278,3 +287,51 @@ def get_mean_dpp(data: pd.DataFrame, tws: pd.DataFrame, info: bool = True) -> fl
     if info:
         LOGGER.info("Mean δ across all valid measurements: %s", mean_dpp)
     return mean_dpp if np.isfinite(mean_dpp) else 0.0
+
+LHC_ARC_PATTERN = r"BPM.*\.0*(1[5-9]|[2-9]\d|[1-9]\d{2,})[RL]"
+
+
+def estimate_dpp_from_model(data: pd.DataFrame, tws: pd.DataFrame, info: bool = True) -> float:
+    """
+    Estimate δ using model-based dispersion using the sum method.
+
+    Args:
+        data: Tracking data with BPM readings. Must contain columns: ["name", "x"].
+        tws: Twiss parameters DataFrame. Must have column "dx" and be indexed by BPM name.
+        info: If True, log diagnostic information.
+    Returns:
+        Estimated δ value as a float.
+    """
+
+    is_lhc = tws.index.str.match(LHC_ARC_PATTERN).any()
+    closed_orbit = estimate_closed_orbit(data, tws)
+
+    if is_lhc:
+        filtered_co = closed_orbit[closed_orbit.index.str.match(LHC_ARC_PATTERN)]
+        filtered_tws = tws.loc[filtered_co.index.unique()]
+        if info:
+            LOGGER.info(
+                "LHC arc BPM pattern detected. Using %d BPMs for δ estimation.",
+                filtered_tws.shape[0],
+            )
+    else:
+        bpms_with_small_dx = tws[np.abs(tws["dx"]) > DX_TOL].index
+        filtered_co = closed_orbit[closed_orbit.index.isin(bpms_with_small_dx)]
+        filtered_tws = tws.loc[filtered_co.index.unique()]
+        if info:
+            LOGGER.info(
+                "Using BPMs with |dx| > %.2e. Selected %d BPMs for δ estimation.",
+                DX_TOL,
+                filtered_tws.shape[0],
+            )
+    if filtered_tws.empty:
+        raise ValueError("No BPMs available for δ estimation after filtering.")
+    numerator = np.sum(filtered_co["x"] * filtered_tws["dx"])
+    denominator = np.sum(filtered_tws["dx"] ** 2)
+    dpp = numerator / denominator
+
+    if info:
+        LOGGER.info(
+            "Estimated δ from model-based dispersion: %s from %s/%s", dpp, numerator, denominator
+        )
+    return dpp

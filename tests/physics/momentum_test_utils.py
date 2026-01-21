@@ -7,6 +7,12 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import tfs
+from omc3.optics_measurements.constants import (
+    ERR,
+    EXT,
+    ORBIT,
+    ORBIT_NAME,
+)
 
 from aba_optimiser.filtering.svd import svd_clean_measurements
 from aba_optimiser.momentum_recon import inject_noise_xy_inplace
@@ -213,3 +219,10 @@ def verify_pz_reconstruction(
     # Check cleaned is better than noisy
     assert px_rmse_cleaned < px_rmse_noisy / px_divisor
     assert py_rmse_cleaned < py_rmse_noisy / py_divisor
+
+def add_error_to_orbit_measurement(fldr):
+    for plane in ["x", "y"]:
+        meas_file = fldr / f"{ORBIT_NAME}{plane}{EXT}"
+        df = tfs.read(meas_file)
+        df[f"{ERR}{ORBIT}{plane.upper()}"] = 1e-6
+        tfs.write(meas_file, df)

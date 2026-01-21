@@ -184,7 +184,7 @@ def run_acd_track(
     )
 
     logger.info(f"Tracking {total_turns} turns with AC dipole")
-    monitored_line.track(particles, num_turns=total_turns, with_progress=False)
+    monitored_line.track(particles, num_turns=total_turns, with_progress=True)
 
     tracking_df = process_tracking_data(
         monitored_line, ramp_turns, flattop_turns, delta_p, add_variance_columns

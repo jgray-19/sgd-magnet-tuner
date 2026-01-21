@@ -9,8 +9,9 @@ from aba_optimiser.momentum_recon.core import (
     get_rng,
     inject_noise_xy_inplace,
     remove_closed_orbit_inplace,
+    # remove_closed_orbit_inplace,
     restore_closed_orbit_and_reference_momenta_inplace,
-    sync_endpoints,
+    sync_endpoints_inplace,
     validate_input,
 )
 from aba_optimiser.momentum_recon.core import (
@@ -22,7 +23,7 @@ from aba_optimiser.momentum_recon.neighbors import (
     merge_neighbor_coords,
     prepare_neighbor_views,
 )
-from aba_optimiser.physics.dpp_calculation import get_mean_dpp
+from aba_optimiser.physics.dpp_calculation import estimate_dpp_from_model
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers only
     import pandas as pd
@@ -60,7 +61,7 @@ def calculate_pz(
 
     remove_closed_orbit_inplace(data, tws)
 
-    dpp_est = get_mean_dpp(data, tws, info)
+    dpp_est = estimate_dpp_from_model(data, tws, info)
     data_p, data_n, bpm_index, _maps = prepare_neighbor_views(data, tws, include_dispersion=True)
 
     turn_x_p, turn_y_p, turn_x_n, turn_y_n = compute_turn_wraps(
@@ -73,7 +74,7 @@ def calculate_pz(
     data_p = momenta_from_prev(data_p, dpp_est)
     data_n = momenta_from_next(data_n, dpp_est)
 
-    sync_endpoints(data_p, data_n)
+    sync_endpoints_inplace(data_p, data_n)
 
     data_avg = weighted_average(data_p, data_n)
 

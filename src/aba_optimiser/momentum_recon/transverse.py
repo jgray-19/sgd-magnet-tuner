@@ -19,7 +19,7 @@ from aba_optimiser.momentum_recon.core import (
     inject_noise_xy_inplace,
     remove_closed_orbit_inplace,
     restore_closed_orbit_and_reference_momenta_inplace,
-    sync_endpoints,
+    sync_endpoints_inplace,
     validate_input,
 )
 from aba_optimiser.momentum_recon.core import (
@@ -161,7 +161,7 @@ def calculate_pz(
     data_p = momenta_from_prev(data_p)
     data_n = momenta_from_next(data_n)
 
-    sync_endpoints(data_p, data_n)
+    sync_endpoints_inplace(data_p, data_n)
 
     data_avg = weighted_average(data_p, data_n)
 

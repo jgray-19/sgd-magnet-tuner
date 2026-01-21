@@ -57,7 +57,7 @@ def _setup_xsuite_simulation(
     mad.mad["zero_twiss", "_"] = mad.mad.twiss(sequence="loaded_sequence")  # ty:ignore[invalid-assignment]
 
     mad.observe_elements()
-    tws = mad.run_twiss(deltap=delta_p)
+    tws = mad.run_twiss()
     tws = tws.loc[tws.index.str.upper().str.contains("BPM")]
     mad.unobserve_elements(["BPM"])
 
@@ -236,9 +236,9 @@ local a = seq:replace({{
         tws,
         px_nonoise_max=1.4e-7,
         py_nonoise_max=1.25e-7,
-        px_noisy_min=1e-7,
+        px_noisy_min=1e-6,
         px_noisy_max=2.4e-6,
-        py_noisy_min=1e-7,
+        py_noisy_min=1e-6,
         py_noisy_max=2.4e-6,
         px_divisor=4.5,
         py_divisor=4.5,
@@ -313,14 +313,14 @@ def test_calculate_pz_with_corrections_and_perturbations(
     # DO NOT EVER INCREASE THESE TOLERANCES, IF THE TESTS START FAILING, FIX THE UNDERLYING ISSUE
     tolerance_values = {
         (2e-4, False, None): {
-            "px_nonoise_max": 2.8e-6,
-            "py_nonoise_max": 6e-7,
-            "px_noisy_min": 3e-6,
-            "px_noisy_max": 3.6e-6,
+            "px_nonoise_max": 1.6e-6,
+            "py_nonoise_max": 2e-7,
+            "px_noisy_min": 2e-6,
+            "px_noisy_max": 3e-6,
             "py_noisy_min": 2e-6,
             "py_noisy_max": 3e-6,
-            "px_divisor": 1.3,
-            "py_divisor": 3.2,
+            "px_divisor": 1.7,
+            "py_divisor": 4.6,
         },
         (0.0, True, 123): {
             "px_nonoise_max": 2e-6,
@@ -329,8 +329,8 @@ def test_calculate_pz_with_corrections_and_perturbations(
             "px_noisy_max": 3e-6,
             "py_noisy_min": 2e-6,
             "py_noisy_max": 3e-6,
-            "px_divisor": 1.6,
-            "py_divisor": 4.0,
+            "px_divisor": 1.7,
+            "py_divisor": 4.6,
         },
     }
     json_path = xsuite_json_path("lhcb1.seq")
