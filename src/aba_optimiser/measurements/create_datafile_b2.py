@@ -52,13 +52,14 @@ if __name__ == "__main__":
     measurement_file = analysis_dir / measurement_filename
     bad_bpms_file = analysis_dir / "bad_bpms.txt"
 
-    pzs, bad_bpms, _ = process_measurements(
+    pzs_dict, bad_bpms, _, _ = process_measurements(
         files,
         analysis_dir,
         model_dir,
         beam=2,
         filename=measurement_filename,
     )
+    pzs = pzs_dict["combined"]
 
     # save the bad bpms to a file
     with bad_bpms_file.open("w") as f:

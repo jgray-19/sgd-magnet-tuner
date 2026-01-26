@@ -78,6 +78,7 @@ class ConfigurationManager:
             seq_name=seq_name,
             start_bpm=first_bpm,
             magnet_range=self.magnet_range,
+            bpm_range=self.bpm_range,
             simulation_config=self.simulation_config,
             corrector_strengths=None,
             tune_knobs_file=None,

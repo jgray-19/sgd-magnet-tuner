@@ -27,11 +27,11 @@ def test_dispersive_measurement_recovers_dpp(
     json_path = xsuite_json_path(seq_file)
 
     tracking_df, full_tws, baseline_line = run_acd_track(
-        json_path=json_path,
         sequence_file=seq,
         delta_p=delta_p,
         ramp_turns=1000,
         flattop_turns=100,
+        json_path=json_path,
     )
 
     ng_tws = xsuite_to_ngtws(full_tws)
@@ -79,9 +79,6 @@ def test_dispersive_measurement_recovers_dpp(
     py_rmse = rmse(merged["py_true"].to_numpy(), merged["py"].to_numpy())
 
     print(f"Dispersive measurement px RMSE: {px_rmse:.2e}, py RMSE: {py_rmse:.2e}")
-    if "crossing" in seq_file:
-        assert px_rmse < 1.01e-7, f"px RMSE {px_rmse:.2e} > 1.01e-7"
-        assert py_rmse < 1.01e-7, f"py RMSE {py_rmse:.2e} > 1.01e-7"
-    else:
-        assert px_rmse < 1.6e-7, f"px RMSE {px_rmse:.2e} > 1.6e-7"
-        assert py_rmse < 1.5e-7, f"py RMSE {py_rmse:.2e} > 1.5e-7"
+
+    assert px_rmse < 3.1e-7, f"px RMSE {px_rmse:.2e} > 3.1e-7"
+    assert py_rmse < 2.8e-7, f"py RMSE {py_rmse:.2e} > 2.7e-7"

@@ -214,7 +214,7 @@ def test_insert_particle_monitors_at_pattern(
             start_at_turn=0, stop_at_turn=10, num_particles=1
         )
         bpm_index = test_line.element_names.index(bpm_name)
-        test_line.insert(monitor_name, at=bpm_index + 1)
+        test_line.insert(monitor_name, at=bpm_index + 1)  # ty:ignore[unresolved-attribute]
 
     initial_num_elements = len(test_line.elements)
     new_line = insert_particle_monitors_at_pattern(
@@ -266,8 +266,8 @@ def test_insert_ac_dipole(test_line: xt.Line, twiss_table: xt.TwissTable):
     # Check that they are ACDipole elements
     acdh = new_line[acdh_name]
     acdv = new_line[acdv_name]
-    assert isinstance(acdh, xt.ACDipole)
-    assert isinstance(acdv, xt.ACDipole)
+    assert isinstance(acdh, xt.ACDipole)  # ty:ignore[unresolved-attribute]
+    assert isinstance(acdv, xt.ACDipole)  # ty:ignore[unresolved-attribute]
 
     # Check properties
     assert acdh.plane == "h"  # horizontal

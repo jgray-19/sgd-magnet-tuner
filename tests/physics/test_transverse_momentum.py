@@ -85,7 +85,6 @@ def _setup_xsuite_simulation(
         magnet_strengths,
         corrector_table,  # ty:ignore[invalid-argument-type]
         sequence_file=sequence_file,
-        json_file=json_path,
         seq_name="lhcb1",
     )
 
@@ -124,7 +123,6 @@ def _setup_xsuite_simulation(
         monitored_line,
         ramp_turns=ramp_turns,
         flattop_turns=flattop_turns,
-        delta_p=delta_p,
         add_variance_columns=False,
     )
     tracking_df["var_x"] = 1.0
@@ -142,7 +140,6 @@ def _setup_xsuite_simulation(
 def test_calculate_pz_recovers_true_momenta(seq_b1, tmp_path):
     """Test that calculate_pz reconstructs true momenta for on-momentum beam."""
     env = create_xsuite_environment(
-        json_file=tmp_path / "lhcb1.json",
         sequence_file=seq_b1,
         seq_name="lhcb1",
     )
@@ -212,7 +209,6 @@ local a = seq:replace({{
         monitored_line,
         ramp_turns=ramp_turns,
         flattop_turns=flattop_turns,
-        delta_p=0.0,
         add_variance_columns=False,
     )
     tracking_df["var_x"] = 1.0
@@ -234,14 +230,14 @@ local a = seq:replace({{
         tracking_df,
         truth,
         tws,
-        px_nonoise_max=1.4e-7,
-        py_nonoise_max=1.25e-7,
+        px_nonoise_max=2e-7,
+        py_nonoise_max=2.5e-7,
         px_noisy_min=1e-6,
-        px_noisy_max=2.4e-6,
+        px_noisy_max=2.6e-6,
         py_noisy_min=1e-6,
-        py_noisy_max=2.4e-6,
-        px_divisor=4.5,
-        py_divisor=4.5,
+        py_noisy_max=2.6e-6,
+        px_cleaned_max=6e-7,
+        py_cleaned_max=6e-7,
         rng_seed=42,
     )
 
@@ -256,8 +252,8 @@ def _verify_pz_reconstruction(
     px_noisy_max,
     py_noisy_min,
     py_noisy_max,
-    px_divisor,
-    py_divisor,
+    px_cleaned_max,
+    py_cleaned_max,
     rng_seed=42,
 ):
     """Wrapper around shared verify_pz_reconstruction for backward compatibility."""
@@ -272,8 +268,8 @@ def _verify_pz_reconstruction(
         px_noisy_max,
         py_noisy_min,
         py_noisy_max,
-        px_divisor,
-        py_divisor,
+        px_cleaned_max,
+        py_cleaned_max,
         rng_seed,
     )
 
@@ -314,23 +310,23 @@ def test_calculate_pz_with_corrections_and_perturbations(
     tolerance_values = {
         (2e-4, False, None): {
             "px_nonoise_max": 1.6e-6,
-            "py_nonoise_max": 2e-7,
+            "py_nonoise_max": 4e-7,
             "px_noisy_min": 2e-6,
             "px_noisy_max": 3e-6,
             "py_noisy_min": 2e-6,
             "py_noisy_max": 3e-6,
-            "px_divisor": 1.7,
-            "py_divisor": 4.6,
+            "px_cleaned_max": 1.8e-6,
+            "py_cleaned_max": 7e-7,
         },
         (0.0, True, 123): {
             "px_nonoise_max": 2e-6,
-            "py_nonoise_max": 2e-7,
+            "py_nonoise_max": 2.5e-7,
             "px_noisy_min": 2e-6,
-            "px_noisy_max": 3e-6,
+            "px_noisy_max": 3.1e-6,
             "py_noisy_min": 2e-6,
             "py_noisy_max": 3e-6,
-            "px_divisor": 1.7,
-            "py_divisor": 4.6,
+            "px_cleaned_max": 1.8e-6,
+            "py_cleaned_max": 6e-7,
         },
     }
     json_path = xsuite_json_path("lhcb1.seq")

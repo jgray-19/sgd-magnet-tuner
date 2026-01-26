@@ -85,7 +85,6 @@ def test_matcher_beta_correction(
     magnet_strengths, matched_tunes, _ = generate_model_with_errors(
         loaded_interface_with_beam,
         sequence_file=seq_b1,
-        json_file=tmp_path / "lhcb1.json",
         dpp_value=0,
         magnet_range="$start/$end",
         corrector_file=corrector_file,

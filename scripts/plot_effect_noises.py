@@ -15,9 +15,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from itertools import product
-from typing import TYPE_CHECKING, NamedTuple
+from typing import NamedTuple
 
 import numpy as np
+import pandas as pd
 from pymadng import MAD
 from tqdm.contrib.concurrent import process_map
 
@@ -25,10 +26,6 @@ from aba_optimiser.config import LHCB1_SEQ_NAME, REL_K1_STD_DEV
 from aba_optimiser.io.utils import get_lhc_file_path
 from aba_optimiser.momentum_recon.transverse import calculate_pz
 from scripts.plot_functions import plot_error_bars_bpm_range, plot_std_log_comparison, show_plots
-
-if TYPE_CHECKING:
-    import pandas as pd
-    import tfs
 
 # Configure logging
 logging.basicConfig(format="%(asctime)s %(levelname)s: %(message)s")
@@ -69,7 +66,7 @@ class NoiseAnalysisResults(NamedTuple):
 
 
 def build_track_command(
-    df_twiss: tfs.TfsDataFrame,
+    df_twiss: pd.DataFrame,
     action: float,
     angle: float,
     config: SimulationConfig,
@@ -128,11 +125,11 @@ class MADSimulator:
     def __init__(
         self,
         config: SimulationConfig,
-        matched_tunes: dict[str, float] | None = None,
-        df_twiss: pd.DataFrame | None = None,
+        matched_tunes: dict[str, float],
+        df_twiss: pd.DataFrame,
     ):
         self.matched_tunes = matched_tunes
-        self.df_twiss = df_twiss
+        self.df_twiss: pd.DataFrame = df_twiss
         self.config = config
         self.mad = self._setup_mad()
         self._match_tunes()
@@ -203,7 +200,7 @@ MAD.element.marker {marker_name} {{ at=-1e-10, from="{bpm_name}" }} ! 1e-10 is t
 
         # Get Twiss at start of sequence
         tw = self.mad.twiss(sequence=self.mad.MADX[LHCB1_SEQ_NAME], observe=1)[0]
-        self.df_twiss: tfs.TfsDataFrame = tw.to_df()
+        self.df_twiss: pd.DataFrame = tw.to_df()
         self.df_twiss.set_index("name", inplace=True)
 
     def _get_quad_names(self):
@@ -492,8 +489,16 @@ def save_error_bar_plot(
         title: Plot title
         filename: Output filename
     """
-    fig = plot_error_bars_bpm_range(s_positions, baseline_x, std_x, baseline_y, std_y, config.bpm_range, y_lim=y_lim)
-    fig.suptitle(title, fontsise=14)
+    fig = plot_error_bars_bpm_range(
+        s_positions,
+        baseline_x.to_numpy(),
+        std_x,
+        baseline_y.to_numpy(),
+        std_y,
+        config.bpm_range,
+        y_lim=y_lim,
+    )
+    fig.suptitle(title, fontsize=14)
     fig.savefig(filename, dpi=300, bbox_inches="tight")
 
 
@@ -509,7 +514,7 @@ def main():
     logger.info(f"Starting analysis: nturns={config.nturns}, nangles={config.nangles}, samples={config.num_error_samples}")
 
     # Initialise temporary simulator to get baseline parameters
-    temp_simulator = MADSimulator(config)
+    temp_simulator = MADSimulator(config, {}, pd.DataFrame())
     matched_tunes = temp_simulator.matched_tunes
     df_twiss = temp_simulator.df_twiss
 

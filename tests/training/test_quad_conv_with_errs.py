@@ -172,7 +172,6 @@ def test_controller_bend_opt_simple(
     env, magnet_strengths, matched_tunes, _ = generate_xsuite_env_with_errors(
         loaded_interface_with_beam,
         sequence_file=seq_b1,
-        json_file=tmp_dir_quad_conv / "lhcb1.json",
         dpp_value=0,
         magnet_range="$start/$end",
         corrector_file=corrector_file,
@@ -234,7 +233,6 @@ def test_controller_bend_opt_simple(
                 inject_noise=False,
                 tws=tws,
                 info=True,
-                subtract_mean=False,
             )
         else:
             # Subtract the closed orbit from the mean

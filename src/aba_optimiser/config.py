@@ -33,7 +33,13 @@ class OptimiserConfig:
     optimiser_type: str = field(default="adam")  # Options: "adam", "amsgrad", "lbfgs"
 
     # Gradient smoothing for loss tracking
-    grad_norm_alpha: float = field(default=0.4)
+    grad_norm_alpha: float = field(default=0.2)
+
+    # Per-parameter trust region: relative step limit per update
+    # Constrains each parameter update: |Δp_i| <= expected_rel_error * max(|p_i|, param_floor)
+    # This enforces per-step bounds independent of optimizer-proposed step size.
+    # Set to 0 to disable trust region (use optimizer step directly).
+    expected_rel_error: float = field(default=1e-4)
 
     # Computed fields
     decay_epochs: int = field(init=False)

@@ -39,8 +39,8 @@ class WorkerConfig:
     end_bpm: str
     magnet_range: str
     sequence_file_path: Path
-    corrector_strengths: Path
-    tune_knobs_file: Path
+    corrector_strengths: Path | None
+    tune_knobs_file: Path | None
     beam_energy: float
     sdir: int = 1
     bad_bpms: list[str] | None = None
@@ -92,7 +92,7 @@ class OpticsData:
     variances: np.ndarray  # Shape: (n_bpms-1, 2) - [var_phase_adv_x, var_phase_adv_y]
     beta_comparisons: np.ndarray  # Shape: (n_bpms, 2) - [beta_x, beta_y]
     beta_variances: np.ndarray  # Shape: (n_bpms, 2) - [var_beta_x, var_beta_y]
-    init_coords: dict[str, np.ndarray]  # beta11, beta22, alfa11, alfa22, dx, dpx, dy, dpy
+    init_coords: dict[str, float]  # beta11, beta22, alfa11, alfa22, dx, dpx, dy, dpy
 
 
 class WeightProcessor:

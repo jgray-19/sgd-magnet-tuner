@@ -100,7 +100,6 @@ def _generate_nonoise_track(
         magnet_strengths=magnet_strengths,
         corrector_table=corrector_table,  # ty:ignore[invalid-argument-type]
         beam=beam,
-        json_file=tmp_dir / f"env_config_b{beam}.json",
         sequence_file=sequence_file,
         seq_name=seq_name,
     )

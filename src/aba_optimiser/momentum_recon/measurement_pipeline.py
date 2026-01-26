@@ -12,6 +12,8 @@ import numpy as np
 from aba_optimiser.measurements.twiss_from_measurement import build_twiss_from_measurements
 from aba_optimiser.momentum_recon.columns import (
     CURRENT_BPM_ERRORS,
+    DISPERSION_RENAME_MAPPING,
+    ERROR_DISPERSION_RENAME_MAPPING,
     ERROR_RENAME_MAPPING,
     MEASUREMENT_RENAME_MAPPING,
 )
@@ -34,7 +36,7 @@ from aba_optimiser.momentum_recon.neighbors import (
     prepare_neighbor_views,
 )
 from aba_optimiser.momentum_recon.schema import PLANE_X, PLANE_Y, SUFFIX_NEXT, SUFFIX_PREV
-from aba_optimiser.physics.dpp_calculation import get_mean_dpp
+from aba_optimiser.physics.dpp_calculation import estimate_dpp_from_model, get_mean_dpp
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers only
     from pathlib import Path
@@ -45,6 +47,7 @@ LOGGER = logging.getLogger(__name__)
 
 # Systematic plane definitions
 PLANES = [(PLANE_X, "X", "11"), (PLANE_Y, "Y", "22")]
+OLD_METHOD_DPP_ESTIMATION = False  # Whether to use old method for DPP estimation from model
 
 
 def prepare_data(orig_data: pd.DataFrame) -> tuple[pd.DataFrame, InputFeatures]:
@@ -65,7 +68,7 @@ def process_twiss(
     measurement_folder: Path,
     bpm_list: list[str],
     include_errors: bool,
-) -> tuple[pd.DataFrame, bool]:
+) -> tuple[pd.DataFrame, bool, bool]:
     """Process twiss data from measurements.
 
     Args:
@@ -74,9 +77,11 @@ def process_twiss(
         include_errors: Whether to include error columns.
 
     Returns:
-        Tuple of (processed_twiss, has_errors).
+        Tuple of (processed_twiss, has_errors, dispersion_found).
     """
-    tws = build_twiss_from_measurements(measurement_folder, include_errors=include_errors)
+    tws, dispersion_found = build_twiss_from_measurements(
+        measurement_folder, include_errors=include_errors
+    )
     tws = tws[tws.index.isin(bpm_list)]
 
     # Check for errors upfront
@@ -92,11 +97,19 @@ def process_twiss(
     if has_errors:
         LOGGER.info("Error columns detected, will use uncertainty propagation")
 
-    # Apply renaming (also index to lowercase)
-    tws = tws.rename(columns=MEASUREMENT_RENAME_MAPPING)
-    tws.index.name = tws.index.name.lower()
+    # Build combined rename mapping based on what data is available
+    rename_mapping = MEASUREMENT_RENAME_MAPPING.copy()
     if has_errors:
-        tws = tws.rename(columns=ERROR_RENAME_MAPPING)
+        rename_mapping.update(ERROR_RENAME_MAPPING)
+    if dispersion_found:
+        rename_mapping.update(DISPERSION_RENAME_MAPPING)
+    if dispersion_found and has_errors:
+        rename_mapping.update(ERROR_DISPERSION_RENAME_MAPPING)
+
+    # Single rename operation instead of 4
+    tws = tws.rename(columns=rename_mapping)
+
+    tws.index.name = tws.index.name.lower()
     tws.columns = [col.lower() for col in tws.columns]
     tws.headers = {key.lower(): value for key, value in tws.headers.items()}
 
@@ -104,7 +117,7 @@ def process_twiss(
     if has_errors:
         _apply_sqrt_beta_error_propagation(tws)
 
-    return tws, bool(has_errors)
+    return tws, bool(has_errors), dispersion_found
 
 
 def _apply_sqrt_beta_error_propagation(tws: pd.DataFrame) -> None:
@@ -150,21 +163,32 @@ def attach_errors(data_p: pd.DataFrame, data_n: pd.DataFrame, tws: pd.DataFrame)
 
 
 def setup_momentum_calculation(
-    data: pd.DataFrame, tws_meas: pd.DataFrame, model_tws: pd.DataFrame, info: bool
+    data: pd.DataFrame,
+    tws_meas: pd.DataFrame,
+    model_tws: pd.DataFrame,
+    dispersion_found: bool,
+    info: bool,
 ) -> tuple[pd.DataFrame, pd.DataFrame, float]:
     """Set up data for momentum calculation.
 
     Args:
         data: Tracking data.
         tws_meas: Processed measurement twiss data.
-        model_tws: Model twiss data for closed orbit
+        model_tws: Model twiss data for closed orbit restoration.
+        dispersion_found: Whether dispersion data is available.
         info: Whether to log info.
 
     Returns:
-        Tuple of (data_p, data_n, dpp_est, closed_orbit).
+        Tuple of (data_p, data_n, dpp_est).
     """
     # Estimate DPP from the model
-    dpp_est = get_mean_dpp(data, tws_meas, info)
+    dpp_est = 0.0
+    if dispersion_found and OLD_METHOD_DPP_ESTIMATION:
+        dpp_est = get_mean_dpp(data, tws_meas, info)
+    elif not OLD_METHOD_DPP_ESTIMATION:
+        dpp_est = estimate_dpp_from_model(data, model_tws, info)
+    else:
+        dpp_est = estimate_dpp_from_model(data, model_tws, info)
 
     # Remove the closed orbit expected from the model.
     remove_closed_orbit_inplace(data, model_tws)
@@ -172,7 +196,7 @@ def setup_momentum_calculation(
     data_p, data_n, bpm_index, maps = prepare_neighbor_views(
         data,
         tws_meas,
-        include_dispersion=True,
+        include_dispersion=dispersion_found,
         include_errors=True,
     )
 
@@ -218,12 +242,11 @@ def aggregate_results(
     Args:
         data_p: Previous neighbor data with momenta.
         data_n: Next neighbor data with momenta.
-        model_tws: Model twiss data for closed orbit.
-        closed_orbit: Closed orbit data.
+        model_tws: Model twiss data for closed orbit restoration.
         dpp_est: Estimated DPP.
 
     Returns:
-        Final result DataFrame.
+        Final result DataFrame with closed orbit and reference momenta restored.
     """
     data_avg = weighted_average(data_p, data_n)
 
@@ -249,11 +272,10 @@ def run_diagnostics(
 
     Args:
         orig_data: Original data.
-        data_p: Previous data.
-        data_n: Next data.
-        data_avg: Averaged data.
+        data_p: Previous neighbor data.
+        data_n: Next neighbor data.
+        data_avg: Averaged momentum data.
         info: Whether to log info.
-        has_px: Whether original data has px.
-        has_py: Whether original data has py.
+        features: Input data features (has_px, has_py, etc.).
     """
     diagnostics(orig_data, data_p, data_n, data_avg, info, features)

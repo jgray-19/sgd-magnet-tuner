@@ -225,9 +225,14 @@ class DataManager:
 
         num_starts = len(config_manager.start_bpms)
         num_ends = len(config_manager.end_bpms)
-        actual_workers = num_batches * (num_starts + num_ends)
+        if self.simulation_config.use_fixed_bpm:
+            actual_workers = num_batches * (num_starts + num_ends)
+            symbol = "+"
+        else:
+            actual_workers = num_batches * (num_starts * num_ends)
+            symbol = "x"
         LOGGER.info(
-            f"Creating {num_batches} batches x ({num_starts} starts + {num_ends} ends) = {actual_workers} workers, {self.tracks_per_worker} turns/worker"
+            f"Creating {num_batches} batches x ({num_starts} starts {symbol} {num_ends} ends) = {actual_workers} workers, {self.tracks_per_worker} turns/worker"
         )
 
         # Organise turns by file, then create batches round-robin

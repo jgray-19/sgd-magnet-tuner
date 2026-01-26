@@ -146,7 +146,7 @@ def test_controller_opt(
         warmup_lr_start=1e-8,
         max_lr=6e-7,
         min_lr=1e-7,
-        gradient_converged_value=1e-4,
+        gradient_converged_value=1e-5,
     )
 
     sequence_config = SequenceConfig(

@@ -22,10 +22,6 @@ MEASUREMENT_RENAME_MAPPING: dict[str, str] = {
     f"{ALPHA}Y": "alfa22",
     f"{PHASE_ADV}X": "mu1",
     f"{PHASE_ADV}Y": "mu2",
-    f"{DISPERSION}X": "dx",
-    f"{DISPERSION}Y": "dy",
-    f"{MOMENTUM_DISPERSION}X": "dpx",
-    f"{MOMENTUM_DISPERSION}Y": "dpy",
     f"{ORBIT}X": "x",
     f"{ORBIT}Y": "y",
     # Always include orbit errors!
@@ -40,6 +36,16 @@ ERROR_RENAME_MAPPING: dict[str, str] = {
     f"{ERR}{ALPHA}Y": "alfay_err",
     f"{ERR}{PHASE_ADV}X": "mu1_err",
     f"{ERR}{PHASE_ADV}Y": "mu2_err",
+}
+
+DISPERSION_RENAME_MAPPING: dict[str, str] = {
+    f"{DISPERSION}X": "dx",
+    f"{DISPERSION}Y": "dy",
+    f"{MOMENTUM_DISPERSION}X": "dpx",
+    f"{MOMENTUM_DISPERSION}Y": "dpy",
+}
+
+ERROR_DISPERSION_RENAME_MAPPING: dict[str, str] = {
     f"{ERR}{DISPERSION}X": "dx_err",
     f"{ERR}{DISPERSION}Y": "dy_err",
     f"{ERR}{MOMENTUM_DISPERSION}X": "dpx_err",

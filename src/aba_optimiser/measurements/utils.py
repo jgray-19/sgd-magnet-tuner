@@ -20,11 +20,9 @@ def find_all_bad_bpms_from_analysis(optics_folder: Path) -> set[str]:
         Set of bad BPM names
     """
     # Find the analysis ini file
-    ini_files = list(optics_folder.glob("analysis.*.ini"))
+    ini_files = list(optics_folder.glob("analysis*.ini"))
     if not ini_files:
-        LOGGER.warning(
-            f"No analysis.*.ini file found in {optics_folder}, using empty bad BPMs list"
-        )
+        LOGGER.warning(f"No analysis*.ini file found in {optics_folder}, using empty bad BPMs list")
         return set()
 
     ini_file = ini_files[0]  # Take the first one if multiple

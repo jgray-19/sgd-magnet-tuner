@@ -32,11 +32,36 @@ def _find_bpm_phase(
     total_var: float | None = None,
 ) -> pd.DataFrame:
     """
-    Shared implementation for finding BPM with phase advance closest to target.
+    Find BPM pairs with phase advance closest to a target value.
+
+    For each BPM_i, finds the nearest BPM_j in the specified direction
+    (forward or backward) whose phase advance is close to the target.
+
+    Selection criteria (in order of priority):
+    1. Candidate must be within stable_width (0.125 rotations) of target phase
+    2. If any candidate has excellent phase match (< 0.01 rotations), prefer those
+    3. Among remaining candidates, select closest by directional distance
+    4. If tied on distance, select best phase match
+
+    Args:
+        mu: BPM phase advances (rotations)
+        tune: Machine tune (rotations per turn)
+        target: Target phase advance (turns), e.g., 0.25 for π/2, 0.5 for π
+        forward: If True, search forward; if False, search backward
+        name: Column name for the matched BPM in output DataFrame
+        mu_var: Optional phase variance for each BPM (rotations²)
+        total_var: Optional total phase variance around ring (rotations²)
+
+    Returns:
+        DataFrame with columns:
+            - {name}: Name of matched BPM
+            - delta: Signed phase error (actual - target) in rotations
+            - delta_err: Phase error uncertainty (rotations), if variance provided
     """
     v = mu.to_numpy(float)
     n = len(v)
 
+    # Compute phase advance matrix: diff[i, j] = phase from BPM_i to BPM_j
     if forward:
         diff = (v.reshape(1, n) - v.reshape(n, 1) + tune) % tune
     else:
@@ -44,31 +69,81 @@ def _find_bpm_phase(
 
     np.fill_diagonal(diff, np.nan)
 
-    abs_diff = np.abs(diff - target)
-    idx = np.full(n, -1, dtype=int)
-    for i in range(n):
-        row = abs_diff[i, :]
-        min_val = np.nanmin(row)
-        candidates = np.where(row == min_val)[0]
-        distances = np.minimum(np.abs(candidates - i), n - np.abs(candidates - i))
-        idx[i] = candidates[np.argmin(distances)]
+    # Find best match for each BPM
+    stable_width = 0.125  # Only consider candidates within ±0.125 rotations of target
 
-    delta = diff[np.arange(n), idx] - target
-    names = mu.index[idx]
+    # Set max BPM distance based on target phase advance
+    # With ~0.125 turns per BPM average, π/2 needs ~2 BPMs, π needs ~4 BPMs
+    # Allow for local variations: π/2 uses 11 BPMs, π has no limit (filtered by stable_width)
+    max_bpm_distance = 11 if abs(target - 0.25) < 0.01 else 20
+
+    idx = np.full(n, -1, dtype=int)
+
+    for i in range(n):
+        row = diff[i, :]
+
+        # Filter to candidates within stable region
+        mask = np.abs((row - target + 0.5) % 1 - 0.5) <= stable_width
+        mask[i] = False  # Exclude self
+        candidates = np.where(mask)[0]
+
+        if len(candidates) == 0:
+            idx[i] = -1
+            continue
+
+        # Filter to candidates within max circular distance (if limit is set)
+        circular_distance = np.minimum(np.abs(candidates - i), n - np.abs(candidates - i))
+        within_distance = circular_distance <= max_bpm_distance
+        candidates = candidates[within_distance]
+
+        if len(candidates) == 0:
+            idx[i] = -1
+            continue
+
+        # Calculate phase error and directional distance for each candidate
+        phase_error = np.abs(row[candidates] - target)
+        distances = (candidates - i) % n if forward else (i - candidates) % n
+
+        # Prefer excellent phase matches (< 0.01 rotations) if any exist
+        excellent_match = phase_error < 0.02
+        if np.any(excellent_match):
+            candidates = candidates[excellent_match]
+            distances = distances[excellent_match]
+            phase_error = phase_error[excellent_match]
+
+        # Select closest by directional distance
+        min_distance = np.min(distances)
+        closest_indices = distances == min_distance
+
+        if np.sum(closest_indices) == 1:
+            # Single closest candidate
+            idx[i] = candidates[closest_indices][0]
+        else:
+            # Multiple at same distance: pick best phase match
+            best_idx = np.argmin(phase_error[closest_indices])
+            idx[i] = candidates[closest_indices][best_idx]
+
+    # Build output DataFrame
+    delta = np.full(n, np.nan)
+    names = np.full(n, None, dtype=object)
+    for i in range(n):
+        if idx[i] != -1:
+            delta[i] = diff[i, idx[i]] - target
+            names[i] = mu.index[idx[i]]
 
     out = pd.DataFrame({name: names, "delta": delta}, index=mu.index)
 
-    # Add delta_err if variance info is provided
+    # Add uncertainty if variance information provided
     if mu_var is not None and total_var is not None:
         var_arr = mu_var.to_numpy(float)
-        i = np.arange(n, dtype=int)
-        j = idx.astype(int)
+        i_arr = np.arange(n, dtype=int)
+        j_arr = idx.astype(int)
 
         if forward:
-            pair_var = _phase_pair_var_forward(var_arr, i, j, float(total_var))
+            pair_var = _phase_pair_var_forward(var_arr, i_arr, j_arr, float(total_var))
         else:
-            # backward from i to j corresponds to forward from j to i
-            pair_var = _phase_pair_var_forward(var_arr, j, i, float(total_var))
+            # Backward from i to j is forward from j to i
+            pair_var = _phase_pair_var_forward(var_arr, j_arr, i_arr, float(total_var))
 
         out["delta_err"] = np.sqrt(pair_var)
 
@@ -83,12 +158,16 @@ def prev_bpm_to_pi_2(
     total_var: float | None = None,
 ) -> pd.DataFrame:
     """
-    For each BPM_i find the previous BPM_j whose backward phase advance
-    (mu_i - mu_j) is closest to pi/2 phase advance.
-    Returns a DataFrame indexed by BPM_i with columns:
-      - prev_bpm : name of BPM_j
-      - delta    : (mu_i - mu_j - 0.25) signed error in turns
-      - delta_err: uncertainty in delta (turns), if variance provided
+    Find previous BPM at π/2 phase advance.
+
+    For each BPM_i, finds the previous BPM_j whose backward phase advance
+    (mu_i - mu_j) is closest to π/2 (0.25 turns).
+
+    Returns:
+        DataFrame with columns:
+            - prev_bpm: Name of matched previous BPM
+            - delta: Phase error (turns)
+            - delta_err: Phase error uncertainty (turns), if variance provided
     """
     return _find_bpm_phase(
         mu,
@@ -109,8 +188,16 @@ def next_bpm_to_pi_2(
     total_var: float | None = None,
 ) -> pd.DataFrame:
     """
-    For each BPM_i find the *next* BPM_j whose forward phase advance
-    (mu_j - mu_i) mod Q is closest to pi/2 phase advance.
+    Find next BPM at π/2 phase advance.
+
+    For each BPM_i, finds the next BPM_j whose forward phase advance
+    (mu_j - mu_i) is closest to π/2 (0.25 turns).
+
+    Returns:
+        DataFrame with columns:
+            - next_bpm: Name of matched next BPM
+            - delta: Phase error (turns)
+            - delta_err: Phase error uncertainty (turns), if variance provided
     """
     return _find_bpm_phase(
         mu,
@@ -131,11 +218,16 @@ def prev_bpm_to_pi(
     total_var: float | None = None,
 ) -> pd.DataFrame:
     """
-    For each BPM_i find the previous BPM_j whose backward phase advance
-    (mu_i - mu_j) is closest to pi phase advance.
-    Returns a DataFrame indexed by BPM_i with columns:
-      - prev_bpm : name of BPM_j
-      - delta    : (mu_i - mu_j - 0.5) signed error in turns
+    Find previous BPM at π phase advance.
+
+    For each BPM_i, finds the previous BPM_j whose backward phase advance
+    (mu_i - mu_j) is closest to π (0.5 turns).
+
+    Returns:
+        DataFrame with columns:
+            - prev_bpm: Name of matched previous BPM
+            - delta: Phase error (turns)
+            - delta_err: Phase error uncertainty (turns), if variance provided
     """
     return _find_bpm_phase(
         mu,
@@ -156,8 +248,16 @@ def next_bpm_to_pi(
     total_var: float | None = None,
 ) -> pd.DataFrame:
     """
-    For each BPM_i find the *next* BPM_j whose forward phase advance
-    (mu_j - mu_i) mod Q is closest to pi phase advance.
+    Find next BPM at π phase advance.
+
+    For each BPM_i, finds the next BPM_j whose forward phase advance
+    (mu_j - mu_i) is closest to π (0.5 turns).
+
+    Returns:
+        DataFrame with columns:
+            - next_bpm: Name of matched next BPM
+            - delta: Phase error (turns)
+            - delta_err: Phase error uncertainty (turns), if variance provided
     """
     return _find_bpm_phase(
         mu,

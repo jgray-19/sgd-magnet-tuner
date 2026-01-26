@@ -9,21 +9,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-from omc3.optics_measurements.constants import (
-    AMP_BETA_NAME,
-    BETA_NAME,
-    DISPERSION_NAME,
-    ORBIT_NAME,
-    PHASE_NAME,
-)
+from omc3.optics_measurements.constants import PHASE_ADV
 
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
-from aba_optimiser.training.base_controller import BaseController, LHCControllerMixin
-from aba_optimiser.training.utils import (
-    extract_bpm_range_names,
-    find_common_bpms,
-    load_tfs_files,
+from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
+from aba_optimiser.measurements.twiss_from_measurement import (
+    build_twiss_from_measurements,
 )
+from aba_optimiser.training.base_controller import BaseController, LHCControllerMixin
+from aba_optimiser.training.utils import extract_bpm_range_names
 from aba_optimiser.training.worker_lifecycle import WorkerLifecycleManager
 from aba_optimiser.workers import OpticsData, OpticsWorker, WorkerConfig
 
@@ -59,6 +53,7 @@ class OpticsController(BaseController):
         tune_knobs_file: Path | None = None,
         true_strengths: Path | dict[str, float] | None = None,
         use_errors: bool = True,
+        use_amplitude_beta: bool = True,
     ):
         """
         Initialise the optics controller.
@@ -74,6 +69,7 @@ class OpticsController(BaseController):
             tune_knobs_file (Path | None, optional): Tune knob file
             true_strengths (Path | dict[str, float] | None, optional): True strengths
             use_errors (bool, optional): Whether to use measurement errors in optimisation. Defaults to True
+            use_amplitude_beta (bool, optional): Use beta from amplitude (True) or phase (False). Defaults to True
         """
         logger.info("Optimising quadrupoles for beta functions")
 
@@ -112,6 +108,7 @@ class OpticsController(BaseController):
         self.corrector_file = corrector_file
         self.tune_knobs_file = tune_knobs_file
         self.use_errors = use_errors
+        self.use_amplitude_beta = use_amplitude_beta
 
         # Create optics-specific worker payloads
         optics_path = Path(optics_folder)
@@ -119,11 +116,11 @@ class OpticsController(BaseController):
             start_bpm="TEMP",
             end_bpm="TEMP",
             magnet_range=sequence_config.magnet_range,
-            sequence_file_path=str(sequence_config.sequence_file_path),
+            sequence_file_path=Path(sequence_config.sequence_file_path),
             corrector_strengths=corrector_file,
             tune_knobs_file=tune_knobs_file,
             beam_energy=sequence_config.beam_energy,
-            sdir=np.nan,
+            sdir=0,
             bad_bpms=sequence_config.bad_bpms,
             seq_name=sequence_config.seq_name,
             optimise_knobs=sequence_config.optimise_knobs,
@@ -136,6 +133,7 @@ class OpticsController(BaseController):
             sequence_config.bad_bpms,
             template_config,
             self.use_errors,
+            self.use_amplitude_beta,
         )
 
     def run(self) -> tuple[dict[str, float], dict[str, float]]:
@@ -174,261 +172,103 @@ class OpticsController(BaseController):
         return self.final_knobs, dict(zip(self.final_knobs.keys(), uncertainties))
 
 
-def load_optics_data_and_find_common_bpms(
+def load_optics_data(
     optics_dir: Path,
-) -> tuple[dict[str, pd.DataFrame], list[str]]:
-    """Load optics TFS files and find common BPMs across all files.
+    use_amplitude_beta: bool = True,
+) -> pd.DataFrame:
+    """Load optics measurements using build_twiss_from_measurements.
 
     Args:
         optics_dir: Path to directory containing TFS optics measurement files
+        use_amplitude_beta: Use beta from amplitude (True) or phase (False)
 
     Returns:
-        Tuple of (tfs_data dict, common_bpms list)
+        Twiss dataframe with measurement data
     """
-    # Load all TFS files - both phase-based and amplitude-based beta measurements
-    file_specs = {
-        "beta_phase_x": (BETA_NAME, X),  # Beta from phase
-        "beta_phase_y": (BETA_NAME, Y),
-        "beta_amplitude_x": (AMP_BETA_NAME, X),  # Beta from amplitude
-        "beta_amplitude_y": (AMP_BETA_NAME, Y),
-        "phase_x": (PHASE_NAME, X),
-        "phase_y": (PHASE_NAME, Y),
-        "disp_x": (DISPERSION_NAME, X),
-        "disp_y": (DISPERSION_NAME, Y),
-        "orbit_x": (ORBIT_NAME, X),
-        "orbit_y": (ORBIT_NAME, Y),
-    }
-    tfs_data = load_tfs_files(optics_dir, file_specs)
-    beta_phase_x = tfs_data["beta_phase_x"]
-    beta_phase_y = tfs_data["beta_phase_y"]
-    beta_amplitude_x = tfs_data["beta_amplitude_x"]
-    beta_amplitude_y = tfs_data["beta_amplitude_y"]
-    phase_x = tfs_data["phase_x"]
-    phase_y = tfs_data["phase_y"]
-    disp_x = tfs_data["disp_x"]
-    disp_y = tfs_data["disp_y"]
-    orbit_x = tfs_data["orbit_x"]
-    orbit_y = tfs_data["orbit_y"]
-
-    # Find common BPMs across all files
-    # For phase files, we need BPMs that appear in NAME or NAME2 columns
-    phase_x_bpms = set(phase_x["NAME"].tolist()) | set(phase_x["NAME2"].tolist())
-    phase_y_bpms = set(phase_y["NAME"].tolist()) | set(phase_y["NAME2"].tolist())
-    common_bpms = find_common_bpms(
-        beta_phase_x,
-        beta_phase_y,
-        beta_amplitude_x,
-        beta_amplitude_y,
-        disp_x,
-        disp_y,
-        orbit_x,
-        orbit_y,
+    logger.info(f"Loading optics measurements from {optics_dir}")
+    logger.info(f"Using beta from {'amplitude' if use_amplitude_beta else 'phase'} measurements")
+    twiss_df, has_dispersion = build_twiss_from_measurements(
+        optics_dir, include_errors=True, use_amplitude_beta=use_amplitude_beta
     )
-    # Intersect with phase measurement BPMs
-    common_bpms_before_phase = len(common_bpms)
-    common_bpms = [bpm for bpm in common_bpms if bpm in phase_x_bpms and bpm in phase_y_bpms]
-    logger.info(
-        f"Found {common_bpms_before_phase} BPMs in beta/disp/orbit files, {len(common_bpms)} after requiring phase measurements"
-    )
-    if len(common_bpms) == 0:
-        logger.warning(
-            "No common BPMs found! Check that beta_amplitude, phase, dispersion, and orbit files all have overlapping BPMs"
-        )
-        logger.warning(
-            f"Beta phase x BPMs: {len(beta_phase_x)}, Beta amplitude x BPMs: {len(beta_amplitude_x)}"
-        )
-        logger.warning(
-            f"Phase x BPMs in measurements: {len(phase_x_bpms)}, Phase y BPMs: {len(phase_y_bpms)}"
-        )
 
-    return tfs_data, common_bpms
+    if not has_dispersion:
+        logger.warning("Dispersion data not found in measurements")
 
-
-def filter_bpm_list_for_phase_coverage(
-    bpm_list: list[str],
-    phase_df: pd.DataFrame,
-) -> tuple[list[str], list[tuple[int, int]]]:
-    """Filter BPM list to only include BPMs that have phase measurements.
-
-    This function removes BPMs from the list that don't have phase measurements
-    to their neighbors, keeping only BPMs that form a connected chain.
-
-    Args:
-        bpm_list: Ordered list of BPM names
-        phase_df: Phase measurement dataframe with NAME, NAME2 columns
-
-    Returns:
-        Tuple of (filtered_bpm_list, missing_pairs_indices) where missing_pairs_indices
-        is always empty (for backwards compatibility)
-    """
-    if len(bpm_list) <= 1:
-        return bpm_list, []
-
-    # Build a set of available phase measurement pairs for quick lookup
-    phase_pairs = set(zip(phase_df["NAME"].tolist(), phase_df["NAME2"].tolist()))
-
-    # Get all BPMs that appear in phase measurements
-    bpms_with_measurements = set(phase_df["NAME"].tolist() + phase_df["NAME2"].tolist())
-
-    # Filter to only include BPMs that:
-    # 1. Have phase measurements (appear in the phase dataframe)
-    # 2. Form a connected chain (have measurement to next BPM in filtered list)
-    filtered_bpm_list = []
-
-    for bpm in bpm_list:
-        # Only include BPMs that appear in phase measurements
-        if bpm in bpms_with_measurements:
-            filtered_bpm_list.append(bpm)
-
-    # Now remove BPMs that don't have measurements to their neighbors in the filtered list
-    # Keep iterating until we have a connected chain
-    max_iterations = len(filtered_bpm_list)  # Prevent infinite loop
-    for _ in range(max_iterations):
-        connected_list = []
-        removed_any = False
-
-        for i, bpm in enumerate(filtered_bpm_list):
-            # Check if this BPM has measurement to previous or next BPM
-            has_connection = False
-
-            # Check connection to previous BPM
-            if i > 0 and (filtered_bpm_list[i - 1], bpm) in phase_pairs:
-                has_connection = True
-
-            # Check connection to next BPM
-            if i < len(filtered_bpm_list) - 1 and (bpm, filtered_bpm_list[i + 1]) in phase_pairs:
-                has_connection = True
-
-            # First and last BPMs only need one connection, others need at least one
-            if has_connection or len(filtered_bpm_list) == 1:
-                connected_list.append(bpm)
-            else:
-                removed_any = True
-                logger.debug(f"Removing BPM {bpm} - no phase measurements to neighbors")
-
-        filtered_bpm_list = connected_list
-
-        # If we didn't remove anything, we have a stable list
-        if not removed_any:
-            break
-
-    # Log if we removed BPMs
-    removed_count = len(bpm_list) - len(filtered_bpm_list)
-    if removed_count > 0:
-        logger.info(
-            f"Filtered BPM list from {len(bpm_list)} to {len(filtered_bpm_list)} BPMs "
-            f"(removed {removed_count} BPMs without phase measurements)"
-        )
-
-    # Return empty missing_pairs list since we filtered out problematic BPMs
-    return filtered_bpm_list, []
+    return twiss_df
 
 
 def find_phase_advance_between_bpms(
-    phase_df: pd.DataFrame,
+    twiss_df: pd.DataFrame,
     bpm_start: str,
     bpm_end: str,
-    bpm_list: list[str],
-    phase_col: str = "PHASEX",
-    err_col: str = "ERRPHASEX",
+    plane: str = "X",
 ) -> tuple[float, float]:
-    """Find phase advance between two BPMs, computing from intermediate measurements if needed.
+    """Find phase advance between two BPMs using cumulative phase from twiss.
 
     Args:
-        phase_df: Phase measurement dataframe with NAME, NAME2, PHASEX/PHASEY columns
+        twiss_df: Twiss dataframe with PHASEADVX/PHASEADVY and mu1_var/mu2_var columns
         bpm_start: Starting BPM name
         bpm_end: Ending BPM name
-        bpm_list: Ordered list of BPMs in the tracking range
-        phase_col: Column name for phase values (PHASEX or PHASEY)
-        err_col: Column name for phase errors (ERRPHASEX or ERRPHASEY)
+        plane: Plane ('X' or 'Y')
 
     Returns:
-        Tuple of (phase_advance, error) computed by summing intermediate measurements
+        Tuple of (phase_advance, error)
 
     Raises:
-        ValueError: If no path can be found between the BPMs
+        ValueError: If BPMs not found in dataframe
     """
-    # Check for direct measurement
-    direct_match = phase_df[(phase_df["NAME"] == bpm_start) & (phase_df["NAME2"] == bpm_end)]
-    if not direct_match.empty:
-        return direct_match[phase_col].values[0], direct_match[err_col].values[0]
+    if bpm_start not in twiss_df.index:
+        raise ValueError(f"BPM {bpm_start} not found in twiss dataframe")
+    if bpm_end not in twiss_df.index:
+        raise ValueError(f"BPM {bpm_end} not found in twiss dataframe")
 
-    # Find indices in BPM list
-    try:
-        idx_start = bpm_list.index(bpm_start)
-        idx_end = bpm_list.index(bpm_end)
-    except ValueError as e:
-        raise ValueError(f"BPM not found in list: {e}")
+    phase_col = f"{PHASE_ADV}{plane}"
+    var_col = "mu1_var" if plane == "X" else "mu2_var"
+    total_var_key = "MU1_TOTAL_VAR" if plane == "X" else "MU2_TOTAL_VAR"
 
-    if idx_start >= idx_end:
-        raise ValueError(f"Invalid BPM order: {bpm_start} must come before {bpm_end}")
+    # Calculate phase advance as difference in cumulative phase
+    phase_start = twiss_df.loc[bpm_start, phase_col]
+    phase_end = twiss_df.loc[bpm_end, phase_col]
+    phase_advance = (phase_end - phase_start) % 1.0
 
-    # Sum phase advances through intermediate BPMs
-    total_phase = 0.0
-    total_error_sq = 0.0
+    # Get cumulative variances and total variance
+    var_start = twiss_df.loc[bpm_start, var_col]
+    var_end = twiss_df.loc[bpm_end, var_col]
+    total_var = twiss_df.headers.get(total_var_key, 0.0)
 
-    for i in range(idx_start, idx_end):
-        bpm1 = bpm_list[i]
-        bpm2 = bpm_list[i + 1]
+    # Check if we wrap around the ring (start phase > end phase)
+    variance = total_var - var_start + var_end if phase_start > phase_end else var_end - var_start
 
-        # Find measurement between consecutive BPMs (try both directions)
-        match = phase_df[(phase_df["NAME"] == bpm1) & (phase_df["NAME2"] == bpm2)]
+    # Handle potential negative values from numerical precision
+    variance = max(0.0, variance)
+    error = np.sqrt(variance)
 
-        if match.empty:
-            # Try reverse direction
-            match = phase_df[(phase_df["NAME"] == bpm2) & (phase_df["NAME2"] == bpm1)]
-            if not match.empty:
-                # Reverse direction - negate the phase
-                phase = -match[phase_col].values[0]
-                error = match[err_col].values[0]
-            else:
-                raise ValueError(
-                    f"No phase measurement found between consecutive BPMs {bpm1} and {bpm2}"
-                )
-        else:
-            phase = match[phase_col].values[0]
-            error = match[err_col].values[0]
-
-        total_phase += phase
-        total_error_sq += error**2
-
-    # Take modulo 1 (phase is in units of 2π)
-    total_phase = total_phase % 1.0
-
-    # Errors add in quadrature
-    total_error = np.sqrt(total_error_sq)
-
-    return total_phase, total_error
+    return phase_advance, error
 
 
 def _get_initial_conditions(
     bpm: str,
-    beta_x: pd.DataFrame,
-    beta_y: pd.DataFrame,
-    disp_x: pd.DataFrame,
-    disp_y: pd.DataFrame,
-    orbit_x: pd.DataFrame,
-    orbit_y: pd.DataFrame,
+    twiss_df: pd.DataFrame,
 ) -> dict[str, float]:
     """Extract initial Twiss parameters and orbit for a BPM."""
+    row = twiss_df.loc[bpm]
     return {
-        "beta11": beta_x.loc[bpm, "BETX"],
-        "beta22": beta_y.loc[bpm, "BETY"],
-        "alfa11": beta_x.loc[bpm, "ALFX"],
-        "alfa22": beta_y.loc[bpm, "ALFY"],
-        "dx": disp_x.loc[bpm, "DX"],
-        "dpx": disp_x.loc[bpm, "DPX"],
-        "dy": disp_y.loc[bpm, "DY"],
-        "dpy": disp_y.loc[bpm, "DPY"],
-        "x": orbit_x.loc[bpm, "X"],
-        "y": orbit_y.loc[bpm, "Y"],
+        "beta11": float(row["BETX"]),
+        "beta22": float(row["BETY"]),
+        "alfa11": float(row["ALFX"]),
+        "alfa22": float(row["ALFY"]),
+        "dx": float(row.get("DX", 0.0)),
+        "dpx": float(row.get("DPX", 0.0)),
+        "dy": float(row.get("DY", 0.0)),
+        "dpy": float(row.get("DPY", 0.0)),
+        "x": float(row["X"]),
+        "y": float(row["Y"]),
     }
 
 
 def _extract_phase_advances(
     bpm_list: list[str],
-    phase_x: pd.DataFrame,
-    phase_y: pd.DataFrame,
+    twiss_df: pd.DataFrame,
 ) -> tuple[list[float], list[float], list[float], list[float], int]:
     """Extract phase advances between consecutive BPMs.
 
@@ -446,10 +286,10 @@ def _extract_phase_advances(
 
         try:
             phase_adv_x, err_phase_adv_x = find_phase_advance_between_bpms(
-                phase_x, bpm1, bpm2, bpm_list, "PHASEX", "ERRPHASEX"
+                twiss_df, bpm1, bpm2, "X"
             )
             phase_adv_y, err_phase_adv_y = find_phase_advance_between_bpms(
-                phase_y, bpm1, bpm2, bpm_list, "PHASEY", "ERRPHASEY"
+                twiss_df, bpm1, bpm2, "Y"
             )
             phase_adv_x_list.append(phase_adv_x)
             phase_adv_y_list.append(phase_adv_y)
@@ -478,6 +318,7 @@ def create_worker_payloads(
     bad_bpms: list[str] | None,
     template_config: WorkerConfig,
     use_errors: bool = True,
+    use_amplitude_beta: bool = True,
 ) -> list[tuple[WorkerConfig, OpticsData]]:
     """Create worker payloads for optics optimisation.
 
@@ -487,6 +328,7 @@ def create_worker_payloads(
         bad_bpms: Optional list of BPM names to exclude from analysis
         template_config: Template configuration to use for all workers
         use_errors: Whether to use measurement errors in optimisation
+        use_amplitude_beta: Use beta from amplitude (True) or phase (False)
 
     Returns:
         List of (WorkerConfig, OpticsData) tuples for each worker
@@ -494,47 +336,41 @@ def create_worker_payloads(
 
     logger.info(f"Loading beta measurements from {optics_dir}")
 
-    tfs_data, common_bpms = load_optics_data_and_find_common_bpms(optics_dir)
-    # Extract and filter data frames to common BPMs
-    data_frames = {
-        key: tfs_data[key].loc[common_bpms] if key not in ("phase_x", "phase_y") else tfs_data[key]
-        for key in tfs_data
-    }
-
-    # Validate no bad BPMs in measurements
-    if bad_bpms and any(
-        bpm in data_frames[key].index
-        for key in [
-            "beta_phase_x",
-            "beta_phase_y",
-            "beta_amplitude_x",
-            "beta_amplitude_y",
-            "disp_x",
-            "disp_y",
-            "orbit_x",
-            "orbit_y",
-        ]
-        for bpm in bad_bpms
-    ):
-        raise ValueError("Bad BPMs found in optics measurement data.")
+    twiss_df = load_optics_data(optics_dir, use_amplitude_beta)
 
     if not bpm_pairs:
-        return []
-
-    # Get BPMs that have phase measurements in both planes
-    phase_x, phase_y = data_frames["phase_x"], data_frames["phase_y"]
-    phase_x_bpms = set(phase_x["NAME"]) | set(phase_x["NAME2"])
-    phase_y_bpms = set(phase_y["NAME"]) | set(phase_y["NAME2"])
-    bpms_with_phase = [bpm for bpm in common_bpms if bpm in phase_x_bpms and bpm in phase_y_bpms]
+        raise ValueError("No BPM pairs provided for worker payload creation")
 
     worker_payloads = []
 
     for start_bpm, end_bpm in bpm_pairs:
         for sdir in (1, -1):
+            # Choose init_bpm as the first good BPM in the list
             init_bpm = start_bpm if sdir == 1 else end_bpm
 
-            # Get BPMs in range with phase measurements
-            bpm_list = extract_bpm_range_names(bpms_with_phase, start_bpm, end_bpm, sdir)
+            # Get all BPMs in the sequence for range extraction
+            temp_mad = OptimisationMadInterface(
+                str(template_config.sequence_file_path),
+                seq_name=template_config.seq_name,
+                magnet_range=template_config.magnet_range,
+                bpm_range=f"{start_bpm}/{end_bpm}",
+                bad_bpms=bad_bpms,  # Filter out bad BPMs
+                beam_energy=template_config.beam_energy,
+            )
+            all_bpms = temp_mad.all_bpms
+            del temp_mad  # Clean up
+
+            additional_bad_bpms = list(set(all_bpms) - set(twiss_df.index))
+            all_bpms = [bpm for bpm in all_bpms if bpm in twiss_df.index]
+
+            try:
+                # Get all BPMs in range from sequence (includes bad BPMs)
+                bpm_list = extract_bpm_range_names(all_bpms, start_bpm, end_bpm, sdir)
+            except ValueError:
+                logger.warning(
+                    f"Skipping BPM range {start_bpm} to {end_bpm} (sdir={sdir}): BPM(s) not found in model"
+                )
+                continue
 
             if len(bpm_list) < 2:
                 logger.warning(
@@ -543,12 +379,12 @@ def create_worker_payloads(
                 continue
 
             logger.info(
-                f"Using {len(bpm_list)} BPMs in range {start_bpm} to {end_bpm} (sdir={sdir})"
+                f"Using {len(bpm_list)} BPMs in range {all_bpms[0]} to {all_bpms[-1]} (sdir={sdir})"
             )
 
             # Extract phase advances
             phase_x_list, phase_y_list, err_x_list, err_y_list, missing = _extract_phase_advances(
-                bpm_list, phase_x, phase_y
+                bpm_list, twiss_df
             )
 
             if missing > 0:
@@ -558,13 +394,10 @@ def create_worker_payloads(
                 )
 
             # Extract beta function measurements at each BPM
-            beta_amplitude_x = data_frames["beta_amplitude_x"]
-            beta_amplitude_y = data_frames["beta_amplitude_y"]
-
-            beta_x_list = [beta_amplitude_x.loc[bpm, "BETX"] for bpm in bpm_list]
-            beta_y_list = [beta_amplitude_y.loc[bpm, "BETY"] for bpm in bpm_list]
-            err_beta_x_list = [beta_amplitude_x.loc[bpm, "ERRBETX"] for bpm in bpm_list]
-            err_beta_y_list = [beta_amplitude_y.loc[bpm, "ERRBETY"] for bpm in bpm_list]
+            beta_x_list = [twiss_df.loc[bpm, "BETX"] for bpm in bpm_list]
+            beta_y_list = [twiss_df.loc[bpm, "BETY"] for bpm in bpm_list]
+            err_beta_x_list = [twiss_df.loc[bpm, "ERRBETX"] for bpm in bpm_list]
+            err_beta_y_list = [twiss_df.loc[bpm, "ERRBETY"] for bpm in bpm_list]
 
             # Prepare arrays for phase advances
             comp = np.hstack(
@@ -584,32 +417,30 @@ def create_worker_payloads(
 
             if not use_errors or np.all(err_comp == 0):
                 logger.warning(
-                    f"No valid phase errors for {start_bpm} to {end_bpm}. Using uniform errors."
+                    f"No valid phase errors for {start_bpm} to {end_bpm}. Using 10% of phase values."
                 )
-                err_comp = np.ones_like(err_comp)
+                err_comp = 0.001 * comp
 
             if not use_errors or np.all(err_beta_comp == 0):
                 logger.warning(
-                    f"No valid beta errors for {start_bpm} to {end_bpm}. Using 10% of beta values as default errors."
+                    f"No valid beta errors for {start_bpm} to {end_bpm}. Using 10% of beta values."
                 )
-                err_beta_comp = 0.1 * beta_comp  # Use 10% of beta values as default errors
+                err_beta_comp = 0.1 * beta_comp
 
             # Create payload
             config = replace(template_config, start_bpm=start_bpm, end_bpm=end_bpm, sdir=sdir)
+            if additional_bad_bpms:
+                if config.bad_bpms is None:
+                    config = replace(config, bad_bpms=additional_bad_bpms)
+                else:
+                    config.bad_bpms = additional_bad_bpms + config.bad_bpms
+
             data = OpticsData(
                 comparisons=comp,
                 variances=err_comp**2,
                 beta_comparisons=beta_comp,
                 beta_variances=err_beta_comp**2,
-                init_coords=_get_initial_conditions(
-                    init_bpm,
-                    data_frames["beta_phase_x"],
-                    data_frames["beta_phase_y"],
-                    data_frames["disp_x"],
-                    data_frames["disp_y"],
-                    data_frames["orbit_x"],
-                    data_frames["orbit_y"],
-                ),
+                init_coords=_get_initial_conditions(init_bpm, twiss_df),
             )
             worker_payloads.append((config, data))
     return worker_payloads
@@ -638,6 +469,7 @@ class LHCOpticsController(LHCControllerMixin, OpticsController):
         beam_energy: float = 6800.0,
         use_errors: bool = True,
         optimise_knobs: list[str] | None = None,
+        use_amplitude_beta: bool = True,
     ):
         """
         Initialise the LHC optics controller.
@@ -658,6 +490,7 @@ class LHCOpticsController(LHCControllerMixin, OpticsController):
             beam_energy (float, optional): Beam energy in GeV. Defaults to 6800.0
             use_errors (bool, optional): Whether to use measurement errors in optimisation. Defaults to True
             optimise_knobs (list[str] | None, optional): List of knob names to optimise. If None, optimises all knobs in magnet_range
+            use_amplitude_beta (bool, optional): Use beta from amplitude (True) or phase (False). Defaults to True
         """
         # Create SequenceConfig using mixin helper
         sequence_config = self.create_sequence_config(
@@ -668,32 +501,6 @@ class LHCOpticsController(LHCControllerMixin, OpticsController):
             beam_energy=beam_energy,
             optimise_knobs=optimise_knobs,
         )
-
-        # Load TFS files to find common BPMs and extend bad_bpms
-        optics_path = Path(optics_folder)
-        tfs_data, common_bpms = load_optics_data_and_find_common_bpms(optics_path)
-
-        # Create temporary MAD to get all BPMs in range
-        from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
-
-        temp_mad = OptimisationMadInterface(
-            str(sequence_config.sequence_file_path),
-            seq_name=sequence_config.seq_name,
-            magnet_range=sequence_config.magnet_range,
-            bpm_range=sequence_config.magnet_range,  # Use magnet_range as bpm_range
-            bad_bpms=sequence_config.bad_bpms,
-            beam_energy=sequence_config.beam_energy,
-        )
-        all_bpms_in_range = temp_mad.all_bpms
-        del temp_mad  # Clean up temporary MAD instance
-
-        # Find BPMs in range that don't have measurements
-        extra_bad_bpms = [bpm for bpm in all_bpms_in_range if bpm not in common_bpms]
-        if extra_bad_bpms:
-            sequence_config.bad_bpms = (sequence_config.bad_bpms or []) + extra_bad_bpms
-            logger.info(
-                f"Extended bad BPMs list with {len(extra_bad_bpms)} BPMs without complete measurements."
-            )
 
         super().__init__(
             sequence_config=sequence_config,
@@ -706,6 +513,7 @@ class LHCOpticsController(LHCControllerMixin, OpticsController):
             tune_knobs_file=tune_knobs_file,
             true_strengths=true_strengths,
             use_errors=use_errors,
+            use_amplitude_beta=use_amplitude_beta,
         )
 
         # Filter to optimise only specified knobs if provided

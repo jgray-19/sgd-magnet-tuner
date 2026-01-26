@@ -154,29 +154,16 @@ def loaded_tracking_interface_with_beam(
 
 
 @pytest.fixture(scope="session")
-def xsuite_json_cache(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
-    """Cache for xsuite JSON files by sequence file name.
-
-    This fixture provides a session-scoped dictionary that maps sequence file names
-    to their cached JSON paths. This avoids regenerating expensive xsuite JSON files
-    across multiple tests.
-    """
-    cache_dir = tmp_path_factory.mktemp("xsuite_cache")
-    return {"_cache_dir": cache_dir}
-
-
-@pytest.fixture(scope="session")
-def xsuite_json_path(xsuite_json_cache: dict) -> Callable[[str], Path]:
-    """Get or create a cached xsuite JSON path for a given sequence file.
+def xsuite_json_path(data_dir: Path) -> Callable[[str], Path]:
+    """Get the xsuite JSON path for a given sequence file.
 
     Returns a callable that takes a sequence file name (e.g., "lhcb1.seq")
-    and returns the path where its JSON should be cached.
+    and returns the path to its pre-generated JSON file in data/sequences.
     """
-    cache_dir = xsuite_json_cache["_cache_dir"]
+    sequences_dir = data_dir / "sequences"
 
     def _get_json_path(seq_file: str) -> Path:
-        # Extract base name without extension and create JSON path in cache
-        base_name = Path(seq_file).stem
-        return cache_dir / f"{base_name}.json"
+        # Extract base name without extension and create JSON path
+        return sequences_dir / Path(seq_file).with_suffix(".json")
 
     return _get_json_path

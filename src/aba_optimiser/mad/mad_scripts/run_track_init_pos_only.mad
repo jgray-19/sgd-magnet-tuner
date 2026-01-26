@@ -17,7 +17,6 @@ assert(
 )
 
 num_knobs = #knob_names ! Number of magnet knobs
-print("Number of knobs: " .. num_knobs)
 local matrix_size = optimise_energy and (num_knobs + 1) or num_knobs
 
 ! Have the set and get ranges in this scope to prevent errors in the save_data function

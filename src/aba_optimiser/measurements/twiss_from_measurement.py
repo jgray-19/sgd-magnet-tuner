@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -5,6 +6,7 @@ import pandas as pd
 import tfs
 from omc3.optics_measurements.constants import (
     ALPHA,
+    AMP_BETA_NAME,
     BETA,
     BETA_NAME,
     DISPERSION,
@@ -21,159 +23,347 @@ from omc3.optics_measurements.constants import (
     S,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 
 def build_twiss_from_measurements(
     measurement_dir: Path,
-    include_errors: bool = False
-) -> pd.DataFrame:
+    include_errors: bool = False,
+    use_amplitude_beta: bool = True,
+) -> tuple[pd.DataFrame, bool]:
     """
-    Builds a twiss file from measurement files in the given directory.
+    Builds a twiss dataframe from optics measurement files.
+
+    Reads beta, dispersion, phase, and orbit measurement files, computes cumulative
+    phase advances, and combines all measurements into a single twiss dataframe.
+    Only BPMs with complete measurements across all planes are included.
 
     Args:
-        measurement_dir: Path to the directory containing measurement .tfs files.
-        include_errors: If True, include error columns in the twiss dataframe.
+        measurement_dir: Path to directory containing measurement .tfs files.
+        include_errors: If True, include error columns in the output.
+        use_amplitude_beta: If True, use beta from amplitude measurements (beta_amplitude_x/y.tfs).
+                           If False, use beta from phase measurements (beta_phase_x/y.tfs).
 
     Returns:
-        pd.DataFrame with twiss data.
+        TfsDataFrame with twiss parameters, sorted by increasing phase advance.
+        Boolean indicating if dispersion data was included.
     """
-    # Read beta measurements
-    beta_x_path = measurement_dir / f"{BETA_NAME}x{EXT}"
-    beta_y_path = measurement_dir / f"{BETA_NAME}y{EXT}"
-    if beta_x_path.exists() and beta_y_path.exists():
-        beta_x = tfs.read(beta_x_path, index=NAME)
-        beta_y = tfs.read(beta_y_path, index=NAME)
-    else:
-        raise FileNotFoundError("Beta measurement files not found.")
+    # Determine which beta measurement files to use
+    beta_file_name = AMP_BETA_NAME if use_amplitude_beta else BETA_NAME
 
-    # Read dispersion measurements
-    disp_x_path = measurement_dir / f"{DISPERSION_NAME}x{EXT}"
-    disp_y_path = measurement_dir / f"{DISPERSION_NAME}y{EXT}"
-    if disp_x_path.exists() and disp_y_path.exists():
-        disp_x = tfs.read(disp_x_path, index=NAME)
-        disp_y = tfs.read(disp_y_path, index=NAME)
-    else:
-        raise FileNotFoundError("Dispersion measurement files not found.")
+    # Read all measurement files
+    measurements = {
+        "beta_x": _read_measurement_file(measurement_dir, beta_file_name, "x"),
+        "beta_y": _read_measurement_file(measurement_dir, beta_file_name, "y"),
+        "phase_x": _read_measurement_file(measurement_dir, PHASE_NAME, "x"),
+        "phase_y": _read_measurement_file(measurement_dir, PHASE_NAME, "y"),
+        "orbit_x": _read_measurement_file(measurement_dir, ORBIT_NAME, "x"),
+        "orbit_y": _read_measurement_file(measurement_dir, ORBIT_NAME, "y"),
+    }
 
-    # Read phase measurements
-    phase_x_path = measurement_dir / f"{PHASE_NAME}x{EXT}"
-    phase_y_path = measurement_dir / f"{PHASE_NAME}y{EXT}"
-    if phase_x_path.exists() and phase_y_path.exists():
-        phase_x = tfs.read(phase_x_path, index=NAME)
-        phase_y = tfs.read(phase_y_path, index=NAME)
-    else:
-        raise FileNotFoundError("Phase measurement files not found.")
+    # Alpha is sometimes missing in amplitude beta files; fall back to phase beta files when needed
+    measurements["alpha_x"], measurements["alpha_y"] = _select_alpha_measurements(
+        measurements["beta_x"],
+        measurements["beta_y"],
+        measurement_dir,
+        use_amplitude_beta,
+    )
+    try:
+        measurements["disp_x"] = _read_measurement_file(measurement_dir, DISPERSION_NAME, "x")
+        measurements["disp_y"] = _read_measurement_file(measurement_dir, DISPERSION_NAME, "y")
+        dispersion_found = True
+    except FileNotFoundError:
+        LOGGER.warning(
+            "Dispersion measurement files not found, proceeding without dispersion data."
+        )
+        dispersion_found = False
 
-    orbit_x_path = measurement_dir / f"{ORBIT_NAME}x{EXT}"
-    orbit_y_path = measurement_dir / f"{ORBIT_NAME}y{EXT}"
-    if orbit_x_path.exists() and orbit_y_path.exists():
-        orbit_x = tfs.read(orbit_x_path, index=NAME)
-        orbit_y = tfs.read(orbit_y_path, index=NAME)
-    else:
-        raise FileNotFoundError("Orbit measurement files not found.")
+    # Compute cumulative phase advances from measurement chains
+    phase_data_x = _compute_cumulative_phase(measurements["phase_x"], f"{PHASE}X")
+    phase_data_y = _compute_cumulative_phase(measurements["phase_y"], f"{PHASE}Y")
 
+    # Log how many BPMs were found in each measurement
+    for key, df in measurements.items():
+        LOGGER.debug(f"Measurement '{key}' has {len(df)} BPMs.")
 
-    # Sort by S to ensure order
-    sorted_index = beta_x.index
+    # Find BPMs with complete measurements and sort by phase
+    bpm_index = _get_valid_bpm_index(measurements, phase_data_x, phase_data_y)
+    LOGGER.info(f"Total BPMs with complete measurements: {len(bpm_index)}")
 
-    # Build the twiss dataframe
-    twiss_df = tfs.TfsDataFrame(index=sorted_index)
+    # Build twiss dataframe
+    twiss_df = tfs.TfsDataFrame(index=bpm_index)
     twiss_df.index.name = NAME
 
-    # S position
-    twiss_df[S] = beta_x.loc[sorted_index, S]
+    # Add optics measurements
+    _add_optics_columns_inplace(twiss_df, measurements, bpm_index)
+    if dispersion_found:
+        _add_dispersion_columns_inplace(twiss_df, measurements, bpm_index)
 
-    # Closed orbit
-    twiss_df["X"] = orbit_x.loc[sorted_index, f"{ORBIT}X"]
-    twiss_df["Y"] = orbit_y.loc[sorted_index, f"{ORBIT}Y"]
+    # Extract phase data for valid BPMs
+    twiss_df[f"{PHASE_ADV}X"] = np.array([phase_data_x.mu[bpm] for bpm in bpm_index])
+    twiss_df[f"{PHASE_ADV}Y"] = np.array([phase_data_y.mu[bpm] for bpm in bpm_index])
 
-    # Beta functions
-    twiss_df[f"{BETA}X"] = beta_x.loc[sorted_index, f"{BETA}X"]
-    twiss_df[f"{BETA}Y"] = beta_y.loc[sorted_index, f"{BETA}Y"]
-
-    # Alpha functions
-    twiss_df[f"{ALPHA}X"] = beta_x.loc[sorted_index, f"{ALPHA}X"]
-    twiss_df[f"{ALPHA}Y"] = beta_y.loc[sorted_index, f"{ALPHA}Y"]
-
-    # Dispersion
-    twiss_df[f"{DISPERSION}X"] = disp_x.loc[sorted_index, f"{DISPERSION}X"]
-    twiss_df[f"{DISPERSION}Y"] = disp_y.loc[sorted_index, f"{DISPERSION}Y"]
-    twiss_df[f"{MOMENTUM_DISPERSION}X"] = disp_x.loc[sorted_index, f"{MOMENTUM_DISPERSION}X"]
-    twiss_df[f"{MOMENTUM_DISPERSION}Y"] = disp_y.loc[sorted_index, f"{MOMENTUM_DISPERSION}Y"]
-
-    # Phase advances (cumulative from start)
-    mu_x, var_mu_x, total_var_x = _compute_cumulative_phase(phase_x, sorted_index, f"{PHASE}X")
-    mu_y, var_mu_y, total_var_y = _compute_cumulative_phase(phase_y, sorted_index, f"{PHASE}Y")
-    twiss_df[f"{PHASE_ADV}X"] = mu_x
-    twiss_df[f"{PHASE_ADV}Y"] = mu_y
-
-    # Always store variance; cheap and avoids later mistakes
+    var_mu_x = np.array([phase_data_x.var[bpm] for bpm in bpm_index])
+    var_mu_y = np.array([phase_data_y.var[bpm] for bpm in bpm_index])
     twiss_df["mu1_var"] = var_mu_x
     twiss_df["mu2_var"] = var_mu_y
 
-    # Always include orbit errors
-    twiss_df[f"{ERR}{ORBIT}X"] = orbit_x.loc[sorted_index, f"{ERR}{ORBIT}X"]
-    twiss_df[f"{ERR}{ORBIT}Y"] = orbit_y.loc[sorted_index, f"{ERR}{ORBIT}Y"]
-
-    # Optionally include errors
+    # Add error columns
     if include_errors:
-        twiss_df[f"{ERR}{BETA}X"] = beta_x.loc[sorted_index, f"{ERR}{BETA}X"]
-        twiss_df[f"{ERR}{BETA}Y"] = beta_y.loc[sorted_index, f"{ERR}{BETA}Y"]
-        twiss_df[f"{ERR}{ALPHA}X"] = beta_x.loc[sorted_index, f"{ERR}{ALPHA}X"]
-        twiss_df[f"{ERR}{ALPHA}Y"] = beta_y.loc[sorted_index, f"{ERR}{ALPHA}Y"]
-        twiss_df[f"{ERR}{DISPERSION}X"] = disp_x.loc[sorted_index, f"{ERR}{DISPERSION}X"]
-        twiss_df[f"{ERR}{DISPERSION}Y"] = disp_y.loc[sorted_index, f"{ERR}{DISPERSION}Y"]
-        twiss_df[f"{ERR}{MOMENTUM_DISPERSION}X"] = disp_x.loc[sorted_index, f"{ERR}{MOMENTUM_DISPERSION}X"]
-        twiss_df[f"{ERR}{MOMENTUM_DISPERSION}Y"] = disp_y.loc[sorted_index, f"{ERR}{MOMENTUM_DISPERSION}Y"]
-        twiss_df[f"{ERR}{PHASE_ADV}X"] = np.sqrt(var_mu_x)
-        twiss_df[f"{ERR}{PHASE_ADV}Y"] = np.sqrt(var_mu_y)
+        _add_error_columns_inplace(twiss_df, measurements, bpm_index, var_mu_x, var_mu_y)
+    if dispersion_found and include_errors:
+        _add_dispersion_error_columns_inplace(twiss_df, measurements, bpm_index)
 
-    # Headers: tunes if available and total variances
-    headers: dict[str, float] = {}
-    headers["MU1_TOTAL_VAR"] = total_var_x
-    headers["MU2_TOTAL_VAR"] = total_var_y
-    if "Q1" in beta_x.headers:
-        headers["Q1"] = beta_x.headers["Q1"]
-    if "Q2" in beta_x.headers:
-        headers["Q2"] = beta_x.headers["Q2"]
-    twiss_df.headers = headers
-    return twiss_df
+    # Add the S column
+    twiss_df[S] = measurements["beta_x"].loc[bpm_index, S].values
+
+    # Set headers
+    twiss_df.headers = {
+        "MU1_TOTAL_VAR": phase_data_x.total_var,
+        "MU2_TOTAL_VAR": phase_data_y.total_var,
+        "Q1": measurements["beta_x"].headers.get("Q1"),
+        "Q2": measurements["beta_x"].headers.get("Q2"),
+    }
+
+    return twiss_df, dispersion_found
 
 
-def _compute_cumulative_phase(
-    phase_df: pd.DataFrame, sorted_index: pd.Index, phase_col: str
-) -> tuple[np.ndarray, np.ndarray, float]:
+def _read_measurement_file(measurement_dir: Path, base_name: str, plane: str) -> pd.DataFrame:
+    """Read a single measurement file."""
+    file_path = measurement_dir / f"{base_name}{plane}{EXT}"
+    if not file_path.exists():
+        raise FileNotFoundError(f"Measurement file not found: {file_path}")
+    return tfs.read(file_path, index=NAME)
+
+
+def _get_valid_bpm_index(
+    measurements: dict[str, pd.DataFrame],
+    phase_data_x: "PhaseData",
+    phase_data_y: "PhaseData",
+) -> pd.Index:
     """
-    Compute cumulative phase (turns) and cumulative variance (turns^2)
-    assuming each row provides the phase advance from NAME -> NAME2 and its error.
-
-    I don't like this function because it recalculates the phase advances from differences,
-    instead we could just use these differences directly when deciding the bpms with the correct
-    phase advance (pi/2 or pi). For now this is only used in testing so it's acceptable.
+    Find BPMs present in all measurements and sort by phase advance.
 
     Returns:
-        mu: cumulative phase at each BPM in sorted_index (turns)
-        var_mu: cumulative variance of mu at each BPM (turns^2)
-        total_var: total variance around ring (turns^2)
-
+        pd.Index of valid BPM names, sorted by increasing horizontal phase advance.
     """
-    # Step phase advance for each BPM in lattice order
-    step = phase_df[phase_col].reindex(sorted_index).to_numpy(float)
-    step_err = phase_df[f"{ERR}{phase_col}"].reindex(sorted_index).to_numpy(float)
+    # Start with intersection of all measurement indices
+    valid_index = phase_data_x.index.intersection(phase_data_y.index)
+    for key, df in measurements.items():
+        if not key.startswith("phase_"):  # Phase data already considered
+            valid_index = valid_index.intersection(df.index)
 
-    # If there can be missing BPMs, decide policy:
-    # - missing step means "no information": treat as 0 with 0 error
-    step = np.nan_to_num(step, nan=0.0)
-    step_err = np.nan_to_num(step_err, nan=0.0)
+    # Sort by horizontal phase advance
+    phase_values = np.array([phase_data_x.mu[bpm] for bpm in valid_index])
+    return valid_index[np.argsort(phase_values)]
 
-    step_var = step_err**2
-    total_var = float(step_var.sum())
 
-    # mu at BPM i is sum of steps from BPM 0 up to i-1
-    # so shift the cumulative sum by 1
-    mu = np.zeros(len(sorted_index), dtype=float)
-    var_mu = np.zeros(len(sorted_index), dtype=float)
-    if len(sorted_index) > 1:
-        mu[1:] = np.cumsum(step[:-1])
-        var_mu[1:] = np.cumsum(step_var[:-1])
+def _add_columns_inplace(
+    twiss_df: tfs.TfsDataFrame,
+    mapping: dict[str, tuple[pd.DataFrame, str]],
+    bpm_index: pd.Index,
+) -> None:
+    """Generic function to add columns to twiss dataframe based on a mapping."""
+    for col_name, (source_df, source_col) in mapping.items():
+        twiss_df[col_name] = source_df.loc[bpm_index, source_col].values
 
-    return mu, var_mu, total_var
+
+def _add_optics_columns_inplace(
+    twiss_df: tfs.TfsDataFrame,
+    measurements: dict[str, pd.DataFrame],
+    bpm_index: pd.Index,
+) -> None:
+    """Add beta, alpha, dispersion, and orbit columns to twiss dataframe."""
+    # Map source columns to twiss columns
+    optics_map = {
+        f"{BETA}X": (measurements["beta_x"], f"{BETA}X"),
+        f"{BETA}Y": (measurements["beta_y"], f"{BETA}Y"),
+        f"{ALPHA}X": (measurements["alpha_x"], f"{ALPHA}X"),
+        f"{ALPHA}Y": (measurements["alpha_y"], f"{ALPHA}Y"),
+        f"{ORBIT}X": (measurements["orbit_x"], f"{ORBIT}X"),
+        f"{ORBIT}Y": (measurements["orbit_y"], f"{ORBIT}Y"),
+    }
+
+    _add_columns_inplace(twiss_df, optics_map, bpm_index)
+
+
+def _add_dispersion_columns_inplace(
+    twiss_df: tfs.TfsDataFrame,
+    measurements: dict[str, pd.DataFrame],
+    bpm_index: pd.Index,
+) -> None:
+    """Add dispersion columns to twiss dataframe."""
+    dispersion_map = {
+        f"{DISPERSION}X": (measurements["disp_x"], f"{DISPERSION}X"),
+        f"{DISPERSION}Y": (measurements["disp_y"], f"{DISPERSION}Y"),
+        f"{MOMENTUM_DISPERSION}X": (measurements["disp_x"], f"{MOMENTUM_DISPERSION}X"),
+        f"{MOMENTUM_DISPERSION}Y": (measurements["disp_y"], f"{MOMENTUM_DISPERSION}Y"),
+    }
+    _add_columns_inplace(twiss_df, dispersion_map, bpm_index)
+
+
+def _add_error_columns_inplace(
+    twiss_df: tfs.TfsDataFrame,
+    measurements: dict[str, pd.DataFrame],
+    bpm_index: pd.Index,
+    var_mu_x: np.ndarray,
+    var_mu_y: np.ndarray,
+) -> None:
+    """Add error columns to twiss dataframe if requested.
+
+    Args:
+        twiss_df: Twiss dataframe to modify in-place.
+        measurements: Dict of measurement dataframes.
+        bpm_index: Index of valid BPMs.
+        var_mu_x: Cumulative phase variance for x plane.
+        var_mu_y: Cumulative phase variance for y plane.
+    """
+    error_map = {
+        f"{ERR}{BETA}X": (measurements["beta_x"], f"{ERR}{BETA}X"),
+        f"{ERR}{BETA}Y": (measurements["beta_y"], f"{ERR}{BETA}Y"),
+        f"{ERR}{ALPHA}X": (measurements["alpha_x"], f"{ERR}{ALPHA}X"),
+        f"{ERR}{ALPHA}Y": (measurements["alpha_y"], f"{ERR}{ALPHA}Y"),
+        f"{ERR}{ORBIT}X": (measurements["orbit_x"], f"{ERR}{ORBIT}X"),
+        f"{ERR}{ORBIT}Y": (measurements["orbit_y"], f"{ERR}{ORBIT}Y"),
+    }
+
+    missing_error_cols = []
+    for col_name, (source_df, source_col) in error_map.items():
+        try:
+            twiss_df[col_name] = source_df.loc[bpm_index, source_col].values
+        except KeyError:
+            missing_error_cols.append(source_col)
+
+    if missing_error_cols:
+        LOGGER.warning(
+            "Missing error columns in measurement files, proceeding without them: %s",
+            missing_error_cols,
+        )
+
+    twiss_df[f"{ERR}{PHASE_ADV}X"] = np.sqrt(var_mu_x)
+    twiss_df[f"{ERR}{PHASE_ADV}Y"] = np.sqrt(var_mu_y)
+
+def _add_dispersion_error_columns_inplace(
+    twiss_df: tfs.TfsDataFrame,
+    measurements: dict[str, pd.DataFrame],
+    bpm_index: pd.Index,
+) -> None:
+    """Add dispersion error columns to twiss dataframe.
+
+    Only called when dispersion data is available.
+    """
+    dispersion_error_map = {
+        f"{ERR}{DISPERSION}X": (measurements["disp_x"], f"{ERR}{DISPERSION}X"),
+        f"{ERR}{DISPERSION}Y": (measurements["disp_y"], f"{ERR}{DISPERSION}Y"),
+        f"{ERR}{MOMENTUM_DISPERSION}X": (measurements["disp_x"], f"{ERR}{MOMENTUM_DISPERSION}X"),
+        f"{ERR}{MOMENTUM_DISPERSION}Y": (measurements["disp_y"], f"{ERR}{MOMENTUM_DISPERSION}Y"),
+    }
+    try:
+        _add_columns_inplace(twiss_df, dispersion_error_map, bpm_index)
+    except KeyError:
+        missing_cols = [
+            col
+            for (col, (df, src_col)) in dispersion_error_map.items()
+            if src_col not in df.columns
+        ]
+        LOGGER.warning(
+            f"Dispersion error columns missing: {missing_cols}. Proceeding without dispersion errors."
+        )
+
+
+class PhaseData:
+    """Container for cumulative phase measurement data."""
+
+    def __init__(self, mu: dict, var: dict, total_var: float, index: pd.Index):
+        self.mu = mu  # Cumulative phase at each BPM (turns)
+        self.var = var  # Cumulative variance at each BPM (turns^2)
+        self.total_var = total_var  # Total variance around ring (turns^2)
+        self.index = index  # BPM names in phase chain
+
+
+def _compute_cumulative_phase(phase_df: pd.DataFrame, phase_col: str) -> PhaseData:
+    """
+    Compute cumulative phase by following NAME -> NAME2 chain.
+
+    The phase_df contains rows with phase advances from NAME -> NAME2.
+    Cumulative phase starts at 0 for the first BPM and accumulates around the ring.
+
+    Args:
+        phase_df: TFS dataframe with phase measurements (index=NAME, contains NAME2 column).
+        phase_col: Column name for phase values (e.g., "PHASEX").
+
+    Returns:
+        PhaseData object with cumulative phase information.
+
+    Raises:
+        ValueError: If phase_df is empty or contains NaN values.
+    """
+    if len(phase_df) == 0:
+        raise ValueError("Phase DataFrame is empty, cannot compute cumulative phase.")
+
+    mu_dict = {}
+    var_dict = {}
+    step_variances = []
+
+    # Start accumulation at first BPM
+    current_bpm = phase_df.index[0]
+    mu_dict[current_bpm] = 0.0
+    var_dict[current_bpm] = 0.0
+
+    # Follow the NAME -> NAME2 chain
+    for name in phase_df.index:
+        if name == current_bpm:
+            next_bpm = phase_df.loc[name, "NAME2"]
+            phase_advance = phase_df.loc[name, phase_col]
+            phase_error = phase_df.loc[name, f"{ERR}{phase_col}"]
+
+            if pd.isna(phase_advance) or pd.isna(phase_error):
+                raise ValueError(f"NaN phase advance or error for {current_bpm} -> {next_bpm}")
+
+            # Accumulate phase and variance
+            mu_dict[next_bpm] = mu_dict[current_bpm] + phase_advance
+            var_dict[next_bpm] = var_dict[current_bpm] + phase_error**2
+            step_variances.append(phase_error**2)
+
+            current_bpm = next_bpm
+
+    return PhaseData(
+        mu=mu_dict,
+        var=var_dict,
+        total_var=float(sum(step_variances)),
+        index=pd.Index(list(mu_dict.keys())),
+    )
+
+
+def _select_alpha_measurements(
+    beta_x_df: pd.DataFrame,
+    beta_y_df: pd.DataFrame,
+    measurement_dir: Path,
+    use_amplitude_beta: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Choose data source for alpha columns.
+
+    Amplitude beta files can lack ALPHA columns; fall back to beta-from-phase files
+    when needed to provide ALFA measurements.
+    """
+
+    alpha_col_x = f"{ALPHA}X"
+    alpha_col_y = f"{ALPHA}Y"
+
+    if alpha_col_x in beta_x_df.columns and alpha_col_y in beta_y_df.columns:
+        return beta_x_df, beta_y_df
+
+    if use_amplitude_beta:
+        LOGGER.info(
+            "Alpha columns missing from amplitude beta files; loading alpha from phase beta files."
+        )
+        phase_beta_x = _read_measurement_file(measurement_dir, BETA_NAME, "x")
+        phase_beta_y = _read_measurement_file(measurement_dir, BETA_NAME, "y")
+        return phase_beta_x, phase_beta_y
+
+    missing_cols = []
+    if alpha_col_x not in beta_x_df.columns:
+        missing_cols.append(alpha_col_x)
+    if alpha_col_y not in beta_y_df.columns:
+        missing_cols.append(alpha_col_y)
+    raise KeyError(f"Alpha columns missing from beta measurements: {missing_cols}")

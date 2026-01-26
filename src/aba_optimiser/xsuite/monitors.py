@@ -110,7 +110,6 @@ def process_tracking_data(
     monitored_line: xt.Line,
     ramp_turns: int = 1000,
     flattop_turns: int = 100,
-    delta_p: float = 0.0,
     add_variance_columns: bool = True,
 ) -> pd.DataFrame:
     """Process raw tracking data from monitors, trimming ramp and adding variance cols."""
@@ -124,7 +123,7 @@ def process_tracking_data(
         tracking_df["var_y"] = 1e-4**2
         tracking_df["var_px"] = 3e-6**2
         tracking_df["var_py"] = 3e-6**2
-        tracking_df["kick_plane"] = "both"
+        tracking_df["kick_plane"] = "xy"
 
     return tracking_df
 

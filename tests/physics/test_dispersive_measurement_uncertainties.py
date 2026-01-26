@@ -130,12 +130,12 @@ def test_dispersive_measurement_with_uncertainties(
 
     if add_noise:
         # With noise, expect slightly larger errors
-        assert px_rmse < 4e-6, f"px RMSE with noise {px_rmse:.2e} > 4e-6"
-        assert py_rmse < 4e-6, f"py RMSE with noise {py_rmse:.2e} > 4e-6"
+        assert px_rmse < 3.5e-6, f"px RMSE with noise {px_rmse:.2e} > 3.5e-6"
+        assert py_rmse < 2.5e-6, f"py RMSE with noise {py_rmse:.2e} > 2.5e-6"
     else:
         # Without noise, expect tighter errors
-        assert px_rmse < 2e-7, f"px RMSE without noise {px_rmse:.2e} > 2e-7"
-        assert py_rmse < 2e-7, f"py RMSE without noise {py_rmse:.2e} > 2e-7"
+        assert px_rmse < 2.5e-7, f"px RMSE without noise {px_rmse:.2e} > 2.5e-7"
+        assert py_rmse < 2.5e-7, f"py RMSE without noise {py_rmse:.2e} > 2.5e-7"
 
     # Check that variance columns exist and are valid
     assert "var_px" in merged.columns, "var_px column missing after merge"

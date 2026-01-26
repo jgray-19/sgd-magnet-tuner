@@ -106,7 +106,7 @@ class MeasurementConfig:
             self.corrector_files = [self.corrector_files]
         if self.tune_knobs_files is None or isinstance(self.tune_knobs_files, Path):
             self.tune_knobs_files = [self.tune_knobs_files]
-        if isinstance(self.machine_deltaps, float):
+        if isinstance(self.machine_deltaps, float | int):
             self.machine_deltaps = [self.machine_deltaps]
 
 

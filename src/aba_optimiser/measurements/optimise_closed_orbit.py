@@ -362,7 +362,7 @@ def process_single_config(
     # Generate files from times
     files = [Path(f"{config.folder}/{config.name_prefix}{time}.sdds") for time in config.times]
 
-    pzs, bad_bpms, ana_dir = process_measurements(
+    pzs_dict, bad_bpms, output_paths, _ = process_measurements(
         files,
         temp_analysis_dir,
         config.model_dir,
@@ -370,8 +370,8 @@ def process_single_config(
         filename=None,
         bad_bpms=bad_bpms,
     )
-    if isinstance(pzs, list) or isinstance(ana_dir, list):
-        raise ValueError("process_measurements returned unexpected list type.")
+    pzs = pzs_dict["combined"]
+    ana_dir = output_paths["combined"]
 
     file_path = ana_dir / measurement_filename
 
@@ -445,6 +445,7 @@ def process_single_config(
         min_lr=1e0,
         gradient_converged_value=1e-6,
         optimiser_type="lbfgs",
+        expected_rel_error=0,
     )
     simulation_config = SimulationConfig(
         # For pre trimmed data
@@ -453,6 +454,7 @@ def process_single_config(
         num_workers=1,
         optimise_energy=True,
         use_fixed_bpm=use_fixed_bpm,
+        optimise_momenta=False,
     )
 
     results_arcs, uncs_arcs = optimise_ranges(

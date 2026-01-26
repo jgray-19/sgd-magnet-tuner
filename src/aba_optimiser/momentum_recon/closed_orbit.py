@@ -38,7 +38,7 @@ def estimate_closed_orbit(
     y_corr = data["y"] - dpp_est * data["name"].map(tws["dy"].to_dict())
 
     g = pd.DataFrame({"name": data["name"], "x_corr": x_corr, "y_corr": y_corr}).groupby(
-        "name", sort=False
+        "name", sort=False, observed=False
     )
 
     co_avg = pd.DataFrame(

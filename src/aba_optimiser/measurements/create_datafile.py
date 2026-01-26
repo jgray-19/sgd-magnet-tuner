@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import tfs
 from omc3.hole_in_one import hole_in_one_entrypoint
+from pymadng import MAD
 from turn_by_turn import TbtData, read_tbt
 
 from aba_optimiser.config import (
@@ -23,9 +24,14 @@ from aba_optimiser.config import (
 from aba_optimiser.filtering.svd import svd_clean_measurements
 from aba_optimiser.io.utils import get_lhc_file_path, save_knobs
 from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
+from aba_optimiser.model_creator.madng_utils import (
+    compute_and_export_twiss_tables,
+    initialise_madng_model,
+)
+from aba_optimiser.model_creator.madx_utils import make_madx_sequence
 
 # from aba_optimiser.momentum_recon.transverse import calculate_pz
-from aba_optimiser.momentum_recon.dispersive import calculate_pz
+from aba_optimiser.momentum_recon.dispersive_measurement import calculate_pz_measurement
 from aba_optimiser.training.controller import LHCController as Controller
 from aba_optimiser.training.controller_helpers import (
     create_arc_bpm_config,
@@ -35,14 +41,14 @@ from aba_optimiser.training.controller_helpers import (
 if TYPE_CHECKING:
     from aba_optimiser.measurements.knob_extraction import NXCALSResult
 
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
 
 
-def load_files(files: list[str | Path]) -> list[TbtData]:
+def load_files(files: list[Path]) -> list[TbtData]:
     """Load and concatenate multiple Parquet files into a single DataFrame."""
     measurements: list[TbtData] = []
     for file in files:
-        logger.info("Loading data from %s", file)
+        LOGGER.info("Loading data from %s", file)
         meas_tbt = read_tbt(file, datatype="lhc")
         measurements.append(meas_tbt)
 
@@ -100,14 +106,14 @@ def convert_measurements(
 
 
 def compute_uniform_vars(
-    combined: pd.DataFrame, bad_bpms: list[str], var_value: float = 1e-8
+    combined: pd.DataFrame, bad_bpms: list[str], var_value: float = (1e-4) ** 2
 ) -> pd.DataFrame:
     """Set uniform variances for all BPMs.
 
     Args:
         combined: DataFrame with BPM measurements
         bad_bpms: List of bad BPM names to set to infinite variance
-        var_value: Uniform variance value to use (default: 1e-8)
+        var_value: Uniform variance value to use (default: (1e-4) ** 2)
 
     Returns:
         DataFrame with var_x, var_y, var_px, var_py columns added
@@ -194,13 +200,12 @@ def compute_vars_from_known_noise(combined: pd.DataFrame, bad_bpms: list[str]) -
 
 
 def run_analysis(
-    analysis_dir: str | Path, model_dir: str | Path, files: list[str | Path], beam: int
+    analysis_dir: str | Path, model_dir: str | Path, files: list[Path], beam: int
 ) -> list[str]:
     """Load, combine, and process data from multiple files."""
     analysis_dir = Path(analysis_dir)
     analysis_dir.mkdir(parents=True, exist_ok=True)
-    files: list[Path] = [Path(f) for f in files]
-    bunches = [32, 1228, 2000] if beam == 2 else [0, 1138, 1968]
+    # bunches = [32, 1228, 2000] if beam == 2 else [0, 1138, 1968]
     hole_in_one_entrypoint(
         harpy=True,
         files=files,
@@ -215,7 +220,7 @@ def run_analysis(
         nattunes=[0.28, 0.31, 0.0],
         num_svd_iterations=3,
         opposite_direction=beam == 2,
-        output_bits=12,
+        output_bits=10,
         peak_to_peak=1e-08,
         resonances=4,
         sing_val=12,
@@ -223,15 +228,15 @@ def run_analysis(
         to_write=["lin", "spectra", "full_spectra", "bpm_summary"],
         tune_clean_limit=1e-05,
         tunes=[0.27, 0.322, 0.0],
-        turn_bits=18,
+        turn_bits=14,
         model_dir=model_dir,
         turns=[0, 50000],
         clean=True,
     )
+    # Find all the bunch IDs that were created
+    linfile_dir = analysis_dir / "lin_files"
     analysed_files: list[Path] = [
-        analysis_dir / "lin_files" / f"{f.name}_bunchID{bunch_id}"
-        for f in files
-        for bunch_id in bunches
+        created_file.with_suffix("") for created_file in linfile_dir.glob("*_bunchID*.linx")
     ]
 
     hole_in_one_entrypoint(
@@ -245,10 +250,9 @@ def run_analysis(
         coupling_method=2,
         coupling_pairing=0,
         isolation_forest=False,
-        nonlinear=["rdt"],
+        nonlinear=[],
         only_coupling=False,
         range_of_bpms=11,
-        rdt_magnet_order=4,
         second_order_dispersion=False,
         three_bpm_method=False,
         three_d_excitation=False,
@@ -273,7 +277,7 @@ def run_analysis(
             with bpm_summary_file_y.open("r") as f:
                 bad_bpms.extend([line.split(" ")[0] for line in f.readlines()])
     bad_bpms = list(set(bad_bpms))
-    logger.info(f"Identified {len(bad_bpms)} bad BPMs from analysis.")
+    LOGGER.info(f"Identified {len(bad_bpms)} bad BPMs from analysis.")
     return bad_bpms
 
 
@@ -291,6 +295,7 @@ def _process_single_dataframe(
     df_with_index: tuple[int, pd.DataFrame],
     tws: pd.DataFrame,
     bad_bpms: list[str],
+    analysis_dir: Path,
     use_uniform_vars: bool,
 ) -> tuple[int, pd.DataFrame]:
     """Process a single DataFrame: clean, compute vars, and calculate pz.
@@ -318,22 +323,17 @@ def _process_single_dataframe(
     else:
         df = compute_vars_from_known_noise(df, bad_bpms)
 
-    # Subtract closed orbit
-    x_co: dict[str, float] = tws["x"].to_dict()
-    y_co: dict[str, float] = tws["y"].to_dict()
-    df["x"] = df["x"] - df["name"].map(x_co)
-    df["y"] = df["y"] - df["name"].map(y_co)
 
     # Calculate pz
-    df = calculate_pz(df, tws=tws, inject_noise=False)
+    df = calculate_pz_measurement(df, analysis_dir, model_tws=tws)
 
-    # Add back closed orbit
-    df["x"] = df["x"] + df["name"].map(x_co)
-    df["y"] = df["y"] + df["name"].map(y_co)
+    # Divide the variances by 10 because of the svd cleaning reducing noise
+    df["var_x"] = df["var_x"] / 10
+    df["var_y"] = df["var_y"] / 10
 
     # Handle NaN values
     if df["px"].isna().any() or df["py"].isna().any():
-        logger.warning(f"NaN values found in px or py for dataframe {i}, dropping rows.")
+        LOGGER.warning(f"NaN values found in px or py for dataframe {i}, dropping rows.")
         df = df.dropna(subset=["px", "py"])
 
     return i, df
@@ -402,23 +402,23 @@ def detect_bad_bpms(
     for pz in pzs:
         # BPMs with NaN in px or py
         mask = pz["px"].isna() | pz["py"].isna()
-        bad_bpms_mask = mask.groupby(pz["name"]).any()
+        bad_bpms_mask = mask.groupby(pz["name"], observed=False).any()
         new_bad = bad_bpms_mask[bad_bpms_mask].index.tolist()
         bad_bpms.extend(new_bad)
         if log_individual:
             for bpm in new_bad:
-                logger.info(f"BPM {bpm}: has_nan=True")
+                LOGGER.info(f"BPM {bpm}: has_nan=True")
 
         # BPMs with infinite variance in both planes (x/y)
         zero_mask = ((np.isinf(pz["var_x"])) | (np.isinf(pz["var_px"]))) & (
             (np.isinf(pz["var_y"])) | (np.isinf(pz["var_py"]))
         )
-        bad_bpms_zero = zero_mask.groupby(pz["name"]).any()
+        bad_bpms_zero = zero_mask.groupby(pz["name"], observed=False).any()
         new_bad_zero = bad_bpms_zero[bad_bpms_zero].index.tolist()
         bad_bpms.extend(new_bad_zero)
         if log_individual:
             for bpm in new_bad_zero:
-                logger.info(f"BPM {bpm}: zero_weight=True")
+                LOGGER.info(f"BPM {bpm}: zero_weight=True")
 
     # Missing BPMs
     all_unique_bpms = set.union(*(set(pz["name"].unique()) for pz in pzs))
@@ -426,29 +426,62 @@ def detect_bad_bpms(
     bad_bpms.extend(missing_bpms)
     if log_individual:
         for bpm in missing_bpms:
-            logger.info(f"BPM {bpm}: missing from data")
+            LOGGER.info(f"BPM {bpm}: missing from data")
 
     # Remove duplicates
     bad_bpms[:] = list(set(bad_bpms))
 
 
+def build_madng_twiss_table(model_dir: Path, beam: int, output_dir: Path) -> pd.DataFrame:
+    """Create MAD-NG Twiss DataFrame for the given model directory and beam.
+
+    Args:
+        model_dir: Directory containing the MAD-NG model files
+        beam: Beam number (1 or 2)
+    Returns:
+        Twiss DataFrame with optics parameters
+    """
+    tws_file = output_dir / "twiss.dat"
+    if not tws_file.exists():
+        LOGGER.warning("Generating MAD-NG Twiss tables, TUNES and DRV_TUNES are hardcoded.")
+        tunes = [0.28, 0.31]
+        drv_tunes = [0.27, 0.322]
+        seq_path = output_dir / f"lhcb{beam}_saved.seq"
+        if not seq_path.exists():
+            make_madx_sequence(beam, model_dir, seq_outdir=output_dir, beam4=beam == 2)
+        with MAD() as mad:
+            # Initialize and match tunes
+            initialise_madng_model(mad, beam, output_dir, tunes=tunes)
+
+            # Compute and export twiss tables
+            compute_and_export_twiss_tables(
+                mad,
+                beam,
+                output_dir,
+                tunes=tunes,
+                drv_tunes=drv_tunes,
+            )
+    return tfs.read(tws_file)
+
+
 def process_measurements(
-    files: list[str | Path],
-    analysis_dir: Path,
-    model_dir: str,
+    files: list[Path],
+    output_dir: Path,
+    model_dir: str | Path,
     beam: int,
     filename: str | None = "pz_data.parquet",
     bad_bpms: list[str] | None = None,
+    previous_analysis_dir: str | Path | None = None,
     use_uniform_vars: bool = False,
     num_workers: int | None = None,
     sequence_path: Path | None = None,
     combine_files: bool = True,
-) -> tuple[pd.DataFrame | list[pd.DataFrame], list[str], Path | list[Path]]:
+) -> tuple[dict[str, pd.DataFrame], list[str], dict[str, Path], pd.DataFrame]:
     """Process measurement files to compute pz data and identify bad BPMs.
 
     Args:
         files: List of measurement file paths
-        analysis_dir: Directory for analysis outputs
+        output_dir: Directory for analysis outputs
         model_dir: Directory containing model files
         beam: Beam number (1 or 2)
         filename: Output filename for parquet file (None to skip saving)
@@ -456,18 +489,33 @@ def process_measurements(
         use_uniform_vars: If True, use uniform variances instead of noise-based
         num_workers: Number of parallel workers (None for auto)
         sequence_path: Path to the MAD-X sequence file
-        combine_files: If True, combine all processed dataframes into one; if False, return list of dataframes
+        combine_files: If True, combine all processed dataframes into one dict entry with key 'combined';
+                      if False, return dict with file paths as keys
 
     Returns:
-        Tuple of (pzs_dataframe or list of dataframes, bad_bpms_list, output_path or list of paths)
+        Tuple of (dict mapping file paths to dataframes, bad_bpms_list, dict mapping keys to output paths, twiss_df)
     """
-    if bad_bpms is None:
-        bad_bpms = run_analysis(analysis_dir, model_dir, files, beam)
+    if bad_bpms is None or previous_analysis_dir is None:
+        bad_bpms = run_analysis(output_dir, model_dir, files, beam)
+        LOGGER.warning(
+            "Previous analysis directory not provided; ran analysis for processing measurements."
+        )
+        analysis_dir = output_dir
+    else:
+        if previous_analysis_dir is None:
+            raise ValueError(
+                "previous_analysis_dir must be provided if bad_bpms is given to calculate the pz from measurements."
+            )
+        analysis_dir = Path(previous_analysis_dir)
+        if not analysis_dir.exists():
+            raise FileNotFoundError(
+                f"Provided previous_analysis_dir {analysis_dir} does not exist."
+            )
 
     data = load_files(files)
     combined = convert_measurements(data, bad_bpms, combine_measurements=combine_files)
-    logger.info(f"Combined data has {len(combined)} DataFrames from different files/bunches.")
-    tws = tfs.read(Path(model_dir) / "twiss_ac.dat")
+    LOGGER.info(f"Combined data has {len(combined)} DataFrames from different files/bunches.")
+    tws = build_madng_twiss_table(Path(model_dir), beam, output_dir)
     tws.columns = [col.lower() for col in tws.columns]
     tws = tws.rename(
         columns={
@@ -484,7 +532,7 @@ def process_measurements(
 
     # Process DataFrames in parallel using threads to avoid Spark context inheritance issues
     # ThreadPoolExecutor shares memory space and doesn't inherit problematic global state like ProcessPoolExecutor
-    logger.info(f"Processing {len(combined)} DataFrames in parallel with threads...")
+    LOGGER.info(f"Processing {len(combined)} DataFrames in parallel with threads...")
     processed_results: list[pd.DataFrame | None] = [None] * len(combined)
 
     # Use ThreadPoolExecutor instead of ProcessPoolExecutor to avoid Spark context conflicts
@@ -495,7 +543,12 @@ def process_measurements(
             with ThreadPoolExecutor(max_workers=effective_workers) as executor:
                 futures = {
                     executor.submit(
-                        _process_single_dataframe, (i, df), tws, bad_bpms, use_uniform_vars
+                        _process_single_dataframe,
+                        (i, df),
+                        tws,
+                        bad_bpms,
+                        analysis_dir,
+                        use_uniform_vars,
                     ): i
                     for i, df in enumerate(combined)
                 }
@@ -504,39 +557,44 @@ def process_measurements(
                     try:
                         idx, processed_df = future.result(timeout=600)  # 10 minute timeout per task
                         processed_results[idx] = processed_df
-                        logger.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
+                        LOGGER.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
                     except Exception as e:
                         idx = futures[future]
-                        logger.error(f"Error processing dataframe {idx}: {e}")
+                        LOGGER.error(f"Error processing dataframe {idx}: {e}")
                         raise
         except KeyboardInterrupt:
-            logger.warning("Keyboard interrupt received, shutting down gracefully...")
+            LOGGER.warning("Keyboard interrupt received, shutting down gracefully...")
             # The ThreadPoolExecutor context manager will handle cleanup
             raise
     else:
         for i, df in enumerate(combined):
             idx, processed_df = _process_single_dataframe(
-                df_with_index=(i, df), tws=tws, bad_bpms=bad_bpms, use_uniform_vars=use_uniform_vars
+                df_with_index=(i, df),
+                tws=tws,
+                bad_bpms=bad_bpms,
+                analysis_dir=analysis_dir,
+                use_uniform_vars=use_uniform_vars,
             )
             processed_results[idx] = processed_df
-            logger.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
+            LOGGER.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
 
     if any(res is None for res in processed_results):
         raise RuntimeError("Some dataframes failed to process.")
 
     combined: list[pd.DataFrame] = processed_results  # ty:ignore[invalid-assignment]
     if combine_files:
-        pzs = pd.concat(combined, ignore_index=True)
-        pzs["name"] = pzs["name"].astype("category")
-        pzs["turn"] = pzs["turn"].astype("int32")
+        pzs_combined = pd.concat(combined, ignore_index=True)
+        pzs_combined["name"] = pzs_combined["name"].astype("category")
+        pzs_combined["turn"] = pzs_combined["turn"].astype("int32")
         # Add the average dpp estimate to the headers
         dpp_est = sum(proc_res.attrs["DPP_EST"] for proc_res in combined) / len(combined)
-        pzs.attrs["DPP_EST"] = dpp_est
+        pzs_combined.attrs["DPP_EST"] = dpp_est
+        pzs_dict: dict[str, pd.DataFrame] = {"combined": pzs_combined}
     else:
         # Group by file: each file has multiple bunches combined
         num_files = len(files)
         num_bunches_per_file = len(combined) // num_files
-        pzs: list[pd.DataFrame] = []
+        pzs_dict: dict[str, pd.DataFrame] = {}
         for i in range(num_files):
             start = i * num_bunches_per_file
             end = (i + 1) * num_bunches_per_file
@@ -545,7 +603,7 @@ def process_measurements(
             file_pzs["name"] = file_pzs["name"].astype("category")
             file_pzs["turn"] = file_pzs["turn"].astype("int32")
             file_pzs.attrs["DPP_EST"] = sum(df.attrs["DPP_EST"] for df in file_dfs) / len(file_dfs)
-            pzs.append(file_pzs)
+            pzs_dict[str(files[i])] = file_pzs
 
     sequence_path = sequence_path or get_lhc_file_path(beam)
 
@@ -557,32 +615,36 @@ def process_measurements(
     del mad_iface
 
     if combine_files:
-        assert isinstance(pzs, pd.DataFrame)  # for ty
-        pzs["name"] = pzs["name"].astype("category")
+        pzs_combined = pzs_dict["combined"]
+        pzs_combined["name"] = pzs_combined["name"].astype("category")
 
-        detect_bad_bpms(pzs, all_bpms, bad_bpms, log_individual=True)
+        detect_bad_bpms(pzs_combined, all_bpms, bad_bpms, log_individual=True)
 
-        logger.info(f"Total bad BPMs: {len(bad_bpms)}")
+        LOGGER.info(f"Total bad BPMs: {len(bad_bpms)}")
 
         if filename:
-            file_path = analysis_dir / filename
-            pzs.to_parquet(file_path)
+            file_path = output_dir / filename
+            pzs_combined.to_parquet(file_path)
+            output_paths = {"combined": file_path}
+        else:
+            output_paths = {"combined": output_dir}
 
-            return pzs, bad_bpms, file_path
-        return pzs, bad_bpms, analysis_dir
+        return pzs_dict, bad_bpms, output_paths, tws
 
-    detect_bad_bpms(pzs, all_bpms, bad_bpms, log_individual=False)
+    detect_bad_bpms(list(pzs_dict.values()), all_bpms, bad_bpms, log_individual=False)
 
-    logger.info(f"Total bad BPMs: {len(bad_bpms)}")
+    LOGGER.info(f"Total bad BPMs: {len(bad_bpms)}")
 
     if filename:
-        file_paths: list[Path] = []
-        for i, pz in enumerate(pzs):
-            file_path = analysis_dir / f"{Path(filename).stem}_{i}.parquet"
+        output_paths: dict[str, Path] = {}
+        for i, (file_key, pz) in enumerate(pzs_dict.items()):
+            file_path = output_dir / f"{Path(filename).stem}_{i}.parquet"
             pz.to_parquet(file_path)
-            file_paths.append(file_path)
-        return pzs, bad_bpms, file_paths
-    return pzs, bad_bpms, analysis_dir
+            output_paths[file_key] = file_path
+    else:
+        output_paths = dict.fromkeys(pzs_dict, output_dir)
+
+    return pzs_dict, bad_bpms, output_paths, tws
 
 
 if __name__ == "__main__":
@@ -619,9 +681,10 @@ if __name__ == "__main__":
     measurement_file = analysis_dir / measurement_filename
     bad_bpms_file = analysis_dir / "bad_bpms.txt"
 
-    pzs, bad_bpms, _ = process_measurements(
+    pzs_dict, bad_bpms, _, _ = process_measurements(
         files, analysis_dir, model_dir, beam=1, filename=measurement_filename
     )
+    pzs = pzs_dict["combined"]
 
     # save the bad bpms to a file
     with bad_bpms_file.open("w") as f:
@@ -639,7 +702,7 @@ if __name__ == "__main__":
 
     results = []
     for arc in range(8):
-        logger.info(f"Starting optimisation for arc {arc + 1}/8")
+        LOGGER.info(f"Starting optimisation for arc {arc + 1}/8")
 
         controller = Controller(
             beam=1,
@@ -657,16 +720,16 @@ if __name__ == "__main__":
         results.append(final_knobs["deltap"])
         with results_file.open("a") as f:
             f.write(f"{arc + 1}\t{results[-1]}\n")
-        logger.info(f"Arc {arc + 1}: deltap = {results[-1]}")
-        logger.info(f"Finished optimisation for arc {arc + 1}/8")
+        LOGGER.info(f"Arc {arc + 1}: deltap = {results[-1]}")
+        LOGGER.info(f"Finished optimisation for arc {arc + 1}/8")
 
-    logger.info("All arc optimisations complete.")
-    logger.info("Final deltaps for each arc:")
+    LOGGER.info("All arc optimisations complete.")
+    LOGGER.info("Final deltaps for each arc:")
     for i, dp in enumerate(results):
-        logger.info(f"Arc {i + 1}: deltap = {dp}")
+        LOGGER.info(f"Arc {i + 1}: deltap = {dp}")
 
-    logger.info(f"Mean deltap: {np.mean(results)}")
-    logger.info(f"Std dev of deltap: {np.std(results)}")
+    LOGGER.info(f"Mean deltap: {np.mean(results)}")
+    LOGGER.info(f"Std dev of deltap: {np.std(results)}")
 
     with results_file.open("a") as f:
         f.write(f"Mean\t{np.mean(results)}\n")

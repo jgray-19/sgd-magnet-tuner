@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import tfs
 
-from aba_optimiser.config import BEAM_ENERGY, CORRECTOR_STRENGTHS, TUNE_KNOBS_FILE, SimulationConfig
+from aba_optimiser.config import BEAM_ENERGY, SimulationConfig
 from aba_optimiser.io.utils import read_knobs
 
 from .base_mad_interface import BaseMadInterface
@@ -68,8 +68,8 @@ class OptimisationMadInterface(BaseMadInterface):
         bpm_pattern: str = BPM_PATTERN,
         bad_bpms: list[str] | None = None,
         beam_energy: float = BEAM_ENERGY,
-        corrector_strengths: Path | None = CORRECTOR_STRENGTHS,
-        tune_knobs_file: Path | None = TUNE_KNOBS_FILE,
+        corrector_strengths: Path | None = None,
+        tune_knobs_file: Path | None = None,
         start_bpm: str | None = None,
         py_name: str = "py",
         debug: bool = False,
@@ -252,7 +252,7 @@ class OptimisationMadInterface(BaseMadInterface):
         print("Retrieved " .. MAD.tostring(bend_dict))
         """)
 
-        self.mad.send(normalise_lhcbend_magnets(self.mad.recv()))  # type: ignore[arg-type]
+        self.mad.send(normalise_lhcbend_magnets(self.mad.recv()))
 
     def _make_adj_knobs(self, simulation_config: SimulationConfig) -> None:
         """

@@ -16,11 +16,6 @@
 
 
 reset_before_tracking()
-print("Starting position-only tracking")
-io.write("Tracking range: " .. tracking_range .. "\n")
-io.write("Number of particles: " .. batch_size .. "\n")
-io.write("Sdir: " .. sdir .. "\n")
-io.flush()
 local _, mflw= track{
     sequence=loaded_sequence,
     X0=da_x0_c[batch],

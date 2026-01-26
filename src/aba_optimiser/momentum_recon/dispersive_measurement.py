@@ -61,7 +61,9 @@ def calculate_pz_measurement(
     bpm_list = data["name"].unique().tolist()
 
     # Stage 2: Process twiss
-    tws, has_errors = process_twiss(Path(measurement_folder), bpm_list, include_errors)
+    tws, has_errors, dispersion_found = process_twiss(
+        Path(measurement_folder), bpm_list, include_errors
+    )
 
     # Filter data to only BPMs present in the twiss
     data = data[data["name"].isin(tws.index)]
@@ -71,7 +73,9 @@ def calculate_pz_measurement(
         raise ValueError("include_errors=True but no error columns found in measurements")
 
     # Stage 3: Set up momentum calculation
-    data_p, data_n, dpp_est = setup_momentum_calculation(data, tws, model_tws, info)
+    data_p, data_n, dpp_est = setup_momentum_calculation(
+        data, tws, model_tws, dispersion_found, info
+    )
 
     # Stage 4: Attach errors if they exist
     if has_errors:

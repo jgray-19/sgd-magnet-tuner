@@ -26,7 +26,7 @@ from aba_optimiser.simulation.magnet_perturbations import (
     apply_magnet_perturbations,
 )
 from aba_optimiser.simulation.optics import perform_orbit_correction
-from aba_optimiser.xsuite.xsuite_tools import (
+from aba_optimiser.xsuite import (
     create_xsuite_environment,
     initialise_env,
     insert_ac_dipole,
@@ -41,7 +41,6 @@ logging.basicConfig(
 
 # Constants
 DATA_DIR = Path(__file__).parent.parent
-JSON_PATH = DATA_DIR / "lhcb1.json"
 SEQUENCE_FILE = DATA_DIR / "lhcb1.seq"
 NATURAL_TUNES = [0.28, 0.31]
 DRIVEN_TUNES = [0.27, 0.322]
@@ -101,14 +100,14 @@ def run_acd_twiss(
     acd_marker = f"mkqa.6l4.b{beam}"
     bet_at_acdipole = before_acd_tws.rows[acd_marker]
 
-    line_acd.env.elements[f"mkach.6l4.b{beam}"] = xt.ACDipole(
+    line_acd.env.elements[f"mkach.6l4.b{beam}"] = xt.ACDipole(  # ty:ignore[unresolved-attribute]
         plane="x",
         natural_q=before_acd_tws["qx"] % 1,
         freq=driven_tunes[0],
         beta_at_acdipole=bet_at_acdipole["betx"],
         twiss_mode=True,
     )
-    line_acd.env.elements[f"mkacv.6l4.b{beam}"] = xt.ACDipole(
+    line_acd.env.elements[f"mkacv.6l4.b{beam}"] = xt.ACDipole(  # ty:ignore[unresolved-attribute]
         plane="y",
         natural_q=before_acd_tws["qy"] % 1,
         freq=driven_tunes[1],
@@ -158,12 +157,11 @@ def generate_model_data():
 
     # Create xsuite environment
     env = create_xsuite_environment(
-        json_file=JSON_PATH,
         sequence_file=SEQUENCE_FILE,
         seq_name="lhcb1",
     )
 
-    line = env["lhcb1"].copy()
+    line = env["lhcb1"].copy()  # ty:ignore[not-subscriptable]
     tws = line.twiss(method="4d")
 
     # Verify natural tunes
@@ -212,20 +210,12 @@ melmcol(tws, {'k1l' , 'k2l', 'k1sl', 'k3l', 'k4l'})
     corrected_env = initialise_env(
         matched_tunes=matched_tunes,
         magnet_strengths=magnet_strengths,
-        corrector_table=corrector_table,
-        json_file=JSON_PATH,
+        corrector_table=corrector_table,  # ty:ignore[invalid-argument-type]
         sequence_file=SEQUENCE_FILE,
         seq_name="lhcb1",
     )
-    # base_env = create_xsuite_environment(
-    #     json_file=JSON_PATH,
-    #     sequence_file=SEQUENCE_FILE,
-    #     beam_energy=BEAM_ENERGY,
-    #     seq_name="lhcb1",
-    #     rerun_madx=False,
-    # )
 
-    return corrected_env["lhcb1"], tws, tws_acd, ng_tws
+    return corrected_env["lhcb1"], tws, tws_acd, ng_tws  # ty:ignore[not-subscriptable]
     # return base_env["lhcb1"], tws, tws_acd, ng_tws
 
 

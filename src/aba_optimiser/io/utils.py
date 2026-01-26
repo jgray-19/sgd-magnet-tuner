@@ -59,7 +59,7 @@ def save_knobs(knobs: dict[str, float], filepath: Path) -> None:
         matched_tunes: Dictionary of tune knobs and values
         filepath: Path to save file
     """
-    logger.info(f"Saving matched tunes to {filepath}")
+    logger.info(f"Saving {len(knobs)} knobs to {filepath}")
     with filepath.open("w") as f:
         for key, val in knobs.items():
             f.write(f"{key}\t{val: .15e}\n")

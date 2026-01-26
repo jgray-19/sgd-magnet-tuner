@@ -511,6 +511,7 @@ weights_py = python:recv()
 
         # Cleanup
         LOGGER.debug(f"Worker {self.worker_id}: Terminating")
+        mad.send("shush()")
         del mad
 
     @staticmethod

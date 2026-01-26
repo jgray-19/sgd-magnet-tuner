@@ -332,6 +332,6 @@ def estimate_dpp_from_model(data: pd.DataFrame, tws: pd.DataFrame, info: bool = 
 
     if info:
         LOGGER.info(
-            "Estimated δ from model-based dispersion: %s from %s/%s", dpp, numerator, denominator
+            f"Estimated δ from model-based dispersion: {dpp} from {numerator:.2e}/{denominator:.2e}"
         )
     return dpp

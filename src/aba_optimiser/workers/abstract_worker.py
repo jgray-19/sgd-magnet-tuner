@@ -268,6 +268,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
 
         # Cleanup
         LOGGER.debug(f"Worker {self.worker_id}: Terminating")
+        mad.send("shush()")
         del mad
 
     @abstractmethod

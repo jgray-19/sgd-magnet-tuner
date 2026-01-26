@@ -72,7 +72,8 @@ class Controller(BaseController):
         """
 
         # Log optimisation targets
-        logger.info("Optimising energy")
+        if simulation_config.optimise_energy:
+            logger.info("Optimising energy")
         if simulation_config.optimise_quadrupoles:
             logger.info("Optimising quadrupoles")
         if simulation_config.optimise_bends:

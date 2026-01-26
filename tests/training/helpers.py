@@ -47,7 +47,6 @@ end
 def generate_model_with_errors(
     loaded_interface_with_beam: BaseMadInterface,
     sequence_file: Path,
-    json_file: Path,
     dpp_value: float,
     magnet_range: str,
     corrector_file: Path,
@@ -60,7 +59,6 @@ def generate_model_with_errors(
 
     Args:
         sequence_file: Path to the sequence file
-        json_file: Path to the xsuite JSON file
         dpp_value: Momentum deviation value
         magnet_range: Range of magnets to perturb
         corrector_file: Path to save corrector strengths
@@ -108,7 +106,6 @@ def generate_model_with_errors(
 def generate_xsuite_env_with_errors(
     loaded_interface_with_beam: BaseMadInterface,
     sequence_file: Path,
-    json_file: Path,
     dpp_value: float,
     magnet_range: str,
     corrector_file: Path,
@@ -121,7 +118,6 @@ def generate_xsuite_env_with_errors(
 
     Args:
         sequence_file: Path to the sequence file
-        json_file: Path to the xsuite JSON file
         dpp_value: Momentum deviation value
         magnet_range: Range of magnets to perturb
         corrector_file: Path to save corrector strengths
@@ -134,7 +130,6 @@ def generate_xsuite_env_with_errors(
     magnet_strengths, matched_tunes, corrector_table = generate_model_with_errors(
         loaded_interface_with_beam,
         sequence_file,
-        json_file,
         dpp_value,
         magnet_range,
         corrector_file,
@@ -150,7 +145,6 @@ def generate_xsuite_env_with_errors(
         magnet_strengths=magnet_strengths,
         corrector_table=corrector_table,
         beam=beam,
-        json_file=json_file,
         sequence_file=sequence_file,
         seq_name=seq_name,
         beam_energy=6800,

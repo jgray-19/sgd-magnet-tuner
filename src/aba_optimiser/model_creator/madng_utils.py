@@ -23,7 +23,7 @@ from .tfs_utils import convert_multiple_tfs_files
 def initialise_madng_model(
     mad: MAD,
     beam: int,
-    model_dir: Path,
+    seq_save_fldr: Path,
     *,
     tunes: list[float] | None = None,
     matching_knob: str = "_op",
@@ -40,7 +40,7 @@ def initialise_madng_model(
         Active MAD-NG instance.
     beam : int
         Beam number (1 or 2).
-    model_dir : Path
+    seq_save_fldr : Path
         Directory containing the saved sequence files.
     tunes : list[float], optional
         Target fractional tunes [Q1, Q2]. If None, uses [0.28, 0.31].
@@ -50,12 +50,12 @@ def initialise_madng_model(
     if tunes is None:
         tunes = [0.28, 0.31]
 
-    saved_seq = model_dir / f"lhcb{beam}_saved.seq"
-    saved_mad = model_dir / f"lhcb{beam}_saved.mad"
+    saved_seq = seq_save_fldr / f"lhcb{beam}_saved.seq"
+    saved_mad = seq_save_fldr / f"lhcb{beam}_saved.mad"
 
     if not saved_seq.exists():
         raise FileNotFoundError(
-            f"Saved sequence file not found in {model_dir}. Run make_madx_sequence first."
+            f"Saved sequence file not found in {seq_save_fldr}. Run make_madx_sequence first."
         )
 
     # Load the saved sequence

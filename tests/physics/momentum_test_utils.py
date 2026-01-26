@@ -90,8 +90,8 @@ def verify_pz_reconstruction(
     px_noisy_max: float,
     py_noisy_min: float,
     py_noisy_max: float,
-    px_divisor: float,
-    py_divisor: float,
+    px_cleaned_max: float,
+    py_cleaned_max: float,
     rng_seed: int = 42,
 ):
     """Verify momentum reconstruction with noise and SVD cleaning.
@@ -123,8 +123,10 @@ def verify_pz_reconstruction(
         Minimum expected RMSE for noisy py.
     py_noisy_max : float
         Maximum acceptable RMSE for noisy py.
-    px_divisor : float
-        Divisor to verify SVD improvement for px.
+    px_cleaned_max : float
+        Maximum acceptable RMSE for SVD-cleaned px.
+    py_cleaned_max : float
+        Maximum acceptable RMSE for SVD-cleaned py.
     py_divisor : float
         Divisor to verify SVD improvement for py.
     rng_seed : int
@@ -212,13 +214,15 @@ def verify_pz_reconstruction(
         f"PY RMSE no noise: {py_rmse_nonoise:.2e}, noisy: {py_rmse_noisy:.2e}, cleaned: {py_rmse_cleaned:.2e}"
     )
 
-    assert px_rmse_nonoise < px_nonoise_max
-    assert py_rmse_nonoise < py_nonoise_max
-    assert px_noisy_min < px_rmse_noisy < px_noisy_max
-    assert py_noisy_min < py_rmse_noisy < py_noisy_max
-    # Check cleaned is better than noisy
-    assert px_rmse_cleaned < px_rmse_noisy / px_divisor
-    assert py_rmse_cleaned < py_rmse_noisy / py_divisor
+    assert px_rmse_nonoise < px_nonoise_max, f"PX no-noise RMSE {px_rmse_nonoise:.2e} should be < {px_nonoise_max:.2e}"
+    assert py_rmse_nonoise < py_nonoise_max, f"PY no-noise RMSE {py_rmse_nonoise:.2e} should be < {py_nonoise_max:.2e}"
+    assert px_noisy_min < px_rmse_noisy < px_noisy_max, f"PX noisy RMSE {px_rmse_noisy:.2e} should be in ({px_noisy_min:.2e}, {px_noisy_max:.2e})"
+    assert py_noisy_min < py_rmse_noisy < py_noisy_max, f"PY noisy RMSE {py_rmse_noisy:.2e} should be in ({py_noisy_min:.2e}, {py_noisy_max:.2e})"
+    # Check cleaned is better than noisy and meets absolute threshold
+    assert px_rmse_cleaned < px_rmse_noisy, f"PX cleaned {px_rmse_cleaned:.2e} should be < noisy {px_rmse_noisy:.2e}"
+    assert py_rmse_cleaned < py_rmse_noisy, f"PY cleaned {py_rmse_cleaned:.2e} should be < noisy {py_rmse_noisy:.2e}"
+    assert px_rmse_cleaned < px_cleaned_max, f"PX cleaned RMSE {px_rmse_cleaned:.2e} should be < {px_cleaned_max:.2e}"
+    assert py_rmse_cleaned < py_cleaned_max, f"PY cleaned RMSE {py_rmse_cleaned:.2e} should be < {py_cleaned_max:.2e}"
 
 def add_error_to_orbit_measurement(fldr):
     for plane in ["x", "y"]:

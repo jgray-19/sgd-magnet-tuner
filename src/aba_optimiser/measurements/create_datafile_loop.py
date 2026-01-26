@@ -218,14 +218,13 @@ def process_single_config(
     # Generate files from times
     files = [Path(f"{config.folder}/{config.name_prefix}{time}.sdds") for time in config.times]
 
-    pzs, bad_bpms, _ = process_measurements(
+    pzs_dict, bad_bpms, _, _ = process_measurements(
         files,
         temp_analysis_dir,
         config.model_dir,
         beam=config.beam,
         filename=measurement_filename,
     )
-
     # Save the bad bpms to a file
     with bad_bpms_file.open("w") as f:
         for bpm in bad_bpms:

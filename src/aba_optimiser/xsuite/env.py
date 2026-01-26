@@ -8,7 +8,7 @@ import xpart as xp
 import xtrack as xt
 from xtrack import load_madx_lattice  # ty:ignore[unresolved-import]
 
-from aba_optimiser.config import BEAM_ENERGY, PROJECT_ROOT
+from aba_optimiser.config import BEAM_ENERGY
 from aba_optimiser.io.utils import get_lhc_file_path
 
 if TYPE_CHECKING:
@@ -27,14 +27,13 @@ def create_xsuite_environment(
     json_file: Path | None = None,
 ) -> xt.Environment:
     """Run MAD-X (if needed) and load an xsuite environment."""
-    if json_file is None:
-        raise ValueError("json_file parameter is required and cannot be None")
-
     if sequence_file is None:
         if beam is None:
             raise ValueError("Either beam or sequence_file must be provided.")
         sequence_file = get_lhc_file_path(beam)
 
+    if json_file is None:
+        json_file = sequence_file.with_suffix(".json")
     if seq_name is None:
         seq_name = sequence_file.stem
 
@@ -59,18 +58,21 @@ def create_xsuite_environment(
     return env
 
 
-def _set_corrector_strengths(env: xt.Environment, corrector_table: tfs.TfsDataFrame) -> None:
+def _set_corrector_strengths(
+    env: xt.Environment, corrector_table: tfs.TfsDataFrame, strict_set: bool = True
+) -> None:
     logger.debug(f"Applying corrector strengths to {len(corrector_table)} elements")
     for _, row in corrector_table.iterrows():
         mag_name = row["ename"].lower()
-        assert (
-            np.isclose(env[mag_name].knl[0], -row["hkick_old"], atol=1e-10)  # ty:ignore[not-subscriptable]
-            and np.isclose(env[mag_name].ksl[0], row["vkick_old"], atol=1e-10)  # ty:ignore[not-subscriptable]
-        ), (
-            f"Corrector {row['ename']} has different initial strengths in environment: "
-            f"knl_env={env[mag_name].knl[0]}, expected={-row['hkick_old']}, "  # ty:ignore[not-subscriptable]
-            f"ksl_env={env[mag_name].ksl[0]}, expected={row['vkick_old']}"  # ty:ignore[not-subscriptable]
-        )
+        if strict_set:
+            assert (
+                np.isclose(env[mag_name].knl[0], -row["hkick_old"], atol=1e-10)  # ty:ignore[not-subscriptable]
+                and np.isclose(env[mag_name].ksl[0], row["vkick_old"], atol=1e-10)  # ty:ignore[not-subscriptable]
+            ), (
+                f"Corrector {row['ename']} has different initial strengths in environment: "
+                f"knl_env={env[mag_name].knl[0]}, expected={-row['hkick_old']}, "  # ty:ignore[not-subscriptable]
+                f"ksl_env={env[mag_name].ksl[0]}, expected={row['vkick_old']}"  # ty:ignore[not-subscriptable]
+            )
         knl_str: float = -row["hkick"] if abs(row["hkick"]) > 1e-10 else 0.0
         ksl_str: float = row["vkick"] if abs(row["vkick"]) > 1e-10 else 0.0
         env.set(mag_name, knl=[knl_str], ksl=[ksl_str])  # type: ignore[attr-defined]
@@ -85,11 +87,9 @@ def initialise_env(
     beam_energy: float = BEAM_ENERGY,
     seq_name: str | None = None,
     json_file: Path | None = None,
+    strict_set=True,
 ) -> xt.Environment:
     """Initialise xsuite environment with tune knobs, magnets, and correctors."""
-    if json_file is None:
-        raise ValueError("json_file parameter is required and cannot be None")
-
     base_env = create_xsuite_environment(
         beam=beam,
         sequence_file=sequence_file,
@@ -112,5 +112,5 @@ def initialise_env(
         logger.debug(f"Setting {magnet_name.lower()} {var} to {strength}")
         base_env.set(magnet_name.lower(), **{var: strength})  # type: ignore[attr-defined]
 
-    _set_corrector_strengths(base_env, corrector_table)
+    _set_corrector_strengths(base_env, corrector_table, strict_set=strict_set)
     return base_env

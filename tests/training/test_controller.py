@@ -108,7 +108,6 @@ def _run_track_with_model(
 def _generate_nonoise_track(
     interface_with_beam: BaseMadInterface,
     sequence_file: Path,
-    json_file: Path,
     flattop_turns: int,
     destination: Path,
     dpp_value: float,
@@ -128,7 +127,6 @@ def _generate_nonoise_track(
     env, magnet_strengths, matched_tunes, corrector_table = generate_xsuite_env_with_errors(
         interface_with_beam,
         sequence_file=sequence_file,
-        json_file=json_file,
         dpp_value=dpp_value,
         magnet_range=magnet_range,
         corrector_file=corrector_file,
@@ -188,6 +186,7 @@ def _make_optimiser_config_energy() -> OptimiserConfig:
         max_lr=2e-6,
         min_lr=2e-7,
         gradient_converged_value=5e-10,
+        expected_rel_error=0,
     )
 
 
@@ -199,6 +198,7 @@ def _make_simulation_config_energy() -> SimulationConfig:
         optimise_energy=True,
         optimise_quadrupoles=False,
         optimise_bends=False,
+        optimise_momenta=True,
     )
 
 
@@ -210,6 +210,7 @@ def _make_optimiser_config_quad() -> OptimiserConfig:
         max_lr=1e-6,
         min_lr=1e-8,
         gradient_converged_value=5e-14,
+        expected_rel_error=0,
     )
 
 
@@ -242,7 +243,6 @@ def test_controller_energy_opt(
     corrector_file, _, tune_knobs_file = _generate_nonoise_track(
         loaded_interface_with_beam,
         seq_b1,
-        tmp_path / "lhcb1.json",
         flattop_turns,
         off_dpp_path,
         dpp_value,
@@ -328,7 +328,6 @@ def test_controller_quad_opt_simple(
     corrector_file, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
         loaded_interface_with_beam,
         seq_b1,
-        tmp_path / "lhcb1.json",
         flattop_turns,
         off_magnet_path,
         0.0,

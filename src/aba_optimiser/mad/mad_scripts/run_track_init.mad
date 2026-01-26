@@ -16,7 +16,6 @@ assert(
 )
 
 num_knobs = #knob_names ! Number of magnet knobs
-print("Number of knobs: " .. num_knobs)
 local matrix_size = optimise_energy and (num_knobs + 1) or num_knobs
 
 ! Have the set and get ranges in this scope to prevent errors in the save_data function
@@ -62,7 +61,6 @@ function save_data(elm, mflw, _, slc)
     -- Observe the BPMs at the specified intervals
     if slc == -2 and elm:is_observed() then
          -- Loop over each particle in the batch
-        print("Observing BPM at element: " .. elm.name .. ", observe_count: " .. observe_count)
         for i=1,batch_size do
             x[i]:seti(observe_count, mflw[i].x:get0()) ! get0 returns the scalar
             y[i]:seti(observe_count, mflw[i].y:get0()) ! get0 returns the scalar

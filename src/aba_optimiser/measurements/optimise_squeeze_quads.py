@@ -4,25 +4,33 @@ import argparse
 import json
 import logging
 from datetime import datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
-from aba_optimiser.mad import OptimisationMadInterface
+from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
+from aba_optimiser.measurements.squeeze_helpers import (
+    ANALYSIS_DIRS,
+    BEAM_ENERGY,
+    BETABEAT_DIR,
+    MODEL_DIRS,
+    get_measurement_date,
+    get_or_make_sequence,
+)
 from aba_optimiser.measurements.utils import find_all_bad_bpms
-from aba_optimiser.model_creator.madx_utils import make_madx_sequence
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig, SequenceConfig
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 # ==================== CONSTANTS ====================
-MEASUREMENT_DATE = "2025_04_27"
 FILL_NUMBER = 10533
-BETABEAT_DIR = Path("/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-27/")
 SQUEEZE_STEPS = [
     "1.2m",
     "1.2m_agc",
@@ -36,161 +44,185 @@ SQUEEZE_STEPS = [
     "0.18m",
 ]
 
-BEAM_ENERGY = 6800.0  # GeV
+ZEROHZ = "0Hz"
+PLUS_50HZ = "+50Hz"
+MINUS_50HZ = "-50Hz"
+PLUS_100HZ = "+100Hz"
+PLUS_150HZ = "+150Hz"
+PLUS_200HZ = "+200Hz"
+PLUS_250HZ = "+250Hz"
+PLUS_300HZ = "+300Hz"
+PLUS_350HZ = "+350Hz"
+MINUS_100HZ = "-100Hz"
+MINUS_150HZ = "-150Hz"
+MINUS_200HZ = "-200Hz"
+MINUS_250HZ = "-250Hz"
+MINUS_300HZ = "-300Hz"
+MINUS_350HZ = "-350Hz"
 
 # ==================== MEASUREMENT TIMES ====================
 MEAS_TIMES = {
     1: {
         "1.2m": {
-            "0hz": ["06_17_47_405", "06_19_27_443", "06_20_39_422"],
-            # "0hz": ["06_20_39_422"],
-            # "+50hz": ["06_24_41_350"],
-            # "-50hz": ["06_26_09_426"],
+            ZEROHZ: ["06_17_47_405", "06_19_27_443", "06_20_39_422"],
+            PLUS_50HZ: ["06_24_41_350"],
+            MINUS_50HZ: ["06_26_09_426"],
         },
         # Please also check the 1.2m after a global correction
         "1.2m_agc": {
-            "0hz": ["07_59_50_367", "07_59_50_367", "07_59_50_367"],
-            "+50Hz": ["08_05_57_495"],
-            "-50Hz": ["08_07_03_451"],
+            ZEROHZ: ["07_59_50_367", "08_01_04_464", "08_02_31_317"],
+            # ZEROHZ: ["07_59_50_367"],
+            # ZEROHZ: ["08_02_31_317"],
+            PLUS_50HZ: ["08_05_57_495"],
+            MINUS_50HZ: ["08_07_03_451"],
         },
         "1.05m": {
-            "0hz": ["09_19_42_460", "09_20_58_100", "09_23_22_506"],
-            "+50hz": ["09_26_23_443", "09_27_41_385"],
-            "-50hz": ["09_29_36_402", "09_30_46_492"],
+            ZEROHZ: ["09_19_42_460", "09_20_58_100", "09_23_22_506"],
+            PLUS_50HZ: ["09_26_23_443", "09_27_41_385"],
+            MINUS_50HZ: ["09_29_36_402", "09_30_46_492"],
         },
         "0.93m": {
-            "0hz": ["10_56_44_423", "10_57_53_330"],
-            "-50hz": ["11_00_38_320"],
-            "+50hz": ["11_02_35_390"],
+            ZEROHZ: ["10_56_44_423", "10_57_53_330"],
+            MINUS_50HZ: ["11_00_38_320"],
+            PLUS_50HZ: ["11_02_35_390"],
         },
         "0.725m": {
-            "0hz": ["12_56_35_478", "12_58_04_387", "12_59_41_358"],
-            "-50hz": ["13_01_45_317"],
-            "+50hz": ["13_03_09_448"],
+            ZEROHZ: ["12_56_35_478", "12_58_04_387", "12_59_41_358"],
+            MINUS_50HZ: ["13_01_45_317"],
+            PLUS_50HZ: ["13_03_09_448"],
         },
         "0.6m": {
-            "0hz": ["13_50_14_431", "13_51_22_434", "13_52_31_321"],
-            "-50hz": ["13_54_02_456"],
-            "+50hz": ["13_55_11_500"],
+            ZEROHZ: ["13_50_14_431", "13_51_22_434", "13_52_31_321"],
+            MINUS_50HZ: ["13_54_02_456"],
+            PLUS_50HZ: ["13_55_11_500"],
         },
         "0.45m": {
-            "0hz": ["14_48_46_464", "14_49_53_484"],
-            "-50hz": ["14_51_35_448"],
-            "+50hz": ["14_52_41_380"],
+            ZEROHZ: ["14_48_46_464", "14_49_53_484"],
+            MINUS_50HZ: ["14_51_35_448"],
+            PLUS_50HZ: ["14_52_41_380"],
         },
         "0.3m": {
-            "0hz": ["15_35_51_360", "15_36_59_413"],
-            "-50hz": ["15_38_30_335"],
-            "+50hz": ["15_39_41_491"],
+            ZEROHZ: ["15_35_51_360", "15_36_59_413"],
+            MINUS_50HZ: ["15_38_30_335"],
+            PLUS_50HZ: ["15_39_41_491"],
         },
         "0.25m": {
-            "0hz": ["16_22_59_435", "16_24_06_387"],
-            "-50hz": ["16_25_33_427"],
-            "+50hz": ["16_27_05_421"],
+            ZEROHZ: ["16_22_59_435", "16_24_06_387"],
+            MINUS_50HZ: ["16_25_33_427"],
+            PLUS_50HZ: ["16_27_05_421"],
         },
         "0.18m": {
-            "0hz": ["17_34_50_472", "17_36_06_419", "17_39_46_502", "17_41_31_474", "17_42_37_338"],
-            "-50hz": ["17_44_16_396"],
-            "+50hz": ["17_45_33_318"],
+            ZEROHZ: [
+                "17_34_50_472",
+                "17_36_06_419",
+                "17_39_46_502",
+                "17_41_31_474",
+                "17_42_37_338",
+            ],
+            MINUS_50HZ: ["17_44_16_396"],
+            PLUS_50HZ: ["17_45_33_318"],
+        },
+        "inj": {  # This has a special date in the squeeze_helpers.py
+            ZEROHZ: ["16_49_56_490", "16_51_01_464", "16_52_08_398"],
+            PLUS_50HZ: ["16_58_06_419", "16_59_12_366", "17_00_27_504"],
+            PLUS_100HZ: ["17_03_16_394", "17_04_25_452", "17_05_53_444"],
+            PLUS_150HZ: ["17_10_45_523", "17_11_52_941", "17_12_57_191"],
+            PLUS_200HZ: ["17_20_55_315", "17_22_05_108", "17_23_09_370"],
+            PLUS_250HZ: ["17_26_28_349", "17_27_50_402", "17_29_16_374"],
+            PLUS_300HZ: ["17_33_14_338", "17_34_20_356", "17_35_28_317"],
+            PLUS_350HZ: ["17_40_25_475", "17_41_36_368", "17_42_54_434"],
+            MINUS_50HZ: ["17_51_38_387", "17_52_44_501", "17_53_50_407"],
+            MINUS_100HZ: ["17_57_13_340", "17_58_24_385", "17_59_32_491"],
+            MINUS_150HZ: ["18_02_51_331", "18_03_57_483", "18_05_05_332"],
+            MINUS_200HZ: ["18_06_53_392", "18_07_59_340", "18_09_04_349"],
+            MINUS_250HZ: ["18_11_32_374", "18_12_51_327", "18_14_23_472"],
+            MINUS_300HZ: ["18_16_36_372", "18_17_44_322", "18_18_52_182"],
+            MINUS_350HZ: ["18_20_38_431", "18_21_46_310", "18_22_51_320"],
         },
     },
     2: {
         "1.2m": {
-            "0hz": ["06_18_14_332", "06_19_48_490", "06_20_57_500"],
-            "+50hz": ["06_25_20_342"],
-            "-50hz": ["06_26_47_456"],
+            ZEROHZ: ["06_18_14_332", "06_19_48_490", "06_20_57_500"],
+            PLUS_50HZ: ["06_25_20_342"],
+            MINUS_50HZ: ["06_26_47_456"],
         },
         "1.05m": {
-            "0hz": ["09_19_49_333", "09_21_08_376", "09_23_29_348"],
-            "+50hz": ["09_26_31_404", "09_28_03_384"],
-            "-50hz": ["09_29_55_397", "09_31_07_320"],
+            ZEROHZ: ["09_19_49_333", "09_21_08_376", "09_23_29_348"],
+            PLUS_50HZ: ["09_26_31_404", "09_28_03_384"],
+            MINUS_50HZ: ["09_29_55_397", "09_31_07_320"],
         },
         "0.93m": {
-            "0hz": ["10_57_01_409", "10_58_15_318"],
-            "-50hz": ["11_01_01_305"],
-            "+50hz": ["11_02_56_432"],
+            ZEROHZ: ["10_57_01_409", "10_58_15_318"],
+            MINUS_50HZ: ["11_01_01_305"],
+            PLUS_50HZ: ["11_02_56_432"],
         },
         "0.725m": {
-            "0hz": ["12_58_53_397", "13_00_13_435"],
-            "-50hz": ["13_02_01_455"],
-            "+50hz": ["13_03_26_368"],
+            ZEROHZ: ["12_58_53_397", "13_00_13_435"],
+            MINUS_50HZ: ["13_02_01_455"],
+            PLUS_50HZ: ["13_03_26_368"],
         },
         "0.6m": {
-            "0hz": ["13_50_31_386", "13_51_38_386", "13_52_47_410"],
-            "-50hz": ["13_54_20_403"],
-            "+50hz": ["13_55_28_330"],
+            ZEROHZ: ["13_50_31_386", "13_51_38_386", "13_52_47_410"],
+            MINUS_50HZ: ["13_54_20_403"],
+            PLUS_50HZ: ["13_55_28_330"],
         },
         "0.45m": {
-            "0hz": ["14_49_16_409", "14_50_23_338"],
-            "-50hz": ["14_51_51_461"],
-            "+50hz": ["14_52_58_336"],
+            ZEROHZ: ["14_49_16_409", "14_50_23_338"],
+            MINUS_50HZ: ["14_51_51_461"],
+            PLUS_50HZ: ["14_52_58_336"],
         },
         "0.3m": {
-            "0hz": ["15_36_09_480", "15_37_15_426"],
-            "-50hz": ["15_38_45_453"],
-            "+50hz": ["15_39_57_354"],
+            ZEROHZ: ["15_36_09_480", "15_37_15_426"],
+            MINUS_50HZ: ["15_38_45_453"],
+            PLUS_50HZ: ["15_39_57_354"],
         },
         "0.25m": {
-            "0hz": ["16_23_14_482", "16_24_20_310"],
-            "-50hz": ["16_25_49_324"],
-            "+50hz": ["16_27_20_308"],
+            ZEROHZ: ["16_23_14_482", "16_24_20_310"],
+            MINUS_50HZ: ["16_25_49_324"],
+            PLUS_50HZ: ["16_27_20_308"],
         },
         "0.18m": {
-            "0hz": ["17_35_05_355", "17_41_46_322", "17_42_55_359"],
-            "-50hz": ["17_44_33_344"],
-            "+50hz": ["17_45_48_406"],
+            ZEROHZ: ["17_35_05_355", "17_41_46_322", "17_42_55_359"],
+            MINUS_50HZ: ["17_44_33_344"],
+            PLUS_50HZ: ["17_45_48_406"],
         },
-    },
-}
-
-# ==================== MODEL DIRECTORIES ====================
-MODEL_DIRS = {
-    1: {
-        "1.2m": "b1_120cm_injTunes",
-        "1.05m": "b1_105cm_injTunes",
-        "0.93m": "b2_93cm_injTunes",  # Double checked - this is correct (they accidentally wrote b2 in the folder name)
-        "0.725m": "b1_72cm_injTunes",
-        "0.6m": "b1_60cm_injTunes",
-        "0.45m": "b1_44cm_flat_injTunes",
-        "0.3m": "b1_30cm_flat_injTunes",
-        "0.25m": "b1_24cm_flat_injTunes",
-        "0.18m": "b1_18cm_flat_injTunes",
-    },
-    2: {
-        "1.2m": "b2_120cm_injTunes",
-        "1.05m": "OMC3_LHCB2_105cm",
-        "0.93m": "b2_93cm_injTunes",
-        "0.725m": "b2_72cm_injTunes",
-        "0.6m": "b2_60cm_injTunes",
-        "0.45m": "b2_44cm_flat_injTunes",
-        "0.3m": "b2_30cm_flat_injTunes",
-        "0.25m": "b2_24cm_flat_injTunes",
-        "0.18m": "b2_18cm_flat_injTunes",
-    },
-}
-
-
-ANALYSIS_DIRS = {
-    1: {
-        "1.2m": "2025-04-27_B1_120cm_injTunes_onOffMom",
-        # Add other squeeze steps as needed
-    },
-    2: {
-        "1.2m": "2025-04-27_B2_120cm_injTunes_onOffMom",
-        # Add other squeeze steps as needed
+        "inj": {  # This has a special date in the squeeze_helpers.py
+            ZEROHZ: ["16_50_23_408", "16_51_29_457", "16_52_34_444"],
+            PLUS_50HZ: ["16_58_39_378", "16_59_45_316", "17_00_51_406"],
+            PLUS_100HZ: ["17_03_42_327", "17_04_51_372", "17_06_00_423"],
+            PLUS_150HZ: ["17_09_53_327", "17_10_58_495", "17_12_09_324"],
+            PLUS_200HZ: ["17_23_20_460", "17_19_54_443", "17_21_03_313"],
+            PLUS_250HZ: ["17_28_11_396", "17_29_22_415", "17_30_40_479"],
+            PLUS_300HZ: ["17_34_11_504", "17_35_21_234", "17_36_28_939"],
+            PLUS_350HZ: ["17_40_14_958", "17_41_28_883", "17_42_46_833"],
+            MINUS_50HZ: ["17_51_17_922", "17_52_22_657", "17_53_28_125"],
+            MINUS_100HZ: ["17_57_57_917", "17_59_08_915", "18_00_26_732"],
+            MINUS_150HZ: ["18_03_31_335", "18_04_37_370", "18_05_49_463"],
+            MINUS_200HZ: ["18_07_24_413", "18_08_30_429", "18_09_36_407"],
+            MINUS_250HZ: ["18_11_42_328", "18_13_31_372", "18_14_45_489"],
+            MINUS_300HZ: ["18_16_48_300", "18_17_58_399", "18_19_04_402"],
+            MINUS_350HZ: ["18_20_15_411", "18_21_21_418", "18_22_26_431"],
+        },
     },
 }
 
 
 # ==================== HELPER FUNCTIONS ====================
-def get_beam_paths(beam: int) -> tuple[Path, Path]:
+def get_beam_paths(beam: int, squeeze_step: str) -> tuple[Path, Path]:
     """Get measurement and model base directories for a beam."""
-    meas_dir = BETABEAT_DIR / f"LHCB{beam}/Measurements/"
-    model_dir = BETABEAT_DIR / f"LHCB{beam}/Models/"
+    beam_path = BETABEAT_DIR / get_measurement_date(squeeze_step) / f"LHCB{beam}/"
+    meas_dir = beam_path / "Measurements/"
+    model_dir = beam_path / "Models/"
     return meas_dir, model_dir
 
 
-def get_bpm_points(arc_num: int, beam: int) -> tuple[str, list[str], list[str]]:
+def get_analysis_dir(beam: int, squeeze_step: str) -> Path:
+    """Get analysis directory for a beam and squeeze step."""
+    beam_path = BETABEAT_DIR / get_measurement_date(squeeze_step) / f"LHCB{beam}/"
+    return beam_path / "Results" / ANALYSIS_DIRS[beam][squeeze_step]
+
+
+def get_bpm_points(arc_num: int, beam: int) -> tuple[str, list[str], list[str], str]:
     """Get magnet range and BPM points for an arc."""
     next_arc = arc_num % 8 + 1
     suffix = f".B{beam}"
@@ -198,31 +230,17 @@ def get_bpm_points(arc_num: int, beam: int) -> tuple[str, list[str], list[str]]:
     # end_bpm = f"BPM.15R{arc_num}{suffix}" # Testing with BPM.15R
     end_bpm = f"BPM.12L{next_arc}{suffix}"
     magnet_range = f"{start_bpm}/{end_bpm}"
-    bpm_start_points = [f"BPM.{i}R{arc_num}{suffix}" for i in range(13, 17, 1)]
-    bpm_end_points = [f"BPM.{i}L{next_arc}{suffix}" for i in range(12, 16, 1)]
+    first_i = 11
+    last_i = 11
+    bpm_start_points = [f"BPM.{i}R{arc_num}{suffix}" for i in range(first_i, 14, 1)]
+    bpm_end_points = [f"BPM.{i}L{next_arc}{suffix}" for i in range(last_i, 14, 1)]
+    bpm_range = f"BPM.{first_i}R{arc_num}{suffix}/BPM.{last_i}L{next_arc}{suffix}"
 
     # Testing these fixed points
     # bpm_start_points = [start_bpm]
     # bpm_end_points = [end_bpm]
 
-    return magnet_range, bpm_start_points, bpm_end_points
-
-
-def get_or_make_sequence(beam: int, model_dir: Path) -> Path:
-    """Get cached sequence or generate new one."""
-    sequences_dir = PROJECT_ROOT / "sequences_from_models"
-    sequences_dir.mkdir(exist_ok=True)
-    seq_name = f"{model_dir.name}.seq"
-    seq_path = sequences_dir / seq_name
-    if seq_path.exists():
-        logging.info(f"Using cached sequence: {seq_path}")
-        return seq_path
-
-    logging.info(f"Generating new sequence: {seq_path}")
-    make_madx_sequence(beam, model_dir, seq_outdir=sequences_dir)
-    generated = sequences_dir / f"lhcb{beam}_saved.seq"
-    generated.rename(seq_path)
-    return seq_path
+    return magnet_range, bpm_start_points, bpm_end_points, bpm_range
 
 
 def validate_processed_files(temp_analysis_dir: Path, freq: str, num_files: int) -> None:
@@ -263,10 +281,10 @@ def save_bad_bpms(bad_bpms_file: Path, bad_bpms: set[str]) -> None:
             f.write(f"{bpm}\n")
 
 
-def get_measurement_time(earliest_time: str) -> datetime:
+def get_measurement_time(earliest_time: str, squeeze_step: str) -> datetime:
     """Convert timestamp string to datetime object."""
     time_str = earliest_time.replace("_", ":")[:8]
-    start_str = f"{MEASUREMENT_DATE.replace('_', '-')} {time_str}"
+    start_str = f"{get_measurement_date(squeeze_step).replace('_', '-')} {time_str}"
     return datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("UTC"))
 
 
@@ -319,150 +337,148 @@ def load_dpp_metadata(temp_analysis_dir: Path, freq: str) -> list[float]:
     return data["dpp_est_values"]
 
 
-def get_analysis_folders(times: list[str], beam: int, meas_base_dir: Path) -> list[Path]:
+def get_analysis_folders(
+    times: list[str], beam: int, meas_base_dir: Path, squeeze_step: str
+) -> list[Path]:
     """Get analysis folder paths for measurement times."""
-    name_prefix = f"Beam{beam}@BunchTurn@{MEASUREMENT_DATE}@"
+    name_prefix = f"Beam{beam}@BunchTurn@{get_measurement_date(squeeze_step)}@".replace("-", "_")
     return [meas_base_dir / f"{name_prefix}{time}" for time in times]
 
 
-def get_measurement_files(times: list[str], analysed_folders: list[Path], beam: int) -> list[Path]:
+def get_measurement_files(
+    times: list[str], analysed_folders: list[Path], beam: int, squeeze_step: str
+) -> list[Path]:
     """Get measurement file paths."""
-    name_prefix = f"Beam{beam}@BunchTurn@{MEASUREMENT_DATE}@"
+    name_prefix = f"Beam{beam}@BunchTurn@{get_measurement_date(squeeze_step)}@".replace("-", "_")
     return [analysed_folders[i] / f"{name_prefix}{times[i]}.sdds" for i in range(len(times))]
 
 
-def process_frequency_data(
+def prepare_frequency_metadata(
     freq: str,
     times: list[str],
     beam: int,
     meas_base_dir: Path,
-    model_dir: Path,
     results_dir: Path,
-    temp_analysis_dir: Path,
     squeeze_step: str,
-    sequence_path: Path,
-    skip_reload: bool,
-    closed_orbit_means: pd.DataFrame | None,
-    machine_deltap: float | None,
-) -> tuple[list[dict], set[str], pd.DataFrame | None, float | None]:
-    """Process measurement data for a single frequency."""
+) -> tuple[list[Path], list[Path], Path | None, set[str]]:
+    """Prepare metadata for a frequency without processing measurements."""
     if not times:
-        logger.warning(f"No times for {squeeze_step} at frequency {freq}, skipping.")
-        return [], set(), closed_orbit_means, machine_deltap
+        return [], [], None, set()
 
-    analysed_folders = get_analysis_folders(times, beam, meas_base_dir)
+    analysed_folders = get_analysis_folders(times, beam, meas_base_dir, squeeze_step)
     validate_folders_exist(analysed_folders, squeeze_step, freq)
 
     bad_bpms = collect_bad_bpms_from_folders(analysed_folders)
     if not bad_bpms:
         raise ValueError("No bad BPMs found, something is wrong.")
-    logger.info(f"Found {len(bad_bpms)} bad BPMs for squeeze step {squeeze_step}")
 
-    meas_time = get_measurement_time(min(times))
+    files = get_measurement_files(times, analysed_folders, beam, squeeze_step)
+    tune_knobs_file = results_dir / f"tune_knobs_{squeeze_step}_{freq}.txt"
+
+    # Save knobs for the earliest measurement time
+    meas_time = get_measurement_time(min(times), squeeze_step)
+    corrector_knobs_file = results_dir / "null.txt"
+    save_online_knobs(
+        meas_time,
+        beam=beam,
+        tune_knobs_file=tune_knobs_file,
+        corrector_knobs_file=corrector_knobs_file,
+        energy=BEAM_ENERGY,
+    )
+
+    return files, analysed_folders, tune_knobs_file, bad_bpms
+
+
+def process_frequency_results(
+    freq: str,
+    file_keys: list[str],
+    pzs_dict: dict[str, pd.DataFrame],
+    tune_knobs_file: Path,
+    temp_analysis_dir: Path,
+    sequence_path: Path,
+    beam: int,
+    machine_deltap: float | None,
+) -> tuple[list[dict], float | None]:
+    """Process results for a single frequency from the pzs_dict."""
+    pzs_list = [pzs_dict[key] for key in file_keys]
     measurements = []
 
-    if skip_reload:
-        validate_processed_files(temp_analysis_dir, freq, len(times))
-        tune_knobs_file = results_dir / f"tune_knobs_{squeeze_step}_{freq}.txt"
-        dpp_values = load_dpp_metadata(temp_analysis_dir, freq)
+    # Calculate machine deltap from 0hz measurements
+    all_0hz_pzs = pd.concat(pzs_list, ignore_index=True)
+    means = all_0hz_pzs.groupby("name", observed=False, sort=False)[["x", "px", "y", "py"]].mean()
+    if freq == ZEROHZ and machine_deltap is None:
+        # Order is preserved: concat maintains order within each dataframe, ignore_index resets index but preserves row order
+        machine_deltap = sum(pz.attrs["DPP_EST"] for pz in pzs_list) / len(pzs_list)
+        if machine_deltap == 0.0:
+            logger.warning("No DPP_EST found in processed data headers, defaulting to 0.0")
 
-        if freq == "0hz" and machine_deltap is None:
-            machine_deltap = dpp_values[0]
+    dpp_values = []
+    for i, pzs in enumerate(pzs_list):
+        dpp_est = pzs.attrs["DPP_EST"]
+        dpp_values.append(dpp_est)
+        deltap = 0.0 if freq == ZEROHZ else dpp_est - (machine_deltap or 0.0)
 
-        for i, dpp_est in enumerate(dpp_values):
-            meas_save_path = temp_analysis_dir / f"pz_data_{freq}_{i}.parquet"
-            deltap = 0.0 if freq == "0hz" else dpp_est - (machine_deltap or 0.0)
-            measurements.append(
-                {
-                    "file": meas_save_path,
-                    "tune_knobs_file": tune_knobs_file,
-                    "machine_deltap": deltap,
-                }
-            )
-
-        logger.info(f"Loaded {len(times)} processed files for {freq}")
-    else:
-        tune_knobs_file = results_dir / f"tune_knobs_{squeeze_step}_{freq}.txt"
-        corrector_knobs_file = results_dir / "null.txt"
-        save_online_knobs(
-            meas_time,
-            beam=beam,
-            tune_knobs_file=tune_knobs_file,
-            corrector_knobs_file=corrector_knobs_file,
-            energy=BEAM_ENERGY,
+        mad_iface = OptimisationMadInterface(
+            sequence_file=sequence_path,
+            seq_name=f"lhcb{beam}",
+            beam_energy=BEAM_ENERGY,
+            bpm_pattern="BPM",
         )
-        files = get_measurement_files(times, analysed_folders, beam)
+        tws = mad_iface.run_twiss(deltap=deltap, observe=1)
+        closed_orbit_means = means - tws.loc[means.index, ["x", "px", "y", "py"]].values
 
-        pzs_list, bad_bpms_out, _ = process_measurements(
-            files,
-            temp_analysis_dir,
-            model_dir,
-            beam=beam,
-            filename=None,
-            bad_bpms=list(bad_bpms),
-            sequence_path=sequence_path,
-            use_uniform_vars=True,
-            num_workers=8,
-            combine_files=False,
+        # Subtract closed orbit to focus optimisation on betatron oscillations
+        # Order is preserved: merge with sort=False maintains order from left DataFrame (pzs)
+        pzs = pzs.merge(closed_orbit_means, on="name", suffixes=("", "_mean"), sort=False)
+        pzs[["x", "px", "y", "py"]] = pzs[["x", "px", "y", "py"]].sub(
+            pzs[["x_mean", "px_mean", "y_mean", "py_mean"]].values
+        )
+        pzs = pzs.drop(columns=["x_mean", "px_mean", "y_mean", "py_mean"])
+        pzs.attrs = pzs_list[i].attrs
+
+        meas_save_path = temp_analysis_dir / f"pz_data_{freq}_{i}.parquet"
+        pzs.to_parquet(meas_save_path)
+
+        measurements.append(
+            {
+                "file": meas_save_path,
+                "tune_knobs_file": tune_knobs_file,
+                "machine_deltap": deltap,
+            }
         )
 
-        if freq == "0hz":
-            all_0hz_pzs = pd.concat(pzs_list, ignore_index=True)
-            machine_deltap = sum(pz.attrs["DPP_EST"] for pz in pzs_list) / len(pzs_list)
-            if machine_deltap == 0.0:
-                logger.warning("No DPP_EST found in processed data headers, defaulting to 0.0")
+    save_dpp_metadata(temp_analysis_dir, freq, dpp_values)
+    return measurements, machine_deltap
 
-            # Subtract closed orbit mean to focus on betatron oscillations
-            # This removes orbit effects (which dipoles/correctors handle)
-            # and lets us optimize the shape of phase space ellipses (quadrupole strengths)
-            closed_orbit_means = all_0hz_pzs.groupby(all_0hz_pzs["name"], observed=False)[
-                ["x", "px", "y", "py"]
-            ].mean()
 
-            # Take the closed orbit from a twiss from the sequence file
-            # The twiss in model dir does not contain the px and py offsets
-            # This is so that when we subtract the bend + corrector contribution,
-            # we get the closed orbit in the absence of these elements
-            mad_iface = OptimisationMadInterface(
-                sequence_file=sequence_path,
-                seq_name=f"lhcb{beam}",
-                corrector_strengths=None,
-                tune_knobs_file=None,
-            )
-            twiss_df = mad_iface.run_twiss()
-            twiss_df = twiss_df.loc[closed_orbit_means.index]
-            closed_orbit_means[["x", "px", "y", "py"]] -= twiss_df[["x", "px", "y", "py"]].values
+def load_frequency_results(
+    freq: str,
+    num_files: int,
+    tune_knobs_file: Path,
+    temp_analysis_dir: Path,
+    machine_deltap: float | None,
+) -> tuple[list[dict], float | None]:
+    """Load previously processed frequency results."""
+    validate_processed_files(temp_analysis_dir, freq, num_files)
+    dpp_values = load_dpp_metadata(temp_analysis_dir, freq)
 
-        dpp_values = []
-        for i, pzs in enumerate(pzs_list):
-            # Subtract closed orbit to focus optimisation on betatron oscillations
-            pzs = pzs.merge(closed_orbit_means, on="name", suffixes=("", "_mean"))
-            if freq == "0hz":
-                pzs[["x", "px", "y", "py"]] = pzs[["x", "px", "y", "py"]].sub(
-                    pzs[["x_mean", "px_mean", "y_mean", "py_mean"]].values
-                )
-            else:
-                pzs[["x", "y"]] = pzs[["x", "y"]].sub(pzs[["x_mean", "y_mean"]].values)
-            pzs = pzs.drop(columns=["x_mean", "px_mean", "y_mean", "py_mean"])
-            pzs.attrs = pzs_list[i].attrs
+    if freq == ZEROHZ and machine_deltap is None:
+        machine_deltap = dpp_values[0]
 
-            meas_save_path = temp_analysis_dir / f"pz_data_{freq}_{i}.parquet"
-            pzs.to_parquet(meas_save_path)
+    measurements = []
+    for i, dpp_est in enumerate(dpp_values):
+        meas_save_path = temp_analysis_dir / f"pz_data_{freq}_{i}.parquet"
+        deltap = 0.0 if freq == ZEROHZ else dpp_est - (machine_deltap or 0.0)
+        measurements.append(
+            {
+                "file": meas_save_path,
+                "tune_knobs_file": tune_knobs_file,
+                "machine_deltap": deltap,
+            }
+        )
 
-            dpp_est = pzs.attrs["DPP_EST"]
-            dpp_values.append(dpp_est)
-            measurements.append(
-                {
-                    "file": meas_save_path,
-                    "tune_knobs_file": tune_knobs_file,
-                    "machine_deltap": dpp_est - machine_deltap,
-                }
-            )
-
-        save_dpp_metadata(temp_analysis_dir, freq, dpp_values)
-        bad_bpms.update(bad_bpms_out)
-
-    return measurements, set(bad_bpms), closed_orbit_means, machine_deltap
+    logger.info(f"Loaded {num_files} processed files for {freq}")
+    return measurements, machine_deltap
 
 
 def create_configs(
@@ -473,11 +489,12 @@ def create_configs(
     measurements: list[dict],
 ) -> tuple[SequenceConfig, BPMConfig, MeasurementConfig]:
     """Create configuration objects for optimisation."""
-    magnet_range, bpm_start_points, bpm_end_points = get_bpm_points(arc_num, beam)
+    magnet_range, bpm_start_points, bpm_end_points, bpm_range = get_bpm_points(arc_num, beam)
 
     sequence_config = SequenceConfig(
         sequence_file_path=sequence_path,
         magnet_range=magnet_range,
+        bpm_range=bpm_range,
         beam_energy=BEAM_ENERGY,
         seq_name=f"lhcb{beam}",
         bad_bpms=list(all_bad_bpms),
@@ -501,35 +518,40 @@ def create_configs(
 def get_default_optimiser_config() -> OptimiserConfig:
     """Get default optimiser configuration."""
     return OptimiserConfig(
-        max_epochs=5,
+        max_epochs=30,
         warmup_epochs=3,
-        warmup_lr_start=1e-4,
+        warmup_lr_start=1e-7,
         max_lr=1e-5,
         min_lr=1e-5,
         # max_lr=1,
         # min_lr=1,
-        gradient_converged_value=1e-9,
+        gradient_converged_value=1e-8,
         optimiser_type="adam",  # 'adam' or 'lbfgs'
+        expected_rel_error=1e-2,
     )
 
 
 def get_default_simulation_config() -> SimulationConfig:
     """Get default simulation configuration."""
     return SimulationConfig(
-        tracks_per_worker=int(19700 / 3),
-        num_batches=100,
+        tracks_per_worker=19_700,
+        # tracks_per_worker=int(19700.0 / 2),
+        num_batches=200,
         num_workers=60,
+        use_fixed_bpm=False,
         optimise_energy=False,
         optimise_quadrupoles=True,
         optimise_bends=False,
-        optimise_momenta=True,  # Enable momentum optimisation (x, px, y, py) not just (x, y)
+        optimise_momenta=False,  # Enable momentum optimisation (x, px, y, py) not just (x, y)
     )
 
 
-def save_arc_estimates(results_dir: Path, squeeze_step: str, arc_num: int, estimate: dict) -> None:
+def save_arc_estimates(
+    results_dir: Path, squeeze_step: str, arc_num: int, estimate: dict, rewrite_file: bool = False
+) -> None:
     """Save arc optimisation estimates to file."""
     outfile = results_dir / f"quad_estimates_{squeeze_step}.txt"
-    write_mode = "a" if arc_num > 1 else "w"
+    write_mode = "a" if not rewrite_file else "w"
     with outfile.open(write_mode) as f:
         f.write(f"Arc {arc_num}:\n")
         for magnet, value in estimate.items():
@@ -546,6 +568,7 @@ def optimise_arc(
     results_dir: Path,
     squeeze_step: str,
     all_bad_bpms: set[str],
+    rewrite_file: bool = False,
 ) -> None:
     """Optimise quadrupoles for a single arc."""
     logger.info(f"Optimising arc {arc_num} for {squeeze_step}")
@@ -566,9 +589,10 @@ def optimise_arc(
         initial_knob_strengths=final_knobs_arc,
         true_strengths=None,
         plots_dir=temp_analysis_dir,
+        mad_logfile=temp_analysis_dir / "mad_log.txt",
     )
     estimate, _ = ctrl.run()
-    save_arc_estimates(results_dir, squeeze_step, arc_num, estimate)
+    save_arc_estimates(results_dir, squeeze_step, arc_num, estimate, rewrite_file=rewrite_file)
 
 
 def process_squeeze_step(
@@ -596,29 +620,92 @@ def process_squeeze_step(
     # Process all frequencies
     all_measurements = []
     all_bad_bpms = set()
-    closed_orbit_means = None
     machine_deltap = None
 
-    for freq, times in meas_times[squeeze_step].items():
-        logger.info(f"  Frequency {freq}: {len(times)} measurements")
-        freq_measurements, freq_bad_bpms, closed_orbit_means, machine_deltap = (
-            process_frequency_data(
-                freq,
-                times,
-                beam,
-                meas_base_dir,
-                model_dir,
-                results_dir,
+    if skip_reload:
+        # Load previously processed data
+        for freq, times in meas_times[squeeze_step].items():
+            if not times:
+                continue
+            logger.info(f"  Frequency {freq}: {len(times)} measurements (loading)")
+            tune_knobs_file = results_dir / f"tune_knobs_{squeeze_step}_{freq}.txt"
+            freq_measurements, machine_deltap = load_frequency_results(
+                freq, len(times), tune_knobs_file, temp_analysis_dir, machine_deltap
+            )
+            all_measurements.extend(freq_measurements)
+    else:
+        # Prepare metadata for all frequencies
+        freq_metadata = {}
+        all_files = []
+        file_to_freq = {}  # Map file path to frequency
+
+        for freq, times in meas_times[squeeze_step].items():
+            if not times:
+                continue
+            logger.info(f"  Frequency {freq}: {len(times)} measurements")
+            files, folders, tune_knobs_file, bad_bpms = prepare_frequency_metadata(
+                freq, times, beam, meas_base_dir, results_dir, squeeze_step
+            )
+            freq_metadata[freq] = (files, tune_knobs_file)
+            all_files.extend(files)
+            for f in files:
+                file_to_freq[str(f)] = freq
+            all_bad_bpms.update(bad_bpms)
+
+        # Single call to process_measurements for all files
+        logger.info(f"Processing {len(all_files)} total measurement files...")
+        analysis_dir = get_analysis_dir(beam, squeeze_step)
+        pzs_dict, bad_bpms_out, _, _ = process_measurements(
+            all_files,
+            temp_analysis_dir,
+            model_dir,
+            beam=beam,
+            filename=None,
+            bad_bpms=list(all_bad_bpms),
+            previous_analysis_dir=analysis_dir,
+            sequence_path=sequence_path,
+            use_uniform_vars=True,
+            num_workers=8,
+            combine_files=False,
+        )
+        all_bad_bpms.update(bad_bpms_out)
+
+        # Process results for each frequency
+        machine_deltap = None
+
+        # Process 0hz first to get closed orbit and machine deltap
+        if ZEROHZ in freq_metadata:
+            files_0hz, tune_knobs_0hz = freq_metadata[ZEROHZ]
+            file_keys_0hz = [str(f) for f in files_0hz]
+            freq_measurements, machine_deltap = process_frequency_results(
+                ZEROHZ,
+                file_keys_0hz,
+                pzs_dict,
+                tune_knobs_0hz,
                 temp_analysis_dir,
-                squeeze_step,
                 sequence_path,
-                skip_reload,
-                closed_orbit_means,
+                beam,
+                None,
+            )
+            all_measurements.extend(freq_measurements)
+
+        # Process other frequencies
+        for freq in freq_metadata:
+            if freq == ZEROHZ:
+                continue
+            files_freq, tune_knobs_freq = freq_metadata[freq]
+            file_keys_freq = [str(f) for f in files_freq]
+            freq_measurements, _ = process_frequency_results(
+                freq,
+                file_keys_freq,
+                pzs_dict,
+                tune_knobs_freq,
+                temp_analysis_dir,
+                sequence_path,
+                beam,
                 machine_deltap,
             )
-        )
-        all_measurements.extend(freq_measurements)
-        all_bad_bpms.update(freq_bad_bpms)
+            all_measurements.extend(freq_measurements)
 
     # Load or save bad BPMs
     all_bad_bpms = load_bad_bpms(bad_bpms_file) if skip_reload else all_bad_bpms
@@ -630,7 +717,8 @@ def process_squeeze_step(
     logger.info(f"Machine deltaps: {[m['machine_deltap'] for m in all_measurements]}")
 
     # Optimise each arc
-    for arc_num in range(1, 9):
+    rewrite_file = True
+    for arc_num in [3, 6]:  # Just try arc34 for now as there are no orbit bumps and arc 67
         optimise_arc(
             arc_num,
             beam,
@@ -640,7 +728,9 @@ def process_squeeze_step(
             results_dir,
             squeeze_step,
             all_bad_bpms,
+            rewrite_file=rewrite_file,
         )
+        rewrite_file = False  # Only rewrite for the first arc
 
     # Cleanup
     if cleanup_temp:
@@ -676,9 +766,11 @@ def main():
         raise ValueError(f"Unknown squeeze step '{args.squeeze_step}' for beam {args.beam}")
 
     # Get paths
-    meas_base_dir, model_base_dir = get_beam_paths(args.beam)
+    from aba_optimiser.measurements.squeeze_helpers import get_results_dir
+
+    meas_base_dir, model_base_dir = get_beam_paths(args.beam, args.squeeze_step)
     model_dir = model_base_dir / MODEL_DIRS[args.beam][args.squeeze_step]
-    results_dir = PROJECT_ROOT / f"b{args.beam}_squeeze_results"
+    results_dir = get_results_dir(args.beam)
 
     process_squeeze_step(
         args.beam,
