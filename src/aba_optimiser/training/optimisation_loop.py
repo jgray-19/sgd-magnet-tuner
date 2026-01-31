@@ -39,9 +39,15 @@ class OptimisationLoop:
         self.true_strengths = true_strengths
         self.use_true_strengths = len(true_strengths) > 0
         self.smoothed_grad_norm: float = 0.0
+        self.smoothed_loss_change: float = 0.0
         self.grad_norm_alpha = optimiser_config.grad_norm_alpha
         self.expected_rel_error = optimiser_config.expected_rel_error
         self.max_clipping_ratio: float = 0.0  # Track max clipping ratio per epoch
+
+        # Track best knobs and loss for rejection logic
+        self.best_loss: float = float("inf")
+        self.best_knobs: dict[str, float] = {}
+        self.loss_improvement_threshold = 1e-4  # Minimum relative improvement to accept new best
 
         self.max_epochs = optimiser_config.max_epochs
         self.gradient_converged_value = optimiser_config.gradient_converged_value
@@ -126,7 +132,6 @@ class OptimisationLoop:
             epoch_loss = 0.0
             epoch_grad = np.zeros(len(self.knob_names))
             lr = self.scheduler(epoch)
-            prev_knobs = current_knobs.copy()
 
             for batch in range(self.num_batches):
                 # Send knobs to workers
@@ -147,6 +152,31 @@ class OptimisationLoop:
             grad_norm = float(np.linalg.norm(epoch_grad[epoch_grad != 0.0]))
             self._update_smoothed_grad_norm(grad_norm)
 
+            # Calculate relative differences for rejection logic
+            sum_true_diff, sum_rel_diff = self._calculate_rel_diff(current_knobs)
+
+            # Update best loss and knobs, but skip if improvement is too small and rel_diff increases
+            should_save_as_best = True
+            if self.best_loss != float("inf") and prev_loss is not None:
+                loss_improvement = (
+                    (self.best_loss - epoch_loss) / abs(prev_loss) if prev_loss != 0 else 0
+                )
+                if loss_improvement < self.loss_improvement_threshold:
+                    best_sum_true_diff, best_sum_rel_diff = self._calculate_rel_diff(
+                        self.best_knobs
+                    )
+                    if sum_rel_diff > best_sum_rel_diff:
+                        should_save_as_best = False
+                        LOGGER.debug(
+                            f"Not saving as best: loss improvement {loss_improvement:.3e} < {self.loss_improvement_threshold:.3e} "
+                            f"and rel_diff {sum_rel_diff:.3e} > {best_sum_rel_diff:.3e}."
+                        )
+            new_best = False
+            if should_save_as_best and epoch_loss < self.best_loss:
+                self.best_loss = epoch_loss
+                self.best_knobs = current_knobs.copy()
+                new_best = True
+
             self._log_epoch_stats(
                 writer,
                 epoch,
@@ -157,33 +187,28 @@ class OptimisationLoop:
                 run_start,
                 current_knobs,
                 self.max_clipping_ratio,
+                sum_true_diff,
+                sum_rel_diff,
+                new_best,
             )
 
             if prev_loss is not None:
                 rel_loss_change = (
                     abs(epoch_loss - prev_loss) / abs(prev_loss) if prev_loss != 0 else 0
                 )
-                if rel_loss_change < 1e-6 and epoch > 10:
+                self._update_smoothed_loss_change(rel_loss_change)
+                if self.smoothed_loss_change < 1e-6 and epoch > 0.2 * self.max_epochs:
                     LOGGER.info(f"\nLoss change below threshold. Stopping early at epoch {epoch}.")
                     break
-            prev_loss = epoch_loss
+            prev_loss: int | float = epoch_loss
 
             if self.smoothed_grad_norm < self.gradient_converged_value:
                 LOGGER.info(
                     f"\nGradient norm below threshold: {self.smoothed_grad_norm:.3e}. Stopping early at epoch {epoch}."
                 )
                 break
-            max_rel_knob_change = max(
-                abs(current_knobs[k] - prev_knobs[k]) / abs(prev_knobs[k])
-                if prev_knobs[k] != 0
-                else 0
-                for k in self.knob_names
-            )
-            if max_rel_knob_change < 1e-8 and epoch > 10:
-                LOGGER.info(f"\nKnob updates below threshold. Stopping early at epoch {epoch}.")
-                break
 
-        return current_knobs
+        return self.best_knobs
 
     def _collect_batch_results(self, parent_conns: list[Connection]) -> tuple[float, np.ndarray]:
         """Collect results from all workers for a batch.
@@ -292,6 +317,33 @@ class OptimisationLoop:
                 + (1.0 - self.grad_norm_alpha) * grad_norm
             )
 
+    def _update_smoothed_loss_change(self, loss_change: float) -> None:
+        """Update the exponential moving average of the loss change."""
+        if self.smoothed_loss_change == 0.0:  # Exact 0 case for first update
+            self.smoothed_loss_change = loss_change
+        else:
+            self.smoothed_loss_change = (
+                self.grad_norm_alpha * self.smoothed_loss_change
+                + (1.0 - self.grad_norm_alpha) * loss_change
+            )
+
+    def _calculate_rel_diff(self, current_knobs: dict[str, float]) -> tuple[float, float]:
+        """Calculate sum of absolute and relative differences from true strengths.
+
+        Returns:
+            Tuple of (sum_true_diff, sum_rel_diff)
+        """
+        if not self.use_true_strengths:
+            return sum(current_knobs.values()), sum(current_knobs.values())
+
+        true_diff = [abs(current_knobs[k] - self.true_strengths[k]) for k in self.knob_names]
+        rel_diff = [
+            diff / abs(self.true_strengths[k]) if self.true_strengths[k] != 0 else 0
+            for k, diff in zip(self.knob_names, true_diff)
+        ]
+
+        return np.sum(true_diff), np.sum(rel_diff)
+
     def _log_epoch_stats(
         self,
         writer: SummaryWriter,
@@ -303,68 +355,53 @@ class OptimisationLoop:
         run_start: float,
         current_knobs: dict[str, float],
         clipping_ratio: float = 0.0,
+        sum_true_diff: float = 0.0,
+        sum_rel_diff: float = 0.0,
+        new_best: bool = False,
     ) -> None:
         """Log statistics for the current epoch."""
-        writer.add_scalar("loss", loss, epoch)
-        writer.add_scalar("grad_norm", grad_norm, epoch)
+        # Log scalars to TensorBoard
+        scalars = {
+            "loss": loss,
+            "grad_norm": grad_norm,
+            "learning_rate": lr,
+        }
         if self.rel_sigma_step > 0:
-            writer.add_scalar("trust_region_clipping_ratio", clipping_ratio, epoch)
-            writer.add_scalar("trust_region_rel_sigma_step", self.rel_sigma_step, epoch)
-
+            scalars.update(
+                {
+                    "trust_region_clipping_ratio": clipping_ratio,
+                    "trust_region_rel_sigma_step": self.rel_sigma_step,
+                }
+            )
         if self.use_true_strengths:
-            true_diff = [abs(current_knobs[k] - self.true_strengths[k]) for k in self.knob_names]
-            rel_diff = [
-                diff / abs(self.true_strengths[k]) if self.true_strengths[k] != 0 else 0
-                for k, diff in zip(self.knob_names, true_diff)
-            ]
-
-            sum_true_diff = np.sum(true_diff)
-            sum_rel_diff = np.sum(rel_diff)
-
-            writer.add_scalar("true_diff", sum_true_diff, epoch)
-            writer.add_scalar("rel_diff", sum_rel_diff, epoch)
+            scalars.update(
+                {
+                    "true_diff": sum_true_diff,
+                    "rel_diff": sum_rel_diff,
+                }
+            )
         else:
-            writer.add_scalar("avg_knob_value", np.mean(list(current_knobs.values())), epoch)
+            scalars["total_knob_value"] = np.sum(list(current_knobs.values()))
 
-        if self.some_magnets and self.use_true_strengths:
-            true_middle_diff = [
-                abs(current_knobs[k] - self.true_strengths[k]) for k in self.knob_names[5:-5]
-            ]
-            rel_middle_diff = [
-                diff / abs(self.true_strengths[k]) if self.true_strengths[k] != 0 else 0
-                for k, diff in zip(self.knob_names[5:-5], true_middle_diff)
-            ]
-
-            sum_true_middle_diff = np.sum(true_middle_diff)
-            sum_rel_middle_diff = np.sum(rel_middle_diff)
-
-            writer.add_scalar("true_middle_diff", sum_true_middle_diff, epoch)
-            writer.add_scalar("rel_middle_diff", sum_rel_middle_diff, epoch)
-
-        writer.add_scalar("learning_rate", lr, epoch)
+        for key, value in scalars.items():
+            writer.add_scalar(key, value, epoch)
         writer.flush()
 
+        # Calculate times
         epoch_time = time.time() - epoch_start
         total_time = time.time() - run_start
 
-        clipping_str = f"clipping_ratio={clipping_ratio:.3e}, " if self.rel_sigma_step > 0 else ""
-        middle = (
-            f"true_diff={sum_true_diff:.3e}, rel_diff={sum_rel_diff:.3e}, "
-            if self.use_true_strengths
-            else ""
-        ) + (
-            f"true_middle_diff={sum_true_middle_diff:.3e}, rel_middle_diff={sum_rel_middle_diff:.3e}, "
-            if self.some_magnets and self.use_true_strengths
-            else ""
-        )
-        message = (
-            f"\rEpoch {epoch}: "
-            f"loss={loss:.3e}, "
-            f"grad_norm={grad_norm:.3e}, "
-            f"{clipping_str}"
-            f"{middle}"
-            f"lr={lr:.3e}, "
-            f"epoch_time={epoch_time:.3f}s, "
-            f"total_time={total_time:.3f}s"
-        )
-        LOGGER.info(message)
+        # Build log message
+        parts = [
+            f"Epoch {epoch}: loss={loss:.3e}, grad_norm={grad_norm:.3e}",
+        ]
+        if self.rel_sigma_step > 0:
+            parts.append(f"clipping_ratio={clipping_ratio:.3e}")
+        if self.use_true_strengths:
+            parts.append(f"true_diff={sum_true_diff:.3e}, rel_diff={sum_rel_diff:.3e}")
+        parts.append(f"lr={lr:.3e}, epoch_time={epoch_time:.3f}s, total_time={total_time:.3f}s")
+        message = ", ".join(parts)
+
+        if new_best:
+            message += " [new best]"
+        LOGGER.info(f"\r{message}")

@@ -74,16 +74,26 @@ def _find_bpm_phase(
 
     # Set max BPM distance based on target phase advance
     # With ~0.125 turns per BPM average, π/2 needs ~2 BPMs, π needs ~4 BPMs
-    # Allow for local variations: π/2 uses 11 BPMs, π has no limit (filtered by stable_width)
-    max_bpm_distance = 11 if abs(target - 0.25) < 0.01 else 20
+    # Allow for local variations: π/2 uses 13 BPMs, π has no limit (filtered by stable_width)
+    max_bpm_distance = 11 if target == 0.25 else 20
 
     idx = np.full(n, -1, dtype=int)
+
+    def _phase_distance(values: np.ndarray, center: float) -> np.ndarray:
+        """Shortest distance on unit circle (turns)."""
+        return np.abs((values - center + 0.5) % 1 - 0.5)
+
+    other_side = (target + 0.5) % 1
+    include_other_side = not np.isclose(target % 1, 0.5)
 
     for i in range(n):
         row = diff[i, :]
 
         # Filter to candidates within stable region
-        mask = np.abs((row - target + 0.5) % 1 - 0.5) <= stable_width
+        mask = _phase_distance(row, target) <= stable_width
+        # Also use the other side of the cos and sin -> target + 0.5
+        if include_other_side:
+            mask = mask | (_phase_distance(row, other_side) <= stable_width)
         mask[i] = False  # Exclude self
         candidates = np.where(mask)[0]
 
@@ -91,9 +101,9 @@ def _find_bpm_phase(
             idx[i] = -1
             continue
 
-        # Filter to candidates within max circular distance (if limit is set)
-        circular_distance = np.minimum(np.abs(candidates - i), n - np.abs(candidates - i))
-        within_distance = circular_distance <= max_bpm_distance
+        # Filter to candidates within max directional distance (if limit is set)
+        directional_distance = (candidates - i) % n if forward else (i - candidates) % n
+        within_distance = directional_distance <= max_bpm_distance
         candidates = candidates[within_distance]
 
         if len(candidates) == 0:
@@ -101,7 +111,7 @@ def _find_bpm_phase(
             continue
 
         # Calculate phase error and directional distance for each candidate
-        phase_error = np.abs(row[candidates] - target)
+        phase_error = _phase_distance(row[candidates], target)
         distances = (candidates - i) % n if forward else (i - candidates) % n
 
         # Prefer excellent phase matches (< 0.01 rotations) if any exist

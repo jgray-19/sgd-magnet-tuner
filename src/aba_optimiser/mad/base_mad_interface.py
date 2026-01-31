@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from pymadng import MAD
 
 if TYPE_CHECKING:
-    import tfs
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +237,67 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
 """)
         return marker_name
 
-    def run_twiss(self, **twiss_kwargs) -> tfs.TfsDataFrame:
+    def install_ac_dipole(
+        self,
+        marker_name: str,
+        nat_tunes: tuple[float, float],
+        drv_tunes: tuple[float, float],
+        offset: float = 0.0,
+    ) -> None:
+        """
+        Install AC dipole kickers at a specified marker location.
+
+        The AC dipole consists of horizontal and vertical kicker elements that
+        drive the beam at specified tunes. The beta functions at the marker
+        location are automatically retrieved from the twiss table.
+
+        Args:
+            marker_name: Name of marker where AC dipole will be installed
+            nat_tunes: Natural tunes (qx, qy)
+            drv_tunes: Driven tunes (qx_drv, qy_drv)
+            offset: Offset from marker location (default: 0.0)
+        """
+        logger.debug(
+            f"Installing AC dipole at {marker_name} with natural tunes {nat_tunes} "
+            f"and driven tunes {drv_tunes}"
+        )
+
+        # Get beta functions at AC marker location
+        self.mad.send(f"""
+local tws = twiss{{sequence=loaded_sequence}}
+local betx = tws['{marker_name}'].beta11
+local bety = tws['{marker_name}'].beta22
+{self.py_name}:send({{betx, bety}}, true)
+""")
+        betx, bety = self.mad.recv()
+
+        if betx is None or bety is None:
+            raise ValueError(f"Could not retrieve beta functions at marker '{marker_name}'")
+
+        # Install AC kickers
+        self.mad.send(f"""
+local hackicker, vackicker in MAD.element
+loaded_sequence:install{{
+    hackicker "hackicker" {{
+        at = {offset},
+        from = "{marker_name}",
+        nat_q = {nat_tunes[0]:.15e},
+        drv_q = {drv_tunes[0]:.15e},
+        ac_bet = {betx:.15e},
+    }},
+    vackicker "vackicker" {{
+        at = {offset},
+        from = "{marker_name}",
+        nat_q = {nat_tunes[1]:.15e},
+        drv_q = {drv_tunes[1]:.15e},
+        ac_bet = {bety:.15e},
+    }}
+}}
+""")
+
+        logger.debug(f"AC dipole installed: betx={betx:.6f}, bety={bety:.6f} at {marker_name}")
+
+    def run_twiss(self, **twiss_kwargs) -> pd.DataFrame:
         """
         Run TWISS calculation and return results. If 'observe' is not specified,
         it defaults to 1 (observing observed elements every turn).
@@ -301,7 +361,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
         Args:
             strengths: Dictionary of magnet strengths with '.k[0-2]' suffix naming
         """
-        suffixes = {".k0", ".k1", ".k2"}
+        suffixes = {".k0", ".k1", ".k2", ".kick"}
         logger.debug(f"Setting {len(strengths)} magnet strengths")
 
         variables_to_set = {}
@@ -313,7 +373,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
 
         self.set_variables(**variables_to_set)
 
-    def apply_corrector_strengths(self, corrector_table: tfs.TfsDataFrame) -> None:
+    def apply_corrector_strengths(self, corrector_table: pd.DataFrame) -> None:
         """
         Apply corrector strengths from a table to MAD sequence.
 
@@ -426,7 +486,7 @@ MAD.element.marker {quoted_marker} {{ at={offset}, from="{element_name}" }}
             **kwargs,
         )  # ty:ignore[invalid-assignment]
 
-    def get_tracking_data(self) -> tfs.TfsDataFrame:
+    def get_tracking_data(self) -> pd.DataFrame:
         """
         Retrieve tracking data.
 

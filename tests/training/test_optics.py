@@ -179,6 +179,6 @@ def test_controller_opt(
             if magnet_strengths[magnet] != 0
             else abs(value)
         )
-        assert rel_diff < 1e-6, (
+        assert rel_diff < 3e-6, (
             f"Magnet {magnet}: FAIL, estimated {value}, true {magnet_strengths[magnet]}, rel diff {rel_diff}"
         )

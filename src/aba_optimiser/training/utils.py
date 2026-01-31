@@ -181,7 +181,9 @@ def create_bpm_range_specs(
             (fixed_start, e, -1) for e in bpm_end_points
         ]
     else:
-        # Cartesian product: every start with every end, forward direction only
-        range_specs = [(s, e, 1) for s in bpm_start_points for e in bpm_end_points]
+        # Cartesian product: every start with every end in both directions
+        range_specs = [
+            (s, e, sdir) for s in bpm_start_points for e in bpm_end_points for sdir in (1, -1)
+        ]
 
     return range_specs

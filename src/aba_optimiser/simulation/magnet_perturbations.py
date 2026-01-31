@@ -57,11 +57,17 @@ def apply_magnet_perturbations(
     for elm in mad.loaded_sequence:
         # Dipoles
         if dodip_err and elm.kind == "sbend" and elm.k0 != 0 and elm.name[:3] == "MB.":
-            if elm.name not in bend_errors_dict:
-                raise ValueError(
-                    f"Bend error for {elm.name} not found in {BEND_ERROR_FILE}"
-                )
-            k0l_error = bend_errors_dict[elm.name]
+            elem_name = elm.name
+            if elem_name not in bend_errors_dict:
+                if elem_name.replace(".B2", ".B1") in bend_errors_dict:
+                    elem_name = elem_name.replace(".B2", ".B1")
+                    logger.warning(
+                        f"Bend error for {elm.name} not found in {BEND_ERROR_FILE}, "
+                        f"but found for {elem_name}. Using that value."
+                    )
+                else:
+                    raise ValueError(f"Bend error for {elm.name} not found in {BEND_ERROR_FILE}")
+            k0l_error = bend_errors_dict[elem_name]
             elm.k0 += k0l_error / elm.l
             magnet_strengths[elm.name + ".k0"] = elm.k0
             true_strengths[elm.name] = elm.k0

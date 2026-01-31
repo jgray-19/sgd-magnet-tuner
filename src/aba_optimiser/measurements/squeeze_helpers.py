@@ -100,7 +100,7 @@ def get_or_make_sequence(beam: int, model_dir: Path) -> Path:
     return seq_path
 
 
-def load_estimates(estimates_file: Path) -> dict[str, dict[str, float]] | dict[str, float]:
+def load_estimates(estimates_file: Path) -> dict[str, dict[str, float]]:
     """Load quadrupole estimates from file.
 
     Handles both formats:

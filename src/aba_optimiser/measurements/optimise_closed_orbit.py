@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -11,10 +10,13 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 from nxcals.spark_session_builder import get_or_create
+from tensorflow.python.autograph.operators.py_builtins import min_
 
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
+from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.measurements.knob_extraction import get_energy
+from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
 from aba_optimiser.training.controller import LHCController as Controller
 from aba_optimiser.training.controller_helpers import (
     create_arc_bpm_config,
@@ -53,7 +55,7 @@ def weighted_mean(values: list[float], uncertainties: list[float]) -> float:
 
 
 def compute_weighted_mean_and_variance(
-    sub: pd.DataFrame, value_col: str, var_col: str, include_scatter: bool = True
+    sub: pd.DataFrame, value_col: str, var_col: str
 ) -> tuple[float, float]:
     """Compute inverse-variance weighted mean and its variance.
 
@@ -61,7 +63,6 @@ def compute_weighted_mean_and_variance(
         sub: DataFrame subset for a single BPM
         value_col: Column name for values to average
         var_col: Column name for variances
-        include_scatter: If True, include observed scatter in variance estimate
 
     Returns:
         Tuple of (weighted_mean, variance_of_mean)
@@ -88,25 +89,8 @@ def compute_weighted_mean_and_variance(
     mu = float(np.sum(w * vals) / sum_w)
 
     # Variance of weighted mean from reported measurement variances
-    var_from_meas = 1.0 / sum_w
+    var_mean = 1.0 / sum_w
 
-    if not include_scatter:
-        return mu, var_from_meas
-
-    # Weighted sample variance (unbiased) of the scatter across points
-    resid = vals - mu
-    num = float(np.sum(w * resid * resid))
-    sum_w2 = float(np.sum(w * w))
-    denom = sum_w - (sum_w2 / sum_w) if sum_w > 0 else np.nan
-    v_unbiased = num / denom if denom and denom > 0 else np.nan
-    n_eff = (sum_w * sum_w) / sum_w2 if sum_w2 > 0 else 0.0
-    var_from_scatter = (
-        v_unbiased / n_eff if (n_eff and n_eff > 1 and np.isfinite(v_unbiased)) else np.nan
-    )
-
-    # Combine conservatively: include scatter if it exceeds propagated measurement variance
-    candidates = [c for c in [var_from_meas, var_from_scatter] if np.isfinite(c) and c > 0]
-    var_mean = max(candidates) if candidates else var_from_meas
     return mu, var_mean
 
 
@@ -116,16 +100,22 @@ def optimise_ranges(
     beam: int,
     optimiser_config: OptimiserConfig,
     simulation_config: SimulationConfig,
+    sequence_path: Path,
     corrector_knobs_file: Path,
     tune_knobs_file: Path,
     measurement_file: Path,
     bad_bpms: list[str],
     title: str,
     energy: float,
-) -> tuple[list[float], list[float]]:
-    """Optimise for a given range configuration."""
+) -> tuple[list[float], list[float], list[float]]:
+    """Optimise for a given range configuration.
+
+    Returns:
+        Tuple of (deltap_wrt_6800_list, deltap_uncertainties, fitted_deltap_list).
+    """
     results = []
     uncertainties = []
+    fitted_deltaps = []
     num_ranges = len(range_config.magnet_ranges)
     for i in range(num_ranges):
         logger.info(f"Starting optimisation for {range_type} {i + 1}/{num_ranges} for {title}")
@@ -145,6 +135,7 @@ def optimise_ranges(
             magnet_range=range_config.magnet_ranges[i],
             optimiser_config=optimiser_config,
             simulation_config=simulation_config,
+            sequence_path=sequence_path,
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,
@@ -153,6 +144,7 @@ def optimise_ranges(
         )
         final_knobs, uncs = controller.run()
         fitted_deltap = final_knobs["deltap"]
+        fitted_deltaps.append(fitted_deltap)
         # Convert to reference energy 6800 GeV (assume beta is 1 and in GeV)
         e_ref = 6800
         e_meas = energy * (1 + fitted_deltap)
@@ -162,16 +154,76 @@ def optimise_ranges(
         uncertainties.append(uncs["deltap"])  # Assuming uncs is a dict with 'deltap'
         logger.info(f"{range_type.capitalize()} {i + 1}: deltap = {results[-1]}")
         logger.info(f"Finished optimisation for {range_type} {i + 1}/{num_ranges} for {title}")
-    return results, uncertainties
+    return results, uncertainties, fitted_deltaps
 
 
-def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementSetupConfig]:
+def optimise_corrector_ranges(
+    range_config: RangeConfig,
+    range_type: str,
+    beam: int,
+    optimiser_config: OptimiserConfig,
+    simulation_config: SimulationConfig,
+    sequence_path: Path,
+    corrector_knobs_file: Path,
+    tune_knobs_file: Path,
+    measurement_file: Path,
+    bad_bpms: list[str],
+    title: str,
+    energy: float,
+    machine_deltap: float,
+) -> list[dict[str, float]]:
+    """Optimise correctors for a given range configuration."""
+    results = []
+    num_ranges = len(range_config.magnet_ranges)
+    for i in range(num_ranges):
+        logger.info(
+            f"Starting corrector optimisation for {range_type} {i + 1}/{num_ranges} for {title}"
+        )
+        meas_config = create_arc_measurement_config(
+            measurement_file,
+            machine_deltap=machine_deltap,
+            num_tracks=1,
+            flattop_turns=3,
+            corrector_files=corrector_knobs_file,
+            tune_knobs_files=tune_knobs_file,
+        )
+
+        bpm_config = create_arc_bpm_config(
+            range_config.bpm_starts[i], range_config.bpm_end_points[i]
+        )
+
+        controller = Controller(
+            beam=beam,
+            measurement_config=meas_config,
+            bpm_config=bpm_config,
+            magnet_range=range_config.magnet_ranges[i],
+            optimiser_config=optimiser_config,
+            simulation_config=simulation_config,
+            sequence_path=sequence_path,
+            show_plots=False,
+            initial_knob_strengths=None,
+            true_strengths=None,
+            bad_bpms=bad_bpms,
+            beam_energy=energy,
+        )
+        final_knobs, _ = controller.run()
+        results.append(final_knobs)
+        logger.info(
+            f"Finished corrector optimisation for {range_type} {i + 1}/{num_ranges} for {title}"
+        )
+    return results
+
+
+def create_beam1_configs(
+    folder: str, name_prefix: str, fixed_bpm: bool
+) -> list[MeasurementSetupConfig]:
     """Create measurement configurations for beam 1."""
     model_dir_b1 = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB1/Models/2025-11-07_B1_12cm_right_knobs/"
+    skip_step = 3 if fixed_bpm else 5
     arc_magnet_ranges_b1 = [f"BPM.9R{s}.B1/BPM.9L{s % 8 + 1}.B1" for s in range(1, 9)]
-    arc_bpm_starts_b1 = [[f"BPM.{i}R{s}.B1" for i in range(9, 35, 3)] for s in range(1, 9)]
+    arc_bpm_starts_b1 = [[f"BPM.{i}R{s}.B1" for i in range(9, 35, skip_step)] for s in range(1, 9)]
     arc_bpm_end_points_b1 = [
-        [f"BPM.{i}L{s % 8 + 1}.B1" for i in range(9, 34, 3)] for s in range(1, 9)
+        [f"BPM.{i}L{s % 8 + 1}.B1" for i in range(9, 34, skip_step)] for s in range(1, 9)
     ]
 
     arc_config_b1 = RangeConfig(
@@ -229,16 +281,21 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[MeasurementSetup
     ]
 
 
-def create_beam2_configs(folder: str, name_prefix: str) -> list[MeasurementSetupConfig]:
+def create_beam2_configs(
+    folder: str, name_prefix: str, use_fixed_bpm: bool
+) -> list[MeasurementSetupConfig]:
     """Create measurement configurations for beam 2."""
     model_dir_b2 = (
         "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB2/Models/2025-11-07_B2_12cm"
     )
     # Arc settings
+    skip_step = 2 if use_fixed_bpm else 4
     arc_magnet_ranges_b2 = [f"BPM.9L{s}.B2/BPM.9R{(s - 2) % 8 + 1}.B2" for s in range(8, 0, -1)]
-    arc_bpm_starts_b2 = [[f"BPM.{i}L{s}.B2" for i in range(9, 34, 3)] for s in range(8, 0, -1)]
+    arc_bpm_starts_b2 = [
+        [f"BPM.{i}L{s}.B2" for i in range(9, 34, skip_step)] for s in range(8, 0, -1)
+    ]
     arc_bpm_end_points_b2 = [
-        [f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 35, 3)] for s in range(8, 0, -1)
+        [f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 35, skip_step)] for s in range(8, 0, -1)
     ]
     arc_config_b2 = RangeConfig(
         magnet_ranges=arc_magnet_ranges_b2,
@@ -302,8 +359,8 @@ def process_single_config(
     temp_analysis_dir: Path,
     date: str,
     skip_reload: bool,
+    optimise_correctors: bool,
     use_fixed_bpm: bool = True,
-    include_scatter: bool = True,
 ) -> None:
     """Process a single measurement configuration.
 
@@ -312,10 +369,9 @@ def process_single_config(
         temp_analysis_dir: Temporary directory for analysis outputs
         date: Date string in YYYY-MM-DD format
         skip_reload: If True, skip reloading strengths from LSA and reuse existing analysis
+        optimise_correctors: If True, optimise correctors after energy optimisation
         use_fixed_bpm: If True (default), use fixed reference BPM approach.
                        If False, create all combinations of start/end BPMs (Cartesian product).
-        include_scatter: If True (default), include observed scatter in variance estimates.
-                        If False, use only propagated measurement variance.
     """
     results_dir = PROJECT_ROOT / f"b{config.beam}co_results"
     tune_knobs_file = results_dir / f"tune_knobs_{config.title}.txt"
@@ -344,6 +400,8 @@ def process_single_config(
     # Get beam energy from NXCALS always
     spark = get_or_create()
     energy, _ = get_energy(spark, meas_time)
+    spark.stop()
+    del spark
 
     bad_bpms: list[str] | None = None
     if skip_reload:
@@ -374,14 +432,15 @@ def process_single_config(
     ana_dir = output_paths["combined"]
 
     file_path = ana_dir / measurement_filename
+    sequence_file = get_or_make_sequence(config.beam, Path(config.model_dir))
 
     # Compute weighted averages per BPM with proper variance of the mean
     rows = []
     for name, sub in pzs.groupby("name"):
-        mu_x, vm_x = compute_weighted_mean_and_variance(sub, "x", "var_x", include_scatter)
-        mu_y, vm_y = compute_weighted_mean_and_variance(sub, "y", "var_y", include_scatter)
-        mu_px, vm_px = compute_weighted_mean_and_variance(sub, "px", "var_px", include_scatter)
-        mu_py, vm_py = compute_weighted_mean_and_variance(sub, "py", "var_py", include_scatter)
+        mu_x, vm_x = compute_weighted_mean_and_variance(sub, "x", "var_x")
+        mu_y, vm_y = compute_weighted_mean_and_variance(sub, "y", "var_y")
+        mu_px, vm_px = compute_weighted_mean_and_variance(sub, "px", "var_px")
+        mu_py, vm_py = compute_weighted_mean_and_variance(sub, "py", "var_py")
         rows.append(
             {
                 "name": name,
@@ -439,11 +498,11 @@ def process_single_config(
 
     optimiser_config = OptimiserConfig(
         max_epochs=1000,
-        warmup_epochs=3,
-        warmup_lr_start=5e-7,
+        warmup_epochs=5,
+        warmup_lr_start=5e-2,
         max_lr=1e0,
         min_lr=1e0,
-        gradient_converged_value=1e-6,
+        gradient_converged_value=1e-9,
         optimiser_type="lbfgs",
         expected_rel_error=0,
     )
@@ -454,15 +513,16 @@ def process_single_config(
         num_workers=1,
         optimise_energy=True,
         use_fixed_bpm=use_fixed_bpm,
-        optimise_momenta=False,
+        optimise_momenta=True,
     )
 
-    results_arcs, uncs_arcs = optimise_ranges(
+    results_arcs, uncs_arcs, fitted_deltaps = optimise_ranges(
         config.arc_config,
         "arc",
         config.beam,
         optimiser_config,
         simulation_config,
+        sequence_file,
         corrector_knobs_file,
         tune_knobs_file,
         measurement_file,
@@ -487,8 +547,16 @@ def process_single_config(
         logger.warning(
             "Falling back to unweighted mean for arcs due to non-positive uncertainties."
         )
+    try:
+        mean_fitted_deltap = weighted_mean(fitted_deltaps, uncs_arcs)
+    except ValueError:
+        mean_fitted_deltap = float(np.mean(fitted_deltaps))
+        logger.warning(
+            "Falling back to unweighted mean for fitted deltaps due to non-positive uncertainties."
+        )
     logger.info(f"Weighted mean deltap arcs: {mean_arcs}")
     logger.info(f"Std dev of deltap arcs: {np.std(results_arcs)}")
+    logger.info(f"Weighted mean fitted deltap: {mean_fitted_deltap}")
 
     # Write the results to a file
     results_file = results_dir / f"{config.title}.txt"
@@ -503,6 +571,46 @@ def process_single_config(
         f.write(f"StdDevArcs\t{std_arcs}\n")
         stderr = std_arcs / np.sqrt(len(results_arcs)) if len(results_arcs) > 0 else 0.0
         f.write(f"StdErrArcs\t{stderr}\n")
+
+    if not optimise_correctors:
+        return
+
+    corrector_optimiser_config = replace(
+        optimiser_config,
+        max_epochs=3000,
+        warmup_epochs=500,
+        min_lr=1e-1,
+        warmup_lr_start=1e-4,
+    )
+    corrector_simulation_config = replace(
+        simulation_config,
+        optimise_energy=False,
+        optimise_correctors=True,
+    )
+    corrector_results = optimise_corrector_ranges(
+        config.arc_config,
+        "arc",
+        config.beam,
+        corrector_optimiser_config,
+        corrector_simulation_config,
+        sequence_file,
+        corrector_knobs_file,
+        tune_knobs_file,
+        measurement_file,
+        bad_bpms,
+        config.title,
+        energy,
+        mean_fitted_deltap,
+    )
+
+    combined_correctors: dict[str, float] = {}
+    for arc_idx, arc_knobs in enumerate(corrector_results, start=1):
+        for knob, value in arc_knobs.items():
+            combined_correctors[knob] = value
+
+    combined_correctors_file = results_dir / f"corrector_knobs_{config.title}_optimised.txt"
+    save_knobs(combined_correctors, combined_correctors_file)
+    logger.info("Saved combined corrector knobs to %s", combined_correctors_file)
 
 
 def main():
@@ -524,9 +632,9 @@ def main():
         help="Disable fixed BPM for start/end points, pair BPMs element-wise instead",
     )
     parser.add_argument(
-        "--no-scatter",
+        "--optimise-correctors",
         action="store_true",
-        help="Exclude observed scatter from variance estimates, use only propagated measurement variance",
+        help="Optimise correctors after energy optimisation",
     )
     args = parser.parse_args()
 
@@ -536,28 +644,28 @@ def main():
     folder = "/user/slops/data/LHC_DATA/OP_DATA/FILL_DATA/11259/BPM"
     name_prefix = f"Beam{args.beam}@BunchTurn@{date.replace('-', '_')}@"
 
+    # Determine use_fixed_bpm from args
+    use_fixed_bpm: bool = not args.no_fixed_bpm
+
     # Get configurations based on beam
     if args.beam == 1:
-        configs = create_beam1_configs(folder, name_prefix)
+        configs = create_beam1_configs(folder, name_prefix, use_fixed_bpm)
     else:
-        configs = create_beam2_configs(folder, name_prefix)
+        configs = create_beam2_configs(folder, name_prefix, use_fixed_bpm)
 
     # Temporary analysis directory
     temp_analysis_dir = PROJECT_ROOT / f"temp_analysis_co_{args.beam}"
 
-    # Determine use_fixed_bpm and include_scatter from args
-    use_fixed_bpm = not args.no_fixed_bpm
-    include_scatter = not args.no_scatter
-
     # Process each configuration
     for config in configs:
         process_single_config(
-            config, temp_analysis_dir, date, args.skip_reload, use_fixed_bpm, include_scatter
+            config,
+            temp_analysis_dir,
+            date,
+            args.skip_reload,
+            args.optimise_correctors,
+            use_fixed_bpm,
         )
-
-    # Delete temp_analysis_dir if not skipping reload
-    if not args.skip_reload:
-        shutil.rmtree(temp_analysis_dir)
 
 
 if __name__ == "__main__":

@@ -64,6 +64,7 @@ class SimulationConfig:
     optimise_energy: bool = field(default=True)
     optimise_quadrupoles: bool = field(default=False)
     optimise_bends: bool = field(default=False)
+    optimise_correctors: bool = field(default=False)
 
     # Whether to include momenta (px, py) in loss function
     # When False, only positions (x, y) are used for optimisation

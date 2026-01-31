@@ -19,7 +19,7 @@ from aba_optimiser.mad.scripts import (
     TRACK_INIT_POS_ONLY,
     TRACK_SCRIPT_POS_ONLY,
 )
-from aba_optimiser.workers.common import TrackingData, WeightProcessor, split_array_to_batches
+from aba_optimiser.workers.common import TrackingData, split_array_to_batches
 from aba_optimiser.workers.tracking import TrackingWorker
 
 if TYPE_CHECKING:
@@ -79,7 +79,9 @@ class PositionOnlyTrackingWorker(TrackingWorker):
             raise ValueError(f"Worker {self.worker_id}: NaNs found in initial coordinates")
 
         self._extract_comparisons(data, n_init)
-        self._compute_weights(data, n_init)
+        if data.precomputed_weights is None:
+            raise ValueError("Precomputed weights must be provided for TrackingWorker")
+        self._load_precomputed_weights(data.precomputed_weights, n_init)
         self._prepare_batches(init_coords, data.init_pts, num_batches)
 
         # Use position-only MAD scripts
@@ -91,23 +93,6 @@ class PositionOnlyTrackingWorker(TrackingWorker):
         positions = data.position_comparisons[:n_init]
         self.x_comparisons_full = positions[:, :, 0]
         self.y_comparisons_full = positions[:, :, 1]
-
-    def _compute_weights(self, data: TrackingData, n_init: int) -> None:
-        """Compute weights from variances for position dimensions only."""
-        pos_variances = data.position_variances[:n_init]
-        x_vars = pos_variances[:, :, 0]
-        y_vars = pos_variances[:, :, 1]
-
-        x_weights = WeightProcessor.variance_to_weight(x_vars)
-        y_weights = WeightProcessor.variance_to_weight(y_vars)
-
-        self.hessian_weight_x = WeightProcessor.aggregate_hessian_weights(x_weights)
-        self.hessian_weight_y = WeightProcessor.aggregate_hessian_weights(y_weights)
-
-        # Normalize weights globally across position dimensions
-        self.x_weights_full, self.y_weights_full = WeightProcessor.normalise_weights_globally(
-            x_weights, y_weights
-        )
 
     def _prepare_batches(
         self, init_coords: np.ndarray, init_pts: np.ndarray, num_batches: int

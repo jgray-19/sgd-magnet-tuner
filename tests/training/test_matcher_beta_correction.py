@@ -70,6 +70,7 @@ def _plot_beta_beating_comparison(
     plot_file = output_dir / "beta_beating_correction.png"
     plt.savefig(plot_file, dpi=150, bbox_inches="tight")
     print(f"Beta beating plot saved to: {plot_file}")
+    plt.show()
 
 
 @pytest.mark.slow
@@ -167,16 +168,20 @@ def test_matcher_beta_correction(
     new_interface.observe_elements()
     tws_corrected = new_interface.run_twiss(observe=1)  # Observe
     # If you want to test if the estimated strengths actually allow beta beating correction, use this.
-    # loaded_interface_with_beam.set_madx_variables(**final_knobs)
-    # tws_corrected = loaded_interface_with_beam.run_twiss(observe=1)  # Observe all elements
+    loaded_interface_with_beam.set_madx_variables(**final_knobs)
+    tws_corrected = loaded_interface_with_beam.run_twiss(observe=1)  # Observe all elements
+
+    # print the stats on the x and y column of tws_corrected
+    print("Twiss Corrected Stats:")
+    print(tws_corrected[["x", "y"]].describe())
 
     # Plot beta beating comparison (uncomment to enable plotting)
     _plot_beta_beating_comparison(twiss_errs, tws_no_err, tws_corrected, tmp_path)
 
     # Check beta beating after correction
     # Compare to model twiss (tws_no_err)
-    tws_corrected_betax = (tws_corrected["beta11"] - tws_no_err["beta11"]) / tws_no_err["beta11"]  # ty:ignore[unsupported-operator]
-    tws_corrected_betay = (tws_corrected["beta22"] - tws_no_err["beta22"]) / tws_no_err["beta22"]  # ty:ignore[unsupported-operator]
+    tws_corrected_betax = (tws_corrected["beta11"] - tws_no_err["beta11"]) / tws_no_err["beta11"]
+    tws_corrected_betay = (tws_corrected["beta22"] - tws_no_err["beta22"]) / tws_no_err["beta22"]
 
     # Compute RMS beta beat
     rms_betax = (tws_corrected_betax.pow(2).mean()) ** 0.5
@@ -204,8 +209,8 @@ def test_matcher_beta_correction(
     )
 
     # Check that the original beta beating was larger
-    tws_errs_betax = (twiss_errs["beta11"] - tws_no_err["beta11"]) / tws_no_err["beta11"]  # ty:ignore[unsupported-operator]
-    tws_errs_betay = (twiss_errs["beta22"] - tws_no_err["beta22"]) / tws_no_err["beta22"]  # ty:ignore[unsupported-operator]
+    tws_errs_betax = (twiss_errs["beta11"] - tws_no_err["beta11"]) / tws_no_err["beta11"]
+    tws_errs_betay = (twiss_errs["beta22"] - tws_no_err["beta22"]) / tws_no_err["beta22"]
     rms_errs_betax = (tws_errs_betax.pow(2).mean()) ** 0.5
     rms_errs_betay = (tws_errs_betay.pow(2).mean()) ** 0.5
     print(f"RMS BetaX error before correction: {rms_errs_betax * 100:.2f}%")

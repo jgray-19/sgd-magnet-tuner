@@ -94,6 +94,8 @@ class ConfigurationManager:
         self.all_bpms = self.mad_iface.all_bpms
         self.start_bpms = [bpm for bpm in self.start_bpms if bpm in self.all_bpms]
         self.end_bpms = [bpm for bpm in self.end_bpms if bpm in self.all_bpms]
+        if self.simulation_config.optimise_bends:
+            self.bend_lengths = self.mad_iface.bend_lengths
 
         # Use bpm_range to determine fixed start and end points, defaulting to magnet_range
         effective_bpm_range = self.bpm_range or self.magnet_range

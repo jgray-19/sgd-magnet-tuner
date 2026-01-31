@@ -85,12 +85,12 @@ def _prepare_plot_data(final_vals, true_vals, uncertainties, initial_vals, plot_
 
 def _compute_y_top(final_vals, baseline, zero_mask, plot_real):
     if plot_real:
-        top = np.ceil(np.max(final_vals)) + 0.5
+        top = np.ceil(np.max(final_vals)) * 1.1
     else:
         final_diff = np.abs(final_vals - baseline) / np.abs(baseline)
         final_diff = np.where(zero_mask, np.nan, final_diff)
         final_diff *= 1e4
-        top = np.ceil(np.nanmax(final_diff)) + 0.5
+        top = np.ceil(np.nanmax(final_diff)) * 1.1
     return top
 
 
@@ -253,9 +253,8 @@ def plot_strengths_comparison(
         if fam in unique_families:
             colour = {"MQ": MQ_FINAL_COLOUR, "MS": MS_FINAL_COLOUR, "MB": MB_FINAL_COLOUR}[fam]
             legend_handles.append(
-                Patch(facecolor=colour, edgecolor="black", label=f"{fam} • Final")
+                Patch(facecolor=colour, edgecolor="black", label=f"{fam} • Estimate")
             )
-    ax.legend(handles=legend_handles, title="Series x Family", loc="upper right")
 
     ax.margins(x=0.01)
     ax.tick_params(axis="x", labelsize=12)

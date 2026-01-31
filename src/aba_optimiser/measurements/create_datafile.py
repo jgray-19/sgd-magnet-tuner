@@ -87,6 +87,7 @@ def convert_measurements(
             df_combined["y"] = df_y.reset_index().melt(
                 id_vars="name", var_name="turn", value_name="y"
             )["y"]
+            # Convert from mm to metres
             df_combined["x"] = df_combined["x"] / 1000
             df_combined["y"] = df_combined["y"] / 1000
             df_combined["kick_plane"] = "xy"
@@ -297,6 +298,7 @@ def _process_single_dataframe(
     bad_bpms: list[str],
     analysis_dir: Path,
     use_uniform_vars: bool,
+    beam: int,
 ) -> tuple[int, pd.DataFrame]:
     """Process a single DataFrame: clean, compute vars, and calculate pz.
 
@@ -325,11 +327,18 @@ def _process_single_dataframe(
 
 
     # Calculate pz
-    df = calculate_pz_measurement(df, analysis_dir, model_tws=tws)
+    df = calculate_pz_measurement(
+        df,
+        analysis_dir,
+        model_tws=tws,
+        include_errors=True,
+        include_optics_errors=True,
+        reverse_meas_tws=beam == 2,
+    )
 
     # Divide the variances by 10 because of the svd cleaning reducing noise
-    df["var_x"] = df["var_x"] / 10
-    df["var_y"] = df["var_y"] / 10
+    df["var_x"] = df["var_x"] / 100
+    df["var_y"] = df["var_y"] / 100
 
     # Handle NaN values
     if df["px"].isna().any() or df["py"].isna().any():
@@ -345,7 +354,7 @@ def save_online_knobs(
     tune_knobs_file: Path | None = None,
     corrector_knobs_file: Path | None = None,
     energy: float | None = None,
-) -> None:
+) -> float:
     """Load and save knob data from NXCal."""
     try:
         from nxcals.spark_session_builder import get_or_create
@@ -357,6 +366,9 @@ def save_online_knobs(
         ) from e
 
     spark = get_or_create()
+    if energy is None:
+        energy, _ = knob_extraction.get_energy(spark, meas_time)
+
     mq_results = knob_extraction.get_mq_vals(spark, meas_time, beam, energy=energy)
     mqt_results = knob_extraction.get_mqt_vals(spark, meas_time, beam, energy=energy)
     ms_results = knob_extraction.get_ms_vals(spark, meas_time, beam, energy=energy)
@@ -365,6 +377,7 @@ def save_online_knobs(
     # Stop Spark context to avoid conflicts with multiprocessing
     # Spark signal handlers interfere with ProcessPoolExecutor shutdown
     spark.stop()
+    del spark
 
     mqt_knobs = build_dict_from_nxcal_result(mqt_results)
     ms_knobs = build_dict_from_nxcal_result(ms_results)
@@ -380,6 +393,8 @@ def save_online_knobs(
     main_magnet_knobs = {**mqt_knobs, **ms_knobs, **mb_knobs, **mq_knobs}
     save_knobs(main_magnet_knobs, tune_knobs_file)
     save_knobs(corrector_knobs, corrector_knobs_file)
+
+    return energy
 
 
 def detect_bad_bpms(
@@ -549,6 +564,7 @@ def process_measurements(
                         bad_bpms,
                         analysis_dir,
                         use_uniform_vars,
+                        beam,
                     ): i
                     for i, df in enumerate(combined)
                 }
@@ -574,6 +590,7 @@ def process_measurements(
                 bad_bpms=bad_bpms,
                 analysis_dir=analysis_dir,
                 use_uniform_vars=use_uniform_vars,
+                beam=beam,
             )
             processed_results[idx] = processed_df
             LOGGER.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")

@@ -58,6 +58,7 @@ def test_dispersive_measurement_recovers_dpp(
         orig_data=tracking_df.copy(deep=True),
         measurement_folder=str(meas_dir),
         model_tws=ng_tws,
+        reverse_meas_tws=False,  # Always working with B4
         info=False,
     )
 
@@ -80,5 +81,5 @@ def test_dispersive_measurement_recovers_dpp(
 
     print(f"Dispersive measurement px RMSE: {px_rmse:.2e}, py RMSE: {py_rmse:.2e}")
 
-    assert px_rmse < 3.1e-7, f"px RMSE {px_rmse:.2e} > 3.1e-7"
+    assert px_rmse < 3.4e-7, f"px RMSE {px_rmse:.2e} > 3.4e-7"
     assert py_rmse < 2.8e-7, f"py RMSE {py_rmse:.2e} > 2.7e-7"

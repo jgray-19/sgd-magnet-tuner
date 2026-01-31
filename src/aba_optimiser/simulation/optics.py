@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_beta_beating(
-    changed_tws: tfs.TfsDataFrame, initial_tws: tfs.TfsDataFrame
+    changed_tws: pd.DataFrame, initial_tws: pd.DataFrame
 ) -> tuple[pd.Series, pd.Series]:
     """
     Calculate beta beating between two twiss calculations.

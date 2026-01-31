@@ -16,7 +16,13 @@ Data Structures:
 """
 
 from aba_optimiser.workers.abstract_worker import AbstractWorker
-from aba_optimiser.workers.common import OpticsData, TrackingData, WeightProcessor, WorkerConfig
+from aba_optimiser.workers.common import (
+    OpticsData,
+    PrecomputedTrackingWeights,
+    TrackingData,
+    WeightProcessor,
+    WorkerConfig,
+)
 from aba_optimiser.workers.optics import OpticsWorker
 from aba_optimiser.workers.tracking import TrackingWorker
 from aba_optimiser.workers.tracking_position_only import PositionOnlyTrackingWorker
@@ -32,6 +38,7 @@ __all__ = [
     "TrackingData",
     "OpticsData",
     "WorkerConfig",
+    "PrecomputedTrackingWeights",
     # Utilities
     "WeightProcessor",
 ]

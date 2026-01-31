@@ -49,6 +49,32 @@ class WorkerConfig:
     mad_logfile: Path | None = None
     optimise_knobs: list[str] | None = None
 
+
+@dataclass
+class PrecomputedTrackingWeights:
+    """Precomputed weights shared across tracking workers.
+
+    Attributes:
+        x: Normalised weights for horizontal position
+        y: Normalised weights for vertical position
+        px: Normalised weights for horizontal momentum
+        py: Normalised weights for vertical momentum
+        hessian_x: Aggregated Hessian weights for x (unnormalised inverse-variance)
+        hessian_y: Aggregated Hessian weights for y (unnormalised inverse-variance)
+        hessian_px: Aggregated Hessian weights for px (unnormalised inverse-variance)
+        hessian_py: Aggregated Hessian weights for py (unnormalised inverse-variance)
+    """
+
+    x: np.ndarray
+    y: np.ndarray
+    px: np.ndarray
+    py: np.ndarray
+    hessian_x: np.ndarray
+    hessian_y: np.ndarray
+    hessian_px: np.ndarray
+    hessian_py: np.ndarray
+
+
 @dataclass
 class TrackingData:
     """Data container for particle tracking simulations.
@@ -63,6 +89,7 @@ class TrackingData:
         momentum_variances: Measurement uncertainties for momenta
         init_coords: Initial particle coordinates for tracking
         init_pts: Initial transverse momentum values per particle
+        precomputed_weights: Optional globally precomputed weights shared by all workers
     """
 
     position_comparisons: np.ndarray  # Shape: (n_particles, n_data_points, 2)
@@ -71,6 +98,7 @@ class TrackingData:
     momentum_variances: np.ndarray  # Shape: (n_particles, n_data_points, 2)
     init_coords: np.ndarray  # Shape: (n_particles, 6)
     init_pts: np.ndarray  # Shape: (n_particles,)
+    precomputed_weights: PrecomputedTrackingWeights | None
 
 
 @dataclass
@@ -120,21 +148,6 @@ class WeightProcessor:
         return weights
 
     @staticmethod
-    def normalise_weights(weights: np.ndarray) -> np.ndarray:
-        """Normalize weights so maximum weight is 1.
-
-        Args:
-            weights: Array of weight values
-
-        Returns:
-            Normalized weights with max value of 1
-        """
-        max_weight = np.max(weights)
-        if max_weight > 0:
-            return weights / max_weight
-        return weights
-
-    @staticmethod
     def normalise_weights_globally(*weights_arrays: np.ndarray) -> tuple[np.ndarray, ...]:
         """Normalize multiple weight arrays globally so that the maximum across all is 1.
 
@@ -170,6 +183,86 @@ class WeightProcessor:
         aggregated = np.zeros_like(sums, dtype=np.float64)
         np.divide(sums, counts, out=aggregated, where=counts > 0)
         return aggregated
+
+    @staticmethod
+    def compute_variance_floor(
+        variances: np.ndarray, percentile: float = 5, factor: float = 1.0
+    ) -> float | None:
+        """Compute a percentile-based variance floor value.
+
+        Args:
+            variances: Array of variance values
+            percentile: Percentile (0-100) used to define the reference variance
+            factor: Multiplicative factor applied to the percentile value
+
+        Returns:
+            Scalar floor value, or None if no valid variances are present.
+        """
+        v = np.asarray(variances, dtype=np.float64)
+        valid = np.isfinite(v) & (v > 0.0)
+        if not np.any(valid):
+            return None
+        ref = np.percentile(v[valid], percentile)
+        return factor * ref
+
+    @staticmethod
+    def floor_variances(
+        variances: np.ndarray,
+        percentile: float = 10,
+        factor: float = 1.0,
+        floor_value: float | None = None,
+    ) -> np.ndarray:
+        """
+        Floor unrealistically small variance values using a robust percentile-based rule.
+
+        This function is intended to protect inverse-variance weighting from domination
+        by a small number of pathologically tiny variances (e.g. due to numerical noise,
+        quantisation, or failed uncertainty estimates).
+
+        The floor is computed as:
+            floor = factor * P_percentile(valid variances)
+
+        where P_percentile is taken over finite, strictly positive variances only.
+
+        Invalid (non-finite or non-positive) variances are left unchanged and are expected
+        to be handled downstream (typically by assigning zero weight).
+
+        Args:
+            variances:
+                Array of variance values. Can be any shape.
+            percentile:
+                Percentile (0-100) used to define the reference variance.
+                Typical values: 0.5-2.0. Default is 1.0.
+            factor:
+                Multiplicative factor applied to the percentile value to obtain the floor.
+                Values < 1 only floor extreme outliers; values ≈ 1 enforce a stricter floor.
+            floor_value:
+                Optional precomputed floor value to apply instead of computing from the
+                provided variances.
+
+        Returns:
+            A new array with the same shape as `variances`, where valid entries smaller
+            than the computed floor have been raised to the floor value.
+        """
+        v = np.asarray(variances, dtype=np.float64)
+
+        # Identify valid variances
+        valid = np.isfinite(v) & (v > 0.0)
+        if not np.any(valid):
+            return v.copy()
+
+        # Compute robust floor
+        var_floor = (
+            WeightProcessor.compute_variance_floor(v, percentile=percentile, factor=factor)
+            if floor_value is None
+            else floor_value
+        )
+
+        # Apply floor
+        v_out = v.copy()
+        v_out[valid] = np.maximum(v_out[valid], var_floor)
+
+        return v_out
 
 
 def split_array_to_batches(array: np.ndarray, num_batches: int, axis: int = 0) -> list[np.ndarray]:

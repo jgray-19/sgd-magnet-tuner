@@ -333,8 +333,9 @@ class Controller(BaseController):
                 true_strengths_dict["pt"] = self.config_manager.mad_iface.dp2pt(
                     true_strengths_dict.pop("deltap")
                 )
-
-        return normalise_lhcbend_magnets(true_strengths_dict)
+        if self.simulation_config.optimise_bends:
+            return normalise_lhcbend_magnets(true_strengths_dict, self.config_manager.bend_lengths)
+        return true_strengths_dict
 
     def _process_initial_knobs(self, initial_knob_strengths) -> dict[str, float] | None:
         """Process initial knob strengths, converting deltap to pt if present."""
@@ -392,6 +393,9 @@ class LHCController(LHCControllerMixin, Controller):
         true_strengths: Path | dict[str, float] | None = None,
         bad_bpms: list[str] | None = None,
         beam_energy: float = 6800.0,
+        debug: bool = False,
+        mad_logfile: Path | None = None,
+        plots_dir: Path | None = None,
     ):
         """
         Initialise the LHC controller with beam number and other parameters.
@@ -409,6 +413,9 @@ class LHCController(LHCControllerMixin, Controller):
             true_strengths (Path | dict[str, float] | None, optional): True strengths file or dict.
             bad_bpms (list[str] | None, optional): List of bad BPMs.
             beam_energy (float, optional): Beam energy in GeV. Defaults to 6800.0.
+            debug (bool, optional): Enable debug mode. Defaults to False.
+            mad_logfile (Path | None, optional): Path to MAD log file. Defaults to None.
+            plots_dir (Path | None, optional): Directory to save plots. Defaults to plots/.
         """
         # Create SequenceConfig using mixin helper
         sequence_config = self.create_sequence_config(
@@ -428,4 +435,7 @@ class LHCController(LHCControllerMixin, Controller):
             show_plots=show_plots,
             initial_knob_strengths=initial_knob_strengths,
             true_strengths=true_strengths,
+            debug=debug,
+            mad_logfile=mad_logfile,
+            plots_dir=plots_dir,
         )

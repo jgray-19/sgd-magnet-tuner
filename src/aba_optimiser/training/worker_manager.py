@@ -18,7 +18,13 @@ import numpy as np
 from aba_optimiser.config import PARTICLE_MASS
 from aba_optimiser.physics.deltap import dp2pt
 from aba_optimiser.training.utils import create_bpm_range_specs
-from aba_optimiser.workers import TrackingData, TrackingWorker, WorkerConfig
+from aba_optimiser.workers import (
+    PrecomputedTrackingWeights,
+    TrackingData,
+    TrackingWorker,
+    WeightProcessor,
+    WorkerConfig,
+)
 from aba_optimiser.workers.tracking_position_only import PositionOnlyTrackingWorker
 
 if TYPE_CHECKING:
@@ -161,6 +167,7 @@ class WorkerManager:
                     momentum_variances=mom_var,
                     init_coords=init_coords,
                     init_pts=pts,
+                    precomputed_weights=None,
                 )
                 config = WorkerConfig(
                     start_bpm=start_bpm,
@@ -197,6 +204,93 @@ class WorkerManager:
                 f"Only {len(file_usage)}/{num_files} measurement files are being used by workers! "
                 f"This may lead to poor optimisation if different files have different deltap values."
             )
+
+        return payloads
+
+    def _attach_global_weights(
+        self,
+        payloads: list[tuple[TrackingData, WorkerConfig, int]],
+        num_batches: int,
+    ) -> list[tuple[TrackingData, WorkerConfig, int]]:
+        """Precompute globally normalised weights for all tracking workers.
+
+        Weighting is computed once across all worker payloads to ensure
+        consistent scaling between workers.
+        """
+        if not payloads:
+            return payloads
+
+        # Extract variance slices for all payloads (shape: pos[:,:,0], pos[:,:,1], mom[:,:,0], mom[:,:,1])
+        payload_data: list[tuple[TrackingData, WorkerConfig, int, list[np.ndarray]]] = []
+        for data, config, file_idx in payloads:
+            n_init = len(data.init_coords) - (len(data.init_coords) % num_batches)
+            if n_init <= 0:
+                raise ValueError(
+                    f"Worker payload for file {file_idx} has no usable particles after batching"
+                )
+            var_slices = [
+                data.position_variances[:n_init, :, 0],  # x
+                data.position_variances[:n_init, :, 1],  # y
+                data.momentum_variances[:n_init, :, 0],  # px
+                data.momentum_variances[:n_init, :, 1],  # py
+            ]
+            payload_data.append((data, config, file_idx, var_slices))
+
+        # Compute variance floors for all dimensions
+        all_variances = [[var_slices[i] for _, _, _, var_slices in payload_data] for i in range(4)]
+        floors = [
+            WeightProcessor.compute_variance_floor(
+                np.concatenate([v.reshape(-1) for v in dim_vars])
+            )
+            for dim_vars in all_variances
+        ]
+
+        # Compute weights and find global max (raw, unnormalised)
+        weight_cache: list[tuple[TrackingData, WorkerConfig, int, list[np.ndarray]]] = []
+        global_max = 0.0
+        for data, config, file_idx, var_slices in payload_data:
+            raw_weights = [
+                WeightProcessor.variance_to_weight(
+                    WeightProcessor.floor_variances(var_slice, floor_value=floor)
+                )
+                for var_slice, floor in zip(var_slices, floors)
+            ]
+            global_max = max(
+                global_max,
+                max((np.max(w) if w.size else 0.0) for w in raw_weights),
+            )
+            weight_cache.append((data, config, file_idx, raw_weights))
+
+        # Normalize and attach weights
+        normaliser = global_max if global_max > 0.0 else 1.0
+        if global_max == 0.0:
+            LOGGER.warning("All computed weights are zero; skipping global normalisation")
+
+        for data, config, file_idx, raw_weights in weight_cache:
+            normalized = [w / normaliser for w in raw_weights]
+            data.precomputed_weights = PrecomputedTrackingWeights(
+                x=normalized[0],
+                y=normalized[1],
+                px=normalized[2],
+                py=normalized[3],
+                hessian_x=WeightProcessor.aggregate_hessian_weights(raw_weights[0]),
+                hessian_y=WeightProcessor.aggregate_hessian_weights(raw_weights[1]),
+                hessian_px=WeightProcessor.aggregate_hessian_weights(raw_weights[2]),
+                hessian_py=WeightProcessor.aggregate_hessian_weights(raw_weights[3]),
+            )
+            LOGGER.debug(
+                f"Attached precomputed weights to worker payload for file {file_idx}\n"
+                f"x max={np.max(normalized[0]):.3e}, min={np.min(normalized[0]):.3e}, mean={np.mean(normalized[0]):.3e}\n"
+                f"y max={np.max(normalized[1]):.3e}, min={np.min(normalized[1]):.3e}, mean={np.mean(normalized[1]):.3e}\n"
+                f"px max={np.max(normalized[2]):.3e}, min={np.min(normalized[2]):.3e}, mean={np.mean(normalized[2]):.3e}\n"
+                f"py max={np.max(normalized[3]):.3e}, min={np.min(normalized[3]):.3e}, mean={np.mean(normalized[3]):.3e}\n",
+            )
+
+        LOGGER.info(
+            "Global weight normalisation complete: max weight=%.3e across %d payloads",
+            global_max,
+            len(payloads),
+        )
 
         return payloads
 
@@ -324,6 +418,7 @@ class WorkerManager:
             end_bpms,
             machine_deltaps,
         )
+        payloads = self._attach_global_weights(payloads, simulation_config.num_batches)
         LOGGER.info(f"Starting {len(payloads)} workers...")
 
         # Select worker class based on whether momenta optimisation is enabled

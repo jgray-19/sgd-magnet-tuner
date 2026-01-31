@@ -14,7 +14,6 @@ from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.measurements.squeeze_helpers import (
     ANALYSIS_DIRS,
-    BEAM_ENERGY,
     BETABEAT_DIR,
     MODEL_DIRS,
     get_measurement_date,
@@ -73,8 +72,8 @@ MEAS_TIMES = {
             ZEROHZ: ["07_59_50_367", "08_01_04_464", "08_02_31_317"],
             # ZEROHZ: ["07_59_50_367"],
             # ZEROHZ: ["08_02_31_317"],
-            PLUS_50HZ: ["08_05_57_495"],
-            MINUS_50HZ: ["08_07_03_451"],
+            # PLUS_50HZ: ["08_05_57_495"],
+            # MINUS_50HZ: ["08_07_03_451"],
         },
         "1.05m": {
             ZEROHZ: ["09_19_42_460", "09_20_58_100", "09_23_22_506"],
@@ -360,10 +359,10 @@ def prepare_frequency_metadata(
     meas_base_dir: Path,
     results_dir: Path,
     squeeze_step: str,
-) -> tuple[list[Path], list[Path], Path | None, set[str]]:
+) -> tuple[list[Path], list[Path], Path | None, set[str], float | int]:
     """Prepare metadata for a frequency without processing measurements."""
     if not times:
-        return [], [], None, set()
+        return [], [], None, set(), 0.0
 
     analysed_folders = get_analysis_folders(times, beam, meas_base_dir, squeeze_step)
     validate_folders_exist(analysed_folders, squeeze_step, freq)
@@ -378,15 +377,14 @@ def prepare_frequency_metadata(
     # Save knobs for the earliest measurement time
     meas_time = get_measurement_time(min(times), squeeze_step)
     corrector_knobs_file = results_dir / "null.txt"
-    save_online_knobs(
+    energy = save_online_knobs(
         meas_time,
         beam=beam,
         tune_knobs_file=tune_knobs_file,
         corrector_knobs_file=corrector_knobs_file,
-        energy=BEAM_ENERGY,
     )
 
-    return files, analysed_folders, tune_knobs_file, bad_bpms
+    return files, analysed_folders, tune_knobs_file, bad_bpms, energy
 
 
 def process_frequency_results(
@@ -398,6 +396,7 @@ def process_frequency_results(
     sequence_path: Path,
     beam: int,
     machine_deltap: float | None,
+    energy: float,
 ) -> tuple[list[dict], float | None]:
     """Process results for a single frequency from the pzs_dict."""
     pzs_list = [pzs_dict[key] for key in file_keys]
@@ -421,7 +420,7 @@ def process_frequency_results(
         mad_iface = OptimisationMadInterface(
             sequence_file=sequence_path,
             seq_name=f"lhcb{beam}",
-            beam_energy=BEAM_ENERGY,
+            beam_energy=energy,
             bpm_pattern="BPM",
         )
         tws = mad_iface.run_twiss(deltap=deltap, observe=1)
@@ -487,6 +486,7 @@ def create_configs(
     all_bad_bpms: set[str],
     arc_num: int,
     measurements: list[dict],
+    energy: float,
 ) -> tuple[SequenceConfig, BPMConfig, MeasurementConfig]:
     """Create configuration objects for optimisation."""
     magnet_range, bpm_start_points, bpm_end_points, bpm_range = get_bpm_points(arc_num, beam)
@@ -495,7 +495,7 @@ def create_configs(
         sequence_file_path=sequence_path,
         magnet_range=magnet_range,
         bpm_range=bpm_range,
-        beam_energy=BEAM_ENERGY,
+        beam_energy=energy,
         seq_name=f"lhcb{beam}",
         bad_bpms=list(all_bad_bpms),
         first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
@@ -534,7 +534,7 @@ def get_default_optimiser_config() -> OptimiserConfig:
 def get_default_simulation_config() -> SimulationConfig:
     """Get default simulation configuration."""
     return SimulationConfig(
-        tracks_per_worker=19_700,
+        tracks_per_worker=9_890,
         # tracks_per_worker=int(19700.0 / 2),
         num_batches=200,
         num_workers=60,
@@ -542,7 +542,7 @@ def get_default_simulation_config() -> SimulationConfig:
         optimise_energy=False,
         optimise_quadrupoles=True,
         optimise_bends=False,
-        optimise_momenta=False,  # Enable momentum optimisation (x, px, y, py) not just (x, y)
+        optimise_momenta=True,  # Enable momentum optimisation (x, px, y, py) not just (x, y)
     )
 
 
@@ -568,13 +568,14 @@ def optimise_arc(
     results_dir: Path,
     squeeze_step: str,
     all_bad_bpms: set[str],
+    energy: float,
     rewrite_file: bool = False,
 ) -> None:
     """Optimise quadrupoles for a single arc."""
     logger.info(f"Optimising arc {arc_num} for {squeeze_step}")
 
     sequence_config, bpm_config, measurement_config = create_configs(
-        beam, sequence_path, all_bad_bpms, arc_num, measurements
+        beam, sequence_path, all_bad_bpms, arc_num, measurements, energy
     )
 
     final_knobs_arc = None  # Start from sequence values or previous arc results
@@ -643,7 +644,7 @@ def process_squeeze_step(
             if not times:
                 continue
             logger.info(f"  Frequency {freq}: {len(times)} measurements")
-            files, folders, tune_knobs_file, bad_bpms = prepare_frequency_metadata(
+            files, folders, tune_knobs_file, bad_bpms, energy = prepare_frequency_metadata(
                 freq, times, beam, meas_base_dir, results_dir, squeeze_step
             )
             freq_metadata[freq] = (files, tune_knobs_file)
@@ -686,6 +687,7 @@ def process_squeeze_step(
                 sequence_path,
                 beam,
                 None,
+                energy,
             )
             all_measurements.extend(freq_measurements)
 
@@ -704,6 +706,7 @@ def process_squeeze_step(
                 sequence_path,
                 beam,
                 machine_deltap,
+                energy,
             )
             all_measurements.extend(freq_measurements)
 
@@ -728,6 +731,7 @@ def process_squeeze_step(
             results_dir,
             squeeze_step,
             all_bad_bpms,
+            energy,
             rewrite_file=rewrite_file,
         )
         rewrite_file = False  # Only rewrite for the first arc

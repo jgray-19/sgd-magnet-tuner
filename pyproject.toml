@@ -142,5 +142,11 @@ exclude = [
     "plots/",
     "*.out",
     "*.png",
-
+    "*.txt",
+    "*.parquet",
+    "*.mad",
+    "temp*/",
+    "*.out",
+    "*.json",
 ]
+

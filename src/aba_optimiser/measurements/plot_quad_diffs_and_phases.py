@@ -279,7 +279,9 @@ def plot_phase_advances(
     beam: int,
 ) -> None:
     """Plot phase advance comparison through each arc with four models."""
-    meas_twiss, _ = build_twiss_from_measurements(analysis_dir, include_errors=True)
+    meas_twiss, _ = build_twiss_from_measurements(
+        analysis_dir, include_errors=True, reverse_bpm_order=beam == 2
+    )
     meas_twiss.columns = [col.lower() for col in meas_twiss.columns]
 
     # Get arc ranges

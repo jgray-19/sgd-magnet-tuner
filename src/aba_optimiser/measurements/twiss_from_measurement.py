@@ -30,6 +30,7 @@ def build_twiss_from_measurements(
     measurement_dir: Path,
     include_errors: bool = False,
     use_amplitude_beta: bool = True,
+    reverse_bpm_order: bool = False,
 ) -> tuple[pd.DataFrame, bool]:
     """
     Builds a twiss dataframe from optics measurement files.
@@ -42,7 +43,8 @@ def build_twiss_from_measurements(
         measurement_dir: Path to directory containing measurement .tfs files.
         include_errors: If True, include error columns in the output.
         use_amplitude_beta: If True, use beta from amplitude measurements (beta_amplitude_x/y.tfs).
-                           If False, use beta from phase measurements (beta_phase_x/y.tfs).
+                   If False, use beta from phase measurements (beta_phase_x/y.tfs).
+        reverse_bpm_order: If True, reverse BPM ordering and accumulate phase from the last BPM.
 
     Returns:
         TfsDataFrame with twiss parameters, sorted by increasing phase advance.
@@ -79,8 +81,12 @@ def build_twiss_from_measurements(
         dispersion_found = False
 
     # Compute cumulative phase advances from measurement chains
-    phase_data_x = _compute_cumulative_phase(measurements["phase_x"], f"{PHASE}X")
-    phase_data_y = _compute_cumulative_phase(measurements["phase_y"], f"{PHASE}Y")
+    phase_data_x = _compute_cumulative_phase(
+        measurements["phase_x"], f"{PHASE}X", reverse=reverse_bpm_order
+    )
+    phase_data_y = _compute_cumulative_phase(
+        measurements["phase_y"], f"{PHASE}Y", reverse=reverse_bpm_order
+    )
 
     # Log how many BPMs were found in each measurement
     for key, df in measurements.items():
@@ -97,7 +103,7 @@ def build_twiss_from_measurements(
     # Add optics measurements
     _add_optics_columns_inplace(twiss_df, measurements, bpm_index)
     if dispersion_found:
-        _add_dispersion_columns_inplace(twiss_df, measurements, bpm_index)
+        _add_dispersion_columns_inplace(twiss_df, measurements, bpm_index, negate=reverse_bpm_order)
 
     # Extract phase data for valid BPMs
     twiss_df[f"{PHASE_ADV}X"] = np.array([phase_data_x.mu[bpm] for bpm in bpm_index])
@@ -162,10 +168,12 @@ def _add_columns_inplace(
     twiss_df: tfs.TfsDataFrame,
     mapping: dict[str, tuple[pd.DataFrame, str]],
     bpm_index: pd.Index,
+    negate: bool = False,
 ) -> None:
     """Generic function to add columns to twiss dataframe based on a mapping."""
+    factor = -1 if negate else 1
     for col_name, (source_df, source_col) in mapping.items():
-        twiss_df[col_name] = source_df.loc[bpm_index, source_col].values
+        twiss_df[col_name] = source_df.loc[bpm_index, source_col].values * factor
 
 
 def _add_optics_columns_inplace(
@@ -191,15 +199,19 @@ def _add_dispersion_columns_inplace(
     twiss_df: tfs.TfsDataFrame,
     measurements: dict[str, pd.DataFrame],
     bpm_index: pd.Index,
+    negate: bool = False,
 ) -> None:
     """Add dispersion columns to twiss dataframe."""
-    dispersion_map = {
+    dispersion_map_x = {
         f"{DISPERSION}X": (measurements["disp_x"], f"{DISPERSION}X"),
-        f"{DISPERSION}Y": (measurements["disp_y"], f"{DISPERSION}Y"),
         f"{MOMENTUM_DISPERSION}X": (measurements["disp_x"], f"{MOMENTUM_DISPERSION}X"),
+    }
+    dispersion_map_y = {
+        f"{DISPERSION}Y": (measurements["disp_y"], f"{DISPERSION}Y"),
         f"{MOMENTUM_DISPERSION}Y": (measurements["disp_y"], f"{MOMENTUM_DISPERSION}Y"),
     }
-    _add_columns_inplace(twiss_df, dispersion_map, bpm_index)
+    _add_columns_inplace(twiss_df, dispersion_map_x, bpm_index, negate=negate)
+    _add_columns_inplace(twiss_df, dispersion_map_y, bpm_index)
 
 
 def _add_error_columns_inplace(
@@ -281,7 +293,9 @@ class PhaseData:
         self.index = index  # BPM names in phase chain
 
 
-def _compute_cumulative_phase(phase_df: pd.DataFrame, phase_col: str) -> PhaseData:
+def _compute_cumulative_phase(
+    phase_df: pd.DataFrame, phase_col: str, *, reverse: bool = False
+) -> PhaseData:
     """
     Compute cumulative phase by following NAME -> NAME2 chain.
 
@@ -291,6 +305,7 @@ def _compute_cumulative_phase(phase_df: pd.DataFrame, phase_col: str) -> PhaseDa
     Args:
         phase_df: TFS dataframe with phase measurements (index=NAME, contains NAME2 column).
         phase_col: Column name for phase values (e.g., "PHASEX").
+        reverse: If True, start accumulation at the last BPM and step backwards.
 
     Returns:
         PhaseData object with cumulative phase information.
@@ -305,12 +320,12 @@ def _compute_cumulative_phase(phase_df: pd.DataFrame, phase_col: str) -> PhaseDa
     var_dict = {}
     step_variances = []
 
-    # Start accumulation at first BPM
+    # Build forward chain order and edge data
     current_bpm = phase_df.index[0]
-    mu_dict[current_bpm] = 0.0
-    var_dict[current_bpm] = 0.0
+    order = [current_bpm]
+    edge_phase = {}
+    edge_var = {}
 
-    # Follow the NAME -> NAME2 chain
     for name in phase_df.index:
         if name == current_bpm:
             next_bpm = phase_df.loc[name, "NAME2"]
@@ -320,12 +335,36 @@ def _compute_cumulative_phase(phase_df: pd.DataFrame, phase_col: str) -> PhaseDa
             if pd.isna(phase_advance) or pd.isna(phase_error):
                 raise ValueError(f"NaN phase advance or error for {current_bpm} -> {next_bpm}")
 
-            # Accumulate phase and variance
-            mu_dict[next_bpm] = mu_dict[current_bpm] + phase_advance
-            var_dict[next_bpm] = var_dict[current_bpm] + phase_error**2
+            edge_phase[(current_bpm, next_bpm)] = phase_advance
+            edge_var[(current_bpm, next_bpm)] = phase_error**2
             step_variances.append(phase_error**2)
 
             current_bpm = next_bpm
+            order.append(current_bpm)
+
+    # Choose accumulation direction
+    if reverse:
+        order = list(reversed(order))
+
+    # Accumulate phase and variance
+    start_bpm = order[0]
+    mu_dict[start_bpm] = 0.0
+    var_dict[start_bpm] = 0.0
+
+    for i in range(len(order) - 1):
+        prev_bpm = order[i]
+        next_bpm = order[i + 1]
+
+        # Get edge in correct direction
+        if reverse:
+            phase_advance = edge_phase[(next_bpm, prev_bpm)]
+            phase_var = edge_var[(next_bpm, prev_bpm)]
+        else:
+            phase_advance = edge_phase[(prev_bpm, next_bpm)]
+            phase_var = edge_var[(prev_bpm, next_bpm)]
+
+        mu_dict[next_bpm] = mu_dict[prev_bpm] + phase_advance
+        var_dict[next_bpm] = var_dict[prev_bpm] + phase_var
 
     return PhaseData(
         mu=mu_dict,

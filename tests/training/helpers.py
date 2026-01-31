@@ -16,6 +16,7 @@ from aba_optimiser.xsuite.env import initialise_env
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pandas as pd
     import xtrack as xt
 
 TRACK_COLUMNS = (
@@ -159,7 +160,7 @@ def get_twiss_without_errors(
     estimated_magnets: dict[str, float] | None = None,
     tune_knobs_file: Path | None = None,
     corrector_file: Path | None = None,
-) -> tfs.TfsDataFrame:
+) -> pd.DataFrame:
     """Get twiss data from a clean model without errors."""
     mad = OptimisationMadInterface(
         sequence_file=sequence_file,

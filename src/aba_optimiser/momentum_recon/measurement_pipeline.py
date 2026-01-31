@@ -68,6 +68,7 @@ def process_twiss(
     measurement_folder: Path,
     bpm_list: list[str],
     include_errors: bool,
+    reverse_meas_tws: bool,
 ) -> tuple[pd.DataFrame, bool, bool]:
     """Process twiss data from measurements.
 
@@ -144,14 +145,20 @@ def attach_errors_inplace(data_p: pd.DataFrame, data_n: pd.DataFrame, tws: pd.Da
     """
     tws_dict = tws.to_dict()
     for err_col in CURRENT_BPM_ERRORS:
-        data_p[err_col] = data_p["name"].map(tws_dict[err_col])
-        data_n[err_col] = data_n["name"].map(tws_dict[err_col])
+        if err_col in tws_dict:
+            data_p[err_col] = data_p["name"].map(tws_dict[err_col])
+            data_n[err_col] = data_n["name"].map(tws_dict[err_col])
+        elif not err_col.startswith("d"):
+            raise ValueError(f"Required error column '{err_col}' not found in twiss data")
 
     # Attach neighbor errors
     for data, suffix in [(data_p, SUFFIX_PREV), (data_n, SUFFIX_NEXT)]:
         # Current BPM errors (same for both)
         for err_col in ["alfax_err", "alfay_err", "dx_err", "dy_err", "dpx_err", "dpy_err"]:
-            data[err_col] = data["name"].map(tws_dict[err_col])
+            if err_col in tws_dict:
+                data[err_col] = data["name"].map(tws_dict[err_col])
+            elif not err_col.startswith("d"):
+                raise ValueError(f"Required error column '{err_col}' not found in twiss data")
 
 
 def attach_errors(data_p: pd.DataFrame, data_n: pd.DataFrame, tws: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -168,6 +175,7 @@ def setup_momentum_calculation(
     model_tws: pd.DataFrame,
     dispersion_found: bool,
     info: bool,
+    dpp_override: float | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, float]:
     """Set up data for momentum calculation.
 
@@ -177,18 +185,23 @@ def setup_momentum_calculation(
         model_tws: Model twiss data for closed orbit restoration.
         dispersion_found: Whether dispersion data is available.
         info: Whether to log info.
+        dpp_override: If provided, use this DPP value instead of estimating it.
 
     Returns:
         Tuple of (data_p, data_n, dpp_est).
     """
-    # Estimate DPP from the model
-    dpp_est = 0.0
-    if dispersion_found and OLD_METHOD_DPP_ESTIMATION:
-        dpp_est = get_mean_dpp(data, tws_meas, info)
-    elif not OLD_METHOD_DPP_ESTIMATION:
-        dpp_est = estimate_dpp_from_model(data, model_tws, info)
+    # Estimate DPP from the model unless an override is provided
+    if dpp_override is not None:
+        dpp_est = float(dpp_override)
+        LOGGER.info("Using provided DPP override: %s", dpp_est)
     else:
-        dpp_est = estimate_dpp_from_model(data, model_tws, info)
+        dpp_est = 0.0
+        if dispersion_found and OLD_METHOD_DPP_ESTIMATION:
+            dpp_est = get_mean_dpp(data, tws_meas, info)
+        elif not OLD_METHOD_DPP_ESTIMATION:
+            dpp_est = estimate_dpp_from_model(data, model_tws, info)
+        else:
+            dpp_est = estimate_dpp_from_model(data, model_tws, info)
 
     # Remove the closed orbit expected from the model.
     remove_closed_orbit_inplace(data, model_tws)

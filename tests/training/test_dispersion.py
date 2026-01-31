@@ -280,11 +280,10 @@ def test_dispersion_b1(
     4. Validates estimates match model within tolerance
     """
     beam = 1
-    tmp_dir = tmp_path / "dispersion_beam_1"
 
     # Generate tracking data and analyze optics
     optics_dir = _generate_nonoise_track(
-        loaded_interface_with_beam, tmp_dir, model_dir_b1, seq_b1, 6600, beam, None
+        loaded_interface_with_beam, tmp_path, model_dir_b1, seq_b1, 6600, beam, None
     )
 
     # Load model twiss for validation
@@ -304,7 +303,7 @@ def test_dispersion_b1(
     )
 
     # Validate estimates against model
-    _validate_dispersion_estimates(dispersion_df, twiss_elements, beam, tmp_dir)
+    _validate_dispersion_estimates(dispersion_df, twiss_elements, beam, tmp_path)
 
 
 @pytest.mark.slow
@@ -324,10 +323,9 @@ def test_dispersion_b2(
     """
 
     beam = 2
-    tmp_dir = tmp_path / "dispersion_beam_2"
     # Generate tracking data and analyze optics
     optics_dir = _generate_nonoise_track(
-        beam2_interface, tmp_dir, model_dir_b2, seq_b2, 6600, beam, None
+        beam2_interface, tmp_path, model_dir_b2, seq_b2, 6600, beam, None
     )
 
     # Load model twiss for validation
@@ -347,4 +345,4 @@ def test_dispersion_b2(
     )
 
     # Validate estimates against model
-    _validate_dispersion_estimates(dispersion_df, twiss_elements, beam, tmp_dir)
+    _validate_dispersion_estimates(dispersion_df, twiss_elements, beam, tmp_path)

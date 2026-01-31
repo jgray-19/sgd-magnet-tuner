@@ -7,7 +7,6 @@ from __future__ import annotations
 import multiprocessing
 
 # import re
-from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -21,7 +20,7 @@ from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.momentum_recon import (
     calculate_dispersive_pz,
     calculate_transverse_pz,
-    # inject_noise_xy_inplace,
+    inject_noise_xy_inplace,
 )
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
@@ -129,25 +128,13 @@ def _run_track_with_acd(
 
 def _make_optimiser_config_bend() -> OptimiserConfig:
     return OptimiserConfig(
-        max_epochs=150,
-        warmup_epochs=50,
-        warmup_lr_start=5e-10,
+        max_epochs=200,
+        warmup_epochs=5,
+        warmup_lr_start=4e-8,
         max_lr=4e-8,
         min_lr=4e-8,
-        gradient_converged_value=1e-7,
+        gradient_converged_value=3e-11,
         optimiser_type="adam",
-    )
-
-
-def _make_simulation_config_bend() -> SimulationConfig:
-    return SimulationConfig(
-        tracks_per_worker=79,
-        num_batches=20,
-        num_workers=60,
-        optimise_energy=False,
-        optimise_quadrupoles=True,
-        optimise_bends=False,
-        optimise_momenta=False,
     )
 
 
@@ -160,13 +147,13 @@ def test_controller_bend_opt_simple(
     loaded_interface_with_beam: BaseMadInterface,
 ) -> None:
     """Test bend optimisation using AC dipole excitation with different lag values."""
-    flattop_turns = 2_000
-    acd_ramp = 1_000  # Ramp turns for AC dipole
-    tmp_dir_quad_conv = tmp_path / "quad_conv_with_errs"
+    flattop_turns = 5000
+    turns_per_batch = 50  # 134  # This number works quite well independently of flattop_turns
+    acd_ramp = 2_000  # Ramp turns for AC dipole - should be long enough to avoid emittance growth
 
-    off_magnet_path = tmp_dir_quad_conv / "track_off_magnet.parquet"
-    corrector_file = tmp_dir_quad_conv / "corrector_track_off_magnet.tfs"
-    tune_knobs_file = tmp_dir_quad_conv / "tune_knobs_track_off_magnet.json"
+    off_magnet_path = tmp_path / "track_off_magnet.parquet"
+    corrector_file = tmp_path / "corrector_track_off_magnet.tfs"
+    tune_knobs_file = tmp_path / "tune_knobs_track_off_magnet.json"
 
     # Generate model with errors for all arcs
     env, magnet_strengths, matched_tunes, _ = generate_xsuite_env_with_errors(
@@ -179,14 +166,15 @@ def test_controller_bend_opt_simple(
         perturb_quads=True,
         perturb_bends=True,
     )
-    twiss_errs = loaded_interface_with_beam.run_twiss(observe=1)  # Observe all elements
+    twiss_errs = loaded_interface_with_beam.run_twiss(observe=0)  # Observe all elements
     save_knobs(matched_tunes, tune_knobs_file)
 
     # Get clean twiss for pz calculation
     tws_no_err = get_twiss_without_errors(seq_b1, just_bpms=False)
 
     # Generate tracks with AC dipole using 3 different lag values
-    dpp_values = [0.0, 3e-4, -3e-4, 5e-4, -5e-4]
+    # dpp_values = [0.0, 4e-4, -4e-4, 8e-4, -8e-4]  # , 12e-4, -12e-4]
+    dpp_values = [0.0, 0.0, 0.0]
     lags = np.linspace(0, 2 * np.pi, len(dpp_values), endpoint=False).tolist()
     track_dfs = _run_track_with_acd(
         env=env,
@@ -201,10 +189,10 @@ def test_controller_bend_opt_simple(
     xsuite_tws = xsuite_tws.set_index("name")
     # convert name to be upper case to match measurement files
     xsuite_tws.index = xsuite_tws.index.str.upper()
-    co_x = xsuite_tws["x"].to_dict()
-    co_y = xsuite_tws["y"].to_dict()
-    co_px = xsuite_tws["px"].to_dict()
-    co_py = xsuite_tws["py"].to_dict()
+    model_co_x = tws_no_err["x"].to_dict()
+    model_co_y = tws_no_err["y"].to_dict()
+    model_co_px = tws_no_err["px"].to_dict()
+    model_co_py = tws_no_err["py"].to_dict()
 
     # Process each track dataframe and save
     processed_files = []
@@ -213,35 +201,52 @@ def test_controller_bend_opt_simple(
     for idx, track_df in enumerate(track_dfs):
         # Add noise to the tracking data and apply SVD cleaning
         track_df_noisy = track_df.copy(deep=True)
-        # inject_noise_xy_inplace(
-        #     track_df_noisy,
-        #     track_df,
-        #     np.random.default_rng(42 + idx),
-        #     low_noise_bpms=[],
-        #     noise_std=1e-4,  # 100 microns noise
-        # )
-        no_mean_file = svd_clean_measurements(track_df_noisy.reset_index())
+        inject_noise_xy_inplace(
+            track_df_noisy,
+            track_df,
+            np.random.default_rng(42 + idx),
+            low_noise_bpms=[],
+            noise_std=1e-4,  # 10 microns noise
+        )
+        cleaned = svd_clean_measurements(track_df_noisy.reset_index())
+        cleaned["name"] = cleaned["name"].str.upper()
         # Convert BPM names to uppercase to match the closed orbit dictionary
-        no_mean_file["name"] = no_mean_file["name"].str.upper()
-        no_mean_file["x"] = no_mean_file["x"] - no_mean_file["name"].map(co_x)
-        no_mean_file["px"] = no_mean_file["px"] - no_mean_file["name"].map(co_px)
-        no_mean_file["y"] = no_mean_file["y"] - no_mean_file["name"].map(co_y)
-        no_mean_file["py"] = no_mean_file["py"] - no_mean_file["name"].map(co_py)
         if idx == 0:
-            no_mean_file = calculate_transverse_pz(
-                orig_data=no_mean_file,
+            cleaned = calculate_transverse_pz(
+                orig_data=cleaned,
                 inject_noise=False,
                 tws=tws,
                 info=True,
             )
+            # Get the mean x, px, y, py for closed orbit subtraction
+            co_x = (cleaned.groupby("name")["x"].mean()).to_dict()
+            co_px = (cleaned.groupby("name")["px"].mean()).to_dict()
+            co_y = (cleaned.groupby("name")["y"].mean()).to_dict()
+            co_py = (cleaned.groupby("name")["py"].mean()).to_dict()
         else:
             # Subtract the closed orbit from the mean
-            no_mean_file = calculate_dispersive_pz(
-                orig_data=no_mean_file,
+            cleaned = calculate_dispersive_pz(
+                orig_data=cleaned,
                 inject_noise=False,
                 tws=tws,
                 info=True,
             )
+        no_mean_file = cleaned.copy(deep=True)
+        # Remove the closed orbit mean from the data, so that includes orbit bumps and different dipolar errors
+        # Then I add back the model closed orbit to have the orbit bumps matched to the model
+        no_mean_file["x"] = (
+            cleaned["x"] - cleaned["name"].map(co_x) + cleaned["name"].map(model_co_x)
+        )
+        no_mean_file["px"] = (
+            cleaned["px"] - cleaned["name"].map(co_px) + cleaned["name"].map(model_co_px)
+        )
+        no_mean_file["y"] = (
+            cleaned["y"] - cleaned["name"].map(co_y) + cleaned["name"].map(model_co_y)
+        )
+        no_mean_file["py"] = (
+            cleaned["py"] - cleaned["name"].map(co_py) + cleaned["name"].map(model_co_py)
+        )
+        del cleaned
 
         # Plot phase space at a specific BPM for investigation
         bpm_to_plot = "BPM.9R1.B1"  # Change this to investigate different BPMs
@@ -253,6 +258,8 @@ def test_controller_bend_opt_simple(
 
             x_mean = np.mean(x_vals)
             px_mean = np.mean(px_vals)
+
+            # from matplotlib import pyplot as plt
 
             # plt.figure(figsize=(8, 8))
             # plt.scatter(x_vals, px_vals, alpha=0.5, s=10, label="Phase space points")
@@ -275,6 +282,7 @@ def test_controller_bend_opt_simple(
             # plt.title(f"Phase space at {bpm_to_plot} (lag {idx})")
             # plt.legend()
             # plt.grid(True, alpha=0.3)
+            # plt.show()
 
             print(f"Lag {idx}, BPM {bpm_to_plot}: x_mean = {x_mean:.6e}, px_mean = {px_mean:.6e}")
 
@@ -286,7 +294,7 @@ def test_controller_bend_opt_simple(
         processed_files.append(output_path)
 
     # Create empty corrector file
-    corrector_file = tmp_dir_quad_conv / "corrector_file.txt"
+    corrector_file = tmp_path / "corrector_file.txt"
     corrector_file.write_text("")
 
     measurement_files = processed_files
@@ -294,27 +302,33 @@ def test_controller_bend_opt_simple(
     tune_knobs_files = [tune_knobs_file] * len(processed_files)
 
     optimiser_config = _make_optimiser_config_bend()
-    simulation_config = _make_simulation_config_bend()
     all_estimates = {}
 
     for arc_num in range(1, 9):
         a1, a2 = int(arc_num), int(arc_num) % 8 + 1
         magnet_range = f"BPM.13R{a1}.B1/BPM.13L{a2}.B1"
-        bpm_start_points = [f"BPM.{s}R{a1}.B1" for s in range(13, 30, 5)] + [
-            f"BPM.{s}R{a1}.B1" for s in range(14, 30, 5)
+        bpm_start_points = [f"BPM.{s}R{a1}.B1" for s in range(13, 30, 6)] + [
+            f"BPM.{s}R{a1}.B1" for s in range(14, 30, 6)
         ]
-        bpm_end_points = [f"BPM.{s}L{a2}.B1" for s in range(13, 30, 5)] + [
-            f"BPM.{s}L{a2}.B1" for s in range(14, 30, 5)
+        bpm_end_points = [f"BPM.{s}L{a2}.B1" for s in range(13, 30, 6)] + [
+            f"BPM.{s}L{a2}.B1" for s in range(14, 30, 6)
         ]
         print(f"\nOptimising arc {arc_num} with magnets in range {magnet_range}")
         print(f"  BPM start points: {bpm_start_points}")
         print(f"  BPM end points: {bpm_end_points}")
 
-        num_workers = simulation_config.num_workers // (len(bpm_start_points) + len(bpm_end_points))
-        sim_config = replace(
-            simulation_config,
+        num_workers = 60 // (len(bpm_start_points) + len(bpm_end_points))
+        tracks_per_worker = flattop_turns - 3
+        num_batches = int(np.ceil(tracks_per_worker / turns_per_batch))
+        sim_config = SimulationConfig(
+            tracks_per_worker=tracks_per_worker,
+            num_batches=num_batches,
             num_workers=num_workers,
-            tracks_per_worker=(flattop_turns - 2) // num_workers,
+            optimise_energy=False,
+            optimise_quadrupoles=True,
+            optimise_bends=False,
+            optimise_momenta=False,
+            use_fixed_bpm=True,
         )
 
         sequence_config = SequenceConfig(
@@ -340,7 +354,7 @@ def test_controller_bend_opt_simple(
         )
 
         # Create arc-specific plots directory
-        arc_plots_dir = tmp_dir_quad_conv / f"arc_{arc_num}_plots"
+        arc_plots_dir = tmp_path / f"arc_{arc_num}_plots"
 
         ctrl = Controller(
             optimiser_config=optimiser_config,
@@ -385,7 +399,7 @@ def test_controller_bend_opt_simple(
             "betay_error_percent": tws_errs_betay * 100,
         }
     )
-    beta_beating_before_file = tmp_dir_quad_conv / "beta_beating_before_correction.tfs"
+    beta_beating_before_file = tmp_path / "beta_beating_before_correction.tfs"
     tfs.write(beta_beating_before_file, beta_beating_before)
 
     tws_est = get_twiss_without_errors(
@@ -408,7 +422,7 @@ def test_controller_bend_opt_simple(
             "betay_error_percent": tws_est_betay * 100,
         }
     )
-    beta_beating_after_file = tmp_dir_quad_conv / "beta_beating_after_correction.tfs"
+    beta_beating_after_file = tmp_path / "beta_beating_after_correction.tfs"
     tfs.write(beta_beating_after_file, beta_beating_after)
 
     assert all(tws_est_betax.abs() < 0.0025), "BetaX errors exceed 0.25% after optimisation"

@@ -24,9 +24,11 @@ def calculate_pz_measurement(
     orig_data: pd.DataFrame,
     measurement_folder: str | Path,
     model_tws: pd.DataFrame,
+    reverse_meas_tws: bool,
     info: bool = True,
     include_errors: bool = False,
     include_optics_errors: bool = False,
+    dpp_override: float | None = None,
 ) -> pd.DataFrame:
     """Calculate transverse momenta from dispersive measurements.
 
@@ -40,6 +42,8 @@ def calculate_pz_measurement(
         info: Whether to print diagnostic info.
         include_errors: Whether to include error columns from measurements.
         include_optics_errors: Whether to include optical function uncertainties in error propagation.
+        dpp_override: If provided, use this $\\Delta p / p$
+            instead of estimating it from the model.
 
     Returns:
         DataFrame with calculated px and py columns, with closed orbit and reference
@@ -62,7 +66,7 @@ def calculate_pz_measurement(
 
     # Stage 2: Process twiss
     tws, has_errors, dispersion_found = process_twiss(
-        Path(measurement_folder), bpm_list, include_errors
+        Path(measurement_folder), bpm_list, include_errors, reverse_meas_tws
     )
 
     # Filter data to only BPMs present in the twiss
@@ -74,7 +78,7 @@ def calculate_pz_measurement(
 
     # Stage 3: Set up momentum calculation
     data_p, data_n, dpp_est = setup_momentum_calculation(
-        data, tws, model_tws, dispersion_found, info
+        data, tws, model_tws, dispersion_found, info, dpp_override
     )
 
     # Stage 4: Attach errors if they exist

@@ -540,3 +540,39 @@ def test_get_bpm_list(loaded_interface: BaseMadInterface, end_num: int) -> None:
     # Check that the list has expected BPMs
     assert bpm_names == expected_bpms, f"Expected BPMs {expected_bpms}, got {bpm_names}"
     interface.unobserve_elements(["BPM"])
+
+
+def test_install_ac_dipole_and_twiss(loaded_interface_with_beam: BaseMadInterface) -> None:
+    """Test AC dipole installation and verify that tunes change to driven values."""
+    interface = loaded_interface_with_beam
+
+    # Run initial twiss to get natural tunes
+    tws = interface.run_twiss(observe=0)
+    nat_qx = tws.headers["q1"] % 1
+    nat_qy = tws.headers["q2"] % 1
+
+    # Define AC dipole parameters
+    ac_marker = "MKQA.6L4.B1"
+    nat_tunes = (nat_qx, nat_qy)
+    drv_tunes = (0.27, 0.322)
+    # Use small positive offset to avoid overlapping with marker element
+    ac_offset = 1.583 / 2  # Standard AC dipole offset
+
+    # Install AC dipole
+    interface.install_ac_dipole(
+        marker_name=ac_marker, nat_tunes=nat_tunes, drv_tunes=drv_tunes, offset=ac_offset
+    )
+
+    # Run twiss after AC dipole installation
+    tws_ac = interface.run_twiss(observe=0)
+    drv_qx = tws_ac.headers["q1"] % 1
+    drv_qy = tws_ac.headers["q2"] % 1
+
+    # Verify that tunes have changed to driven values
+    tolerance = 1e-4
+    assert np.isclose(drv_qx, drv_tunes[0], atol=tolerance), (
+        f"Q1 not driven correctly: expected {drv_tunes[0]:.6f}, got {drv_qx:.6f}"
+    )
+    assert np.isclose(drv_qy, drv_tunes[1], atol=tolerance), (
+        f"Q2 not driven correctly: expected {drv_tunes[1]:.6f}, got {drv_qy:.6f}"
+    )

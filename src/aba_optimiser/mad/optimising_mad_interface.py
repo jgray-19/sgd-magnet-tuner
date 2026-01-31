@@ -22,26 +22,13 @@ local spos_list = {}
 MAKE_KNOBS_LOOP_MAD = """
 local used = {{}}
 for i, e, s, ds in loaded_sequence:siter(magnet_range) do
-    if {element_condition} then
-        local k_str_name
-        if e.k0 and e.k0 ~= 0 then
-            k_str_name = string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".k0"
-            MADX[k_str_name] = bend_dict[k_str_name] ! Use bend_dict to get normalised value.
-            e.k0 = \\->MADX[k_str_name]
-        elseif e.k1 and e.k1 ~= 0 then
-            k_str_name = e.name .. ".k1"
-            MADX[k_str_name] = e.k1 ! Must not be 0.
-            e.k1 = \\->MADX[k_str_name]
-        elseif e.k2 and e.k2 ~= 0 then
-            k_str_name = e.name .. ".k2"
-            MADX[k_str_name] = e.k2 ! Must not be 0.
-            e.k2 = \\->MADX[k_str_name]
-        end
-        if k_str_name and not used[k_str_name] then
-            used[k_str_name] = true ! We assume that all the bends have the same k0 for [A-D].
-            table.insert(knob_names, k_str_name)
-            table.insert(spos_list, s)
-        end
+    local k_str_name ! Define as nil for scope
+{attr_block}
+    if k_str_name and not used[k_str_name] then
+        ! If knob was redefined and not used yet, then add it
+        used[k_str_name] = true ! We assume that all the bends have the same k0 for [A-D].
+        table.insert(knob_names, k_str_name)
+        table.insert(spos_list, s)
     end
 end
 """
@@ -149,11 +136,6 @@ class OptimisationMadInterface(BaseMadInterface):
         self.mad["bpm_range"] = self.bpm_range
         self.mad["bpm_pattern"] = self.bpm_pattern
 
-        if simulation_config is not None:
-            self._make_adj_knobs(simulation_config)
-        else:
-            LOGGER.info("Skipping knob creation (no simulation config provided)")
-
         # Setup optimisation-specific functionality
         self._observe_bpms(bad_bpms)
         self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
@@ -169,6 +151,12 @@ class OptimisationMadInterface(BaseMadInterface):
             self._set_tune_knobs(tune_knobs_file)
         else:
             LOGGER.info("Skipping tune knobs (not provided)")
+
+        # Once you have done all the setup, create the knobs, if required
+        if simulation_config is not None:
+            self._make_adj_knobs(simulation_config)
+        else:
+            LOGGER.info("Skipping knob creation (no simulation config provided)")
 
     def count_bpms(self, bpm_range) -> tuple[int, list[str]]:
         """Count the number of BPM elements in the specified range."""
@@ -208,7 +196,7 @@ class OptimisationMadInterface(BaseMadInterface):
             # Apply corrector strengths for non-zero correctors only
             self.apply_corrector_strengths(corrector_table[changed])  # ty:ignore[invalid-argument-type]
         except (tfs.TfsFormatError, UnboundLocalError) as e:
-            LOGGER.error(f"Error reading or applying corrector strengths: {e}, assuming knobs")
+            LOGGER.warning(f"Error reading or applying corrector strengths: {e}, assuming knobs")
             knobs = read_knobs(corrector_strengths)
             for name, val in knobs.items():
                 self.mad.send(f"MADX['{name}'] = {val}")
@@ -236,23 +224,71 @@ class OptimisationMadInterface(BaseMadInterface):
     def _make_bend_dict(self) -> None:
         """
         Create a dictionary of the bend strengths in the current sequence.
+        Includes both sbends and rbends for normalisation.
         """
         from aba_optimiser.physics.lhc_bends import normalise_lhcbend_magnets
 
         self.mad.send(f"""
         bend_dict = {{}}
+        bend_lengths = {{}}
         for i, e in loaded_sequence:siter(magnet_range) do
-            if e.kind == "sbend" and e.k0 ~= 0 then
+            if (e.kind == "sbend" or e.kind == "rbend") and e.k0 ~= 0 then
                 bend_dict[e.name .. ".k0"] = e.k0
+                bend_lengths[e.name .. ".k0"] = e.l ! Length is `l` attribute
             end
         end
-        print("Sending bend dictionary " .. MAD.tostring(bend_dict))
+        ! print("Sending bend dictionary " .. MAD.tostring(bend_dict))
         {self.py_name}:send(bend_dict, true)
+        {self.py_name}:send(bend_lengths, true)
         bend_dict = {self.py_name}:recv()
-        print("Retrieved " .. MAD.tostring(bend_dict))
+        ! print("Retrieved " .. MAD.tostring(bend_dict))
         """)
+        true_strengths_dict: dict[str, float] = self.mad.recv()
+        self.bend_lengths: dict[str, float] = self.mad.recv()
+        normalised_names = normalise_lhcbend_magnets(true_strengths_dict, self.bend_lengths)
+        self.mad.send(normalised_names)
 
-        self.mad.send(normalise_lhcbend_magnets(self.mad.recv()))
+    def _build_attr_block(self, attr_conditions: list[tuple[str, str, str]]) -> str:
+        """
+        Build the MAD-NG Lua block that assigns deferred knobs for the selected attributes.
+
+        attr_conditions carries the fully-qualified condition for each attribute (kind, name pattern,
+        non-zero check) so the generated Lua `if` clauses mirror the same predicates used in the
+        outer `element_condition`.
+
+        This was created to handle generic attributes, and special cases like bend k0 naming,
+        simplifying extension.
+        """
+        lines: list[str] = []
+        attr_specs = {
+            "sbend": {
+                "name_expr": 'string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".k0"',
+                "mad_value": "bend_dict[k_str_name]",
+            },
+            "rbend": {
+                "name_expr": 'string.gsub(e.name, "(MB[RXWAL]%w*%.)([A-G]?)([0-9]+[LR][1-8].*)", "%1%3") .. (e.k0 >= 0 and "_p" or "_n") .. ".k0"',
+                "mad_value": "bend_dict[k_str_name]",
+            },
+        }
+
+        for idx, (kind, attr, condition) in enumerate(attr_conditions):
+            spec = attr_specs.get(kind, {})
+            name_expr = spec.get("name_expr", f'e.name .. ".{attr}"')
+            mad_value = spec.get("mad_value", f"e.{attr}")
+            tmpl = [
+                f"{{prefix}} {condition} then",
+                f"    k_str_name = {name_expr}",
+                f"    MADX[k_str_name] = {mad_value}",
+                f"    e.{attr} = \\->MADX[k_str_name]",
+            ]
+            prefix = "if" if idx == 0 else "elseif"
+            for line in tmpl:
+                lines.append(f"        {line.format(prefix=prefix)}")
+
+        if not lines:
+            lines.append("        -- no attributes selected")
+        lines.append("        end")
+        return "\n".join(lines)
 
     def _make_adj_knobs(self, simulation_config: SimulationConfig) -> None:
         """
@@ -262,19 +298,25 @@ class OptimisationMadInterface(BaseMadInterface):
             self._make_bend_dict()
         mad_code = MAKE_KNOBS_INIT_MAD
 
-        if simulation_config.optimise_quadrupoles or simulation_config.optimise_bends:
-            conditions = []
-            for kind, attr, pattern, flag in [
-                ("sbend", "k0", "MB%.", simulation_config.optimise_bends),
-                ("quadrupole", "k1", "MQ%.", simulation_config.optimise_quadrupoles),
+        if (
+            simulation_config.optimise_quadrupoles
+            or simulation_config.optimise_bends
+            or simulation_config.optimise_correctors
+        ):
+            attr_conditions: list[tuple[str, str, str]] = []
+            for kind, attr, pattern, zero_check, flag in [
+                ("sbend", "k0", "MB%.", True, simulation_config.optimise_bends),
+                ("rbend", "k0", "MB[RXWAL]%w*%.", True, simulation_config.optimise_bends),
+                ("quadrupole", "k1", "MQ%.", True, simulation_config.optimise_quadrupoles),
+                ("hkicker", "kick", "MCB", False, simulation_config.optimise_correctors),
             ]:
                 if flag:
-                    conditions.append(
-                        f'(e.kind == "{kind}" and e.{attr} ~=0 and e.name:match("{pattern}"))'
-                    )
-            element_condition = " or ".join(conditions) if conditions else "false"
+                    zero_chk_str = f"and e.{attr} ~=0" if zero_check else ""
+                    condition = f'(e.kind == "{kind}" {zero_chk_str} and e.name:match("{pattern}"))'
+                    attr_conditions.append((kind, attr, condition))
 
-            loop_code = MAKE_KNOBS_LOOP_MAD.format(element_condition=element_condition)
+            attr_block = self._build_attr_block(attr_conditions)
+            loop_code = MAKE_KNOBS_LOOP_MAD.format(attr_block=attr_block)
             mad_code += loop_code
 
         if simulation_config.optimise_energy:
@@ -303,6 +345,7 @@ class OptimisationMadInterface(BaseMadInterface):
             LOGGER.info(
                 f"Created {len(self.knob_names)} knobs from {self.elem_spos[0]} to {self.elem_spos[-1]}"
             )
+            LOGGER.info(f"Knob names: {self.knob_names}")
         else:
             LOGGER.info("No knobs created. Just optimising energy")
 

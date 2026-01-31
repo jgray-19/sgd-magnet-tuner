@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from mpmath.tests.test_compatibility import N
+
 from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig
 
 if TYPE_CHECKING:
@@ -15,12 +17,12 @@ if TYPE_CHECKING:
 
 
 def create_arc_measurement_config(
-    measurement_file: str | Path,
+    measurement_file: Path,
     machine_deltap: float = 0.0,
     num_tracks: int = 3,
     flattop_turns: int = 6600,
-    corrector_files: list[Path] | Path | None = None,
-    tune_knobs_files: list[Path] | Path | None = None,
+    corrector_files: list[Path | None] | Path | None = None,
+    tune_knobs_files: list[Path | None] | Path | None = None,
 ) -> MeasurementConfig:
     """Create a MeasurementConfig for arc-by-arc processing.
 

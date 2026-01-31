@@ -104,6 +104,8 @@ def compute_optics_errors(
     dy_current = data.get("dy", np.zeros_like(y_current))
     dy_neighbor = data.get(names.dy, np.zeros_like(y_neighbor))
     dpy_current = data.get("dpy", np.zeros_like(y_current))
+    if np.all(dx_current == 0) and dpp_est != 0.0:
+        raise ValueError("Dispersion columns missing but dpp_est is non-zero.")
 
     phi_x = data[names.delta_x].to_numpy() * 2 * np.pi
     phi_y = data[names.delta_y].to_numpy() * 2 * np.pi

@@ -15,7 +15,11 @@ import numpy as np
 
 from aba_optimiser.mad.scripts import HESSIAN_SCRIPT, TRACK_INIT, TRACK_SCRIPT
 from aba_optimiser.workers.abstract_worker import AbstractWorker
-from aba_optimiser.workers.common import TrackingData, WeightProcessor, split_array_to_batches
+from aba_optimiser.workers.common import (
+    PrecomputedTrackingWeights,
+    TrackingData,
+    split_array_to_batches,
+)
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -131,7 +135,9 @@ class TrackingWorker(AbstractWorker[TrackingData]):
 
         # Extract and process comparison data symmetrically for all dimensions
         self._extract_comparisons(data, n_init)
-        self._compute_weights(data, n_init)
+        if data.precomputed_weights is None:
+            raise ValueError("Precomputed weights must be provided for TrackingWorker")
+        self._load_precomputed_weights(data.precomputed_weights, n_init)
         self._prepare_batches(init_coords, data.init_pts, num_batches)
 
         # Load MAD-NG tracking scripts
@@ -155,41 +161,18 @@ class TrackingWorker(AbstractWorker[TrackingData]):
         self.px_comparisons_full = momenta[:, :, 0]
         self.py_comparisons_full = momenta[:, :, 1]
 
-    def _compute_weights(self, data: TrackingData, n_init: int) -> None:
-        """Compute weights from variances for all phase space dimensions.
+    def _load_precomputed_weights(self, weights: PrecomputedTrackingWeights, n_init: int) -> None:
+        """Use globally precomputed weights instead of per-worker computation."""
 
-        Converts measurement variances to inverse-variance weights,
-        normalizes them, and prepares Hessian weights.
+        self.x_weights_full = weights.x[:n_init]
+        self.y_weights_full = weights.y[:n_init]
+        self.px_weights_full = weights.px[:n_init]
+        self.py_weights_full = weights.py[:n_init]
 
-        Args:
-            data: TrackingData container
-            n_init: Number of particles to use
-        """
-        # Extract variances symmetrically
-        pos_variances = data.position_variances[:n_init]
-        mom_variances = data.momentum_variances[:n_init]
-
-        x_vars = pos_variances[:, :, 0]
-        y_vars = pos_variances[:, :, 1]
-        px_vars = mom_variances[:, :, 0]
-        py_vars = mom_variances[:, :, 1]
-
-        # Convert variances to weights symmetrically
-        x_weights = WeightProcessor.variance_to_weight(x_vars)
-        y_weights = WeightProcessor.variance_to_weight(y_vars)
-        px_weights = WeightProcessor.variance_to_weight(px_vars)
-        py_weights = WeightProcessor.variance_to_weight(py_vars)
-
-        # Prepare Hessian weights (aggregated across particles)
-        self.hessian_weight_x = WeightProcessor.aggregate_hessian_weights(x_weights)
-        self.hessian_weight_y = WeightProcessor.aggregate_hessian_weights(y_weights)
-        self.hessian_weight_px = WeightProcessor.aggregate_hessian_weights(px_weights)
-        self.hessian_weight_py = WeightProcessor.aggregate_hessian_weights(py_weights)
-
-        # Normalize weights globally across all dimensions for gradient computation
-        self.x_weights_full, self.y_weights_full, self.px_weights_full, self.py_weights_full = (
-            WeightProcessor.normalise_weights_globally(x_weights, y_weights, px_weights, py_weights)
-        )
+        self.hessian_weight_x = weights.hessian_x
+        self.hessian_weight_y = weights.hessian_y
+        self.hessian_weight_px = weights.hessian_px
+        self.hessian_weight_py = weights.hessian_py
 
     def _prepare_batches(
         self, init_coords: np.ndarray, init_pts: np.ndarray, num_batches: int
