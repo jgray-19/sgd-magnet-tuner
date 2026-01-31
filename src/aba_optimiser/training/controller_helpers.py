@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mpmath.tests.test_compatibility import N
-
 from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig
 
 if TYPE_CHECKING:
