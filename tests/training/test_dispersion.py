@@ -19,13 +19,15 @@ from omc3.model.constants import TWISS_ELEMENTS_DAT
 from scipy import stats
 from turn_by_turn import convert_to_tbt, write_tbt
 from turn_by_turn.structures import TbtData
+from xtrack_tools.acd import run_ac_dipole_tracking_with_particles
+from xtrack_tools.env import initialise_env
 
 from aba_optimiser.dispersion.dispersion_estimation import estimate_corrector_dispersions
 from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
 from aba_optimiser.simulation.optics import perform_orbit_correction
-from aba_optimiser.xsuite.acd import run_ac_dipole_tracking_with_particles
-from aba_optimiser.xsuite.env import initialise_env
+
+pytest.importorskip("xtrack_tools")
 
 if TYPE_CHECKING:
     from pathlib import Path

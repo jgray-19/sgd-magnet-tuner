@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 from nxcals.spark_session_builder import get_or_create
-from tensorflow.python.autograph.operators.py_builtins import min_
 
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
 from aba_optimiser.io.utils import save_knobs

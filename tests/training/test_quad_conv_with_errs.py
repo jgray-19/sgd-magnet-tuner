@@ -13,20 +13,20 @@ import numpy as np
 import pandas as pd
 import pytest
 import tfs
-
-from aba_optimiser.config import OptimiserConfig, SimulationConfig
-from aba_optimiser.filtering.svd import svd_clean_measurements
-from aba_optimiser.io.utils import save_knobs
-from aba_optimiser.momentum_recon import (
+from tmom_recon import (
     calculate_dispersive_pz,
     calculate_transverse_pz,
     inject_noise_xy_inplace,
 )
+from tmom_recon.svd import svd_clean_measurements
+from xtrack_tools.acd import run_ac_dipole_tracking_with_particles
+from xtrack_tools.monitors import line_to_dataframes
+
+from aba_optimiser.config import OptimiserConfig, SimulationConfig
+from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig, SequenceConfig
-from aba_optimiser.xsuite.acd import run_ac_dipole_tracking_with_particles
-from aba_optimiser.xsuite.monitors import line_to_dataframes
 from tests.training.helpers import (
     TRACK_COLUMNS,
     generate_xsuite_env_with_errors,
@@ -40,6 +40,8 @@ if TYPE_CHECKING:
 
     from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 
+pytest.importorskip("tmom_recon")
+pytest.importorskip("xtrack_tools")
 
 def _run_track_with_acd(
     env: xt.Environment,
@@ -205,7 +207,6 @@ def test_controller_bend_opt_simple(
             track_df_noisy,
             track_df,
             np.random.default_rng(42 + idx),
-            low_noise_bpms=[],
             noise_std=1e-4,  # 10 microns noise
         )
         cleaned = svd_clean_measurements(track_df_noisy.reset_index())

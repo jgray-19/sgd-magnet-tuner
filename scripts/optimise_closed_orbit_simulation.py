@@ -11,6 +11,9 @@ import numpy as np
 import pandas as pd
 import tfs
 from xobjects import ContextCpu as Context
+from xtrack_tools.acd import prepare_acd_line_with_monitors
+from xtrack_tools.env import initialise_env
+from xtrack_tools.monitors import process_tracking_data
 
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
 from aba_optimiser.io.utils import save_knobs
@@ -22,9 +25,6 @@ from aba_optimiser.training.controller_helpers import (
     create_arc_bpm_config,
     create_arc_measurement_config,
 )
-from aba_optimiser.xsuite.acd import prepare_acd_line_with_monitors
-from aba_optimiser.xsuite.env import initialise_env
-from aba_optimiser.xsuite.monitors import process_tracking_data
 
 if TYPE_CHECKING:
     from pathlib import Path

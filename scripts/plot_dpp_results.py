@@ -196,7 +196,8 @@ def collect_expected_measured_points(beam_data, dispersion_type="estimated"):
     return dlmn_points, corrector_points
 
 
-co = "_sim"  # Set to "" to use non closed orbit optimisation
+co = "co"  # Set to "" to use non closed orbit optimisation
+# co = "_sim"  # Set to "" to use non closed orbit optimisation
 # co = ""  # Set to "" to use non closed orbit optimisation
 
 
@@ -298,8 +299,7 @@ def plot_all_deltap_vs_range(beam_data_list):
                 )
     plt.xlabel("Arc", fontsize=16)
     plt.ylabel(r"Deltap ($\times 10^{-5}$)", fontsize=16)
-    beam_str = f"Beam {beam_data_list[0].beam}" if len(beam_data_list) == 1 else "Beams 1 and 2"
-    # plt.title(f"Deltap vs ARC for {beam_str} - All Files")
+
     ax = plt.gca()
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}"))
     ax.tick_params(axis="both", labelsize=14)
@@ -523,22 +523,8 @@ def plot_expected_vs_measured_mean_common(
 
     plt.xlabel(r"Expected Deltap ($\times 10^{-5}$)", fontsize=16)
     plt.ylabel(r"Measured Mean Deltap ($\times 10^{-5}$)", fontsize=16)
-    beam_str = f"Beam {beam_data_list[0].beam}" if len(beam_data_list) == 1 else "Beams 1 and 2"
-    if dispersion_type == "estimated":
-        dispersion_title = "Estimated"
-    elif dispersion_type == "model":
-        dispersion_title = "Model"
-    else:
-        dispersion_title = "No Corrector"
     fit_suffix = "" if include_fits else ", No Fit"
-    if dispersion_type == "none":
-        title = f"Expected vs Measured Mean Deltap{fit_suffix} - {beam_str}"
-    else:
-        title = (
-            f"Expected vs Measured Mean Deltap - {beam_str}"
-            # f"Expected vs Measured Mean Deltap ({dispersion_title} Disp{fit_suffix}) - {beam_str}"
-        )
-    # plt.title(title)
+
     ax = plt.gca()
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}"))
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}"))

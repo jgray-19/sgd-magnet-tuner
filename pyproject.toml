@@ -34,7 +34,6 @@ docs = [
     "furo>=2023.9.10",
 ]
 tracking = [
-    "xsuite",
     "omc3 > 0.26.0",
     "cpymad",
     "pyarrow",
@@ -43,12 +42,18 @@ tracking = [
 cern = [
     "nxcals",
 ]
+dev = [
+    "pre-commit",
+    "ruff",
+    "tmom-recon",
+    "xtrack-tools",
+]
 all = [
     "test",
-    "dev",
     "docs",
     "tracking",
     "cern",
+    "dev",
 ]
 
 
@@ -149,4 +154,3 @@ exclude = [
     "*.out",
     "*.json",
 ]
-

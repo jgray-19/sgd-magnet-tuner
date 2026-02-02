@@ -15,14 +15,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from tmom_recon import calculate_transverse_pz, inject_noise_xy_inplace
+from tmom_recon.svd import svd_clean_measurements
+from xtrack_tools.coordinates import get_kick_plane_category
 
 from aba_optimiser.config import MOMENTUM_STD_DEV, POSITION_STD_DEV
-from aba_optimiser.filtering.svd import svd_clean_measurements
-
-# from aba_optimiser.physics.dispersive_momentum_reconstruction import calculate_pz
-from aba_optimiser.momentum_recon.transverse import calculate_pz, inject_noise_xy_inplace
-
-from .coordinates import get_kick_plane_category
 
 if TYPE_CHECKING:
     import multiprocessing as mp
@@ -127,7 +124,7 @@ def process_track_with_queue(
 
         # Filter the noisy data and enqueue cleaned data
         cleaned_df = svd_clean_measurements(noisy_df)
-        cleaned_df = calculate_pz(cleaned_df, tws, inject_noise=False, info=False)
+        cleaned_df = calculate_transverse_pz(cleaned_df, tws, inject_noise=False, info=False)
         del noisy_df  # Clean up noisy_df after its last use
 
         cleaned_df["name"] = cleaned_df["name"].astype(str)
@@ -244,13 +241,13 @@ def add_noise_and_clean(
     true_df["kick_plane"] = true_df["kick_plane"].astype("category")
 
     # Add noise
-    noisy_df = calculate_pz(true_df, inject_noise=True, tws=tws, info=True)
+    noisy_df = calculate_transverse_pz(true_df, inject_noise=True, tws=tws, info=True)
     noisy_df["name"] = noisy_df["name"].astype(str)
     noisy_df["kick_plane"] = noisy_df["kick_plane"].astype(str)
 
     # Apply SVD cleaning
     cleaned_df = svd_clean_measurements(noisy_df)
-    cleaned_df = calculate_pz(cleaned_df, inject_noise=False, tws=tws, info=True)
+    cleaned_df = calculate_transverse_pz(cleaned_df, inject_noise=False, tws=tws, info=True)
     return noisy_df, cleaned_df
 
 

@@ -18,7 +18,7 @@ import psutil
 import tfs
 
 from aba_optimiser.mad.tracking_interface import TrackingMadInterface
-from aba_optimiser.simulation.coordinates import create_initial_conditions
+from xtrack_tools.coordinates import create_initial_conditions
 
 logger = logging.getLogger(__name__)
 
@@ -344,9 +344,9 @@ def run_parallel_tracking(
         true_dfs = retrieve_tracking_data(interfaces)
         interfaces.clear()
     else:
-        from aba_optimiser.xsuite.env import initialise_env
-        from aba_optimiser.xsuite.monitors import line_to_dataframes
-        from aba_optimiser.xsuite.tracking import start_tracking_xsuite_batch
+        from xtrack_tools.env import initialise_env
+        from xtrack_tools.monitors import line_to_dataframes
+        from xtrack_tools.tracking import start_tracking_xsuite_batch
 
         # Create xsuite environment
         logger.info("Creating xsuite environment")

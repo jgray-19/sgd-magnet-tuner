@@ -26,7 +26,7 @@ from aba_optimiser.simulation.magnet_perturbations import (
     apply_magnet_perturbations,
 )
 from aba_optimiser.simulation.optics import perform_orbit_correction
-from aba_optimiser.xsuite import (
+from xtrack_tools import (
     create_xsuite_environment,
     initialise_env,
     insert_ac_dipole,

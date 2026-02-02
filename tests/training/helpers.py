@@ -11,7 +11,7 @@ import tfs
 from aba_optimiser.mad import BaseMadInterface, OptimisationMadInterface
 from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
 from aba_optimiser.simulation.optics import perform_orbit_correction
-from aba_optimiser.xsuite.env import initialise_env
+from xtrack_tools.env import initialise_env
 
 if TYPE_CHECKING:
     from pathlib import Path

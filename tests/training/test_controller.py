@@ -9,14 +9,14 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
+from xtrack_tools.monitors import line_to_dataframes
+from xtrack_tools.tracking import run_tracking_without_ac_dipole
 
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig, SequenceConfig
-from aba_optimiser.xsuite.monitors import line_to_dataframes
-from aba_optimiser.xsuite.tracking import run_tracking_without_ac_dipole
 from tests.training.helpers import TRACK_COLUMNS, generate_xsuite_env_with_errors
 
 if TYPE_CHECKING:
@@ -26,6 +26,8 @@ if TYPE_CHECKING:
     import xtrack as xt
 
     from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+
+pytest.importorskip("xtrack_tools")
 
 logger = logging.getLogger(__name__)
 

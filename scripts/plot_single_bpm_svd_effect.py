@@ -13,9 +13,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 import tfs
+from tmom_recon.svd import svd_clean_measurements
 from turn_by_turn import read_tbt
 
-from aba_optimiser.filtering.svd import svd_clean_measurements
 from aba_optimiser.measurements.create_datafile import compute_vars_from_known_noise
 from aba_optimiser.momentum_recon.transverse import calculate_pz
 
@@ -110,7 +110,7 @@ def add_momenta(
     df_with_var = compute_vars_from_known_noise(df, bad_bpms)
 
     # Calculate px and py
-    df_with_p = calculate_pz(df_with_var, tws=tws, inject_noise=False, subtract_mean=False)
+    df_with_p = calculate_pz(df_with_var, tws=tws, inject_noise=False)
 
     # Drop NaN values
     if df_with_p["px"].isna().any() or df_with_p["py"].isna().any():
