@@ -23,7 +23,6 @@ import argparse
 import logging
 
 import matplotlib.pyplot as plt
-import tfs
 
 
 def get_twiss_without_errors(
@@ -34,7 +33,7 @@ def get_twiss_without_errors(
     estimated_magnets: dict[str, float] | None = None,
     tune_knobs_file: Path | None = None,
     corrector_file: Path | None = None,
-) -> tfs.TfsDataFrame:
+) -> pd.DataFrame:
     """Get twiss data from a model with optional tune knobs and estimated magnets."""
     mad = OptimisationMadInterface(
         sequence_file=str(sequence_file),
@@ -97,7 +96,6 @@ def plot_quad_diffs(estimates: dict, actual: dict, squeeze_step: str, results_di
             ax.set_ylabel("Estimated k1")
     plt.tight_layout()
     plt.savefig(results_dir / f"quad_diffs_{squeeze_step}.png")
-    plt.show()
 
 
 def get_arc_ranges(beam: int) -> dict[int, tuple[str, str]]:
@@ -141,7 +139,7 @@ def _normalize_phase(df: pd.DataFrame, mu_cols: tuple[str, str], start_bpm: str)
     return df
 
 
-def get_phase_advance_through_arc(
+def get_twiss_through_arc(
     seq_file: Path,
     beam: int,
     beam_energy: float,
@@ -151,7 +149,7 @@ def get_phase_advance_through_arc(
     estimated_magnets: dict[str, float] | None = None,
     tune_knobs_file: Path | None = None,
 ) -> pd.DataFrame:
-    """Get phase advance through an arc using model with range and beta0 from measurement.
+    """Get twiss data (phase and beta) through an arc using model with range and beta0 from measurement.
 
     Args:
         seq_file: Path to sequence file
@@ -164,7 +162,7 @@ def get_phase_advance_through_arc(
         tune_knobs_file: Optional tune knobs file
 
     Returns:
-        DataFrame with phase advances at BPM locations
+        DataFrame with phase advances and beta functions at BPM locations
     """
     mad = OptimisationMadInterface(
         sequence_file=str(seq_file),
@@ -224,7 +222,7 @@ def get_phase_advance_through_arc(
         for val in values:
             mad.mad.send(val)
         df = mad.mad.twiss_result.to_df().set_index("name")
-        return df.rename(columns={"mu1": "mux", "mu2": "muy"})
+        return df.rename(columns={"mu1": "mux", "mu2": "muy", "beta11": "betx", "beta22": "bety"})
 
     base = run_twiss(list(optics.values()))
     plus = run_twiss([optics[k] + optics_err[k] for k in optics])
@@ -232,6 +230,8 @@ def get_phase_advance_through_arc(
 
     base["mux_err"] = abs(plus["mux"] - minus["mux"]) / 2
     base["muy_err"] = abs(plus["muy"] - minus["muy"]) / 2
+    base["betx_err"] = abs(plus["betx"] - minus["betx"]) / 2
+    base["bety_err"] = abs(plus["bety"] - minus["bety"]) / 2
 
     return _normalize_phase(base, ("mux", "muy"), start_bpm=arc_start)
 
@@ -264,7 +264,6 @@ def get_measurement_phase_through_arc(
         return arc_bpms, []
 
     candidate_bpms = list(arc_bpms.head(2).index)
-    print(candidate_bpms)
     return arc_bpms, candidate_bpms
 
 
@@ -277,8 +276,13 @@ def plot_phase_advances(
     tune_knobs_file: Path,
     beam_energy: float,
     beam: int,
+    arcs: list[int] | None = None,
 ) -> None:
-    """Plot phase advance comparison through each arc with four models."""
+    """Plot phase advance comparison through each arc with four models.
+
+    Args:
+        arcs: Optional list of arc numbers to plot. If None, plots all arcs 1-8.
+    """
     meas_twiss, _ = build_twiss_from_measurements(
         analysis_dir, include_errors=True, reverse_bpm_order=beam == 2
     )
@@ -287,9 +291,12 @@ def plot_phase_advances(
     # Get arc ranges
     arc_ranges = get_arc_ranges(beam)
 
-    for arc_num in range(1, 9):
+    # Use specified arcs or default to all
+    arc_list = arcs if arcs is not None else list(range(1, 9))
+
+    for arc_num in arc_list:
         arc_start, arc_end = arc_ranges[arc_num]
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        fig, axes = plt.subplots(2, 2, figsize=(16, 10))
 
         # Get measurement arc (unnormalized) and candidate BPMs near arc start
         meas_phase_raw, candidate_bpms = get_measurement_phase_through_arc(meas_twiss, arc_start, arc_end)
@@ -301,7 +308,7 @@ def plot_phase_advances(
             for start_bpm in candidates:
                 if start_bpm not in meas_twiss.index:
                     continue
-                phase_initial = get_phase_advance_through_arc(
+                phase_initial = get_twiss_through_arc(
                     seq_file,
                     beam,
                     beam_energy,
@@ -325,7 +332,7 @@ def plot_phase_advances(
         meas_phase = _normalize_phase(meas_phase_raw, ("mux", "muy"), start_bpm=start_bpm)
 
         # Recompute models using chosen start BPM (shared beta0 and range)
-        phase_basic = get_phase_advance_through_arc(
+        twiss_basic = get_twiss_through_arc(
             seq_file,
             beam,
             beam_energy,
@@ -336,7 +343,7 @@ def plot_phase_advances(
             tune_knobs_file=None,
         )
 
-        phase_online = get_phase_advance_through_arc(
+        twiss_online = get_twiss_through_arc(
             seq_file,
             beam,
             beam_energy,
@@ -347,7 +354,7 @@ def plot_phase_advances(
             tune_knobs_file=tune_knobs_file,
         )
 
-        phase_eff_online = get_phase_advance_through_arc(
+        twiss_eff_online = get_twiss_through_arc(
             seq_file,
             beam,
             beam_energy,
@@ -360,9 +367,9 @@ def plot_phase_advances(
 
         # Find common BPMs
         common_bpms = (
-            meas_phase.index.intersection(phase_basic.index)
-            .intersection(phase_online.index)
-            .intersection(phase_eff_online.index)
+            meas_phase.index.intersection(twiss_basic.index)
+            .intersection(twiss_online.index)
+            .intersection(twiss_eff_online.index)
         )
         if len(common_bpms) == 0:
             logging.warning(f"No common BPMs found in Arc {arc_num}, skipping plot.")
@@ -376,6 +383,26 @@ def plot_phase_advances(
             meas_err_vals = meas_err.loc[common_bpms] if meas_err is not None else 0.0
             return delta, np.sqrt(series_err_vals**2 + meas_err_vals**2)
 
+        def _rel_diff(
+            series: pd.Series,
+            series_err: pd.Series | None,
+            meas: pd.Series,
+            meas_err: pd.Series | None,
+        ) -> tuple[pd.Series, pd.Series | None]:
+            """Calculate relative difference: (series - meas) / meas * 100 (in percent)"""
+            rel_delta = (
+                (series.loc[common_bpms] - meas.loc[common_bpms]) / meas.loc[common_bpms] * 100
+            )
+            if series_err is None and meas_err is None:
+                return rel_delta, None
+            series_err_vals = series_err.loc[common_bpms] if series_err is not None else 0.0
+            meas_err_vals = meas_err.loc[common_bpms] if meas_err is not None else 0.0
+            # Error propagation for relative difference
+            rel_err = (
+                np.sqrt(series_err_vals**2 + meas_err_vals**2) / np.abs(meas.loc[common_bpms]) * 100
+            )
+            return rel_delta, rel_err
+
         def _plot(ax, xvals, series, yerr, label, fmt):
             ax.errorbar(
                 xvals,
@@ -388,42 +415,186 @@ def plot_phase_advances(
                 capsize=2,
             )
 
-        # Horizontal
-        ax_x = axes[0]
+        # Phase X
+        ax_phase_x = axes[0, 0]
         meas_mux = meas_phase["mux"]
         meas_mux_err = meas_phase.get("errmux")
-        base_dx, base_dx_err = _diff(phase_basic["mux"], phase_basic.get("mux_err"), meas_mux, meas_mux_err)
-        _plot(ax_x, meas_phase.loc[common_bpms, "s"], base_dx, base_dx_err, "Base model - meas", "s-")
-        online_dx, online_dx_err = _diff(phase_online["mux"], phase_online.get("mux_err"), meas_mux, meas_mux_err)
-        _plot(ax_x, meas_phase.loc[common_bpms, "s"], online_dx, online_dx_err, "Model+tunes - meas", "^-")
-        eff_dx, eff_dx_err = _diff(phase_eff_online["mux"], phase_eff_online.get("mux_err"), meas_mux, meas_mux_err)
-        _plot(ax_x, meas_phase.loc[common_bpms, "s"], eff_dx, eff_dx_err, "Model+tunes+ests - meas", "d-")
-        ax_x.axhline(0.0, color="k", linewidth=0.8, alpha=0.5)
-        ax_x.set_ylabel("Δ Phase X vs meas (2π)")
-        ax_x.set_title(f"Arc {arc_num} - Horizontal Δ")
-        ax_x.legend(fontsize=8)
-        ax_x.grid(visible=True, alpha=0.3)
+        base_dx, base_dx_err = _diff(
+            twiss_basic["mux"], twiss_basic.get("mux_err"), meas_mux, meas_mux_err
+        )
+        _plot(
+            ax_phase_x,
+            meas_phase.loc[common_bpms, "s"],
+            base_dx,
+            base_dx_err,
+            "Base model - meas",
+            "s-",
+        )
+        online_dx, online_dx_err = _diff(
+            twiss_online["mux"], twiss_online.get("mux_err"), meas_mux, meas_mux_err
+        )
+        _plot(
+            ax_phase_x,
+            meas_phase.loc[common_bpms, "s"],
+            online_dx,
+            online_dx_err,
+            "Model+tunes - meas",
+            "^-",
+        )
+        eff_dx, eff_dx_err = _diff(
+            twiss_eff_online["mux"], twiss_eff_online.get("mux_err"), meas_mux, meas_mux_err
+        )
+        _plot(
+            ax_phase_x,
+            meas_phase.loc[common_bpms, "s"],
+            eff_dx,
+            eff_dx_err,
+            "Model+tunes+ests - meas",
+            "d-",
+        )
+        ax_phase_x.axhline(0.0, color="k", linewidth=0.8, alpha=0.5)
+        ax_phase_x.set_ylabel("Δ Phase X vs meas (2π)")
+        ax_phase_x.set_title(f"Arc {arc_num} - Horizontal Phase Δ")
+        ax_phase_x.legend(fontsize=8)
+        ax_phase_x.grid(visible=True, alpha=0.3)
+        ax_phase_x.set_xlabel("S (m)")
 
-        # Vertical
-        ax_y = axes[1]
+        # Phase Y
+        ax_phase_y = axes[0, 1]
         meas_muy = meas_phase["muy"]
         meas_muy_err = meas_phase.get("errmuy")
-        base_dy, base_dy_err = _diff(phase_basic["muy"], phase_basic.get("muy_err"), meas_muy, meas_muy_err)
-        _plot(ax_y, meas_phase.loc[common_bpms, "s"], base_dy, base_dy_err, "Base model - meas", "s-")
-        online_dy, online_dy_err = _diff(phase_online["muy"], phase_online.get("muy_err"), meas_muy, meas_muy_err)
-        _plot(ax_y, meas_phase.loc[common_bpms, "s"], online_dy, online_dy_err, "Model+tunes - meas", "^-")
-        eff_dy, eff_dy_err = _diff(phase_eff_online["muy"], phase_eff_online.get("muy_err"), meas_muy, meas_muy_err)
-        _plot(ax_y, meas_phase.loc[common_bpms, "s"], eff_dy, eff_dy_err, "Model+tunes+ests - meas", "d-")
-        ax_y.axhline(0.0, color="k", linewidth=0.8, alpha=0.5)
-        ax_y.set_ylabel("Δ Phase Y vs meas (2π)")
-        ax_y.set_title(f"Arc {arc_num} - Vertical Δ")
-        ax_y.legend(fontsize=8)
-        ax_y.grid(visible=True, alpha=0.3)
+        base_dy, base_dy_err = _diff(
+            twiss_basic["muy"], twiss_basic.get("muy_err"), meas_muy, meas_muy_err
+        )
+        _plot(
+            ax_phase_y,
+            meas_phase.loc[common_bpms, "s"],
+            base_dy,
+            base_dy_err,
+            "Base model - meas",
+            "s-",
+        )
+        online_dy, online_dy_err = _diff(
+            twiss_online["muy"], twiss_online.get("muy_err"), meas_muy, meas_muy_err
+        )
+        _plot(
+            ax_phase_y,
+            meas_phase.loc[common_bpms, "s"],
+            online_dy,
+            online_dy_err,
+            "Model+tunes - meas",
+            "^-",
+        )
+        eff_dy, eff_dy_err = _diff(
+            twiss_eff_online["muy"], twiss_eff_online.get("muy_err"), meas_muy, meas_muy_err
+        )
+        _plot(
+            ax_phase_y,
+            meas_phase.loc[common_bpms, "s"],
+            eff_dy,
+            eff_dy_err,
+            "Model+tunes+ests - meas",
+            "d-",
+        )
+        ax_phase_y.axhline(0.0, color="k", linewidth=0.8, alpha=0.5)
+        ax_phase_y.set_ylabel("Δ Phase Y vs meas (2π)")
+        ax_phase_y.set_title(f"Arc {arc_num} - Vertical Phase Δ")
+        ax_phase_y.legend(fontsize=8)
+        ax_phase_y.grid(visible=True, alpha=0.3)
+        ax_phase_y.set_xlabel("S (m)")
 
-        ax_x.set_xlabel("S (m)")
-        ax_y.set_xlabel("S (m)")
+        # Beta X
+        ax_beta_x = axes[1, 0]
+        meas_betx = meas_twiss.loc[common_bpms, "betx"]
+        meas_betx_err = meas_twiss.loc[common_bpms].get("errbetx")
+        base_dbetx, base_dbetx_err = _rel_diff(
+            twiss_basic["betx"], twiss_basic.get("betx_err"), meas_betx, meas_betx_err
+        )
+        _plot(
+            ax_beta_x,
+            meas_twiss.loc[common_bpms, "s"],
+            base_dbetx,
+            base_dbetx_err,
+            "Base model - meas",
+            "s-",
+        )
+        online_dbetx, online_dbetx_err = _rel_diff(
+            twiss_online["betx"], twiss_online.get("betx_err"), meas_betx, meas_betx_err
+        )
+        _plot(
+            ax_beta_x,
+            meas_twiss.loc[common_bpms, "s"],
+            online_dbetx,
+            online_dbetx_err,
+            "Model+tunes - meas",
+            "^-",
+        )
+        eff_dbetx, eff_dbetx_err = _rel_diff(
+            twiss_eff_online["betx"], twiss_eff_online.get("betx_err"), meas_betx, meas_betx_err
+        )
+        _plot(
+            ax_beta_x,
+            meas_twiss.loc[common_bpms, "s"],
+            eff_dbetx,
+            eff_dbetx_err,
+            "Model+tunes+ests - meas",
+            "d-",
+        )
+        ax_beta_x.axhline(0.0, color="k", linewidth=0.8, alpha=0.5)
+        ax_beta_x.set_ylabel("Δ β_x / β_x vs meas (%)")
+        ax_beta_x.set_title(f"Arc {arc_num} - Horizontal β Δ")
+        ax_beta_x.legend(fontsize=8)
+        ax_beta_x.grid(visible=True, alpha=0.3)
+        ax_beta_x.set_xlabel("S (m)")
 
-        fig.suptitle(f"Phase advance comparison - {squeeze_step} - Arc {arc_num} (start: {start_bpm})", fontsize=12)
+        # Beta Y
+        ax_beta_y = axes[1, 1]
+        meas_bety = meas_twiss.loc[common_bpms, "bety"]
+        meas_bety_err = meas_twiss.loc[common_bpms].get("errbety")
+        base_dbety, base_dbety_err = _rel_diff(
+            twiss_basic["bety"], twiss_basic.get("bety_err"), meas_bety, meas_bety_err
+        )
+        _plot(
+            ax_beta_y,
+            meas_twiss.loc[common_bpms, "s"],
+            base_dbety,
+            base_dbety_err,
+            "Base model - meas",
+            "s-",
+        )
+        online_dbety, online_dbety_err = _rel_diff(
+            twiss_online["bety"], twiss_online.get("bety_err"), meas_bety, meas_bety_err
+        )
+        _plot(
+            ax_beta_y,
+            meas_twiss.loc[common_bpms, "s"],
+            online_dbety,
+            online_dbety_err,
+            "Model+tunes - meas",
+            "^-",
+        )
+        eff_dbety, eff_dbety_err = _rel_diff(
+            twiss_eff_online["bety"], twiss_eff_online.get("bety_err"), meas_bety, meas_bety_err
+        )
+        _plot(
+            ax_beta_y,
+            meas_twiss.loc[common_bpms, "s"],
+            eff_dbety,
+            eff_dbety_err,
+            "Model+tunes+ests - meas",
+            "d-",
+        )
+        ax_beta_y.axhline(0.0, color="k", linewidth=0.8, alpha=0.5)
+        ax_beta_y.set_ylabel("Δ β_y / β_y vs meas (%)")
+        ax_beta_y.set_title(f"Arc {arc_num} - Vertical β Δ")
+        ax_beta_y.legend(fontsize=8)
+        ax_beta_y.grid(visible=True, alpha=0.3)
+        ax_beta_y.set_xlabel("S (m)")
+
+        fig.suptitle(
+            f"Phase advance & beta comparison - {squeeze_step} - Arc {arc_num} (start: {start_bpm})",
+            fontsize=12,
+        )
         plt.tight_layout()
         plt.savefig(results_dir / f"phase_advance_{squeeze_step}_arc{arc_num}.png", dpi=150)
     plt.show()
@@ -440,10 +611,28 @@ def main():
     parser.add_argument(
         "--optics", action="store_true", help="Use the optimisation from optics measurements"
     )
+    parser.add_argument(
+        "--arcs",
+        type=str,
+        default=None,
+        help="Arcs to plot: can be a range (e.g., '4-6') or comma-separated (e.g., '5,6,7'). If not specified, plots all arcs 1-8.",
+    )
     args = parser.parse_args()
     beam = args.beam
     squeeze_step = args.squeeze_step
     use_optics = args.optics
+
+    # Parse arcs argument
+    arc_list = None
+    if args.arcs:
+        if "-" in args.arcs:
+            # Handle range format (e.g., "4-6")
+            parts = args.arcs.split("-")
+            start, end = int(parts[0]), int(parts[1])
+            arc_list = list(range(start, end + 1))
+        else:
+            # Handle comma-separated format (e.g., "5,6,7")
+            arc_list = [int(x.strip()) for x in args.arcs.split(",")]
 
     beam_path = BETABEAT_DIR / get_measurement_date(squeeze_step) / f"LHCB{beam}/"
     model_base_dir = beam_path / "Models/"
@@ -491,6 +680,7 @@ def main():
         tune_knobs_file,
         beam_energy,
         beam,
+        arcs=arc_list,
     )
 
 

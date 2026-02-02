@@ -229,10 +229,10 @@ def get_bpm_points(arc_num: int, beam: int) -> tuple[str, list[str], list[str], 
     # end_bpm = f"BPM.15R{arc_num}{suffix}" # Testing with BPM.15R
     end_bpm = f"BPM.12L{next_arc}{suffix}"
     magnet_range = f"{start_bpm}/{end_bpm}"
-    first_i = 11
-    last_i = 11
-    bpm_start_points = [f"BPM.{i}R{arc_num}{suffix}" for i in range(first_i, 14, 1)]
-    bpm_end_points = [f"BPM.{i}L{next_arc}{suffix}" for i in range(last_i, 14, 1)]
+    first_i = 13
+    last_i = 13
+    bpm_start_points = [f"BPM.{i}R{arc_num}{suffix}" for i in range(first_i, 15, 1)]
+    bpm_end_points = [f"BPM.{i}L{next_arc}{suffix}" for i in range(last_i, 15, 1)]
     bpm_range = f"BPM.{first_i}R{arc_num}{suffix}/BPM.{last_i}L{next_arc}{suffix}"
 
     # Testing these fixed points
@@ -317,23 +317,27 @@ def setup_temp_directory(temp_analysis_dir: Path, skip_reload: bool) -> None:
         temp_analysis_dir.mkdir(exist_ok=True)
 
 
-def save_dpp_metadata(temp_analysis_dir: Path, freq: str, dpp_values: list[float]) -> None:
-    """Save dpp_est values to metadata file."""
-    metadata_file = temp_analysis_dir / f"dpp_metadata_{freq}.json"
-    with metadata_file.open("w") as f:
-        json.dump({"dpp_est_values": dpp_values}, f)
-
-
-def load_dpp_metadata(temp_analysis_dir: Path, freq: str) -> list[float]:
-    """Load dpp_est values from metadata file."""
-    metadata_file = temp_analysis_dir / f"dpp_metadata_{freq}.json"
+def load_metadata(temp_analysis_dir: Path) -> dict:
+    """Load metadata from unified metadata file."""
+    metadata_file = temp_analysis_dir / "metadata.json"
     if not metadata_file.exists():
-        raise FileNotFoundError(
-            f"DPP metadata file {metadata_file} not found. Run without --skip-reload to regenerate."
-        )
+        return {}
     with metadata_file.open("r") as f:
-        data = json.load(f)
-    return data["dpp_est_values"]
+        return json.load(f)
+
+
+def save_metadata(temp_analysis_dir: Path, metadata: dict) -> None:
+    """Save metadata to unified metadata file."""
+    metadata_file = temp_analysis_dir / "metadata.json"
+    with metadata_file.open("w") as f:
+        json.dump(metadata, f, indent=2)
+
+
+def update_metadata(temp_analysis_dir: Path, **kwargs) -> None:
+    """Update specific keys in metadata file."""
+    metadata = load_metadata(temp_analysis_dir)
+    metadata.update(kwargs)
+    save_metadata(temp_analysis_dir, metadata)
 
 
 def get_analysis_folders(
@@ -446,7 +450,13 @@ def process_frequency_results(
             }
         )
 
-    save_dpp_metadata(temp_analysis_dir, freq, dpp_values)
+    # Save dpp values for this frequency
+    metadata = load_metadata(temp_analysis_dir)
+    if "dpp_values" not in metadata:
+        metadata["dpp_values"] = {}
+    metadata["dpp_values"][freq] = dpp_values
+    save_metadata(temp_analysis_dir, metadata)
+
     return measurements, machine_deltap
 
 
@@ -459,7 +469,8 @@ def load_frequency_results(
 ) -> tuple[list[dict], float | None]:
     """Load previously processed frequency results."""
     validate_processed_files(temp_analysis_dir, freq, num_files)
-    dpp_values = load_dpp_metadata(temp_analysis_dir, freq)
+    metadata = load_metadata(temp_analysis_dir)
+    dpp_values = metadata["dpp_values"][freq]
 
     if freq == ZEROHZ and machine_deltap is None:
         machine_deltap = dpp_values[0]
@@ -622,9 +633,13 @@ def process_squeeze_step(
     all_measurements = []
     all_bad_bpms = set()
     machine_deltap = None
+    if ZEROHZ in meas_times[squeeze_step]:
+        raise NotImplementedError("Please process 0Hz frequency first for closed orbit and machine deltap.")
 
     if skip_reload:
         # Load previously processed data
+        metadata = load_metadata(temp_analysis_dir)
+        energy = metadata["energy"]
         for freq, times in meas_times[squeeze_step].items():
             if not times:
                 continue
@@ -642,16 +657,21 @@ def process_squeeze_step(
 
         for freq, times in meas_times[squeeze_step].items():
             if not times:
-                continue
+                raise ValueError(f"No measurement times found for frequency {freq}")
             logger.info(f"  Frequency {freq}: {len(times)} measurements")
-            files, folders, tune_knobs_file, bad_bpms, energy = prepare_frequency_metadata(
+            files, folders, tune_knobs_file, bad_bpms, freq_energy = prepare_frequency_metadata(
                 freq, times, beam, meas_base_dir, results_dir, squeeze_step
             )
+            if freq == ZEROHZ:
+                energy = freq_energy
             freq_metadata[freq] = (files, tune_knobs_file)
             all_files.extend(files)
             for f in files:
                 file_to_freq[str(f)] = freq
             all_bad_bpms.update(bad_bpms)
+
+        # Save energy metadata
+        update_metadata(temp_analysis_dir, energy=energy)
 
         # Single call to process_measurements for all files
         logger.info(f"Processing {len(all_files)} total measurement files...")
