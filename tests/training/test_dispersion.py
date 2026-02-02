@@ -13,6 +13,9 @@ from typing import TYPE_CHECKING, Literal
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+
+pytest.importorskip("tmom_recon")
+
 import tfs
 from omc3.hole_in_one import hole_in_one_entrypoint
 from omc3.model.constants import TWISS_ELEMENTS_DAT

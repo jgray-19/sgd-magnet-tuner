@@ -9,6 +9,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
+
+pytest.importorskip("tmom_recon")
+pytest.importorskip("xtrack_tools")
+
 from xtrack_tools.monitors import line_to_dataframes
 from xtrack_tools.tracking import run_tracking_without_ac_dipole
 
@@ -27,7 +31,6 @@ if TYPE_CHECKING:
 
     from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 
-pytest.importorskip("xtrack_tools")
 
 logger = logging.getLogger(__name__)
 

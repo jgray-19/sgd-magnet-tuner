@@ -12,6 +12,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 import pytest
+
+pytest.importorskip("tmom_recon")
+pytest.importorskip("xtrack_tools")
+
 import tfs
 from tmom_recon import (
     calculate_dispersive_pz,
@@ -39,9 +43,6 @@ if TYPE_CHECKING:
     from xtrack import xt
 
     from aba_optimiser.mad.base_mad_interface import BaseMadInterface
-
-pytest.importorskip("tmom_recon")
-pytest.importorskip("xtrack_tools")
 
 def _run_track_with_acd(
     env: xt.Environment,
