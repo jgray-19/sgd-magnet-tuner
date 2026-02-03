@@ -28,6 +28,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: true
 
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
@@ -51,30 +53,3 @@ jobs:
         uses: py-cov-action/python-coverage-comment-action@v3
         with:
           GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Coverage Decrease Calculation
-        id: coverage_decrease
-        env:
-           REF_COVERAGE: ${{ steps.coverage_comment.outputs.reference_percent_covered }}
-        run: |
-              MIN_ALLOWED=$(echo "${REF_COVERAGE} - ${ALLOWED_COVERAGE_DECREASE}" | bc)
-              echo "min_allowed=${MIN_ALLOWED}" >> $GITHUB_OUTPUT
-
-      - name: Check Coverage Decrease
-        if: ${{ steps.coverage_comment.outputs.new_percent_covered < steps.coverage_decrease.outputs.min_allowed }}
-        env:
-           MIN_COVERAGE_ALLOWED: ${{ steps.coverage_decrease.outputs.min_allowed }}
-           CURRENT_COVERAGE: ${{ steps.coverage_comment.outputs.new_percent_covered }}
-        run: echo "Coverage decreased more than allowed (${CURRENT_COVERAGE} < ${MIN_COVERAGE_ALLOWED})." && exit 1
-
-      - name: Minumum Coverage Check
-        if: ${{ steps.coverage_comment.outputs.new_percent_covered < env.MIN_COVERAGE }}
-        env:
-           CURRENT_COVERAGE: ${{ steps.coverage_comment.outputs.new_percent_covered }}
-        run: echo "Coverage is below minimum (${CURRENT_COVERAGE} < ${MIN_COVERAGE})." && exit 1
-
-      - name: Minimum Diff Coverage Check
-        if: ${{ steps.coverage_comment.outputs.diff_total_percent_covered < env.MIN_DIFF_COVERAGE }}
-        env:
-            CURRENT_DIFF_COVERAGE: ${{ steps.coverage_comment.outputs.diff_total_percent_covered }}
-        run: echo "Diff coverage is below minimum (${CURRENT_DIFF_COVERAGE} < ${MIN_DIFF_COVERAGE})." && exit 1

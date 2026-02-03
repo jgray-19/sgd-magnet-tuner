@@ -1,6 +1,7 @@
 # sgd-magnet-tuner
 
 [![Coverage Status](https://github.com/jgray-19/sgd-magnet-tuner/actions/workflows/coverage.yml/badge.svg)](https://github.com/jgray-19/sgd-magnet-tuner/actions/workflows/coverage.yml)
+![Coverage](https://raw.githubusercontent.com/jgray-19/sgd-magnet-tuner/python-coverage-comment-action-data/badge.svg)
 
 Tools for optimising accelerator magnet knob strengths using gradient-based
 methods with MAD-NG. This README is short and focused — see the docs for
