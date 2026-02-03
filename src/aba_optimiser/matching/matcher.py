@@ -541,7 +541,10 @@ end
         Returns:
             List of BPM names within the specified magnet range.
         """
-        return self.mad_interface.get_bpm_list(self.config.magnet_range)
+        # `BaseMadInterface.get_bpm_list` returns a tuple of (all_bpms, bpms_in_range).
+        # We only want the list of BPMs within the requested range.
+        all_bpms, bpms_in_range = self.mad_interface.get_bpm_list(self.config.magnet_range)
+        return bpms_in_range
 
     def _flatten_all_vectors(self, vectors: list[np.ndarray]) -> list[np.ndarray]:
         """Flatten all input vectors to 1D arrays.
