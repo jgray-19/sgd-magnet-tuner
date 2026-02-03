@@ -43,6 +43,9 @@ jobs:
       - name: Install package
         run: uv pip install '.[test,tracking]'
 
+      - name: Install dependencies from GitHub
+        run: uv pip install git+https://github.com/jgray-19/xtrack_tools.git git+https://github.com/jgray-19/tmom-recon.git
+
       - name: Run all tests
         run: |
           export PYTHONPATH=$PYTHONPATH:$(pwd)/src
