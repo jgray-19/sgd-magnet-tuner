@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.config import PARTICLE_MASS
+from aba_optimiser.config import PROTON_MASS
 from aba_optimiser.physics.deltap import dp2pt
 from aba_optimiser.training.utils import create_bpm_range_specs
 from aba_optimiser.workers import (
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
     import pandas as pd
 
+    from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.config import SimulationConfig
 
 
@@ -63,12 +64,10 @@ class WorkerManager:
         magnet_range: str,
         fixed_start: str,
         fixed_end: str,
-        sequence_file_path: Path,
+        accelerator: Accelerator,
         corrector_strengths_files: list[Path],
         tune_knobs_files: list[Path],
         bad_bpms: list[str] | None = None,
-        seq_name: str | None = None,
-        beam_energy: float = 6800.0,
         flattop_turns: int = 1000,
         num_tracks: int = 1,
         use_fixed_bpm: bool = True,
@@ -76,7 +75,25 @@ class WorkerManager:
         mad_logfile: Path | None = None,
         optimise_knobs: list[str] | None = None,
     ):
-        """Initialise the WorkerManager."""
+        """Initialise the WorkerManager.
+
+        Args:
+            n_data_points: Number of data points per BPM pair
+            ybpm: Y BPM name
+            magnet_range: Range of magnets
+            fixed_start: Fixed start BPM
+            fixed_end: Fixed end BPM
+            accelerator: Accelerator instance encapsulating machine parameters
+            corrector_strengths_files: List of corrector strength files
+            tune_knobs_files: List of tune knob files
+            bad_bpms: List of bad BPMs
+            flattop_turns: Number of flattop turns
+            num_tracks: Number of tracks
+            use_fixed_bpm: Whether to use fixed BPM
+            debug: Debug mode
+            mad_logfile: MAD log file path
+            optimise_knobs: List of knobs to optimize
+        """
         self.n_data_points = n_data_points
         self.parent_conns: list[Connection] = []
         self.workers: list[mp.Process] = []
@@ -84,14 +101,13 @@ class WorkerManager:
         self.magnet_range = magnet_range
         self.fixed_start = fixed_start
         self.fixed_end = fixed_end
-        self.sequence_file_path = sequence_file_path
+        self.accelerator = accelerator
         self.corrector_strengths_files = corrector_strengths_files
         self.tune_knobs_files = tune_knobs_files
         self._pos_cache: dict[int, dict[tuple[int, str], int]] = {}
         self.bad_bpms = bad_bpms
-        self.seq_name = seq_name
         self.use_fixed_bpm = use_fixed_bpm
-        self.beam_energy = beam_energy
+        self.beam_energy = accelerator.beam_energy
         self.flattop_turns = flattop_turns
         self.num_tracks = num_tracks
         self.debug = debug
@@ -100,7 +116,7 @@ class WorkerManager:
 
     def _compute_pt(self, file_idx: int, machine_deltaps: list[float]) -> float:
         """Compute transverse momentum based on file index."""
-        return dp2pt(machine_deltaps[file_idx], PARTICLE_MASS, self.beam_energy)
+        return dp2pt(machine_deltaps[file_idx], PROTON_MASS, self.beam_energy)
 
     def create_worker_payloads(
         self,
@@ -170,19 +186,16 @@ class WorkerManager:
                     precomputed_weights=None,
                 )
                 config = WorkerConfig(
+                    accelerator=self.accelerator,
                     start_bpm=start_bpm,
                     end_bpm=end_bpm,
                     magnet_range=self.magnet_range,
-                    sequence_file_path=self.sequence_file_path,
                     corrector_strengths=self.corrector_strengths_files[primary_file_idx],
                     tune_knobs_file=self.tune_knobs_files[primary_file_idx],
-                    beam_energy=self.beam_energy,
                     sdir=sdir,
                     bad_bpms=self.bad_bpms,
-                    seq_name=self.seq_name,
                     debug=self.debug,
                     mad_logfile=self.mad_logfile,
-                    optimise_knobs=self.optimise_knobs,
                 )
 
                 payloads.append((data, config, primary_file_idx))

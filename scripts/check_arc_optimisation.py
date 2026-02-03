@@ -24,8 +24,8 @@ import numpy as np
 import pandas as pd
 import tfs
 
-from aba_optimiser.config import BEAM_ENERGY
-from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
+from aba_optimiser.accelerators import LHC
+from aba_optimiser.mad import GenericMadInterface
 from aba_optimiser.measurements.squeeze_helpers import (
     ANALYSIS_DIRS,
     PROJECT_ROOT,
@@ -38,6 +38,7 @@ from aba_optimiser.measurements.squeeze_helpers import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+BEAM_ENERGY = 6800
 # Arc 1 BPM boundaries (Beam 1)
 ARC1_START_BPM = "BPM.13R3.B1"
 # ARC1_START_BPM = "BPM.20R1.B1"
@@ -189,11 +190,8 @@ def generate_twiss_data(sequence_file: Path, beam: int, deltap: float) -> pd.Dat
 
     logger.info(f"Generating twiss data using MAD-NG for sequence: {sequence_file}")
 
-    mad_iface = OptimisationMadInterface(
-        sequence_file=sequence_file,
-        seq_name=f"lhcb{beam}",
-        beam_energy=BEAM_ENERGY,
-    )
+    accelerator = LHC(beam=beam, beam_energy=BEAM_ENERGY, sequence_file=sequence_file)
+    mad_iface = GenericMadInterface(accelerator)
 
 
     # Generate twiss table
@@ -324,18 +322,15 @@ def track_particles_through_arc1(
     print("tune knobs file:", tune_knobs_file)
 
     # Setup MAD interface for Arc1
-    mad_iface = OptimisationMadInterface(
-        sequence_file=str(sequence_file),
-        seq_name=f"lhcb{beam}",
-        beam_energy=BEAM_ENERGY,
-        bpm_pattern="BPM",
+    accelerator = LHC(beam=beam, beam_energy=BEAM_ENERGY, sequence_file=sequence_file)
+    mad_iface = GenericMadInterface(
+        accelerator,
         magnet_range=f"{ARC1_START_BPM}/{ARC1_END_BPM}",
         bpm_range=f"{ARC1_START_BPM}/{ARC1_END_BPM}",
         corrector_strengths=corrector_file,
         tune_knobs_file=tune_knobs_file,
         start_bpm=ARC1_START_BPM,
-        simulation_config=None,  # We're not optimizing, just tracking
-        py_name="py"
+        py_name="py",
     )
 
     # Apply optimized magnet strengths if provided

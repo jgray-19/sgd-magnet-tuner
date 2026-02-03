@@ -8,7 +8,6 @@ from aba_optimiser.config import (
     NO_NOISE_FILE,
 )
 from aba_optimiser.dataframes.utils import select_markers
-from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 from aba_optimiser.plotting.utils import setup_scientific_formatting
 
 ACD_ON = False  # Whether the ACD was used or not (Ignores the ramp up turns)
@@ -46,37 +45,6 @@ if ACD_ON:
     # kalman_start = kalman_start[kalman_start.index > RAMP_UP_TURNS]
     # kalman_other = kalman_other[kalman_other.index > RAMP_UP_TURNS]
 
-# Prepare analytical ellipses for start BPM
-ps_diag_start = PhaseSpaceDiagnostics(
-    bpm=start_bpm,
-    x_data=noisy_start["x"],
-    px_data=noisy_start["px"],
-    y_data=noisy_start["y"],
-    py_data=noisy_start["py"],
-)
-x_ellipse, px_ellipse, y_ellipse, py_ellipse = ps_diag_start.ellipse_points()
-x_upper, px_upper, y_upper, py_upper = ps_diag_start.ellipse_sigma(sigma_level=1.0)
-x_lower, px_lower, y_lower, py_lower = ps_diag_start.ellipse_sigma(sigma_level=-1.0)
-
-# Prepare analytical ellipses for other BPM
-ps_diag_other = PhaseSpaceDiagnostics(
-    bpm=other_bpm,
-    x_data=noise_other["x"],
-    px_data=noise_other["px"],
-    y_data=noise_other["y"],
-    py_data=noise_other["py"],
-    info=True,
-)
-x_ellipse_other, px_ellipse_other, y_ellipse_other, py_ellipse_other = (
-    ps_diag_other.ellipse_points()
-)
-x_upper_other, px_upper_other, y_upper_other, py_upper_other = (
-    ps_diag_other.ellipse_sigma(sigma_level=1.0)
-)
-x_lower_other, px_lower_other, y_lower_other, py_lower_other = (
-    ps_diag_other.ellipse_sigma(sigma_level=-1.0)
-)
-
 
 def plot_phase_space(
     *,
@@ -88,16 +56,13 @@ def plot_phase_space(
     coord1: str,
     coord2: str,
     title: str,
-    ellipse=None,
     extra_mask=None,
     extra_labels=None,
 ):
     """General phase space plot function"""
 
     # ax.scatter(noisy[coord1], noisy[coord2], s=1, color="blue", label="Noisy")
-    ax.scatter(
-        non_noisy[coord1], non_noisy[coord2], s=1, color="red", label="Non-noisy"
-    )
+    ax.scatter(non_noisy[coord1], non_noisy[coord2], s=1, color="red", label="Non-noisy")
     # ax.scatter(filtered[coord1], filtered[coord2], s=1, color="green", label="Filtered")
     # ax.scatter(kalman[coord1], kalman[coord2], s=1, color="green", label="Kalman")
 
@@ -124,19 +89,6 @@ def plot_phase_space(
             label=extra_labels[2],
         )
 
-    if ellipse is not None:
-        # ellipse: (center, upper, lower) tuples
-        center_x, center_y = ellipse[0]
-        upper_x, upper_y = ellipse[1]
-        lower_x, lower_y = ellipse[2]
-        ax.plot(center_x, center_y, color="orange", label="Analytical Ellipse")
-        ax.plot(
-            upper_x, upper_y, color="orange", linestyle="--", label="+1 Sigma Ellipse"
-        )
-        ax.plot(
-            lower_x, lower_y, color="orange", linestyle="--", label="-1 Sigma Ellipse"
-        )
-
     coord1 = coord1.replace("p", "p_")
     coord2 = coord2.replace("p", "p_")
     ax.set_xlabel("$" + coord1 + "$")
@@ -160,7 +112,6 @@ plot_configs = [
         "coord1": "x",
         "coord2": "px",
         "title": f"x, px Phase Space ({start_bpm})",
-        "ellipse": [(x_ellipse, px_ellipse), (x_upper, px_upper), (x_lower, px_lower)],
     },
     {
         "ax": axs[0, 1],
@@ -171,7 +122,6 @@ plot_configs = [
         "coord1": "y",
         "coord2": "py",
         "title": f"y, py Phase Space ({start_bpm})",
-        "ellipse": [(y_ellipse, py_ellipse), (y_upper, py_upper), (y_lower, py_lower)],
     },
     {
         "ax": axs[1, 0],
@@ -182,11 +132,6 @@ plot_configs = [
         "coord1": "x",
         "coord2": "px",
         "title": f"x, px Phase Space ({other_bpm})",
-        "ellipse": [
-            (x_ellipse_other, px_ellipse_other),
-            (x_upper_other, px_upper_other),
-            (x_lower_other, px_lower_other),
-        ],
     },
     {
         "ax": axs[1, 1],
@@ -197,18 +142,13 @@ plot_configs = [
         "coord1": "y",
         "coord2": "py",
         "title": f"y, py Phase Space ({other_bpm})",
-        "ellipse": [
-            (y_ellipse_other, py_ellipse_other),
-            (y_upper_other, py_upper_other),
-            (y_lower_other, py_lower_other),
-        ],
     },
 ]
 
 
 # Loop over subplots
 for cfg in plot_configs:
-    plot_phase_space(**cfg)
+    plot_phase_space(**cfg)  # ty:ignore[invalid-argument-type]
 
 # Global legend
 handles, labels = axs[0, 0].get_legend_handles_labels()

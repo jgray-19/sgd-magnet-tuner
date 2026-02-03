@@ -11,11 +11,12 @@ import pytest
 import tfs
 from omc3.scripts.fake_measurement_from_model import generate as fake_measurement
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig
 from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
 from aba_optimiser.simulation.optics import perform_orbit_correction
-from aba_optimiser.training.controller_config import BPMConfig, SequenceConfig
+from aba_optimiser.training.controller_config import SequenceConfig
 from aba_optimiser.training_optics import OpticsController
 
 if TYPE_CHECKING:
@@ -53,7 +54,7 @@ def _generate_fake_measurement(
     """Generate a parquet file containing noiseless tracking data for the requested BPMs."""
     # Create unique corrector file path based on destination
     corrector_file = tmp_path / "correctors.tfs"
-    interface.mad["zero_twiss", "_"] = interface.mad.twiss(sequence="loaded_sequence")  # ty:ignore[invalid-assignment]
+    interface.mad["zero_twiss", "_"] = interface.mad.twiss(sequence="loaded_sequence")
 
     # Perform orbit correction for off-momentum beam (delta = 2e-4)
     magnet_strengths = {}
@@ -150,21 +151,18 @@ def test_controller_opt(
     )
 
     sequence_config = SequenceConfig(
-        sequence_file_path=seq_b1,
         magnet_range=magnet_range,
-        seq_name="lhcb1",
     )
 
-    bpm_config = BPMConfig(
-        start_points=bpm_start_points,
-        end_points=bpm_end_points,
-    )
+    accel = LHC(beam=1, sequence_file=seq_b1, beam_energy=6800.0, optimise_quadrupoles=True)
 
     ctrl = OpticsController(
-        sequence_config=sequence_config,
-        optics_folder=analysis_dir,
-        bpm_config=bpm_config,
-        optimiser_config=optimiser_config,
+        accel,
+        sequence_config,
+        optimiser_config,
+        analysis_dir,
+        bpm_start_points,
+        bpm_end_points,
         show_plots=False,
         corrector_file=corrector_file,
         tune_knobs_file=tune_knobs_file,

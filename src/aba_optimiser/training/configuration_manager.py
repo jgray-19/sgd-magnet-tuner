@@ -7,40 +7,24 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.config import BEAM_ENERGY
-from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
+from aba_optimiser.mad import GradientDescentMadInterface, get_mad_interface
 from aba_optimiser.workers import TrackingWorker
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.config import SimulationConfig
 
 
 LOGGER = logging.getLogger(__name__)
-
-
-def circular_far_samples(
-    arr: np.ndarray, k: int, start_offset: int = 0
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Pick k indices as far apart as possible on a circular array.
-    k must be <= len(arr). start_offset rotates the selection.
-    """
-    n = len(arr)
-    if k > n:
-        raise ValueError("k must be <= len(arr)")
-    step = n / k
-    # bin centers → unique indices even when step is non-integer
-    idx = (np.floor((np.arange(k) + 0.5) * step + start_offset) % n).astype(int)
-    return arr[idx], idx
-
 
 class ConfigurationManager:
     """Manages configuration and setup for the optimisation process."""
 
     def __init__(
         self,
+        accelerator: Accelerator,
         simulation_config: SimulationConfig,
         magnet_range: str,
         bpm_start_points: list[str],
@@ -48,54 +32,51 @@ class ConfigurationManager:
         bpm_range: str | None = None,
         optimise_knobs: list[str] | None = None,
     ):
-        self.mad_iface: OptimisationMadInterface = None
+        self.mad_iface: GradientDescentMadInterface = None
         self.knob_names: list[str] = []
         self.elem_spos: list[float] = []
         self.all_bpms: list[str] = []
         self.initial_strengths: np.ndarray = np.array([])
-        self.bpm_ranges: list[str] = []
+        self.fixed_start: str = ""
+        self.fixed_end: str = ""
+        self.bend_lengths: dict | None = None
 
+        self.accelerator = accelerator
         self.start_bpms = bpm_start_points
-        self.end_bpms = bpm_end_points
+        self.end_bpms: list[str] = bpm_end_points
         self.magnet_range = magnet_range
         self.simulation_config = simulation_config
         self.bpm_range = bpm_range
-        self.optimise_knobs = optimise_knobs
 
     def setup_mad_interface(
         self,
-        sequence_file_path: str,
         first_bpm: str | None,
         bad_bpms: list[str] | None,
-        seq_name: str | None = None,
-        beam_energy: float = BEAM_ENERGY,
         debug: bool = False,
         mad_logfile: Path | None = None,
     ) -> None:
         """Initialise the MAD-NG interface and get basic model parameters."""
-        self.mad_iface = OptimisationMadInterface(
-            sequence_file_path,
-            seq_name=seq_name,
+
+        self.mad_iface = get_mad_interface(self.accelerator)(
+            accelerator=self.accelerator,
             start_bpm=first_bpm,
             magnet_range=self.magnet_range,
             bpm_range=self.bpm_range,
-            simulation_config=self.simulation_config,
             corrector_strengths=None,
             tune_knobs_file=None,
             bad_bpms=bad_bpms,
-            beam_energy=beam_energy,
             debug=debug,
             mad_logfile=mad_logfile,
-            optimise_knobs=self.optimise_knobs,
         )
         self.knob_names = self.mad_iface.knob_names
 
-        self.elem_spos = self.mad_iface.elem_spos
+        self.elem_spos: list[int | float] = self.mad_iface.elem_spos
         self.all_bpms = self.mad_iface.all_bpms
         self.start_bpms = [bpm for bpm in self.start_bpms if bpm in self.all_bpms]
         self.end_bpms = [bpm for bpm in self.end_bpms if bpm in self.all_bpms]
-        if self.simulation_config.optimise_bends:
-            self.bend_lengths = self.mad_iface.bend_lengths
+
+        # Accelerator-specific bend normalisation (no-op by default)
+        self.bend_lengths = self.accelerator.get_bend_lengths(self.mad_iface)
 
         # Use bpm_range to determine fixed start and end points, defaulting to magnet_range
         effective_bpm_range = self.bpm_range or self.magnet_range

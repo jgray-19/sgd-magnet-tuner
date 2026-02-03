@@ -11,16 +11,15 @@ import numpy as np
 import pandas as pd
 from nxcals.spark_session_builder import get_or_create
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
 from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.measurements.knob_extraction import get_energy
 from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
-from aba_optimiser.training.controller import LHCController as Controller
-from aba_optimiser.training.controller_helpers import (
-    create_arc_bpm_config,
-    create_arc_measurement_config,
-)
+from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.controller_config import SequenceConfig
+from aba_optimiser.training.controller_helpers import create_arc_measurement_config
 
 logger = logging.getLogger(__name__)
 
@@ -119,27 +118,40 @@ def optimise_ranges(
     for i in range(num_ranges):
         logger.info(f"Starting optimisation for {range_type} {i + 1}/{num_ranges} for {title}")
 
-        controller = Controller(
+        # Create LHC accelerator instance
+        accelerator = LHC(
             beam=beam,
-            measurement_config=create_arc_measurement_config(
-                measurement_file,
-                num_tracks=1,
-                flattop_turns=3,
-                corrector_files=corrector_knobs_file,
-                tune_knobs_files=tune_knobs_file,
-            ),
-            bpm_config=create_arc_bpm_config(
-                range_config.bpm_starts[i], range_config.bpm_end_points[i]
-            ),
+            beam_energy=energy,
+            sequence_file=sequence_path,
+            optimise_energy=True,  # Since we're optimizing deltap/pt
+        )
+
+        sequence_config = SequenceConfig(
             magnet_range=range_config.magnet_ranges[i],
-            optimiser_config=optimiser_config,
-            simulation_config=simulation_config,
-            sequence_path=sequence_path,
+            bpm_range=f"{range_config.bpm_starts[i][0]}/{range_config.bpm_end_points[i][0]}",
+            bad_bpms=bad_bpms,
+            first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
+        )
+
+        measurement_config = create_arc_measurement_config(
+            measurement_file,
+            num_tracks=1,
+            flattop_turns=3,
+            corrector_files=corrector_knobs_file,
+            tune_knobs_files=tune_knobs_file,
+        )
+
+        controller = Controller(
+            accelerator,
+            optimiser_config,
+            simulation_config,
+            sequence_config,
+            measurement_config,
+            range_config.bpm_starts[i],
+            range_config.bpm_end_points[i],
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,
-            bad_bpms=bad_bpms,
-            beam_energy=energy,
         )
         final_knobs, uncs = controller.run()
         fitted_deltap = final_knobs["deltap"]
@@ -178,6 +190,22 @@ def optimise_corrector_ranges(
         logger.info(
             f"Starting corrector optimisation for {range_type} {i + 1}/{num_ranges} for {title}"
         )
+
+        # Create LHC accelerator instance
+        accelerator = LHC(
+            beam=beam,
+            beam_energy=energy,
+            sequence_file=sequence_path,
+            optimise_correctors=True,
+        )
+
+        sequence_config = SequenceConfig(
+            magnet_range=range_config.magnet_ranges[i],
+            bpm_range=f"{range_config.bpm_starts[i][0]}/{range_config.bpm_end_points[i][0]}",
+            bad_bpms=bad_bpms,
+            first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
+        )
+
         meas_config = create_arc_measurement_config(
             measurement_file,
             machine_deltap=machine_deltap,
@@ -187,23 +215,17 @@ def optimise_corrector_ranges(
             tune_knobs_files=tune_knobs_file,
         )
 
-        bpm_config = create_arc_bpm_config(
-            range_config.bpm_starts[i], range_config.bpm_end_points[i]
-        )
-
         controller = Controller(
-            beam=beam,
-            measurement_config=meas_config,
-            bpm_config=bpm_config,
-            magnet_range=range_config.magnet_ranges[i],
-            optimiser_config=optimiser_config,
-            simulation_config=simulation_config,
-            sequence_path=sequence_path,
+            accelerator,
+            optimiser_config,
+            simulation_config,
+            sequence_config,
+            meas_config,
+            range_config.bpm_starts[i],
+            range_config.bpm_end_points[i],
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,
-            bad_bpms=bad_bpms,
-            beam_energy=energy,
         )
         final_knobs, _ = controller.run()
         results.append(final_knobs)
@@ -510,7 +532,6 @@ def process_single_config(
         tracks_per_worker=1,
         num_batches=1,
         num_workers=1,
-        optimise_energy=True,
         use_fixed_bpm=use_fixed_bpm,
         optimise_momenta=True,
     )

@@ -25,6 +25,7 @@ from turn_by_turn.structures import TbtData
 from xtrack_tools.acd import run_ac_dipole_tracking_with_particles
 from xtrack_tools.env import initialise_env
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.dispersion.dispersion_estimation import estimate_corrector_dispersions
 from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
@@ -68,7 +69,7 @@ def _generate_nonoise_track(
     """
     seq_name = f"lhcb{beam}"
 
-    mad.mad["zero_twiss", "_"] = mad.mad.twiss(sequence="loaded_sequence")  # ty:ignore[invalid-assignment]
+    mad.mad["zero_twiss", "_"] = mad.mad.twiss(sequence="loaded_sequence")
     # Apply magnet perturbations
     magnet_strengths = {}
     if peturbed_magnets is not None:
@@ -123,7 +124,7 @@ def _generate_nonoise_track(
 
     for lag in [np.pi / 3]:
         monitored_line = run_ac_dipole_tracking_with_particles(
-            line=env[seq_name],  # ty:ignore[not-subscriptable]
+            line=env[seq_name],
             beam=beam,
             ramp_turns=acd_ramp,
             flattop_turns=flattop_turns,

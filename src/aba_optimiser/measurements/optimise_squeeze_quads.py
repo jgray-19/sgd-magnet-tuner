@@ -9,8 +9,9 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
-from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
+from aba_optimiser.mad.optimising_mad_interface import GenericMadInterface
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.measurements.squeeze_helpers import (
     ANALYSIS_DIRS,
@@ -21,7 +22,7 @@ from aba_optimiser.measurements.squeeze_helpers import (
 )
 from aba_optimiser.measurements.utils import find_all_bad_bpms
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig, SequenceConfig
+from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -420,11 +421,8 @@ def process_frequency_results(
         dpp_est = pzs.attrs["DPP_EST"]
         dpp_values.append(dpp_est)
         deltap = 0.0 if freq == ZEROHZ else dpp_est - (machine_deltap or 0.0)
-
-        mad_iface = OptimisationMadInterface(
-            sequence_file=sequence_path,
-            seq_name=f"lhcb{beam}",
-            beam_energy=energy,
+        mad_iface = GenericMadInterface(
+            LHC(beam, beam_energy=energy, sequence_file=sequence_path),
             bpm_pattern="BPM",
         )
         tws = mad_iface.run_twiss(deltap=deltap, observe=1)
@@ -498,21 +496,28 @@ def create_configs(
     arc_num: int,
     measurements: list[dict],
     energy: float,
-) -> tuple[SequenceConfig, BPMConfig, MeasurementConfig]:
-    """Create configuration objects for optimisation."""
+) -> tuple[LHC, SequenceConfig, list[str], list[str], MeasurementConfig]:
+    """Create configuration objects for optimisation.
+
+    Returns:
+        Tuple of (accelerator, sequence_config, bpm_start_points, bpm_end_points, measurement_config)
+    """
     magnet_range, bpm_start_points, bpm_end_points, bpm_range = get_bpm_points(arc_num, beam)
 
+    # Create LHC accelerator instance
+    accelerator = LHC(
+        beam=beam,
+        beam_energy=energy,
+        sequence_file=sequence_path,
+        optimise_quadrupoles=True,
+    )
+
     sequence_config = SequenceConfig(
-        sequence_file_path=sequence_path,
         magnet_range=magnet_range,
         bpm_range=bpm_range,
-        beam_energy=energy,
-        seq_name=f"lhcb{beam}",
         bad_bpms=list(all_bad_bpms),
         first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
     )
-
-    bpm_config = BPMConfig(start_points=bpm_start_points, end_points=bpm_end_points)
 
     measurement_config = MeasurementConfig(
         measurement_files=[m["file"] for m in measurements],
@@ -523,7 +528,7 @@ def create_configs(
         bunches_per_file=3,
     )
 
-    return sequence_config, bpm_config, measurement_config
+    return accelerator, sequence_config, bpm_start_points, bpm_end_points, measurement_config
 
 
 def get_default_optimiser_config() -> OptimiserConfig:
@@ -550,9 +555,6 @@ def get_default_simulation_config() -> SimulationConfig:
         num_batches=200,
         num_workers=60,
         use_fixed_bpm=False,
-        optimise_energy=False,
-        optimise_quadrupoles=True,
-        optimise_bends=False,
         optimise_momenta=True,  # Enable momentum optimisation (x, px, y, py) not just (x, y)
     )
 
@@ -585,18 +587,20 @@ def optimise_arc(
     """Optimise quadrupoles for a single arc."""
     logger.info(f"Optimising arc {arc_num} for {squeeze_step}")
 
-    sequence_config, bpm_config, measurement_config = create_configs(
-        beam, sequence_path, all_bad_bpms, arc_num, measurements, energy
+    accelerator, sequence_config, bpm_start_points, bpm_end_points, measurement_config = (
+        create_configs(beam, sequence_path, all_bad_bpms, arc_num, measurements, energy)
     )
 
     final_knobs_arc = None  # Start from sequence values or previous arc results
 
     ctrl = Controller(
+        accelerator,
         get_default_optimiser_config(),
         get_default_simulation_config(),
         sequence_config,
         measurement_config,
-        bpm_config,
+        bpm_start_points,
+        bpm_end_points,
         show_plots=False,
         initial_knob_strengths=final_knobs_arc,
         true_strengths=None,

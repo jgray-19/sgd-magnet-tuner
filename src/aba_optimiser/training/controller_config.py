@@ -15,66 +15,16 @@ class SequenceConfig:
     """Configuration for MAD-NG sequence and beam parameters.
 
     Attributes:
-        sequence_file_path: Path to the MAD-NG sequence file
         magnet_range: Range of magnets to optimize (e.g., "BPM.9R2.B1/BPM.9L3.B1")
         bpm_range: Range of BPMs for optimisation (None to use magnet_range)
         first_bpm: First BPM in the sequence (None for auto-detection)
-        seq_name: Sequence name in MAD-NG file (None for auto-detection)
-        beam_energy: Beam energy in GeV
         bad_bpms: List of BPM names to exclude from analysis
-        optimise_knobs: List of global knob names to optimise
     """
 
-    sequence_file_path: str | Path
     magnet_range: str
     bpm_range: str | None = None
     first_bpm: str | None = None
-    seq_name: str | None = None
-    beam_energy: float = 6800.0
     bad_bpms: list[str] | None = None
-    optimise_knobs: list[str] | None = None
-
-    @classmethod
-    def for_lhc_beam(
-        cls,
-        beam: int,
-        magnet_range: str,
-        sequence_path: Path | None = None,
-        beam_energy: float = 6800.0,
-        bad_bpms: list[str] | None = None,
-        bpm_range: str | None = None,
-        optimise_knobs: list[str] | None = None,
-    ) -> SequenceConfig:
-        """Create configuration for LHC beam 1 or 2.
-
-        Args:
-            beam: Beam number (1 or 2)
-            magnet_range: Range of magnets to optimize
-            sequence_path: Optional custom sequence file path
-            beam_energy: Beam energy in GeV
-            bad_bpms: List of bad BPMs to exclude
-            bpm_range: Optional BPM range for optimisation (defaults to magnet_range)
-            optimise_knobs: List of global knob names to optimise
-
-        Returns:
-            SequenceConfig configured for the specified LHC beam
-        """
-        from aba_optimiser.io.utils import get_lhc_file_path
-
-        sequence_file = sequence_path if sequence_path is not None else get_lhc_file_path(beam)
-        first_bpm = "BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2"
-        seq_name = f"lhcb{beam}"
-
-        return cls(
-            sequence_file_path=sequence_file,
-            magnet_range=magnet_range,
-            bpm_range=bpm_range,
-            first_bpm=first_bpm,
-            seq_name=seq_name,
-            beam_energy=beam_energy,
-            bad_bpms=bad_bpms,
-            optimise_knobs=optimise_knobs,
-        )
 
 
 @dataclass
@@ -108,50 +58,3 @@ class MeasurementConfig:
             self.tune_knobs_files = [self.tune_knobs_files]
         if isinstance(self.machine_deltaps, float | int):
             self.machine_deltaps = [self.machine_deltaps]
-
-
-@dataclass
-class BPMConfig:
-    """BPM range configuration.
-
-    Attributes:
-        start_points: List of starting BPM names for each range
-        end_points: List of ending BPM names for each range
-    """
-
-    start_points: list[str]
-    end_points: list[str]
-
-    def validate(self) -> None:
-        """Validate BPM configuration."""
-        if len(self.start_points) != len(self.end_points):
-            raise ValueError(
-                f"Number of start_points ({len(self.start_points)}) must match "
-                f"end_points ({len(self.end_points)})"
-            )
-
-
-@dataclass
-class ControllerConfig:
-    """Complete controller configuration combining all parameter groups.
-
-    This is a convenience class that bundles all configuration objects together.
-    Using this reduces a 15+ parameter constructor to just a few grouped configs.
-    """
-
-    sequence_config: SequenceConfig
-    bpm_config: BPMConfig
-    measurement_config: MeasurementConfig | None = None
-    optics_folder: str | Path | None = None
-    initial_knob_strengths: dict[str, float] | None = None
-    show_plots: bool = True
-
-    def validate(self) -> None:
-        """Validate the complete configuration."""
-        self.bpm_config.validate()
-
-        if self.measurement_config is None and self.optics_folder is None:
-            raise ValueError("Either measurement_config or optics_folder must be provided")
-
-        if self.measurement_config is not None and self.optics_folder is not None:
-            raise ValueError("Cannot specify both measurement_config and optics_folder")

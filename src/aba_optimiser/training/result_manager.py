@@ -18,7 +18,7 @@ from aba_optimiser.plotting.utils import show_plots
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from aba_optimiser.config import SimulationConfig
+    from aba_optimiser.accelerators import Accelerator
 
 
 LOGGER = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ class ResultManager:
         self,
         knob_names: list[str],
         elem_spos: list[float],
-        simulation_config: SimulationConfig,
+        accelerator: Accelerator,
         show_plots: bool = True,
         output_knobs_path: Path | None = None,
         knob_table_path: Path | None = None,
@@ -42,7 +42,7 @@ class ResultManager:
         Args:
             knob_names: List of knob names
             elem_spos: Element s-positions
-            simulation_config: Simulation configuration settings
+            accelerator: Accelerator instance for machine-specific info
             show_plots: Whether to display plots
             output_knobs_path: Path to save final knobs (defaults to PROJECT_ROOT/data/final_knobs.txt)
             knob_table_path: Path to save knob table (defaults to PROJECT_ROOT/data/knob_strengths_table.txt)
@@ -51,7 +51,7 @@ class ResultManager:
         self.knob_names = knob_names
         self.elem_spos = elem_spos
         self.show_plots = show_plots
-        self.simulation_config = simulation_config
+        self.accelerator = accelerator
 
         # Lazy import defaults if not provided
         if output_knobs_path is None or knob_table_path is None:
@@ -129,7 +129,7 @@ class ResultManager:
         LOGGER.info("Generating plots...")
         quad_unc = uncertainties.copy()
         knob_names = self.knob_names.copy()
-        if self.simulation_config.optimise_energy:
+        if self.accelerator.optimise_energy:
             knob_names.remove("deltap")
             quad_unc = quad_unc[:-1]  # Remove uncertainty for deltap
 
@@ -143,9 +143,7 @@ class ResultManager:
         save_prefix = f"{self.plots_dir}/"
         show_errorbars = True
 
-        if (
-            self.simulation_config.optimise_quadrupoles or self.simulation_config.optimise_bends
-        ):  # Relative difference comparison
+        if len(knob_names) > 0:
             plot_strengths_comparison(
                 magnet_names,
                 final_vals,
@@ -155,6 +153,7 @@ class ResultManager:
                 show_errorbars=show_errorbars,
                 plot_real=False,
                 save_path=f"{save_prefix}relative_difference_comparison.png",
+                accelerator=self.accelerator,
                 unit="$m^{-1}$",
             )
 
@@ -167,6 +166,7 @@ class ResultManager:
                 show_errorbars=show_errorbars,
                 plot_real=False,
                 save_path=f"{save_prefix}relative_difference_vs_position_comparison.png",
+                accelerator=self.accelerator,
                 magnet_names=magnet_names,
             )
 

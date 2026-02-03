@@ -1,13 +1,20 @@
+from __future__ import annotations
+
 import logging
-from pathlib import Path
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 import numpy as np
 import tfs
 
-from aba_optimiser.config import BEAM_ENERGY, SimulationConfig
 from aba_optimiser.io.utils import read_knobs
 
 from .base_mad_interface import BaseMadInterface
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from aba_optimiser.accelerators import Accelerator
 
 # BPM_PATTERN = "^BPM%.%d-%d.*"
 BPM_PATTERN = "^BPM"
@@ -40,21 +47,30 @@ coord_names = {{"x", "px", "y", "py", "t", "pt"}}
 """
 
 
-class OptimisationMadInterface(BaseMadInterface):
+class GenericMadInterface(BaseMadInterface):
     """
-    Encapsulates communication with MAD-NG via pymadng.MAD.
+    Generic MAD interface for all setup tasks EXCEPT knob creation.
+
+    This interface handles:
+    - Loading sequences and setting up beams
+    - Observing BPMs and configuring ranges
+    - Applying corrector strengths and tune knobs
+    - General MAD-NG operations
+
+    Knob creation (for gradient descent) is NOT handled here and should be
+    implemented by accelerator-specific subclasses.
+
+    This separation allows non-gradient-descent use cases to use this interface
+    without unnecessary knob creation overhead.
     """
 
     def __init__(
         self,
-        sequence_file: str | Path,
-        seq_name: str | None = None,
+        accelerator: Accelerator,
         magnet_range: str = "$start/$end",
         bpm_range: str | None = None,
-        simulation_config: SimulationConfig | None = None,
         bpm_pattern: str = BPM_PATTERN,
         bad_bpms: list[str] | None = None,
-        beam_energy: float = BEAM_ENERGY,
         corrector_strengths: Path | None = None,
         tune_knobs_file: Path | None = None,
         start_bpm: str | None = None,
@@ -62,16 +78,14 @@ class OptimisationMadInterface(BaseMadInterface):
         debug: bool = False,
         mad_logfile: Path | None = None,
         discard_mad_output: bool = False,
-        optimise_knobs: list[str] | None = None,
     ):
         """
-        Initialise optimisation MAD interface with automatic setup.
+        Initialise generic MAD interface with automatic setup.
 
         Args:
-            sequence_file: Path to the MAD-X sequence file
+            accelerator: Accelerator instance providing configuration
             magnet_range: Range of magnets to include, e.g., "MARKER.1/MARKER.10"
             bpm_range: Range of BPMs to observe, e.g., "BPM.13R3.B1/BPM.12L4.B1"
-            simulation_config: Simulation configuration for which parameters to optimise
             bpm_pattern: Pattern for BPM matching
             bad_bpms: List of bad BPMs to exclude from observation
             beam_energy: Beam energy in GeV
@@ -79,10 +93,9 @@ class OptimisationMadInterface(BaseMadInterface):
             seq_name: Name of the sequence to load
             tune_knobs_file: Path to tune knobs file, or None to skip
             py_name: Name used for Python-MAD communication
-            debug: bool = False, Enable debug mode. Defaults to False.
-            mad_logfile: Path | None = None, Path to MAD log file. Defaults to None.
-            discard_mad_output: bool = False, Whether to discard MAD-NG output to stdout.
-            optimise_knobs: list[str] | None = None, List of knob names to optimise. If None, optimises all knobs.
+            debug: Enable debug mode. Defaults to False.
+            mad_logfile: Path to MAD log file. Defaults to None.
+            discard_mad_output: Whether to discard MAD-NG output to stdout.
         """
         # Configure MAD output
         stdout = None
@@ -103,26 +116,21 @@ class OptimisationMadInterface(BaseMadInterface):
         super().__init__(
             stdout=stdout, redirect_stderr=redirect_stderr, py_name=py_name, debug=debug
         )
-        # Store optimisation-specific attributes
-        self.sequence_file = sequence_file
-        if seq_name is None:
-            seq_name = Path(sequence_file).stem
-        self.seq_name = seq_name
+        # Store setup attributes
+        self.accelerator = accelerator
         self.magnet_range = magnet_range
         self.bpm_range = bpm_range if bpm_range is not None else magnet_range
         self.bpm_pattern = bpm_pattern
-        self.beam_energy = beam_energy
-        self.seq_name = seq_name
-        self.optimise_knobs = optimise_knobs
 
-        # Type hints for attributes set during initialization
+        # Type hints for attributes that may be set during initialization or by subclasses
         self.nbpms: int
-        self.knob_names: list[str]
-        self.elem_spos: list[float]
+        self.all_bpms: list[str]
+        self.knob_names: list[str] = []
+        self.elem_spos: list[float] = []
 
         # Perform automatic setup using base class methods
-        self.load_sequence(sequence_file, self.seq_name)
-        self.setup_beam(self.beam_energy)
+        self.load_sequence(accelerator.sequence_file, accelerator.get_seq_name())
+        self.setup_beam(accelerator.beam_energy)
 
         if start_bpm is not None:
             marker_name = self.install_marker(start_bpm, "marker_" + start_bpm)
@@ -136,7 +144,7 @@ class OptimisationMadInterface(BaseMadInterface):
         self.mad["bpm_range"] = self.bpm_range
         self.mad["bpm_pattern"] = self.bpm_pattern
 
-        # Setup optimisation-specific functionality
+        # Setup observation and ranges
         self._observe_bpms(bad_bpms)
         self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
 
@@ -151,12 +159,6 @@ class OptimisationMadInterface(BaseMadInterface):
             self._set_tune_knobs(tune_knobs_file)
         else:
             LOGGER.info("Skipping tune knobs (not provided)")
-
-        # Once you have done all the setup, create the knobs, if required
-        if simulation_config is not None:
-            self._make_adj_knobs(simulation_config)
-        else:
-            LOGGER.info("Skipping knob creation (no simulation config provided)")
 
     def count_bpms(self, bpm_range) -> tuple[int, list[str]]:
         """Count the number of BPM elements in the specified range."""
@@ -221,32 +223,125 @@ class OptimisationMadInterface(BaseMadInterface):
         LOGGER.debug(f"Previous tune knob values: {prev}")
         LOGGER.debug(f"Set tune knobs from {tune_knobs_file}: {len(tune_knobs)}")
 
-    def _make_bend_dict(self) -> None:
-        """
-        Create a dictionary of the bend strengths in the current sequence.
-        Includes both sbends and rbends for normalisation.
-        """
-        from aba_optimiser.physics.lhc_bends import normalise_lhcbend_magnets
 
-        self.mad.send(f"""
-        bend_dict = {{}}
-        bend_lengths = {{}}
-        for i, e in loaded_sequence:siter(magnet_range) do
-            if (e.kind == "sbend" or e.kind == "rbend") and e.k0 ~= 0 then
-                bend_dict[e.name .. ".k0"] = e.k0
-                bend_lengths[e.name .. ".k0"] = e.l ! Length is `l` attribute
-            end
-        end
-        ! print("Sending bend dictionary " .. MAD.tostring(bend_dict))
-        {self.py_name}:send(bend_dict, true)
-        {self.py_name}:send(bend_lengths, true)
-        bend_dict = {self.py_name}:recv()
-        ! print("Retrieved " .. MAD.tostring(bend_dict))
-        """)
-        true_strengths_dict: dict[str, float] = self.mad.recv()
-        self.bend_lengths: dict[str, float] = self.mad.recv()
-        normalised_names = normalise_lhcbend_magnets(true_strengths_dict, self.bend_lengths)
-        self.mad.send(normalised_names)
+class GradientDescentMadInterface(GenericMadInterface, ABC):
+    """
+    Abstract MAD interface for gradient descent optimization.
+
+    Extends GenericMadInterface with knob creation capabilities specific to gradient descent
+    optimization. Subclasses define what knobs to create via get_knob_specs().
+
+    This separates accelerator-specific knob definitions from the generic setup logic.
+    """
+
+    def __init__(
+        self,
+        accelerator: Accelerator,
+        magnet_range: str = "$start/$end",
+        bpm_range: str | None = None,
+        bpm_pattern: str = BPM_PATTERN,
+        bad_bpms: list[str] | None = None,
+        corrector_strengths: Path | None = None,
+        tune_knobs_file: Path | None = None,
+        start_bpm: str | None = None,
+        py_name: str = "py",
+        debug: bool = False,
+        mad_logfile: Path | None = None,
+        discard_mad_output: bool = False,
+    ):
+        """
+        Initialize gradient descent MAD interface with knob creation.
+
+        Args:
+            accelerator: Accelerator instance providing configuration
+            magnet_range: Range of magnets to include
+            bpm_range: Range of BPMs to observe
+            bpm_pattern: Pattern for BPM matching
+            bad_bpms: List of bad BPMs to exclude
+            corrector_strengths: Path to corrector strengths file
+            tune_knobs_file: Path to tune knobs file
+            py_name: Name used for Python-MAD communication
+            debug: Enable debug mode
+            mad_logfile: Path to MAD log file
+            discard_mad_output: Whether to discard MAD-NG output
+        """
+        super().__init__(
+            accelerator,
+            magnet_range,
+            bpm_range,
+            bpm_pattern,
+            bad_bpms,
+            corrector_strengths,
+            tune_knobs_file,
+            start_bpm,
+            py_name,
+            debug,
+            mad_logfile,
+            discard_mad_output,
+        )
+
+        if accelerator.has_any_optimisation():
+            # Create gradient descent knobs using subclass-specific knob specs
+            self._make_adj_knobs()
+        else:
+            LOGGER.warning(
+                "Gradient descent optimisation interface initialised without any optimisation enabled."
+                "\nUse GenericMadInterface if no optimisation is required."
+            )
+
+    @abstractmethod
+    def get_knob_specs(self) -> list[tuple[str, str, str, bool]]:
+        """
+        Get the list of knob specifications for this accelerator.
+
+        Should be implemented by subclasses to define which knobs to create for optimization.
+
+        Returns:
+            List of (kind, attribute, pattern, zero_check) tuples:
+            - kind: MAD element kind (e.g., "sbend", "quadrupole", "hkicker")
+            - attribute: MAD element attribute (e.g., "k0", "k1", "kick")
+            - pattern: Regex pattern to match element names
+            - zero_check: Whether to exclude elements with zero attribute values
+        """
+
+    def _filter_knob_specs(
+        self, all_specs: list[tuple[str, str, str, bool]]
+    ) -> list[tuple[str, str, str, bool]]:
+        """
+        Filter knob specifications based on the accelerator's optimisation settings.
+
+        Default filtering is accelerator-agnostic and only includes generic
+        magnet types (quadrupoles, sextupoles). Accelerator-specific subclasses
+        should override this method to add bends, correctors, etc.
+
+        Args:
+            all_specs: All available knob specifications from get_knob_specs()
+
+        Returns:
+            Filtered list of specs to actually create knobs for
+        """
+        filtered = []
+        for kind, attr, pattern, zero_check in all_specs:
+            if (kind == "quadrupole" and self.accelerator.optimise_quadrupoles) or (
+                kind == "sextupole" and self.accelerator.optimise_sextupoles
+            ):
+                filtered.append((kind, attr, pattern, zero_check))
+        return filtered
+
+    def _prepare_knob_data(self, selected_specs: list[tuple[str, str, str, bool]]) -> None:
+        """Prepare any accelerator-specific data required for knob creation.
+
+        Default implementation does nothing; subclasses can override.
+        """
+        return
+
+    def _get_attr_specs(self) -> dict[str, dict[str, str]]:
+        """Return attribute name/value expressions for special element kinds.
+
+        Subclasses can override to provide accelerator-specific logic for
+        naming and value extraction (e.g., LHC bend k0 naming).
+        """
+        return {}
 
     def _build_attr_block(self, attr_conditions: list[tuple[str, str, str]]) -> str:
         """
@@ -260,16 +355,7 @@ class OptimisationMadInterface(BaseMadInterface):
         simplifying extension.
         """
         lines: list[str] = []
-        attr_specs = {
-            "sbend": {
-                "name_expr": 'string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".k0"',
-                "mad_value": "bend_dict[k_str_name]",
-            },
-            "rbend": {
-                "name_expr": 'string.gsub(e.name, "(MB[RXWAL]%w*%.)([A-G]?)([0-9]+[LR][1-8].*)", "%1%3") .. (e.k0 >= 0 and "_p" or "_n") .. ".k0"',
-                "mad_value": "bend_dict[k_str_name]",
-            },
-        }
+        attr_specs = self._get_attr_specs()
 
         for idx, (kind, attr, condition) in enumerate(attr_conditions):
             spec = attr_specs.get(kind, {})
@@ -290,36 +376,34 @@ class OptimisationMadInterface(BaseMadInterface):
         lines.append("        end")
         return "\n".join(lines)
 
-    def _make_adj_knobs(self, simulation_config: SimulationConfig) -> None:
+    def _make_adj_knobs(self) -> None:
         """
-        Create deferred-strength knobs for elements matching the optimisation settings.
+        Create deferred-strength knobs for elements matching the knob specifications.
+
+        Uses get_knob_specs() from subclass to determine which knobs to create.
         """
-        if simulation_config.optimise_bends:
-            self._make_bend_dict()
+        knob_specs = self.get_knob_specs()
+
+        # Filter knob specs based on configuration
+        filtered_specs = self._filter_knob_specs(knob_specs)
+
+        self._prepare_knob_data(filtered_specs)
+
         mad_code = MAKE_KNOBS_INIT_MAD
 
-        if (
-            simulation_config.optimise_quadrupoles
-            or simulation_config.optimise_bends
-            or simulation_config.optimise_correctors
-        ):
+        if filtered_specs:
             attr_conditions: list[tuple[str, str, str]] = []
-            for kind, attr, pattern, zero_check, flag in [
-                ("sbend", "k0", "MB%.", True, simulation_config.optimise_bends),
-                ("rbend", "k0", "MB[RXWAL]%w*%.", True, simulation_config.optimise_bends),
-                ("quadrupole", "k1", "MQ%.", True, simulation_config.optimise_quadrupoles),
-                ("hkicker", "kick", "MCB", False, simulation_config.optimise_correctors),
-            ]:
-                if flag:
-                    zero_chk_str = f"and e.{attr} ~=0" if zero_check else ""
-                    condition = f'(e.kind == "{kind}" {zero_chk_str} and e.name:match("{pattern}"))'
-                    attr_conditions.append((kind, attr, condition))
+            for kind, attr, pattern, zero_check in filtered_specs:
+                zero_chk_str = f"and e.{attr} ~=0" if zero_check else ""
+                condition = f'(e.kind == "{kind}" {zero_chk_str} and e.name:match("{pattern}"))'
+                attr_conditions.append((kind, attr, condition))
 
             attr_block = self._build_attr_block(attr_conditions)
             loop_code = MAKE_KNOBS_LOOP_MAD.format(attr_block=attr_block)
             mad_code += loop_code
 
-        if simulation_config.optimise_energy:
+        # Add energy knob if needed
+        if self.accelerator.optimise_energy:
             mad_code += 'table.insert(knob_names, "pt")\n'
 
         mad_code += MAKE_KNOBS_END_MAD.format(py_name=self.py_name)
@@ -329,13 +413,17 @@ class OptimisationMadInterface(BaseMadInterface):
         elem_spos_all: list[float] = self.mad.recv()
 
         # Filter knobs if optimise_knobs is specified
-        if self.optimise_knobs is not None:
+        if self.accelerator.custom_knobs_to_optimise is not None:
             original_count = len(knob_names_all)
-            filtered_indices = [i for i, k in enumerate(knob_names_all) if k in self.optimise_knobs]
+            filtered_indices = [
+                i
+                for i, k in enumerate(knob_names_all)
+                if k in self.accelerator.custom_knobs_to_optimise
+            ]
             self.knob_names = [knob_names_all[i] for i in filtered_indices]
             self.elem_spos = [elem_spos_all[i] for i in filtered_indices]
             LOGGER.info(
-                f"Filtered knobs from {original_count} to {len(self.knob_names)} based on optimise_knobs"
+                f"Filtered knobs from {original_count} to {len(self.knob_names)} based on custom_knobs_to_optimise"
             )
         else:
             self.knob_names = knob_names_all
@@ -345,9 +433,9 @@ class OptimisationMadInterface(BaseMadInterface):
             LOGGER.info(
                 f"Created {len(self.knob_names)} knobs from {self.elem_spos[0]} to {self.elem_spos[-1]}"
             )
-            LOGGER.info(f"Knob names: {self.knob_names}")
+            LOGGER.debug(f"Knob names: {self.knob_names}")
         else:
-            LOGGER.info("No knobs created. Just optimising energy")
+            LOGGER.info("No knobs created")
 
     def receive_knob_values(self) -> np.ndarray:
         """

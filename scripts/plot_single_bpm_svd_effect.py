@@ -13,11 +13,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 import tfs
+from tmom_recon.physics.transverse import calculate_pz
 from tmom_recon.svd import svd_clean_measurements
 from turn_by_turn import read_tbt
 
 from aba_optimiser.measurements.create_datafile import compute_vars_from_known_noise
-from aba_optimiser.momentum_recon.transverse import calculate_pz
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +171,7 @@ def plot_phase_space(
     axes[0].set_ylabel("px [mrad]")
     axes[0].set_title(f"Horizontal Phase Space at {bpm_name}")
     axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
+    axes[0].grid(visible=True, alpha=0.3)
 
     # Plot y vs py
     axes[1].scatter(
@@ -194,7 +194,7 @@ def plot_phase_space(
     axes[1].set_ylabel("py [mrad]")
     axes[1].set_title(f"Vertical Phase Space at {bpm_name}")
     axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
+    axes[1].grid(visible=True, alpha=0.3)
 
     plt.tight_layout()
 

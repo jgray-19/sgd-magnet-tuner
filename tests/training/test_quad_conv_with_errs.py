@@ -4,8 +4,6 @@ Integration test for quadrupole convergence with errors using AC dipole excitati
 
 from __future__ import annotations
 
-import multiprocessing
-
 # import re
 from typing import TYPE_CHECKING
 
@@ -26,11 +24,12 @@ from tmom_recon.svd import svd_clean_measurements
 from xtrack_tools.acd import run_ac_dipole_tracking_with_particles
 from xtrack_tools.monitors import line_to_dataframes
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig, SequenceConfig
+from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
 from tests.training.helpers import (
     TRACK_COLUMNS,
     generate_xsuite_env_with_errors,
@@ -43,6 +42,7 @@ if TYPE_CHECKING:
     from xtrack import xt
 
     from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+
 
 def _run_track_with_acd(
     env: xt.Environment,
@@ -74,7 +74,7 @@ def _run_track_with_acd(
     processed_dfs = []
     output_files = []
     destination.parent.mkdir(parents=True, exist_ok=True)
-    line: xt.Line = env["lhcb1"]  # ty:ignore[not-subscriptable]
+    line: xt.Line = env["lhcb1"]
     tws = line.twiss(method="4d", delta0=0)
 
     for idx, lag in enumerate(lags):
@@ -141,7 +141,6 @@ def _make_optimiser_config_bend() -> OptimiserConfig:
     )
 
 
-@pytest.mark.skipif(multiprocessing.cpu_count() < 60, reason="Requires at least 60 CPU cores")
 @pytest.mark.slow
 def test_controller_bend_opt_simple(
     tmp_path: Path,
@@ -188,7 +187,7 @@ def test_controller_bend_opt_simple(
         lags=lags,
         return_dataframes=True,
     )
-    xsuite_tws = env["lhcb1"].twiss4d().to_pandas()  # ty:ignore[not-subscriptable]
+    xsuite_tws = env["lhcb1"].twiss4d().to_pandas()
     xsuite_tws = xsuite_tws.set_index("name")
     # convert name to be upper case to match measurement files
     xsuite_tws.index = xsuite_tws.index.str.upper()
@@ -322,22 +321,18 @@ def test_controller_bend_opt_simple(
         num_workers = 60 // (len(bpm_start_points) + len(bpm_end_points))
         tracks_per_worker = flattop_turns - 3
         num_batches = int(np.ceil(tracks_per_worker / turns_per_batch))
+        lhc_accelerator = LHC(beam=1, sequence_file=seq_b1, optimise_quadrupoles=True)
+
         sim_config = SimulationConfig(
             tracks_per_worker=tracks_per_worker,
             num_batches=num_batches,
             num_workers=num_workers,
-            optimise_energy=False,
-            optimise_quadrupoles=True,
-            optimise_bends=False,
             optimise_momenta=False,
             use_fixed_bpm=True,
         )
 
         sequence_config = SequenceConfig(
-            sequence_file_path=seq_b1,
             magnet_range=magnet_range,
-            beam_energy=6800,
-            seq_name="lhcb1",
             # first_bpm="MSIA.EXIT.B1",
         )
 
@@ -350,20 +345,17 @@ def test_controller_bend_opt_simple(
             bunches_per_file=1,
         )
 
-        bpm_config = BPMConfig(
-            start_points=bpm_start_points,
-            end_points=bpm_end_points,
-        )
-
         # Create arc-specific plots directory
         arc_plots_dir = tmp_path / f"arc_{arc_num}_plots"
 
         ctrl = Controller(
+            accelerator=lhc_accelerator,
             optimiser_config=optimiser_config,
             simulation_config=sim_config,
             sequence_config=sequence_config,
             measurement_config=measurement_config,
-            bpm_config=bpm_config,
+            bpm_start_points=bpm_start_points,
+            bpm_end_points=bpm_end_points,
             show_plots=False,
             true_strengths=magnet_strengths,
             plots_dir=arc_plots_dir,

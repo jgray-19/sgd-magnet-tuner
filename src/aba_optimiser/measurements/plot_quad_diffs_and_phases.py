@@ -3,9 +3,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from tmom_recon import build_twiss_from_measurements
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT
-from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
+from aba_optimiser.mad import LHCOptimisationMadInterface
 from aba_optimiser.measurements.squeeze_helpers import (
     ANALYSIS_DIRS,
     BETABEAT_DIR,
@@ -15,7 +17,6 @@ from aba_optimiser.measurements.squeeze_helpers import (
     get_results_dir,
     load_estimates,
 )
-from aba_optimiser.measurements.twiss_from_measurement import build_twiss_from_measurements
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
@@ -35,11 +36,9 @@ def get_twiss_without_errors(
     corrector_file: Path | None = None,
 ) -> pd.DataFrame:
     """Get twiss data from a model with optional tune knobs and estimated magnets."""
-    mad = OptimisationMadInterface(
-        sequence_file=str(sequence_file),
-        seq_name=f"lhcb{beam}",
-        beam_energy=beam_energy,
-        bpm_pattern="BPM",
+    accelerator = LHC(beam=beam, beam_energy=beam_energy, sequence_file=sequence_file)
+    mad = LHCOptimisationMadInterface(
+        accelerator,
         corrector_strengths=corrector_file,
         tune_knobs_file=tune_knobs_file,
     )
@@ -56,10 +55,9 @@ def find_true_values(
     beam_energy: float,
 ) -> dict[str, dict[str, float]]:
     """Find true quadrupole values from the sequence file with tune knobs applied."""
-    mad = OptimisationMadInterface(
-        sequence_file=str(seq_file),
-        seq_name=f"lhcb{beam}",
-        beam_energy=beam_energy,
+    accelerator = LHC(beam=beam, beam_energy=beam_energy, sequence_file=seq_file)
+    mad = LHCOptimisationMadInterface(
+        accelerator,
         tune_knobs_file=tune_knobs_file,
         corrector_strengths=None,
     )
@@ -164,11 +162,8 @@ def get_twiss_through_arc(
     Returns:
         DataFrame with phase advances and beta functions at BPM locations
     """
-    mad = OptimisationMadInterface(
-        sequence_file=str(seq_file),
-        seq_name=f"lhcb{beam}",
-        beam_energy=beam_energy,
-        bpm_pattern="BPM",
+    mad = LHCOptimisationMadInterface(
+        accelerator=LHC(beam=beam, beam_energy=beam_energy, sequence_file=seq_file),
         corrector_strengths=None,
         tune_knobs_file=tune_knobs_file,
     )

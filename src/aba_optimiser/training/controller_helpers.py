@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig
+from aba_optimiser.training.controller_config import MeasurementConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -42,23 +42,4 @@ def create_arc_measurement_config(
         machine_deltaps=machine_deltap,
         bunches_per_file=num_tracks,
         flattop_turns=flattop_turns,
-    )
-
-
-def create_arc_bpm_config(
-    bpm_starts: list[str],
-    bpm_ends: list[str],
-) -> BPMConfig:
-    """Create a BPMConfig for arc processing.
-
-    Args:
-        bpm_starts: List of starting BPM names
-        bpm_ends: List of ending BPM names
-
-    Returns:
-        BPMConfig configured with the specified BPM ranges
-    """
-    return BPMConfig(
-        start_points=bpm_starts,
-        end_points=bpm_ends,
     )

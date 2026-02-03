@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from multiprocessing import Process
 from typing import TYPE_CHECKING, Generic, TypeVar
 
-from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
+from aba_optimiser.mad import get_mad_interface
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
     from aba_optimiser.config import SimulationConfig
     from aba_optimiser.workers.common import WorkerConfig
+
 LOGGER = logging.getLogger(__name__)
 
 # Type variable for worker data type
@@ -153,9 +154,9 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
     def setup_mad_interface(self, init_knobs: dict[str, float]) -> tuple[MAD, int]:
         """Initialize and configure the MAD-NG interface.
 
-        This method creates the OptimisationMadInterface, loads required
-        modules, and sets up the differential algebra maps for gradient
-        computation.
+        This method uses the accelerator's factory method to create a properly
+        configured MAD interface, eliminating the need to manually pass many
+        individual parameters.
 
         Args:
             init_knobs: Initial values for all optimisation knobs
@@ -181,20 +182,17 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             else:
                 worker_logfile = logfile_path.with_name(f"{logfile_path.name}_worker_{self.worker_id}")
 
-        mad_iface = OptimisationMadInterface(
-            self.config.sequence_file_path,
-            py_name="python",
-            seq_name=self.config.seq_name,
+        # Use accelerator factory to create MAD interface
+        mad_iface = get_mad_interface(self.config.accelerator)(
+            accelerator=self.config.accelerator,
             magnet_range=self.config.magnet_range,
             bpm_range=self.bpm_range,
-            simulation_config=self.simulation_config,
-            bad_bpms=self.config.bad_bpms,
             corrector_strengths=self.config.corrector_strengths,
             tune_knobs_file=self.config.tune_knobs_file,
-            beam_energy=self.config.beam_energy,
+            bad_bpms=self.config.bad_bpms,
             debug=self.config.debug,
             mad_logfile=worker_logfile,
-            optimise_knobs=self.config.optimise_knobs,
+            py_name="python",  # Workers use hardcoded "python" in their MAD scripts
         )
 
         knob_names = mad_iface.knob_names

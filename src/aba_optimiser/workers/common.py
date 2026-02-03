@@ -14,40 +14,41 @@ import numpy as np
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from aba_optimiser.accelerators import Accelerator
+
 
 @dataclass
 class WorkerConfig:
     """Configuration parameters common to all worker types.
 
+    Instead of passing many individual parameters (sequence_file, beam_energy,
+    seq_name, etc.), we pass an Accelerator instance that encapsulates all
+    machine-specific configuration and can create MAD interfaces.
+
     Attributes:
+        accelerator: Accelerator instance (e.g., LHC) with machine parameters
         start_bpm: Name of the starting BPM in the range
         end_bpm: Name of the ending BPM in the range
         magnet_range: MAD-NG range specification for magnets
-        sequence_file_path: Path to the accelerator sequence file
         corrector_strengths: Path to corrector strength configuration
         tune_knobs_file: Path to tune knob definitions
-        beam_energy: Beam energy in GeV
         sdir: Direction of propagation (+1 forward, -1 backward)
         bad_bpms: List of BPM names to exclude from analysis
-        seq_name: Name of the sequence in MAD-NG (if not default)
         debug: Enable debug mode for MAD interface
         mad_logfile: Path to MAD log file (can be None)
         optimise_knobs: List of global knob names to optimise
     """
 
+    accelerator: Accelerator
     start_bpm: str
     end_bpm: str
     magnet_range: str
-    sequence_file_path: Path
     corrector_strengths: Path | None
     tune_knobs_file: Path | None
-    beam_energy: float
     sdir: int = 1
     bad_bpms: list[str] | None = None
-    seq_name: str | None = None
     debug: bool = False
     mad_logfile: Path | None = None
-    optimise_knobs: list[str] | None = None
 
 
 @dataclass
@@ -260,7 +261,7 @@ class WeightProcessor:
 
         # Apply floor
         v_out = v.copy()
-        v_out[valid] = np.maximum(v_out[valid], var_floor)
+        v_out[valid] = np.maximum(v_out[valid], var_floor)  # ty:ignore[no-matching-overload]
 
         return v_out
 

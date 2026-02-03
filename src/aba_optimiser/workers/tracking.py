@@ -221,7 +221,7 @@ class TrackingWorker(AbstractWorker[TrackingData]):
         """
         mad["batch_size"] = self.batch_size
         mad["num_batches"] = self.num_batches
-        mad["optimise_energy"] = self.simulation_config.optimise_energy
+        mad["optimise_energy"] = self.config.accelerator.optimise_energy
 
         if self.mode == "arc-by-arc":
             # Single-turn tracking for arc-by-arc mode

@@ -20,13 +20,14 @@ from typing import NamedTuple
 import numpy as np
 import pandas as pd
 from pymadng import MAD
+from tmom_recon.physics.transverse import calculate_pz
 from tqdm.contrib.concurrent import process_map
 
-from aba_optimiser.config import LHCB1_SEQ_NAME, REL_K1_STD_DEV
+from aba_optimiser.config import REL_K1_STD_DEV
 from aba_optimiser.io.utils import get_lhc_file_path
-from aba_optimiser.momentum_recon.transverse import calculate_pz
 from scripts.plot_functions import plot_error_bars_bpm_range, plot_std_log_comparison, show_plots
 
+LHCB1_SEQ_NAME = "lhcb1"  # Sequence name in MAD-X (lowercase)
 # Configure logging
 logging.basicConfig(format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)

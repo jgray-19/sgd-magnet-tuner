@@ -16,6 +16,7 @@ from tmom_recon import calculate_pz_measurement
 from tmom_recon.svd import svd_clean_measurements
 from turn_by_turn import TbtData, read_tbt
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import (
     CORRECTOR_STRENGTHS,
     DPP_OPTIMISER_CONFIG,
@@ -24,17 +25,14 @@ from aba_optimiser.config import (
     TUNE_KNOBS_FILE,
 )
 from aba_optimiser.io.utils import get_lhc_file_path, save_knobs
-from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
+from aba_optimiser.mad import LHCOptimisationMadInterface
 from aba_optimiser.model_creator.madng_utils import (
     compute_and_export_twiss_tables,
     initialise_madng_model,
 )
 from aba_optimiser.model_creator.madx_utils import make_madx_sequence
-from aba_optimiser.training.controller import LHCController as Controller
-from aba_optimiser.training.controller_helpers import (
-    create_arc_bpm_config,
-    create_arc_measurement_config,
-)
+from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
 
 if TYPE_CHECKING:
     from aba_optimiser.measurements.knob_extraction import NXCALSResult
@@ -622,10 +620,8 @@ def process_measurements(
 
     sequence_path = sequence_path or get_lhc_file_path(beam)
 
-    mad_iface = OptimisationMadInterface(
-        sequence_path,
-        seq_name=f"LHCB{beam}",
-    )
+    accelerator = LHC(beam=beam, beam_energy=6800, sequence_file=sequence_path)
+    mad_iface = LHCOptimisationMadInterface(accelerator)
     all_bpms = set(mad_iface.all_bpms)
     del mad_iface
 
@@ -716,20 +712,27 @@ if __name__ == "__main__":
         f.write("Arc\tDeltap\n")
 
     results = []
+    accelerator = LHC(beam=1, beam_energy=6800, sequence_file=get_lhc_file_path(1))
+    measurement_config = MeasurementConfig(measurement_files=[measurement_file])
+
     for arc in range(8):
         LOGGER.info(f"Starting optimisation for arc {arc + 1}/8")
 
+        sequence_config = SequenceConfig(
+            magnet_range=MAGNET_RANGES[arc], bad_bpms=bad_bpms, first_bpm="BPM.33L2.B1"
+        )
+
         controller = Controller(
-            beam=1,
-            measurement_config=create_arc_measurement_config(measurement_file),
-            bpm_config=create_arc_bpm_config(BPM_STARTS[arc], BPM_END_POINTS[arc]),
-            magnet_range=MAGNET_RANGES[arc],
+            accelerator=accelerator,
             optimiser_config=DPP_OPTIMISER_CONFIG,
             simulation_config=DPP_SIMULATION_CONFIG,
+            sequence_config=sequence_config,
+            measurement_config=measurement_config,
+            bpm_start_points=BPM_STARTS[arc],
+            bpm_end_points=BPM_END_POINTS[arc],
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,
-            bad_bpms=bad_bpms,
         )
         final_knobs, uncs = controller.run()
         results.append(final_knobs["deltap"])

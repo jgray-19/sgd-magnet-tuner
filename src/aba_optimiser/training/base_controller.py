@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime
 import logging
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tensorboardX import SummaryWriter
@@ -16,6 +15,9 @@ from aba_optimiser.training.result_manager import ResultManager
 from aba_optimiser.training.utils import filter_bad_bpms, normalize_true_strengths
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
+    from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.config import OptimiserConfig, SimulationConfig
 
 LOGGER = logging.getLogger(__name__)
@@ -34,9 +36,9 @@ class BaseController(ABC):
 
     def __init__(
         self,
+        accelerator: Accelerator,
         optimiser_config: OptimiserConfig,
         simulation_config: SimulationConfig,
-        sequence_file_path: str | Path,
         magnet_range: str,
         bpm_start_points: list[str],
         bpm_end_points: list[str],
@@ -45,8 +47,6 @@ class BaseController(ABC):
         true_strengths: Path | dict[str, float] | None = None,
         bad_bpms: list[str] | None = None,
         first_bpm: str | None = None,
-        seq_name: str | None = None,
-        beam_energy: float = 6800.0,
         bpm_range: str | None = None,
         debug: bool = False,
         mad_logfile: Path | None = None,
@@ -55,9 +55,9 @@ class BaseController(ABC):
         """Initialize base controller.
 
         Args:
+            accelerator: Accelerator instance defining machine configuration
             optimiser_config: Gradient descent optimiser configuration
             simulation_config: Simulation and worker configuration
-            sequence_file_path: Path to the sequence file
             magnet_range: Magnet range specification
             bpm_start_points: Start BPMs for each range
             bpm_end_points: End BPMs for each range
@@ -66,14 +66,12 @@ class BaseController(ABC):
             true_strengths: True strengths (Path, dict, or None)
             bad_bpms: List of bad BPMs to exclude
             first_bpm: First BPM in the sequence
-            seq_name: Sequence name
-            beam_energy: Beam energy in GeV
             bpm_range: BPM range for determining fixed start/end points (defaults to magnet_range)
             optimise_knobs: List of global knob names to optimise, or None
         """
         self.optimiser_config = optimiser_config
         self.simulation_config = simulation_config
-        self.sequence_file_path = Path(sequence_file_path)
+        self.accelerator = accelerator
         self.show_plots = show_plots
         self.debug = debug
         self.mad_logfile = mad_logfile
@@ -85,6 +83,7 @@ class BaseController(ABC):
 
         # Initialize configuration manager
         self.config_manager = ConfigurationManager(
+            accelerator,
             simulation_config,
             magnet_range,
             bpm_start_points,
@@ -93,11 +92,8 @@ class BaseController(ABC):
             optimise_knobs,
         )
         self.config_manager.setup_mad_interface(
-            str(sequence_file_path),
             first_bpm,
             bad_bpms,
-            seq_name,
-            beam_energy,
             debug,
             mad_logfile,
         )
@@ -131,7 +127,7 @@ class BaseController(ABC):
             self.config_manager.knob_names,
             self.config_manager.elem_spos,
             show_plots=self.show_plots,
-            simulation_config=self.simulation_config,
+            accelerator=self.accelerator,
         )
 
     def setup_logging(self, log_suffix: str = "opt") -> SummaryWriter:
@@ -156,61 +152,28 @@ class BaseController(ABC):
         pass
 
 
-class LHCControllerMixin:
-    """Mixin providing LHC-specific configuration helpers."""
+# class LHCControllerMixin:
+#     """Mixin providing LHC-specific configuration helpers."""
 
-    @staticmethod
-    def get_lhc_config(beam: int, sequence_path: Path | None = None) -> dict[str, str]:
-        """Get LHC-specific configuration for a beam.
+#     @staticmethod
+#     def get_lhc_config(beam: int, sequence_path: Path | None = None) -> dict[str, str]:
+#         """Get LHC-specific configuration for a beam.
 
-        Args:
-            beam: Beam number (1 or 2)
-            sequence_path: Optional custom sequence path
+#         Args:
+#             beam: Beam number (1 or 2)
+#             sequence_path: Optional custom sequence path
 
-        Returns:
-            Dictionary with 'sequence_file_path', 'first_bpm', and 'seq_name'
-        """
-        from aba_optimiser.io.utils import get_lhc_file_path
+#         Returns:
+#             Dictionary with 'sequence_file_path', 'first_bpm', and 'seq_name'
+#         """
+#         from aba_optimiser.io.utils import get_lhc_file_path
 
-        sequence_file = str(get_lhc_file_path(beam) if sequence_path is None else sequence_path)
-        first_bpm = "BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2"
-        seq_name = f"lhcb{beam}"
+#         sequence_file = str(get_lhc_file_path(beam) if sequence_path is None else sequence_path)
+#         first_bpm = "BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2"
+#         seq_name = f"lhcb{beam}"
 
-        return {
-            "sequence_file_path": sequence_file,
-            "first_bpm": first_bpm,
-            "seq_name": seq_name,
-        }
-
-    @staticmethod
-    def create_sequence_config(
-        beam: int,
-        magnet_range: str,
-        sequence_path: Path | None = None,
-        bad_bpms: list[str] | None = None,
-        beam_energy: float = 6800.0,
-        optimise_knobs: list[str] | None = None,
-    ):
-        """Create a SequenceConfig for LHC beam.
-
-        Args:
-            beam: Beam number (1 or 2)
-            magnet_range: Magnet range specification
-            sequence_path: Optional custom sequence path
-            bad_bpms: List of bad BPMs to exclude
-            beam_energy: Beam energy in GeV
-            optimise_knobs: List of knob names to optimise
-
-        Returns:
-            SequenceConfig configured for the specified LHC beam
-        """
-        from aba_optimiser.training.controller_config import SequenceConfig
-
-        return SequenceConfig.for_lhc_beam(
-            beam=beam,
-            magnet_range=magnet_range,
-            sequence_path=sequence_path,
-            beam_energy=beam_energy,
-            bad_bpms=bad_bpms,
-            optimise_knobs=optimise_knobs,
-        )
+#         return {
+#             "sequence_file_path": sequence_file,
+#             "first_bpm": first_bpm,
+#             "seq_name": seq_name,
+#         }

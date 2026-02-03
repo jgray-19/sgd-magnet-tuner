@@ -7,13 +7,18 @@ from __future__ import annotations
 import logging
 import warnings
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
 from aba_optimiser.plotting.utils import setup_scientific_formatting
+
+if TYPE_CHECKING:
+    from aba_optimiser.accelerators import Accelerator
 
 LOGGER = logging.getLogger(__name__)
 
@@ -23,6 +28,7 @@ plt.rcParams.update({"font.size": 16})
 MB_COLOUR = "#2ca02c"  # tab:green (fallback)
 MQ_COLOUR = "#1f77b4"  # tab:blue (fallback)
 MS_COLOUR = "#ff7f0e"  # tab:orange (fallback)
+
 # Distinct colors per (series × family)
 MB_TRUE_COLOUR = "#2ca02c"  # tab:green
 MB_FINAL_COLOUR = "#98df8a"  # tab:lightgreen
@@ -30,6 +36,7 @@ MQ_TRUE_COLOUR = "#1f77b4"  # tab:blue
 MQ_FINAL_COLOUR = "#17becf"  # tab:cyan
 MS_TRUE_COLOUR = "#ff7f0e"  # tab:orange
 MS_FINAL_COLOUR = "#d62728"  # tab:red
+
 TRUE_COLOURS = {
     "MB": MB_TRUE_COLOUR,
     "MQ": MQ_TRUE_COLOUR,
@@ -42,14 +49,66 @@ FINAL_COLOURS = {
 }
 
 
+def _generate_family_colors_from_accelerator(
+    accelerator: Accelerator,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Generate true/final colors for magnet families from accelerator knob specs.
+
+    Returns:
+        Tuple of (true_colors, final_colors) dictionaries mapping family names to colors.
+    """
+    knob_specs = accelerator.get_supported_knob_specs()
+
+    # Extract unique families from patterns (e.g., "MB.*" -> "MB")
+    families = set()
+    for _, _, pattern, _ in knob_specs:
+        # Extract family from pattern (first 2 chars before any special chars)
+        family = pattern.split(".")[0][:2]  # e.g., "MB.*" -> "MB"
+        families.add(family)
+
+    families = sorted(families)
+    n_families = len(families)
+
+    # Generate colors using matplotlib's color cycle
+    import matplotlib.cm as cm
+
+    tab10 = cm.get_cmap("tab10")
+    base_colors = [tab10(i / max(1, n_families - 1)) for i in range(n_families)]
+
+    true_colors = {}
+    final_colors = {}
+
+    for i, family in enumerate(families):
+        base_color = base_colors[i]
+
+        # Create true color (darker/saturated)
+        true_colors[family] = base_color
+
+        # Create final color (lighter version)
+        # Convert to HSV and lighten
+        h, s, v = mcolors.rgb_to_hsv(base_color[:3])  # Take RGB components
+        final_colors[family] = mcolors.hsv_to_rgb((h, s * 0.6, min(1.0, v * 1.3)))
+
+    return true_colors, final_colors
+
+
 def _family_labels_and_colors(
     names: list[str],
+    accelerator: Accelerator | None = None,
 ) -> tuple[list[str], list[str], dict[str, str]]:
     """Return (families, colors, palette) for magnet names."""
     families = []
     for n in names:
         families.append(n[:2])  # e.g., "MQ", "MS", "MB"
-    palette = {"MQ": MQ_COLOUR, "MS": MS_COLOUR, "MB": MB_COLOUR}
+
+    if accelerator is not None:
+        true_colors, final_colors = _generate_family_colors_from_accelerator(accelerator)
+        # Use final colors as the main palette for backward compatibility
+        palette = final_colors
+    else:
+        # Fallback to hardcoded colors
+        palette = {"MQ": MQ_COLOUR, "MS": MS_COLOUR, "MB": MB_COLOUR}
+
     colors = [palette.get(f, "#808080") for f in families]  # Default to grey for unknown families
     return families, colors, palette
 
@@ -113,10 +172,20 @@ def _validate_inputs(
     return n
 
 
-def _get_family_colors_and_masks(magnet_names):
-    families, _, _ = _family_labels_and_colors(magnet_names)
-    true_colours = [TRUE_COLOURS.get(f, "#808080") for f in families]
-    final_colours = [FINAL_COLOURS.get(f, "#808080") for f in families]
+def _get_family_colors_and_masks(magnet_names, accelerator: Accelerator | None = None):
+    families, _, _ = _family_labels_and_colors(magnet_names, accelerator)
+
+    if accelerator is not None:
+        true_colours_dict, final_colours_dict = _generate_family_colors_from_accelerator(
+            accelerator
+        )
+    else:
+        # Fallback to hardcoded colors
+        true_colours_dict = TRUE_COLOURS
+        final_colours_dict = FINAL_COLOURS
+
+    true_colours = [true_colours_dict.get(f, "#808080") for f in families]
+    final_colours = [final_colours_dict.get(f, "#808080") for f in families]
     is_mq = np.array([f == "MQ" for f in families], dtype=bool)
     is_ms = np.array([f == "MS" for f in families], dtype=bool)
     is_mb = np.array([f == "MB" for f in families], dtype=bool)
@@ -133,6 +202,7 @@ def plot_strengths_comparison(
     plot_real: bool = False,
     save_path: str = "plots/relative_difference_comparison.png",
     *,
+    accelerator: Accelerator | None = None,
     style: str | None = "seaborn-v0_8-colorblind",
     unit: str | None = None,
     dpi: int = 200,
@@ -141,13 +211,16 @@ def plot_strengths_comparison(
     Plot strengths comparison (either raw strengths or relative differences).
 
     Colors encode magnet family (MQ/MS). Style (hatch) encodes True vs Final.
+    If accelerator is provided, colors are generated dynamically from supported knob specs.
     """
     if style:
         plt.style.use(style)
 
     n = _validate_inputs(magnet_names, final_vals, true_vals, uncertainties, initial_vals)
 
-    families, true_colours, final_colours, _, _, _ = _get_family_colors_and_masks(magnet_names)
+    families, true_colours, final_colours, _, _, _ = _get_family_colors_and_masks(
+        magnet_names, accelerator
+    )
 
     final_plot, true_plot, uncertainties_on_plot, baseline, zero_mask = _prepare_plot_data(
         final_vals, true_vals, uncertainties, initial_vals, plot_real
@@ -249,12 +322,26 @@ def plot_strengths_comparison(
             label="True",
         ),
     ]
-    for fam in ["MQ", "MS", "MB"]:
-        if fam in unique_families:
-            colour = {"MQ": MQ_FINAL_COLOUR, "MS": MS_FINAL_COLOUR, "MB": MB_FINAL_COLOUR}[fam]
-            legend_handles.append(
-                Patch(facecolor=colour, edgecolor="black", label=f"{fam} • Estimate")
-            )
+
+    if accelerator is not None:
+        true_colors_dict, final_colors_dict = _generate_family_colors_from_accelerator(accelerator)
+        for fam in sorted(unique_families):
+            if fam in final_colors_dict:
+                legend_handles.append(
+                    Patch(
+                        facecolor=final_colors_dict[fam],
+                        edgecolor="black",
+                        label=f"{fam} • Estimate",
+                    )
+                )
+    else:
+        # Fallback to hardcoded families
+        for fam in ["MQ", "MS", "MB"]:
+            if fam in unique_families:
+                colour = {"MQ": MQ_FINAL_COLOUR, "MS": MS_FINAL_COLOUR, "MB": MB_FINAL_COLOUR}[fam]
+                legend_handles.append(
+                    Patch(facecolor=colour, edgecolor="black", label=f"{fam} • Estimate")
+                )
 
     ax.margins(x=0.01)
     ax.tick_params(axis="x", labelsize=12)
@@ -274,6 +361,7 @@ def plot_strengths_vs_position(
     plot_real: bool = False,
     save_path: str = "plots/relative_difference_vs_position.png",
     *,
+    accelerator: Accelerator | None = None,
     style: str | None = "seaborn-v0_8-colorblind",
     unit: str | None = None,
     dpi: int = 300,
@@ -284,6 +372,7 @@ def plot_strengths_vs_position(
 
     Colors encode magnet family (MQ/MS) if `magnet_names` is provided.
     Series (True/Final) uses marker shape to differentiate.
+    If accelerator is provided, colors are generated dynamically from supported knob specs.
     """
     if style:
         plt.style.use(style)
@@ -296,7 +385,9 @@ def plot_strengths_vs_position(
     spos_arr = np.asarray(elem_spos)
 
     if magnet_names is not None:
-        families, _, _, is_mq, is_ms, is_mb = _get_family_colors_and_masks(magnet_names)
+        families, _, _, is_mq, is_ms, is_mb = _get_family_colors_and_masks(
+            magnet_names, accelerator
+        )
     else:
         families = None
 
@@ -399,30 +490,59 @@ def plot_strengths_vs_position(
         assert families is not None
         unique_families = set(families)
         handles = []
-        for fam in ["MQ", "MS", "MB"]:
-            if fam in unique_families:
-                true_color = TRUE_COLOURS[fam]
-                final_color = FINAL_COLOURS[fam]
-                handles.append(
-                    Line2D(
-                        [0],
-                        [0],
-                        marker="s",
-                        linestyle="None",
-                        color=true_color,
-                        label=f"{fam} • True",
+
+        if accelerator is not None:
+            true_colors_dict, final_colors_dict = _generate_family_colors_from_accelerator(
+                accelerator
+            )
+            for fam in sorted(unique_families):
+                if fam in true_colors_dict and fam in final_colors_dict:
+                    handles.append(
+                        Line2D(
+                            [0],
+                            [0],
+                            marker="s",
+                            linestyle="None",
+                            color=true_colors_dict[fam],
+                            label=f"{fam} • True",
+                        )
                     )
-                )
-                handles.append(
-                    Line2D(
-                        [0],
-                        [0],
-                        marker="o",
-                        linestyle="None",
-                        color=final_color,
-                        label=f"{fam} • Final",
+                    handles.append(
+                        Line2D(
+                            [0],
+                            [0],
+                            marker="o",
+                            linestyle="None",
+                            color=final_colors_dict[fam],
+                            label=f"{fam} • Final",
+                        )
                     )
-                )
+        else:
+            # Fallback to hardcoded families
+            for fam in ["MQ", "MS", "MB"]:
+                if fam in unique_families:
+                    true_color = TRUE_COLOURS[fam]
+                    final_color = FINAL_COLOURS[fam]
+                    handles.append(
+                        Line2D(
+                            [0],
+                            [0],
+                            marker="s",
+                            linestyle="None",
+                            color=true_color,
+                            label=f"{fam} • True",
+                        )
+                    )
+                    handles.append(
+                        Line2D(
+                            [0],
+                            [0],
+                            marker="o",
+                            linestyle="None",
+                            color=final_color,
+                            label=f"{fam} • Final",
+                        )
+                    )
         ax.legend(handles=handles, title="Legend", loc="upper right")
     else:
         handles = [

@@ -15,14 +15,15 @@ from xtrack_tools.acd import prepare_acd_line_with_monitors
 from xtrack_tools.env import initialise_env
 from xtrack_tools.monitors import process_tracking_data
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
 from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
 from aba_optimiser.simulation.optics import perform_orbit_correction
-from aba_optimiser.training.controller import LHCController as Controller
+from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.controller_config import SequenceConfig
 from aba_optimiser.training.controller_helpers import (
-    create_arc_bpm_config,
     create_arc_measurement_config,
 )
 
@@ -192,8 +193,8 @@ def generate_track_with_errors(
     seq_name = f"lhcb{beam}"
     iface.load_sequence(sequence_path, seq_name)
     iface.setup_beam(particle="proton", beam_energy=BEAM_ENERGY_GEV)
-    iface.mad["zero_twiss", "_"] = iface.mad.twiss(sequence="loaded_sequence")  # ty:ignore[invalid-assignment]
-    tws = iface.mad.zero_twiss.to_df().set_index("name")
+    iface.mad["zero_twiss", "_"] = iface.mad.twiss(sequence="loaded_sequence")
+    # tws = iface.mad.zero_twiss.to_df().set_index("name")
 
     magnet_strengths, _ = apply_magnet_perturbations(
         iface.mad,
@@ -244,7 +245,7 @@ def generate_track_with_errors(
 
     save_knobs(matched_tunes, tune_knobs_path)
 
-    line = env[seq_name]  # ty:ignore[not-subscriptable]
+    line: xt.Line = env[seq_name]
     ramp_turns=1000
     monitored_line, total_turns = prepare_acd_line_with_monitors(
         line=line,
@@ -307,23 +308,31 @@ def optimise_ranges(
             corrector_files=corrector_knobs_file,
             tune_knobs_files=tune_knobs_file,
         )
-        bpm_config = create_arc_bpm_config(
-            range_config.bpm_starts[i], range_config.bpm_end_points[i]
+
+        accelerator = LHC(
+            beam=beam,
+            beam_energy=BEAM_ENERGY_GEV,
+            sequence_file=sequence_path,
+            optimise_energy=True,
+            optimise_quadrupoles=False,
+            optimise_bends=False,
+        )
+        sequence_config = SequenceConfig(
+            magnet_range=range_config.magnet_ranges[i],
+            bad_bpms=bad_bpms,
         )
 
         controller = Controller(
-            beam=beam,
-            measurement_config=measurement_config,
-            bpm_config=bpm_config,
-            magnet_range=range_config.magnet_ranges[i],
+            accelerator=accelerator,
             optimiser_config=optimiser_config,
             simulation_config=simulation_config,
-            sequence_path=sequence_path,
+            sequence_config=sequence_config,
+            measurement_config=measurement_config,
+            bpm_start_points=range_config.bpm_starts[i],
+            bpm_end_points=range_config.bpm_end_points[i],
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,
-            bad_bpms=bad_bpms,
-            beam_energy=BEAM_ENERGY_GEV,
         )
         final_knobs, uncs = controller.run()
         results.append(final_knobs["deltap"])
@@ -392,9 +401,6 @@ def main() -> None:
         tracks_per_worker=1,
         num_workers=1,
         num_batches=1,
-        optimise_energy=True,
-        optimise_quadrupoles=False,
-        optimise_bends=False,
         optimise_momenta=False,
         use_fixed_bpm=not args.no_fixed_bpm,
     )

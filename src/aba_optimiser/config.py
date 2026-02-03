@@ -60,12 +60,6 @@ class SimulationConfig:
     num_workers: int
     num_batches: int
 
-    # Which parameters to optimise
-    optimise_energy: bool = field(default=True)
-    optimise_quadrupoles: bool = field(default=False)
-    optimise_bends: bool = field(default=False)
-    optimise_correctors: bool = field(default=False)
-
     # Whether to include momenta (px, py) in loss function
     # When False, only positions (x, y) are used for optimisation
     optimise_momenta: bool = field(default=True)
@@ -129,9 +123,6 @@ DPP_SIMULATION_CONFIG = SimulationConfig(
     tracks_per_worker=219,
     num_workers=60,
     num_batches=20,
-    optimise_energy=True,
-    optimise_quadrupoles=False,
-    optimise_bends=False,
 )
 
 # Optimiser configuration for quadrupole optimisation
@@ -160,9 +151,6 @@ QUAD_SIMULATION_CONFIG = SimulationConfig(
     # num_workers=1,
     # num_batches=1,
     num_batches=10,
-    optimise_energy=False,
-    optimise_quadrupoles=True,
-    optimise_bends=False,
 )
 
 # =============================================================================
@@ -170,22 +158,14 @@ QUAD_SIMULATION_CONFIG = SimulationConfig(
 # =============================================================================
 
 # Standard error of the noise
-POSITION_STD_DEV = 1e-5  # Standard deviation of the position noise
-MOMENTUM_STD_DEV = 3e-7  # Standard deviation of the momentum noise
+POSITION_STD_DEV = 1e-4  # Standard deviation of the position noise
+MOMENTUM_STD_DEV = 3e-6  # Standard deviation of the momentum noise
 REL_K1_STD_DEV = 1e-4  # Standard deviation of the K1 noise
 MACHINE_DELTAP = -16e-5  # -11e-5  # The energy deviation of the machine from expected.
 DELTAP = 1e-3
 
-# DEPRECATED: Pass as arguments to Controller and MAD interfaces
-MAGNET_RANGE = "BPM.11R2.B1/BPM.11L3.B1"
-BEAM_ENERGY = 6800  # Beam energy in GeV - pass as argument to Controller
-
-
 # Physical constants
-PARTICLE_MASS = 938.27208816 * 1e-3  # [GeV] Proton energy-mass
-
-# MAD-X sequence name
-LHCB1_SEQ_NAME = "lhcb1"  # Sequence name in MAD-X (lowercase)
+PROTON_MASS = 938.27208816 * 1e-3  # [GeV] Proton energy-mass
 
 # Global schema constant for data files (this is appropriate as a global)
 FILE_COLUMNS: tuple[str, ...] = (
@@ -227,7 +207,6 @@ TUNE_KNOBS_FILE = PROJECT_ROOT / "data/matched_tunes.txt"
 CORRECTOR_STRENGTHS = PROJECT_ROOT / "data/corrector_strengths.txt"
 # Bend errors file
 BEND_ERROR_FILE = PROJECT_ROOT / "data/bend_errors.tfs"
-
 
 # =============================================================================
 # TODO AND NOTES

@@ -12,8 +12,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.physics.lhc_bends import normalise_lhcbend_magnets
-from aba_optimiser.training.base_controller import BaseController, LHCControllerMixin
+from aba_optimiser.training.base_controller import BaseController
 from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.utils import normalize_true_strengths
 from aba_optimiser.training.worker_manager import WorkerManager
@@ -21,9 +20,9 @@ from aba_optimiser.training.worker_manager import WorkerManager
 if TYPE_CHECKING:
     from tensorboardX import SummaryWriter
 
+    from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.config import OptimiserConfig, SimulationConfig
     from aba_optimiser.training.controller_config import (
-        BPMConfig,
         MeasurementConfig,
         SequenceConfig,
     )
@@ -42,11 +41,13 @@ class Controller(BaseController):
 
     def __init__(
         self,
+        accelerator: Accelerator,
         optimiser_config: OptimiserConfig,
         simulation_config: SimulationConfig,
         sequence_config: SequenceConfig,
         measurement_config: MeasurementConfig,
-        bpm_config: BPMConfig,
+        bpm_start_points: list[str],
+        bpm_end_points: list[str],
         show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
         true_strengths: Path | dict[str, float] | None = None,
@@ -58,11 +59,13 @@ class Controller(BaseController):
         Initialise the controller with all required managers.
 
         Args:
+            accelerator (Accelerator): Accelerator instance defining machine configuration.
             optimiser_config (OptimiserConfig): Gradient descent optimiser configuration.
             simulation_config (SimulationConfig): Simulation and worker configuration.
             sequence_config (SequenceConfig): Sequence and beam configuration.
             measurement_config (MeasurementConfig): Measurement data file configuration.
-            bpm_config (BPMConfig): BPM range configuration.
+            bpm_start_points (list[str]): Starting BPM names for each range.
+            bpm_end_points (list[str]): Ending BPM names for each range.
             show_plots (bool, optional): Whether to show plots. Defaults to True.
             initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths.
             true_strengths (Path | dict[str, float], optional): True strengths file or dict.
@@ -72,12 +75,7 @@ class Controller(BaseController):
         """
 
         # Log optimisation targets
-        if simulation_config.optimise_energy:
-            logger.info("Optimising energy")
-        if simulation_config.optimise_quadrupoles:
-            logger.info("Optimising quadrupoles")
-        if simulation_config.optimise_bends:
-            logger.info("Optimising bends")
+        accelerator.log_optimisation_targets()
         if simulation_config.optimise_momenta:
             logger.info("Including momenta (px, py) in loss function")
         else:
@@ -104,19 +102,17 @@ class Controller(BaseController):
 
         # Initialize base controller (handles config manager, optimisation loop, result manager)
         super().__init__(
-            optimiser_config=optimiser_config,
-            simulation_config=simulation_config,
-            sequence_file_path=sequence_config.sequence_file_path,
-            magnet_range=sequence_config.magnet_range,
-            bpm_start_points=bpm_config.start_points,
-            bpm_end_points=bpm_config.end_points,
-            show_plots=show_plots,
+            accelerator,
+            optimiser_config,
+            simulation_config,
+            sequence_config.magnet_range,
+            bpm_start_points,
+            bpm_end_points,
+            show_plots,
             initial_knob_strengths=None,  # Will be set later after true_strengths processing
             true_strengths=None,  # Will be processed separately for tracking-specific logic
             bad_bpms=sequence_config.bad_bpms,
             first_bpm=sequence_config.first_bpm,
-            seq_name=sequence_config.seq_name,
-            beam_energy=sequence_config.beam_energy,
             bpm_range=bpm_range,
             debug=debug,
             mad_logfile=mad_logfile,
@@ -126,11 +122,10 @@ class Controller(BaseController):
         self._init_data_manager(
             measurement_config.bunches_per_file, measurement_config.flattop_turns
         )
+
         self._init_worker_manager(
             sequence_config.magnet_range,
             sequence_config.bad_bpms,
-            sequence_config.seq_name,
-            sequence_config.beam_energy,
             measurement_config.flattop_turns,
             measurement_config.bunches_per_file,
         )
@@ -286,15 +281,16 @@ class Controller(BaseController):
         self,
         magnet_range: str,
         bad_bpms: list[str] | None,
-        seq_name: str | None,
-        beam_energy: float,
         flattop_turns: int,
         num_tracks: int,
     ) -> None:
         """Initialize worker manager for tracking workers."""
         # Set worker logging level
         import logging
-        logging.getLogger('aba_optimiser.workers').setLevel(self.simulation_config.worker_logging_level)
+
+        logging.getLogger("aba_optimiser.workers").setLevel(
+            self.simulation_config.worker_logging_level
+        )
 
         self.worker_manager = WorkerManager(
             self.config_manager.calculate_n_data_points(),
@@ -302,12 +298,10 @@ class Controller(BaseController):
             magnet_range=magnet_range,
             fixed_start=self.config_manager.fixed_start,
             fixed_end=self.config_manager.fixed_end,
-            sequence_file_path=self.sequence_file_path,
+            accelerator=self.accelerator,
             corrector_strengths_files=self.corrector_files,
             tune_knobs_files=self.tune_knobs_files,
             bad_bpms=bad_bpms,
-            seq_name=seq_name,
-            beam_energy=beam_energy,
             flattop_turns=flattop_turns,
             num_tracks=num_tracks,
             use_fixed_bpm=self.simulation_config.use_fixed_bpm,
@@ -333,9 +327,9 @@ class Controller(BaseController):
                 true_strengths_dict["pt"] = self.config_manager.mad_iface.dp2pt(
                     true_strengths_dict.pop("deltap")
                 )
-        if self.simulation_config.optimise_bends:
-            return normalise_lhcbend_magnets(true_strengths_dict, self.config_manager.bend_lengths)
-        return true_strengths_dict
+        return self.accelerator.normalise_true_strengths(
+            true_strengths_dict, self.config_manager.bend_lengths
+        )
 
     def _process_initial_knobs(self, initial_knob_strengths) -> dict[str, float] | None:
         """Process initial knob strengths, converting deltap to pt if present."""
@@ -360,82 +354,14 @@ class Controller(BaseController):
         )
 
         # Replace "pt" with "deltap" in result manager if optimizing energy
-        deltap_knob_names = list(self.config_manager.knob_names)
-        if self.simulation_config.optimise_energy:
-            deltap_knob_names.append("deltap")
-            deltap_knob_names.remove("pt")
+        deltap_knob_names = self.accelerator.format_result_knob_names(
+            self.config_manager.knob_names
+        )
 
         self.result_manager = ResultManager(
             deltap_knob_names,
             self.config_manager.elem_spos,
             show_plots=self.show_plots,
-            simulation_config=self.simulation_config,
+            accelerator=self.accelerator,
             plots_dir=self.plots_dir,
-        )
-
-
-class LHCController(LHCControllerMixin, Controller):
-    """
-    LHC-specific controller that automatically sets sequence file path and first BPM based on beam number.
-    """
-
-    def __init__(
-        self,
-        beam: int,
-        measurement_config: MeasurementConfig,
-        bpm_config: BPMConfig,
-        magnet_range: str,
-        optimiser_config: OptimiserConfig,
-        simulation_config: SimulationConfig,
-        sequence_path: Path | None = None,
-        show_plots: bool = True,
-        initial_knob_strengths: dict[str, float] | None = None,
-        true_strengths: Path | dict[str, float] | None = None,
-        bad_bpms: list[str] | None = None,
-        beam_energy: float = 6800.0,
-        debug: bool = False,
-        mad_logfile: Path | None = None,
-        plots_dir: Path | None = None,
-    ):
-        """
-        Initialise the LHC controller with beam number and other parameters.
-
-        Args:
-            beam (int): The beam number (1 or 2).
-            measurement_config (MeasurementConfig): Measurement data file configuration.
-            bpm_config (BPMConfig): BPM range configuration.
-            magnet_range (str): Magnet range.
-            optimiser_config (OptimiserConfig): Optimiser configuration.
-            simulation_config (SimulationConfig): Simulation configuration.
-            sequence_path (Path | None, optional): Path to the sequence file. If None, uses default LHC file.
-            show_plots (bool, optional): Whether to show plots. Defaults to True.
-            initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths.
-            true_strengths (Path | dict[str, float] | None, optional): True strengths file or dict.
-            bad_bpms (list[str] | None, optional): List of bad BPMs.
-            beam_energy (float, optional): Beam energy in GeV. Defaults to 6800.0.
-            debug (bool, optional): Enable debug mode. Defaults to False.
-            mad_logfile (Path | None, optional): Path to MAD log file. Defaults to None.
-            plots_dir (Path | None, optional): Directory to save plots. Defaults to plots/.
-        """
-        # Create SequenceConfig using mixin helper
-        sequence_config = self.create_sequence_config(
-            beam=beam,
-            magnet_range=magnet_range,
-            sequence_path=sequence_path,
-            bad_bpms=bad_bpms,
-            beam_energy=beam_energy,
-        )
-
-        super().__init__(
-            optimiser_config=optimiser_config,
-            simulation_config=simulation_config,
-            sequence_config=sequence_config,
-            measurement_config=measurement_config,
-            bpm_config=bpm_config,
-            show_plots=show_plots,
-            initial_knob_strengths=initial_knob_strengths,
-            true_strengths=true_strengths,
-            debug=debug,
-            mad_logfile=mad_logfile,
-            plots_dir=plots_dir,
         )

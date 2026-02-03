@@ -7,11 +7,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 import tfs
+from xtrack_tools.env import initialise_env
 
-from aba_optimiser.mad import BaseMadInterface, OptimisationMadInterface
+from aba_optimiser.accelerators import LHC
+from aba_optimiser.mad import BaseMadInterface, GenericMadInterface
 from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
 from aba_optimiser.simulation.optics import perform_orbit_correction
-from xtrack_tools.env import initialise_env
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -71,7 +72,7 @@ def generate_model_with_errors(
     """
     # Create MAD interface and load sequence
     interface = loaded_interface_with_beam
-    interface.mad["zero_twiss", "_"] = interface.mad.twiss(sequence="loaded_sequence")  # ty:ignore[invalid-assignment]
+    interface.mad["zero_twiss", "_"] = interface.mad.twiss(sequence="loaded_sequence")
 
     # Perform orbit correction for off-momentum beam
     # Perform orbit correction for off-momentum beam (delta = 2e-4)
@@ -157,15 +158,18 @@ def generate_xsuite_env_with_errors(
 def get_twiss_without_errors(
     sequence_file: Path,
     just_bpms: bool,
+    beam: int = 1,
     estimated_magnets: dict[str, float] | None = None,
     tune_knobs_file: Path | None = None,
     corrector_file: Path | None = None,
 ) -> pd.DataFrame:
     """Get twiss data from a clean model without errors."""
-    mad = OptimisationMadInterface(
+    accelerator = LHC(
+        beam=beam,
         sequence_file=sequence_file,
-        seq_name="lhcb1",
-        beam_energy=6800,
+    )
+    mad = GenericMadInterface(
+        accelerator,
         bpm_pattern="BPM",
         corrector_strengths=corrector_file,
         tune_knobs_file=tune_knobs_file,

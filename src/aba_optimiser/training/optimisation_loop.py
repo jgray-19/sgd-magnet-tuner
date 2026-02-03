@@ -64,10 +64,6 @@ class OptimisationLoop:
             max_lr=optimiser_config.max_lr,
             min_lr=optimiser_config.min_lr,
         )
-
-        self.some_magnets = (
-            simulation_config.optimise_quadrupoles or simulation_config.optimise_bends
-        )
         self.num_batches = simulation_config.num_batches
 
         # Convert total expected relative error into a per-step trust-region bound

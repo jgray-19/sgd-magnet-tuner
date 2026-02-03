@@ -26,7 +26,7 @@ def convert_seq_to_json(seq_file: Path) -> None:
 
     try:
         # Load MAD-X lattice from sequence file
-        env = xt.load_madx_lattice(file=seq_file)  # ty:ignore[unresolved-attribute]
+        env = xt.load_madx_lattice(file=seq_file)
 
         # Save to JSON
         env.to_json(json_file)

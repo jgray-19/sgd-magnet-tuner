@@ -10,13 +10,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from omc3.optics_measurements.constants import PHASE_ADV
+from tmom_recon import build_twiss_from_measurements
 
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
-from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
-from aba_optimiser.measurements.twiss_from_measurement import (
-    build_twiss_from_measurements,
-)
-from aba_optimiser.training.base_controller import BaseController, LHCControllerMixin
+from aba_optimiser.mad import get_mad_interface
+from aba_optimiser.training.base_controller import BaseController
 from aba_optimiser.training.utils import extract_bpm_range_names
 from aba_optimiser.training.worker_lifecycle import WorkerLifecycleManager
 from aba_optimiser.workers import OpticsData, OpticsWorker, WorkerConfig
@@ -24,7 +22,8 @@ from aba_optimiser.workers import OpticsData, OpticsWorker, WorkerConfig
 if TYPE_CHECKING:
     import pandas as pd
 
-    from aba_optimiser.training.controller_config import BPMConfig, SequenceConfig
+    from aba_optimiser.accelerators import Accelerator
+    from aba_optimiser.training.controller_config import SequenceConfig
 
 X = "x"
 Y = "y"
@@ -43,10 +42,12 @@ class OpticsController(BaseController):
 
     def __init__(
         self,
+        accelerator: Accelerator,
         sequence_config: SequenceConfig,
-        optics_folder: str | Path,
-        bpm_config: BPMConfig,
         optimiser_config: OptimiserConfig,
+        optics_folder: str | Path,
+        bpm_start_points: list[str],
+        bpm_end_points: list[str],
         show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
         corrector_file: Path | None = None,
@@ -59,48 +60,43 @@ class OpticsController(BaseController):
         Initialise the optics controller.
 
         Args:
-            sequence_config (SequenceConfig): Sequence and beam configuration
-            optics_folder (str | Path): Path to folder containing beta_phase_x.tfs and beta_phase_y.tfs
-            bpm_config (BPMConfig): BPM range configuration
-            optimiser_config (OptimiserConfig): Gradient descent optimiser configuration
-            show_plots (bool, optional): Whether to show plots. Defaults to True
-            initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths
-            corrector_file (Path | None, optional): Corrector strength file
-            tune_knobs_file (Path | None, optional): Tune knob file
-            true_strengths (Path | dict[str, float] | None, optional): True strengths
-            use_errors (bool, optional): Whether to use measurement errors in optimisation. Defaults to True
-            use_amplitude_beta (bool, optional): Use beta from amplitude (True) or phase (False). Defaults to True
+            accelerator (Accelerator): Accelerator instance defining machine configuration.
+            sequence_config (SequenceConfig): Sequence configuration of BPMs and magnets.
+            optimiser_config (OptimiserConfig): Gradient descent optimiser configuration.
+            optics_folder (str | Path): Path to directory containing TFS optics measurement files.
+            bpm_start_points (list[str]): Start BPMs for each range.
+            bpm_end_points (list[str]): End BPMs for each range.
+            show_plots (bool): Whether to show plots.
+            initial_knob_strengths (dict[str, float] | None): Initial knob strengths.
+            corrector_file (Path | None): Path to corrector strengths file.
+            tune_knobs_file (Path | None): Path to tune knobs file.
+            true_strengths (Path | dict[str, float] | None): True strengths (Path, dict, or None).
+            use_errors (bool): Whether to use measurement errors in optimisation.
+            use_amplitude_beta (bool): Use beta from amplitude (True) or phase (False
         """
         logger.info("Optimising quadrupoles for beta functions")
 
         # Create optics-specific simulation config
-        opt_quads = sequence_config.optimise_knobs is None
         simulation_config = SimulationConfig(
             tracks_per_worker=1,
             num_workers=1,
             num_batches=1,
-            optimise_energy=False,
-            optimise_quadrupoles=opt_quads,
-            optimise_bends=False,
             use_fixed_bpm=True,
         )
 
         # Initialize base controller
         super().__init__(
+            accelerator=accelerator,
             optimiser_config=optimiser_config,
             simulation_config=simulation_config,
-            sequence_file_path=sequence_config.sequence_file_path,
             magnet_range=sequence_config.magnet_range,
-            bpm_start_points=bpm_config.start_points,
-            bpm_end_points=bpm_config.end_points,
+            bpm_start_points=bpm_start_points,
+            bpm_end_points=bpm_end_points,
             show_plots=show_plots,
             initial_knob_strengths=initial_knob_strengths,
             true_strengths=true_strengths,
             bad_bpms=sequence_config.bad_bpms,
             first_bpm=sequence_config.first_bpm,
-            seq_name=sequence_config.seq_name,
-            beam_energy=sequence_config.beam_energy,
-            optimise_knobs=sequence_config.optimise_knobs,
         )
 
         # Store optics-specific attributes
@@ -113,21 +109,19 @@ class OpticsController(BaseController):
         # Create optics-specific worker payloads
         optics_path = Path(optics_folder)
         template_config = WorkerConfig(
+            accelerator=accelerator,
             start_bpm="TEMP",
             end_bpm="TEMP",
             magnet_range=sequence_config.magnet_range,
-            sequence_file_path=Path(sequence_config.sequence_file_path),
             corrector_strengths=corrector_file,
             tune_knobs_file=tune_knobs_file,
-            beam_energy=sequence_config.beam_energy,
             sdir=0,
             bad_bpms=sequence_config.bad_bpms,
-            seq_name=sequence_config.seq_name,
-            optimise_knobs=sequence_config.optimise_knobs,
         )
 
         # Use explicit BPM (start, end) pairs from config manager
         self.worker_payloads = create_worker_payloads(
+            accelerator,
             optics_path,
             self.config_manager.bpm_pairs,
             sequence_config.bad_bpms,
@@ -313,6 +307,7 @@ def _extract_phase_advances(
 
 
 def create_worker_payloads(
+    accelerator: Accelerator,
     optics_dir: Path,
     bpm_pairs: list[tuple[str, str]],
     bad_bpms: list[str] | None,
@@ -349,13 +344,11 @@ def create_worker_payloads(
             init_bpm = start_bpm if sdir == 1 else end_bpm
 
             # Get all BPMs in the sequence for range extraction
-            temp_mad = OptimisationMadInterface(
-                str(template_config.sequence_file_path),
-                seq_name=template_config.seq_name,
+            temp_mad = get_mad_interface(accelerator)(
+                accelerator,
                 magnet_range=template_config.magnet_range,
                 bpm_range=f"{start_bpm}/{end_bpm}",
                 bad_bpms=bad_bpms,  # Filter out bad BPMs
-                beam_energy=template_config.beam_energy,
             )
             all_bpms = temp_mad.all_bpms
             del temp_mad  # Clean up
@@ -444,92 +437,3 @@ def create_worker_payloads(
             )
             worker_payloads.append((config, data))
     return worker_payloads
-
-
-class LHCOpticsController(LHCControllerMixin, OpticsController):
-    """
-    LHC-specific optics controller that automatically sets sequence file path
-    and first BPM based on beam number.
-    """
-
-    def __init__(
-        self,
-        beam: int,
-        optics_folder: str | Path,
-        bpm_config: BPMConfig,
-        magnet_range: str,
-        optimiser_config: OptimiserConfig,
-        sequence_path: Path | None = None,
-        show_plots: bool = True,
-        initial_knob_strengths: dict[str, float] | None = None,
-        corrector_file: Path | None = None,
-        tune_knobs_file: Path | None = None,
-        true_strengths: Path | dict[str, float] | None = None,
-        bad_bpms: list[str] | None = None,
-        beam_energy: float = 6800.0,
-        use_errors: bool = True,
-        optimise_knobs: list[str] | None = None,
-        use_amplitude_beta: bool = True,
-    ):
-        """
-        Initialise the LHC optics controller.
-
-        Args:
-            beam (int): The beam number (1 or 2)
-            optics_folder (str | Path): Path to folder containing beta_phase_x.tfs and beta_phase_y.tfs
-            bpm_config (BPMConfig): BPM range configuration
-            magnet_range (str): Magnet range specification
-            optimiser_config (OptimiserConfig): Gradient descent optimiser configuration
-            sequence_path (Path | None, optional): Path to sequence file. If None, uses default
-            show_plots (bool, optional): Whether to show plots. Defaults to True
-            initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths
-            corrector_file (Path | None, optional): Corrector strength file
-            tune_knobs_file (Path | None, optional): Tune knob file
-            true_strengths (Path | dict[str, float] | None, optional): True strengths
-            bad_bpms (list[str] | None, optional): List of bad BPMs
-            beam_energy (float, optional): Beam energy in GeV. Defaults to 6800.0
-            use_errors (bool, optional): Whether to use measurement errors in optimisation. Defaults to True
-            optimise_knobs (list[str] | None, optional): List of knob names to optimise. If None, optimises all knobs in magnet_range
-            use_amplitude_beta (bool, optional): Use beta from amplitude (True) or phase (False). Defaults to True
-        """
-        # Create SequenceConfig using mixin helper
-        sequence_config = self.create_sequence_config(
-            beam=beam,
-            magnet_range=magnet_range,
-            sequence_path=sequence_path,
-            bad_bpms=bad_bpms,
-            beam_energy=beam_energy,
-            optimise_knobs=optimise_knobs,
-        )
-
-        super().__init__(
-            sequence_config=sequence_config,
-            optics_folder=optics_folder,
-            bpm_config=bpm_config,
-            optimiser_config=optimiser_config,
-            show_plots=show_plots,
-            initial_knob_strengths=initial_knob_strengths,
-            corrector_file=corrector_file,
-            tune_knobs_file=tune_knobs_file,
-            true_strengths=true_strengths,
-            use_errors=use_errors,
-            use_amplitude_beta=use_amplitude_beta,
-        )
-
-        # Filter to optimise only specified knobs if provided
-        if optimise_knobs is not None:
-            logger.info(f"Filtering optimisation to {len(optimise_knobs)} specified knobs")
-            # Filter knob_names
-            original_knob_names = self.config_manager.knob_names
-            self.config_manager.knob_names = [k for k in original_knob_names if k in optimise_knobs]
-            # Filter initial_knobs
-            self.initial_knobs = {
-                k: v for k, v in self.initial_knobs.items() if k in optimise_knobs
-            }
-            # Filter true_strengths
-            self.filtered_true_strengths = {
-                k: v for k, v in self.filtered_true_strengths.items() if k in optimise_knobs
-            }
-            logger.info(
-                f"Optimising {len(self.config_manager.knob_names)} knobs: {self.config_manager.knob_names}"
-            )

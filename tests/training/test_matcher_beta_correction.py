@@ -13,6 +13,7 @@ import tfs
 
 pytest.importorskip("tmom_recon")
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 from aba_optimiser.matching.matcher import BetaMatcher
 from aba_optimiser.matching.matcher_config import MatcherConfig

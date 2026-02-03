@@ -142,7 +142,7 @@ def get_mq_vals(
         patterns,
         expected_knobs=None,
         log_prefix="MQ: ",
-        delta_days=0.1,
+        data_retrieval_days=0.1,
         energy=energy,
     )
     # Remove all the b2 magnets for beam 1 and vice versa
@@ -183,6 +183,6 @@ def get_mcb_vals(
         patterns,
         expected_knobs=None,
         log_prefix="MCB: ",
-        delta_days=0.25,
+        data_retrieval_days=0.25,
         energy=energy,
     )

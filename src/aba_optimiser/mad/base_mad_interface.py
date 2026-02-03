@@ -313,7 +313,7 @@ loaded_sequence:install{{
             twiss_kwargs["observe"] = 1  # Default to no observation if not set
 
         try:
-            self.mad["tws", "flw"] = self.mad.twiss(sequence="loaded_sequence", **twiss_kwargs)  # ty:ignore[invalid-assignment]
+            self.mad["tws", "flw"] = self.mad.twiss(sequence="loaded_sequence", **twiss_kwargs)
         except ValueError as e:
             logger.error(f"Error during twiss calculation: {e}")
             raise RuntimeError("Twiss failed - check MAD output for details") from e
@@ -484,7 +484,7 @@ loaded_sequence:install{{
             X0={"x": x, "px": px, "y": y, "py": py, "t": t, "pt": pt},
             nturn=nturns,
             **kwargs,
-        )  # ty:ignore[invalid-assignment]
+        )
 
     def get_tracking_data(self) -> pd.DataFrame:
         """

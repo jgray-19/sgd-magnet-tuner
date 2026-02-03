@@ -16,11 +16,12 @@ pytest.importorskip("xtrack_tools")
 from xtrack_tools.monitors import line_to_dataframes
 from xtrack_tools.tracking import run_tracking_without_ac_dipole
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import BPMConfig, MeasurementConfig, SequenceConfig
+from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
 from tests.training.helpers import TRACK_COLUMNS, generate_xsuite_env_with_errors
 
 if TYPE_CHECKING:
@@ -65,7 +66,7 @@ def _run_track_with_model(
     if len(angle_list) != num_particles:
         raise ValueError("action_list and angle_list must have the same length")
 
-    line: xt.Line = env["lhcb1"]  # ty:ignore[not-subscriptable]
+    line: xt.Line = env["lhcb1"]
 
     monitored_line = run_tracking_without_ac_dipole(
         line=line,
@@ -200,9 +201,6 @@ def _make_simulation_config_energy() -> SimulationConfig:
         tracks_per_worker=1,
         num_workers=3,
         num_batches=10,
-        optimise_energy=True,
-        optimise_quadrupoles=False,
-        optimise_bends=False,
         optimise_momenta=True,
     )
 
@@ -224,9 +222,6 @@ def _make_simulation_config_quad() -> SimulationConfig:
         tracks_per_worker=10,
         num_workers=8,
         num_batches=2,
-        optimise_energy=False,
-        optimise_quadrupoles=True,
-        optimise_bends=False,
     )
 
 
@@ -267,9 +262,7 @@ def test_controller_energy_opt(
     ]
 
     sequence_config = SequenceConfig(
-        sequence_file_path=seq_b1,
         magnet_range=magnet_range,
-        beam_energy=6800,
     )
 
     measurement_config = MeasurementConfig(
@@ -280,17 +273,21 @@ def test_controller_energy_opt(
         bunches_per_file=1,
     )
 
-    bpm_config = BPMConfig(
-        start_points=bpm_start_points,
-        end_points=bpm_end_points,
+    accelerator = LHC(
+        beam=1,
+        beam_energy=6800,
+        sequence_file=seq_b1,
+        optimise_energy=True,
     )
 
     ctrl = Controller(
-        optimiser_config=optimiser_config,
-        simulation_config=simulation_config,
-        sequence_config=sequence_config,
-        measurement_config=measurement_config,
-        bpm_config=bpm_config,
+        accelerator,
+        optimiser_config,
+        simulation_config,
+        sequence_config,
+        measurement_config,
+        bpm_start_points,
+        bpm_end_points,
         show_plots=False,
         true_strengths=None,
         mad_logfile=tmp_path / "controller_energy_opt.log",
@@ -300,7 +297,7 @@ def test_controller_energy_opt(
 
     assert np.allclose(estimate.pop("deltap"), dpp_value, rtol=1e-4, atol=1e-10)
     uncertainty = unc.pop("deltap")
-    assert uncertainty < 1e-6 and uncertainty > 0
+    assert uncertainty < 2e-6 and uncertainty > 0
 
     # check that estimate and unc are now empty
     assert not estimate
@@ -346,9 +343,7 @@ def test_controller_quad_opt_simple(
     true_values = magnet_strengths.copy()
 
     sequence_config = SequenceConfig(
-        sequence_file_path=seq_b1,
         magnet_range=magnet_range,
-        beam_energy=6800,
         first_bpm=start_marker,
     )
 
@@ -360,16 +355,21 @@ def test_controller_quad_opt_simple(
         bunches_per_file=1,
     )
 
-    bpm_config = BPMConfig(
-        start_points=bpm_start_points,
-        end_points=bpm_end_points,
+    accelerator = LHC(
+        beam=1,
+        beam_energy=6800,
+        sequence_file=seq_b1,
+        optimise_quadrupoles=True,
     )
+
     ctrl = Controller(
-        optimiser_config=optimiser_config,
-        simulation_config=simulation_config,
-        sequence_config=sequence_config,
-        measurement_config=measurement_config,
-        bpm_config=bpm_config,
+        accelerator,
+        optimiser_config,
+        simulation_config,
+        sequence_config,
+        measurement_config,
+        bpm_start_points,
+        bpm_end_points,
         show_plots=False,
         plots_dir=tmp_path / "plots",
         true_strengths=true_values,

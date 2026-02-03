@@ -4,14 +4,11 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import tfs
 from omc3.model.constants import TWISS_AC_DAT
+from tmom_recon.physics.transverse import calculate_pz
 from turn_by_turn import read_tbt
 
-from aba_optimiser.config import module_path
+from aba_optimiser.config import PROJECT_ROOT
 from aba_optimiser.dataframes.utils import select_markers
-from aba_optimiser.momentum_recon.transverse import calculate_pz
-
-# from lhcng.model import model_to_ng
-from aba_optimiser.physics.phase_space import PhaseSpaceDiagnostics
 
 # from lhcng.tfs_utils import convert_tfs_to_madx
 
@@ -39,7 +36,7 @@ model_dir = Path(
     "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Models/b1_flat_60_18cm"
     # '/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-27/LHCB1/Models/b1_60cm_injTunes'
 )
-ng_model_dir = module_path / model_dir.name
+ng_model_dir = PROJECT_ROOT / model_dir.name
 # model_to_ng(model_dir, beam=1, out_dir=ng_model_dir)
 
 tws = tfs.read(ng_model_dir / TWISS_AC_DAT, index="NAME")
@@ -147,46 +144,4 @@ plt.legend()
 
 plt.tight_layout()
 
-# plt.show()
-
-# Prepare ellipse for X_BPM_START using the first real data set
-x_bpm_data = select_markers(data_p_list[0], BPM_START)
-ps_diag = PhaseSpaceDiagnostics(
-    bpm=BPM_START,
-    x_data=x_bpm_data["x"],
-    px_data=x_bpm_data["px"],
-    y_data=x_bpm_data["y"],
-    py_data=x_bpm_data["py"],
-    # tws=tws,
-    analysis_dir="/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Results/b1_flat_60_18cm_after_coupling_cor",
-)
-# Get ellipse points (center, +1 sigma, -1 sigma)
-x_ellipse, px_ellipse, y_ellipse, py_ellipse = ps_diag.ellipse_points()
-x_upper, px_upper, y_upper, py_upper = ps_diag.ellipse_sigma(sigma_level=1.0)
-x_lower, px_lower, y_lower, py_lower = ps_diag.ellipse_sigma(sigma_level=-1.0)
-
-# Plot both (x, px) and (y, py) phase spaces with ellipses in the same figure
-fig, axs = plt.subplots(1, 2, figsize=(14, 6))
-
-# (x, px) subplot
-axs[0].scatter(x_bpm_data["x"], x_bpm_data["px"], s=5, alpha=0.5, label="Data P 1")
-axs[0].plot(x_ellipse, px_ellipse, color="orange", label="Ellipse")
-axs[0].plot(x_upper, px_upper, color="red", linestyle="--", label="+1 Sigma")
-axs[0].plot(x_lower, px_lower, color="blue", linestyle="--", label="-1 Sigma")
-axs[0].set_title(f"Phase Space at {BPM_START} (X/PX) with Ellipse")
-axs[0].set_xlabel("X Position (m)")
-axs[0].set_ylabel("PX")
-axs[0].legend()
-
-# (y, py) subplot
-axs[1].scatter(x_bpm_data["y"], x_bpm_data["py"], s=5, alpha=0.5, label="Data P 1")
-axs[1].plot(y_ellipse, py_ellipse, color="orange", label="Ellipse")
-axs[1].plot(y_upper, py_upper, color="red", linestyle="--", label="+1 Sigma")
-axs[1].plot(y_lower, py_lower, color="blue", linestyle="--", label="-1 Sigma")
-axs[1].set_title(f"Phase Space at {BPM_START} (Y/PY) with Ellipse")
-axs[1].set_xlabel("Y Position (m)")
-axs[1].set_ylabel("PY")
-axs[1].legend()
-
-plt.tight_layout()
 plt.show()

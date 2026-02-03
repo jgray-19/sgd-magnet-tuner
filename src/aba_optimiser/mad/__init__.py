@@ -3,13 +3,20 @@ MAD-NG interface modules for accelerator simulation.
 
 This package provides different interfaces for working with MAD-NG:
 - BaseMadInterface: Core functionality without automatic setup
-- optimisationMadInterface: For accelerator optimisation workflows
+- GenericMadInterface: Generic setup functionality
+- GradientDescentMadInterface: Abstract base for gradient descent optimization
+- LHCOptimisationMadInterface: LHC-specific optimization interface
 """
 
 from .base_mad_interface import BaseMadInterface
-from .optimising_mad_interface import OptimisationMadInterface
+from .dispatch import get_mad_interface
+from .lhc_optimising_interface import LHCOptimisationMadInterface
+from .optimising_mad_interface import GenericMadInterface, GradientDescentMadInterface
 
 __all__ = [
     "BaseMadInterface",
-    "OptimisationMadInterface",
+    "GenericMadInterface",
+    "GradientDescentMadInterface",
+    "LHCOptimisationMadInterface",
+    "get_mad_interface",
 ]

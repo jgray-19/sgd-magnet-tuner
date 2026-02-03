@@ -1,19 +1,19 @@
-"""
-Tests for OptimisationMadInterface.
+"""Tests for MAD interfaces.
 
-This module contains pytest tests for the OptimisationMadInterface class.
+This module contains pytest tests for GenericMadInterface and
+LHCOptimisationMadInterface.
 """
 
 from __future__ import annotations
 
-import dataclasses
 from typing import TYPE_CHECKING
 
 import pytest
 
-from aba_optimiser.config import BEAM_ENERGY, SimulationConfig
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.io.utils import read_knobs
-from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
+from aba_optimiser.mad.lhc_optimising_interface import LHCOptimisationMadInterface
+from aba_optimiser.mad.optimising_mad_interface import GenericMadInterface
 from tests.mad.helpers import (
     check_beam_setup,
     check_corrector_strengths,
@@ -24,23 +24,25 @@ from tests.mad.helpers import (
     cleanup_interface,
 )
 
+BEAM_ENERGY = 6800  # Beam energy in GeV
+
 if TYPE_CHECKING:
     from collections.abc import Generator
     from pathlib import Path
 
-    import tfs
+    import pandas as pd
 
 
 def setup_and_check_interface(
-    sequence_file: Path,
+    accelerator: LHC,
     magnet_range: str = "$start/$end",
     bpm_range: str = "$start/$end",
     bpm_pattern: str = r"^BPM",
-) -> tuple[OptimisationMadInterface, tfs.TfsDataFrame]:
+) -> tuple[GenericMadInterface, pd.DataFrame]:
     """Set up interface with given parameters and perform common validation checks.
 
     Args:
-        sequence_file: Path to the sequence file
+        accelerator: LHC accelerator instance
         magnet_range: Range specification for magnets
         bpm_range: Range specification for BPMs
         bpm_pattern: Regex pattern for BPM matching
@@ -48,11 +50,8 @@ def setup_and_check_interface(
     Returns:
         Tuple of (interface, twiss_dataframe) after setup and validation
     """
-    interface = OptimisationMadInterface(
-        sequence_file=str(sequence_file),
-        corrector_strengths=None,
-        tune_knobs_file=None,
-        discard_mad_output=True,
+    interface = GenericMadInterface(
+        accelerator=accelerator,
         magnet_range=magnet_range,
         bpm_range=bpm_range,
         bpm_pattern=bpm_pattern,
@@ -73,28 +72,16 @@ def setup_and_check_interface(
     return interface, twiss_df
 
 
-@pytest.fixture(scope="module")
-def simulation_config() -> SimulationConfig:
-    """Create test simulation configuration."""
-    return SimulationConfig(
-        tracks_per_worker=5,
-        num_workers=2,
-        num_batches=1,
-        optimise_energy=True,
-    )
-
-
 @pytest.fixture(scope="function")
-def optimising_interface(
-    seq_b1: Path, simulation_config: SimulationConfig
-) -> Generator[OptimisationMadInterface, None, None]:
-    """Create a fresh OptimisationMadInterface for each test."""
-    iface = OptimisationMadInterface(
+def optimising_interface(seq_b1: Path) -> Generator[LHCOptimisationMadInterface, None, None]:
+    """Create a fresh LHCOptimisationMadInterface for each test."""
+    accelerator = LHC(
+        beam=1,
+        beam_energy=BEAM_ENERGY,
         sequence_file=str(seq_b1),
-        simulation_config=simulation_config,
-        corrector_strengths=None,
-        tune_knobs_file=None,
-        discard_mad_output=True,
+    )
+    iface = LHCOptimisationMadInterface(
+        accelerator=accelerator,
     )
     yield iface
     cleanup_interface(iface)
@@ -109,17 +96,14 @@ class TestOptimisationMadInterfaceInit:
         ],
     )
     def test_default(self, seq_b1: Path, beam_energy: float | None, seq_name: str | None) -> None:
-        """Test initialisation of OptimisationMadInterface with default parameters."""
-        kwargs: dict[str, float | str] = {}
-        if beam_energy is not None:
-            kwargs["beam_energy"] = beam_energy
-        if seq_name is not None:
-            kwargs["seq_name"] = seq_name
-        interface = OptimisationMadInterface(
+        """Test initialisation of GenericMadInterface with default parameters."""
+        accelerator = LHC(
+            beam=1,
+            beam_energy=beam_energy or BEAM_ENERGY,
             sequence_file=str(seq_b1),
-            corrector_strengths=None,
-            tune_knobs_file=None,
-            **kwargs,  # ty:ignore[invalid-argument-type]
+        )
+        interface = GenericMadInterface(
+            accelerator=accelerator,
         )
         bpm_pattern = r"^BPM"
         check_interface_basic_init(interface, "py")
@@ -143,18 +127,20 @@ class TestOptimisationMadInterfaceInit:
         # Check beam setup
         check_beam_setup(interface, particle="proton", energy=beam_energy or BEAM_ENERGY)
 
-        # knob_names only set when simulation_config is provided
-        assert not hasattr(interface, "knob_names") or interface.knob_names is None
-        assert not hasattr(interface, "elem_spos") or interface.elem_spos is None
+        assert interface.knob_names == []
+        assert interface.elem_spos == []
 
         cleanup_interface(interface)
 
     def test_bpm_magnet_pattern(self, seq_b1: Path) -> None:
         """Test that MAD variables are set correctly for default ranges and patterns."""
-        interface = OptimisationMadInterface(
+        accelerator = LHC(
+            beam=1,
+            beam_energy=BEAM_ENERGY,
             sequence_file=str(seq_b1),
-            corrector_strengths=None,
-            tune_knobs_file=None,
+        )
+        interface = GenericMadInterface(
+            accelerator=accelerator,
             discard_mad_output=True,
         )
 
@@ -177,8 +163,13 @@ class TestOptimisationMadInterfaceInit:
 
     def test_custom_bpm_pattern(self, seq_b1: Path) -> None:
         """Test that MAD variables are set correctly for custom patterns."""
+        accelerator = LHC(
+            beam=1,
+            beam_energy=BEAM_ENERGY,
+            sequence_file=str(seq_b1),
+        )
         interface, twiss_df = setup_and_check_interface(
-            seq_b1, "BPM.10L1.B1/BPM.20L1.B1", "$start/$end", r"^BPM%.10.*"
+            accelerator, "BPM.10L1.B1/BPM.20L1.B1", "$start/$end", r"^BPM%.10.*"
         )
 
         # Filter BPMs to match the custom pattern (BPMs starting with "BPM.10")
@@ -193,8 +184,13 @@ class TestOptimisationMadInterfaceInit:
 
     def test_custom_bpm_range(self, seq_b1: Path) -> None:
         """Test that MAD variables are set correctly for custom BPM ranges."""
+        accelerator = LHC(
+            beam=1,
+            beam_energy=BEAM_ENERGY,
+            sequence_file=str(seq_b1),
+        )
         interface, twiss_df = setup_and_check_interface(
-            seq_b1, "$start/$end", "BPM.10L1.B1/BPM.10R1.B1", r"^BPM"
+            accelerator, "$start/$end", "BPM.10L1.B1/BPM.10R1.B1", r"^BPM"
         )
 
         # Extract the BPM range boundaries
@@ -218,30 +214,27 @@ class TestOptimisationMadInterfaceInit:
         [(True, False, False), (False, True, False), (False, False, True), (True, True, False)],
         ids=["opt-energy_only", "opt-quad_only", "opt-bend_only", "opt-energy_quad"],
     )
-    def test_with_simulation_config(
+    def test_with_knob_config(
         self,
         seq_b1: Path,
-        simulation_config: SimulationConfig,
         optimise_energy: bool,
         optimise_quadrupoles: bool,
         optimise_bends: bool,
     ) -> None:
-        """Test initialisation with simulation configuration."""
-        simulation_config = dataclasses.replace(
-            simulation_config,
+        """Test initialisation with knob configuration."""
+        accelerator = LHC(
+            beam=1,
+            beam_energy=BEAM_ENERGY,
+            sequence_file=str(seq_b1),
             optimise_energy=optimise_energy,
             optimise_quadrupoles=optimise_quadrupoles,
             optimise_bends=optimise_bends,
         )
-        interface = OptimisationMadInterface(
-            sequence_file=str(seq_b1),
-            simulation_config=simulation_config,
-            corrector_strengths=None,
-            tune_knobs_file=None,
+        interface = LHCOptimisationMadInterface(
+            accelerator=accelerator,
             discard_mad_output=True,
         )
         check_interface_basic_init(interface, "py")
-        # Check that knobs were created for energy optimisation
         if optimise_energy:
             assert "pt" in interface.knob_names
 
@@ -260,7 +253,7 @@ class TestOptimisationMadInterfaceInit:
             assert len(interface.elem_spos) == 0
         else:
             if optimise_energy:
-                assert len(interface.elem_spos) == len(interface.knob_names) - 1  # Exclude pt
+                assert len(interface.elem_spos) == len(interface.knob_names) - 1
             else:
                 assert len(interface.elem_spos) == len(interface.knob_names)
         cleanup_interface(interface)
@@ -274,8 +267,13 @@ class TestOptimisationMadInterfaceInit:
         apply_correctors: bool,
     ) -> None:
         """Test initialization with different corrector strength settings."""
-        interface = OptimisationMadInterface(
+        accelerator = LHC(
+            beam=1,
+            beam_energy=BEAM_ENERGY,
             sequence_file=str(seq_b1),
+        )
+        interface = GenericMadInterface(
+            accelerator=accelerator,
             corrector_strengths=corrector_file if apply_correctors else None,
             tune_knobs_file=None,
         )
@@ -294,15 +292,20 @@ class TestOptimisationMadInterfaceInit:
         corrector_knob_file = corrector_knobs_file
         tune_knob_file = tune_knobs_file
 
-        no_knob_interface = OptimisationMadInterface(
+        accelerator = LHC(
+            beam=1,
+            beam_energy=BEAM_ENERGY,
             sequence_file=str(seq_b1),
+        )
+        no_knob_interface = GenericMadInterface(
+            accelerator=accelerator,
             corrector_strengths=None,
             tune_knobs_file=None,
         )
         original_mqt_strength = no_knob_interface.mad["MADX['MQT.14R3.B1'].k1"]
 
-        knob_interface = OptimisationMadInterface(
-            sequence_file=str(seq_b1),
+        knob_interface = GenericMadInterface(
+            accelerator=accelerator,
             corrector_strengths=corrector_knob_file,
             tune_knobs_file=tune_knob_file,
         )
@@ -333,8 +336,13 @@ class TestOptimisationMadInterfaceInit:
     )
     def test_bad_bpms(self, seq_b1: Path, bad_bpms: list[str] | None) -> None:
         """Test that bad_bpms are properly unobserved."""
-        interface = OptimisationMadInterface(
+        accelerator = LHC(
+            beam=1,
+            beam_energy=BEAM_ENERGY,
             sequence_file=str(seq_b1),
+        )
+        interface = GenericMadInterface(
+            accelerator=accelerator,
             corrector_strengths=None,
             tune_knobs_file=None,
             bad_bpms=bad_bpms,
@@ -373,7 +381,7 @@ class TestOptimisationMadInterfaceInit:
     ],
     ids=["full_range", "custom_range", "wider_custom_range"],
 )
-def test_count_bpms(optimising_interface: OptimisationMadInterface, bpm_range: str) -> None:
+def test_count_bpms(optimising_interface: LHCOptimisationMadInterface, bpm_range: str) -> None:
     """Test counting BPMs in the sequence with different ranges."""
     full_bpms = optimising_interface.all_bpms
 
@@ -389,18 +397,22 @@ def test_count_bpms(optimising_interface: OptimisationMadInterface, bpm_range: s
 
 
 def test_recv_update_knob_values(
-    optimising_interface: OptimisationMadInterface,
+    optimising_interface: LHCOptimisationMadInterface,
 ) -> None:
     """Test receiving current knob values."""
     values = optimising_interface.receive_knob_values()
-    assert values == [0.0]
+    # No knobs are created, so we expect empty array
+    assert len(values) == 0
 
+    # Now add some knobs and verify they can be received
     optimising_interface.knob_names.extend(["a", "b", "c"])
     optimising_interface.mad.send("MADX.a = 1.0; MADX.b = 2.1; MADX.c = -3.2")
     values = optimising_interface.receive_knob_values()
-    assert all(values == [0.0, 1.0, 2.1, -3.2]), f"Unexpected knob values: {values}"
+    assert all(values == [1.0, 2.1, -3.2]), f"Unexpected knob values: {values}"
 
+    # Update knobs (including a non-existent one "pt" that should be ignored)
     update_table = {"a": 4.5, "b": -6.7, "c": 8.9, "pt": 1.0}
     optimising_interface.update_knob_values(update_table)
     values = optimising_interface.receive_knob_values()
-    assert all(values == [1.0, 4.5, -6.7, 8.9]), f"Unexpected knob values after update: {values}"
+    # Only the 3 existing knobs should be updated, "pt" is ignored with a warning
+    assert all(values == [4.5, -6.7, 8.9]), f"Unexpected knob values after update: {values}"

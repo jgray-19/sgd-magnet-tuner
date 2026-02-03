@@ -20,12 +20,6 @@ from omc3.hole_in_one import hole_in_one_entrypoint
 from turn_by_turn import write_tbt
 from turn_by_turn.structures import TbtData, TransverseData
 from xobjects import ContextCpu  # noqa: E402
-
-from aba_optimiser.mad.base_mad_interface import BaseMadInterface
-from aba_optimiser.simulation.magnet_perturbations import (
-    apply_magnet_perturbations,
-)
-from aba_optimiser.simulation.optics import perform_orbit_correction
 from xtrack_tools import (
     create_xsuite_environment,
     initialise_env,
@@ -33,6 +27,12 @@ from xtrack_tools import (
     insert_particle_monitors_at_pattern,
     line_to_dataframes,
 )
+
+from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+from aba_optimiser.simulation.magnet_perturbations import (
+    apply_magnet_perturbations,
+)
+from aba_optimiser.simulation.optics import perform_orbit_correction
 
 # Setup logging
 logging.basicConfig(
@@ -100,14 +100,14 @@ def run_acd_twiss(
     acd_marker = f"mkqa.6l4.b{beam}"
     bet_at_acdipole = before_acd_tws.rows[acd_marker]
 
-    line_acd.env.elements[f"mkach.6l4.b{beam}"] = xt.ACDipole(  # ty:ignore[unresolved-attribute]
+    line_acd.env.elements[f"mkach.6l4.b{beam}"] = xt.ACDipole(
         plane="x",
         natural_q=before_acd_tws["qx"] % 1,
         freq=driven_tunes[0],
         beta_at_acdipole=bet_at_acdipole["betx"],
         twiss_mode=True,
     )
-    line_acd.env.elements[f"mkacv.6l4.b{beam}"] = xt.ACDipole(  # ty:ignore[unresolved-attribute]
+    line_acd.env.elements[f"mkacv.6l4.b{beam}"] = xt.ACDipole(
         plane="y",
         natural_q=before_acd_tws["qy"] % 1,
         freq=driven_tunes[1],
@@ -161,8 +161,8 @@ def generate_model_data():
         seq_name="lhcb1",
     )
 
-    line = env["lhcb1"].copy()  # ty:ignore[not-subscriptable]
-    tws = line.twiss(method="4d")
+    line = env["lhcb1"].copy()
+    tws: xt.TwissTable = line.twiss(method="4d")
 
     # Verify natural tunes
     qx = float(tws.qx % 1)
@@ -215,7 +215,7 @@ melmcol(tws, {'k1l' , 'k2l', 'k1sl', 'k3l', 'k4l'})
         seq_name="lhcb1",
     )
 
-    return corrected_env["lhcb1"], tws, tws_acd, ng_tws  # ty:ignore[not-subscriptable]
+    return corrected_env["lhcb1"], tws, tws_acd, ng_tws
     # return base_env["lhcb1"], tws, tws_acd, ng_tws
 
 

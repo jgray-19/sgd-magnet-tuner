@@ -120,7 +120,7 @@ def process_track_with_queue(
         # del noise_table
 
         noisy_df = true_df.copy()
-        inject_noise_xy_inplace(noisy_df, true_df, np.random.default_rng(), [])
+        inject_noise_xy_inplace(noisy_df, true_df, np.random.default_rng())
 
         # Filter the noisy data and enqueue cleaned data
         cleaned_df = svd_clean_measurements(noisy_df)
