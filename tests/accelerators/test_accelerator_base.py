@@ -16,6 +16,9 @@ class ConcreteAccelerator(Accelerator):
         """Return a test sequence name."""
         return "test_seq"
 
+    def get_supported_knob_specs(self) -> list[tuple[str, str, str, bool]]:
+        """Return a list of supported knob specifications."""
+        return [("quadrupole", "k1", "MQ", True)]
 
 class TestAcceleratorBase:
     """Tests for base Accelerator functionality."""

@@ -14,6 +14,8 @@ import pytest
 pytest.importorskip("tmom_recon")
 pytest.importorskip("xtrack_tools")
 
+import os
+
 import tfs
 from tmom_recon import (
     calculate_dispersive_pz,
