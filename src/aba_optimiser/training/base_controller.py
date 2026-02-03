@@ -47,7 +47,6 @@ class BaseController(ABC):
         true_strengths: Path | dict[str, float] | None = None,
         bad_bpms: list[str] | None = None,
         first_bpm: str | None = None,
-        bpm_range: str | None = None,
         debug: bool = False,
         mad_logfile: Path | None = None,
         optimise_knobs: list[str] | None = None,
@@ -66,7 +65,6 @@ class BaseController(ABC):
             true_strengths: True strengths (Path, dict, or None)
             bad_bpms: List of bad BPMs to exclude
             first_bpm: First BPM in the sequence
-            bpm_range: BPM range for determining fixed start/end points (defaults to magnet_range)
             optimise_knobs: List of global knob names to optimise, or None
         """
         self.optimiser_config = optimiser_config
@@ -88,7 +86,6 @@ class BaseController(ABC):
             magnet_range,
             bpm_start_points,
             bpm_end_points,
-            bpm_range,
             optimise_knobs,
         )
         self.config_manager.setup_mad_interface(

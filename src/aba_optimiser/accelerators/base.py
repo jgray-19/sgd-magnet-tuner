@@ -131,3 +131,47 @@ class Accelerator(ABC):
             all possible knobs that can be created for this accelerator.
         """
         pass
+
+    def get_bpm_plane_mask(
+        self, bpm_list: list[str], bad_bpms: list[str]
+    ) -> tuple[list[bool], list[bool]]:
+        """Generate masks indicating which BPMs measure which planes.
+
+        This method identifies single-plane vs dual-plane BPMs and determines which
+        planes should be masked out based on bad BPM filtering. The masks are used
+        to set appropriate weights (0 or NaN) for planes that don't have measurements.
+
+        Args:
+            bpm_list: List of BPM names to generate masks for
+            bad_bpms: List of bad BPM specifications (can include plane suffixes)
+
+        Returns:
+            Tuple of (h_mask, v_mask) where each mask is a list of booleans.
+            True indicates the plane should be used, False indicates it should be masked.
+
+        Note:
+            Default implementation assumes all BPMs are dual-plane and returns all True.
+            Accelerator-specific subclasses should override this method to handle
+            single-plane BPMs and plane-specific bad BPM filtering.
+        """
+        # Default: all BPMs measure both planes
+        h_mask = [True] * len(bpm_list)
+        v_mask = [True] * len(bpm_list)
+        # Set all bad BPMs to False in both masks
+        return h_mask, v_mask
+
+    def parse_bad_bpm_specification(self, bad_bpm_spec: str) -> tuple[str, str | None]:
+        """Parse a bad BPM specification into BPM name and optional plane.
+
+        Args:
+            bad_bpm_spec: Bad BPM specification (e.g., "BPM.14L1.B1" or "BPM.14L1.B1.H")
+
+        Returns:
+            Tuple of (bpm_base_name, plane) where plane is "H", "V", or None for both planes
+
+        Note:
+            Default implementation assumes no plane suffixes (dual-plane only).
+            Override in accelerator-specific subclasses for different naming conventions.
+        """
+        # Default: no plane suffix, all BPMs are dual-plane
+        return bad_bpm_spec, None

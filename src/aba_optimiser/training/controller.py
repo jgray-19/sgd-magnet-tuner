@@ -97,9 +97,6 @@ class Controller(BaseController):
         self.num_configs = len(measurement_files)
         self.plots_dir = plots_dir
 
-        # Set bpm_range to magnet_range if not provided
-        bpm_range = sequence_config.bpm_range or sequence_config.magnet_range
-
         # Initialize base controller (handles config manager, optimisation loop, result manager)
         super().__init__(
             accelerator,
@@ -113,7 +110,6 @@ class Controller(BaseController):
             true_strengths=None,  # Will be processed separately for tracking-specific logic
             bad_bpms=sequence_config.bad_bpms,
             first_bpm=sequence_config.first_bpm,
-            bpm_range=bpm_range,
             debug=debug,
             mad_logfile=mad_logfile,
         )
@@ -258,6 +254,7 @@ class Controller(BaseController):
     def _init_data_manager(self, num_tracks: int, flattop_turns: int) -> None:
         """Initialize data manager and load track data."""
         self.data_manager = DataManager(
+            self.config_manager.bpms_in_range,
             self.config_manager.all_bpms,
             self.simulation_config,
             self.measurement_files,
@@ -301,6 +298,7 @@ class Controller(BaseController):
             accelerator=self.accelerator,
             corrector_strengths_files=self.corrector_files,
             tune_knobs_files=self.tune_knobs_files,
+            all_bpms=self.config_manager.all_bpms,
             bad_bpms=bad_bpms,
             flattop_turns=flattop_turns,
             num_tracks=num_tracks,

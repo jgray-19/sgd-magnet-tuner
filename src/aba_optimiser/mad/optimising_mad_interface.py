@@ -146,7 +146,7 @@ class GenericMadInterface(BaseMadInterface):
 
         # Setup observation and ranges
         self._observe_bpms(bad_bpms)
-        self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
+        self.bpms_in_range, self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
 
         # Apply corrector strengths if provided
         if corrector_strengths is not None:
@@ -160,12 +160,12 @@ class GenericMadInterface(BaseMadInterface):
         else:
             LOGGER.info("Skipping tune knobs (not provided)")
 
-    def count_bpms(self, bpm_range) -> tuple[int, list[str]]:
+    def count_bpms(self, bpm_range) -> tuple[list[str], int, list[str]]:
         """Count the number of BPM elements in the specified range."""
-        all_bpms = self.get_bpm_list(bpm_range)
-        nbpms = len(all_bpms)
+        all_bpms, bpms_in_range = self.get_bpm_list(bpm_range)
+        nbpms = len(bpms_in_range)
         LOGGER.info(f"Counted {nbpms} BPMs in range: {bpm_range}")
-        return nbpms, all_bpms
+        return bpms_in_range, nbpms, all_bpms
 
     def _observe_bpms(self, bad_bpms: list[str] | None) -> None:
         """Set up the MAD-NG session to observe BPMs."""

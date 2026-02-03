@@ -141,7 +141,7 @@ class WeightProcessor:
             variances: Array of variance values
 
         Returns:
-            Array of weights (1/variance for valid entries, 0 otherwise)
+            Array of weights (1/variance for valid entries, 0 for invalid)
         """
         weights = np.zeros_like(variances, dtype=np.float64)
         valid = np.isfinite(variances) & (variances > 0.0)

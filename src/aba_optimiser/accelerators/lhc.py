@@ -145,3 +145,73 @@ class LHC(Accelerator):
             ("quadrupole", "k1", self.PATTERN_MAIN_QUAD, True),
             ("hkicker", "kick", self.PATTERN_CORRECTOR, False),
         ]
+
+    def parse_bad_bpm_specification(self, bad_bpm_spec: str) -> tuple[str, str | None]:
+        """Parse LHC bad BPM specification into BPM name and optional plane.
+
+        LHC naming convention:
+        - No suffix: dual-plane BPM (e.g., "BPM.14L1.B1")
+        - .H suffix: horizontal plane only (e.g., "BPM.14L1.B1.H")
+        - .V suffix: vertical plane only (e.g., "BPM.14L1.B1.V")
+
+        Args:
+            bad_bpm_spec: Bad BPM specification
+
+        Returns:
+            Tuple of (bpm_base_name, plane) where plane is "H", "V", or None for both planes
+        """
+        if bad_bpm_spec.endswith(".H"):
+            return bad_bpm_spec[:-2], "H"
+        if bad_bpm_spec.endswith(".V"):
+            return bad_bpm_spec[:-2], "V"
+        return bad_bpm_spec, None
+
+    def get_bpm_plane_mask(
+        self, bpm_list: list[str], bad_bpms: list[str]
+    ) -> tuple[list[bool], list[bool]]:
+        """Generate masks for LHC BPM planes considering single-plane and bad BPMs.
+
+        LHC-specific implementation that handles:
+        1. Single-plane BPMs (those with .H or .V suffix)
+        2. Bad BPM filtering per plane
+        3. Dual-plane BPMs (standard naming without suffix)
+
+        Logic:
+        - For dual-plane BPMs:
+          - If "BPM.X.H" is in bad_bpms → mask horizontal plane
+          - If "BPM.X.V" is in bad_bpms → mask vertical plane
+          - If "BPM.X" is in bad_bpms → mask both planes
+        - For single-plane BPMs:
+          - "BPM.X.H" measures only horizontal → mask vertical
+          - "BPM.X.V" measures only vertical → mask horizontal
+          - If the BPM appears in bad_bpms, mask its measuring plane too
+
+        Args:
+            bpm_list: List of BPM names (can include .H or .V suffixes)
+            bad_bpms: List of bad BPM specifications (with optional plane suffixes)
+
+        Returns:
+            Tuple of (h_mask, v_mask) where True means the plane should be used
+        """
+        # Build a dict of bad planes per BPM: {base_name -> set of bad planes}
+        bad_bpm_dict: dict[str, set[str]] = {}
+        for bad_spec in bad_bpms:
+            base_name, plane = self.parse_bad_bpm_specification(bad_spec)
+            bad_planes = bad_bpm_dict.setdefault(base_name, set())
+            if plane is None:
+                bad_planes.update(["H", "V"])
+            else:
+                bad_planes.add(plane)
+
+        # Generate masks for each BPM
+        h_mask = []
+        v_mask = []
+        for bpm_name in bpm_list:
+            base_name, plane_suffix = self.parse_bad_bpm_specification(bpm_name)
+            bad_planes = bad_bpm_dict.get(base_name, set())
+
+            # A plane is measured if BPM doesn't exclude it, and not bad
+            h_mask.append(plane_suffix != "V" and "H" not in bad_planes)
+            v_mask.append(plane_suffix != "H" and "V" not in bad_planes)
+
+        return h_mask, v_mask

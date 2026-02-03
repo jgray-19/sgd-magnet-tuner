@@ -128,7 +128,6 @@ def optimise_ranges(
 
         sequence_config = SequenceConfig(
             magnet_range=range_config.magnet_ranges[i],
-            bpm_range=f"{range_config.bpm_starts[i][0]}/{range_config.bpm_end_points[i][0]}",
             bad_bpms=bad_bpms,
             first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
         )
@@ -201,7 +200,6 @@ def optimise_corrector_ranges(
 
         sequence_config = SequenceConfig(
             magnet_range=range_config.magnet_ranges[i],
-            bpm_range=f"{range_config.bpm_starts[i][0]}/{range_config.bpm_end_points[i][0]}",
             bad_bpms=bad_bpms,
             first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
         )

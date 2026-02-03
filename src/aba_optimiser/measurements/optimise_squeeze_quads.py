@@ -222,7 +222,7 @@ def get_analysis_dir(beam: int, squeeze_step: str) -> Path:
     return beam_path / "Results" / ANALYSIS_DIRS[beam][squeeze_step]
 
 
-def get_bpm_points(arc_num: int, beam: int) -> tuple[str, list[str], list[str], str]:
+def get_bpm_points(arc_num: int, beam: int) -> tuple[str, list[str], list[str]]:
     """Get magnet range and BPM points for an arc."""
     next_arc = arc_num % 8 + 1
     suffix = f".B{beam}"
@@ -234,13 +234,12 @@ def get_bpm_points(arc_num: int, beam: int) -> tuple[str, list[str], list[str], 
     last_i = 13
     bpm_start_points = [f"BPM.{i}R{arc_num}{suffix}" for i in range(first_i, 15, 1)]
     bpm_end_points = [f"BPM.{i}L{next_arc}{suffix}" for i in range(last_i, 15, 1)]
-    bpm_range = f"BPM.{first_i}R{arc_num}{suffix}/BPM.{last_i}L{next_arc}{suffix}"
 
     # Testing these fixed points
     # bpm_start_points = [start_bpm]
     # bpm_end_points = [end_bpm]
 
-    return magnet_range, bpm_start_points, bpm_end_points, bpm_range
+    return magnet_range, bpm_start_points, bpm_end_points
 
 
 def validate_processed_files(temp_analysis_dir: Path, freq: str, num_files: int) -> None:
@@ -502,7 +501,7 @@ def create_configs(
     Returns:
         Tuple of (accelerator, sequence_config, bpm_start_points, bpm_end_points, measurement_config)
     """
-    magnet_range, bpm_start_points, bpm_end_points, bpm_range = get_bpm_points(arc_num, beam)
+    magnet_range, bpm_start_points, bpm_end_points = get_bpm_points(arc_num, beam)
 
     # Create LHC accelerator instance
     accelerator = LHC(
@@ -514,7 +513,6 @@ def create_configs(
 
     sequence_config = SequenceConfig(
         magnet_range=magnet_range,
-        bpm_range=bpm_range,
         bad_bpms=list(all_bad_bpms),
         first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
     )

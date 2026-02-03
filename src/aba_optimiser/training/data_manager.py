@@ -24,6 +24,7 @@ class DataManager:
 
     def __init__(
         self,
+        bpms_in_range: list[str],
         all_bpms: list[str],
         simulation_config: SimulationConfig,
         measurement_files: list[str],
@@ -31,6 +32,7 @@ class DataManager:
         flattop_turns: int,
     ):
         self.all_bpms = all_bpms
+        self.bpms_in_range = bpms_in_range
         self.simulation_config = simulation_config
         self.measurement_files = measurement_files
         self.num_bunches = num_bunches
@@ -54,7 +56,7 @@ class DataManager:
         df["name"] = df["name"].astype("category", copy=False)
         df["kick_plane"] = df["kick_plane"].astype("category", copy=False)
         # Copy because we drop non-selected markers and convert from view.
-        return select_markers(df, self.all_bpms).copy()
+        return select_markers(df, self.bpms_in_range).copy()
 
     def _read_parquet(
         self, source: str, needed_turns: set[int] | None, offset: int
@@ -62,7 +64,7 @@ class DataManager:
         """Read a parquet with optional turn filtering and column validation."""
         if needed_turns:
             filtered_turns = [t - offset for t in needed_turns]
-            filters = [("turn", "in", filtered_turns), ("name", "in", self.all_bpms)]
+            filters = [("turn", "in", filtered_turns), ("name", "in", self.bpms_in_range)]
             df = pd.read_parquet(source, columns=cols_to_read, filters=filters)
         else:
             df = pd.read_parquet(source, columns=cols_to_read)
@@ -82,7 +84,7 @@ class DataManager:
             # reduce bpm order to only those present in the data
             bpm_order_filtered = [
                 bpm
-                for bpm in self.all_bpms
+                for bpm in self.bpms_in_range
                 if bpm in self.track_data[file_idx].index.get_level_values("name")
             ]
             self.track_data[file_idx] = self.track_data[file_idx].reindex(
@@ -126,13 +128,30 @@ class DataManager:
             file_tracks[file_idx] = self._reduce_dataframe(df)
 
         # Handle NaN values in track data
-        for df in file_tracks.values():
-            # For each row that contains NaNs in the x, y or px, py columns,
-            # set the x_weight and y_weight to 0
+        for file_idx, df in file_tracks.items():
             nan_mask = df[["x", "y", "px", "py"]].isna().any(axis=1)
             if nan_mask.any():
-                raise ValueError(
-                    "Found NaN values in track data. Please clean the data before proceeding."
+                num_nans = nan_mask.sum()
+                total_rows = len(df)
+                percentage = 100.0 * num_nans / total_rows
+
+                # Log detailed NaN information
+                LOGGER.warning(
+                    f"File {file_idx}: Found {num_nans} rows with NaN values "
+                    f"({percentage:.2f}% of {total_rows} rows). "
+                    f"These will be assigned zero weight in optimization."
+                )
+
+                # Break down by column
+                for col in ["x", "y", "px", "py"]:
+                    col_nans = df[col].isna().sum()
+                    if col_nans > 0:
+                        LOGGER.warning(f"  - {col}: {col_nans} NaN values")
+
+                # Show first few affected rows
+                nan_rows = df[nan_mask].head(5)
+                LOGGER.debug(
+                    f"First affected rows:\n{nan_rows[['turn', 'name', 'x', 'y', 'px', 'py']]}"
                 )
 
         self.track_data = file_tracks

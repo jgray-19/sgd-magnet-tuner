@@ -61,7 +61,7 @@ def setup_and_check_interface(
     assert interface.mad["magnet_range"] == magnet_range
     assert interface.mad["bpm_range"] == bpm_range
     assert interface.mad["bpm_pattern"] == bpm_pattern
-    assert len(interface.all_bpms) == interface.nbpms
+    assert len(interface.bpms_in_range) == interface.nbpms
 
     # Check that BPMs matching the pattern are observed
     check_element_observations(interface, condition=f"elm.name:match('{bpm_pattern}')")
@@ -118,8 +118,10 @@ class TestOptimisationMadInterfaceInit:
         assert interface.bpm_pattern == bpm_pattern
         assert interface.nbpms == 563, f"Expected 563 BPMs, got {interface.nbpms}"
 
+        assert isinstance(interface.bpms_in_range, list)
+        assert len(interface.bpms_in_range) == interface.nbpms
         assert isinstance(interface.all_bpms, list)
-        assert len(interface.all_bpms) == interface.nbpms
+        assert len(interface.all_bpms) == 563  # Total BPMs in sequence
 
         # Check sequence loading
         check_sequence_loaded(interface, "lhcb1")
@@ -148,7 +150,7 @@ class TestOptimisationMadInterfaceInit:
         assert interface.mad["magnet_range"] == "$start/$end"
         assert interface.mad["bpm_range"] == "$start/$end"
         assert interface.mad["bpm_pattern"] == "^BPM"
-        assert len(interface.all_bpms) == interface.nbpms
+        assert len(interface.bpms_in_range) == interface.nbpms
 
         # Check that BPMs matching the pattern are observed
         check_element_observations(interface, condition=f"elm.name:match('{interface.bpm_pattern}')")
@@ -156,8 +158,8 @@ class TestOptimisationMadInterfaceInit:
         # Run twiss calculation to get BPM data
         twiss_df = interface.run_twiss()
 
-        # Verify that the twiss dataframe includes all BPMs in the sequence
-        assert list(twiss_df.index) == interface.all_bpms
+        # Verify that the twiss dataframe includes all BPMs in the range
+        assert list(twiss_df.index) == interface.bpms_in_range
 
         cleanup_interface(interface)
 
@@ -173,7 +175,7 @@ class TestOptimisationMadInterfaceInit:
         )
 
         # Filter BPMs to match the custom pattern (BPMs starting with "BPM.10")
-        expected_bpms = [name for name in interface.all_bpms if name.startswith("BPM.10")]
+        expected_bpms = [name for name in interface.bpms_in_range if name.startswith("BPM.10")]
 
         # Verify that twiss dataframe contains exactly the expected filtered BPMs
         assert len(twiss_df.index) == len(expected_bpms)
@@ -196,16 +198,18 @@ class TestOptimisationMadInterfaceInit:
         # Extract the BPM range boundaries
         first_bpm, second_bpm = "BPM.10L1.B1", "BPM.10R1.B1"
 
-        # Verify that all_bpms is correctly sliced to the specified range
-        assert interface.all_bpms[0] == first_bpm
-        assert interface.all_bpms[-1] == second_bpm
+        # Verify that bpms_in_range is correctly sliced to the specified range
+        assert interface.bpms_in_range[0] == first_bpm
+        assert interface.bpms_in_range[-1] == second_bpm
 
         start_idx = interface.all_bpms.index(first_bpm)
         end_idx = interface.all_bpms.index(second_bpm) + 1
-        assert len(interface.all_bpms) == end_idx - start_idx
+        assert len(interface.bpms_in_range) == end_idx - start_idx
 
-        # Verify that twiss dataframe contains all BPMs (not filtered by range)
-        assert len(twiss_df.index) == 563
+        # Verify that all_bpms contains all BPMs in the sequence
+        assert len(interface.all_bpms) == 563
+        # Verify that twiss dataframe contains all observed BPMs (not just those in range)
+        assert len(twiss_df.index) == len(interface.all_bpms)
 
         cleanup_interface(interface)
 
@@ -355,10 +359,10 @@ class TestOptimisationMadInterfaceInit:
         # Check that nbpms is reduced by the number of bad BPMs
         assert interface.nbpms == expected_nbpms, f"Expected {expected_nbpms} BPMs, got {interface.nbpms}"
 
-        # Check that bad_bpms are not in all_bpms
+        # Check that bad_bpms are not in bpms_in_range
         if bad_bpms:
             for bpm in bad_bpms:
-                assert bpm not in interface.all_bpms, f"Bad BPM {bpm} should not be in all_bpms"
+                assert bpm not in interface.bpms_in_range, f"Bad BPM {bpm} should not be in bpms_in_range"
 
         # Run twiss and check that bad_bpms are not in the dataframe
         twiss_df = interface.run_twiss()
@@ -386,14 +390,15 @@ def test_count_bpms(optimising_interface: LHCOptimisationMadInterface, bpm_range
     full_bpms = optimising_interface.all_bpms
 
     if bpm_range == "$start/$end":
-        expected_bpms = full_bpms
+        expected_bpms_in_range = optimising_interface.bpms_in_range
     else:
         start, end = bpm_range.split("/")
-        expected_bpms = full_bpms[full_bpms.index(start) : full_bpms.index(end) + 1]
+        expected_bpms_in_range = full_bpms[full_bpms.index(start) : full_bpms.index(end) + 1]
 
-    nbpms, all_bpms = optimising_interface.count_bpms(bpm_range)
-    assert nbpms == len(expected_bpms)
-    assert all_bpms == expected_bpms
+    bpms_in_range, nbpms, all_bpms = optimising_interface.count_bpms(bpm_range)
+    assert nbpms == len(expected_bpms_in_range)
+    assert bpms_in_range == expected_bpms_in_range
+    assert all_bpms == full_bpms  # Should always return full BPM list
 
 
 def test_recv_update_knob_values(

@@ -116,7 +116,7 @@ class BaseMadInterface:
             f'loaded_sequence.beam = beam {{ particle = "{particle}", energy = {beam_energy:.15e} }}'
         )
 
-    def get_bpm_list(self, bpm_range: str) -> list[str]:
+    def get_bpm_list(self, bpm_range: str) -> tuple[list[str], list[str]]:
         """
         Get list of BPM names within a specified range.
 
@@ -124,7 +124,9 @@ class BaseMadInterface:
             bpm_range: Range specification (e.g., "BPM.11R2.B1/BPM.11L3.B1")
 
         Returns:
-            List of BPM names within the range that are observed
+            Tuple containing:
+            - List of all BPM names in the sequence
+            - List of BPM names within the specified range
         """
         logger.debug(f"Getting BPM list for range: {bpm_range}")
 
@@ -148,9 +150,11 @@ class BaseMadInterface:
         self.mad.send(get_bpms_mad)
         all_bpms = self.mad.receive()  # Run the script
         bpms_in_range = self.mad.receive()
-        bpm_names = [bpm for bpm in all_bpms if bpm in bpms_in_range]  # Preserve order of all_bpms
-        logger.debug(f"Found {len(bpm_names)} BPMs in range {bpm_range}")
-        return bpm_names
+        bpms_in_range = [
+            bpm for bpm in all_bpms if bpm in bpms_in_range
+        ]  # Preserve order of all_bpms
+        logger.debug(f"Found {len(bpms_in_range)} BPMs in range {bpm_range}")
+        return all_bpms, bpms_in_range
 
     def observe_elements(self, pattern: str = "BPM") -> None:
         """

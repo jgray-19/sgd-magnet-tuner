@@ -16,13 +16,11 @@ class SequenceConfig:
 
     Attributes:
         magnet_range: Range of magnets to optimize (e.g., "BPM.9R2.B1/BPM.9L3.B1")
-        bpm_range: Range of BPMs for optimisation (None to use magnet_range)
         first_bpm: First BPM in the sequence (None for auto-detection)
         bad_bpms: List of BPM names to exclude from analysis
     """
 
     magnet_range: str
-    bpm_range: str | None = None
     first_bpm: str | None = None
     bad_bpms: list[str] | None = None
 

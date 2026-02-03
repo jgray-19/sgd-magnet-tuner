@@ -29,7 +29,6 @@ class ConfigurationManager:
         magnet_range: str,
         bpm_start_points: list[str],
         bpm_end_points: list[str],
-        bpm_range: str | None = None,
         optimise_knobs: list[str] | None = None,
     ):
         self.mad_iface: GradientDescentMadInterface = None
@@ -46,7 +45,6 @@ class ConfigurationManager:
         self.end_bpms: list[str] = bpm_end_points
         self.magnet_range = magnet_range
         self.simulation_config = simulation_config
-        self.bpm_range = bpm_range
 
     def setup_mad_interface(
         self,
@@ -61,7 +59,6 @@ class ConfigurationManager:
             accelerator=self.accelerator,
             start_bpm=first_bpm,
             magnet_range=self.magnet_range,
-            bpm_range=self.bpm_range,
             corrector_strengths=None,
             tune_knobs_file=None,
             bad_bpms=bad_bpms,
@@ -71,21 +68,23 @@ class ConfigurationManager:
         self.knob_names = self.mad_iface.knob_names
 
         self.elem_spos: list[int | float] = self.mad_iface.elem_spos
+
         self.all_bpms = self.mad_iface.all_bpms
-        self.start_bpms = [bpm for bpm in self.start_bpms if bpm in self.all_bpms]
-        self.end_bpms = [bpm for bpm in self.end_bpms if bpm in self.all_bpms]
+        self.bpms_in_range = self.mad_iface.bpms_in_range
+
+        self.start_bpms = [bpm for bpm in self.start_bpms if bpm in self.bpms_in_range]
+        self.end_bpms = [bpm for bpm in self.end_bpms if bpm in self.bpms_in_range]
 
         # Accelerator-specific bend normalisation (no-op by default)
         self.bend_lengths = self.accelerator.get_bend_lengths(self.mad_iface)
 
-        # Use bpm_range to determine fixed start and end points, defaulting to magnet_range
-        effective_bpm_range = self.bpm_range or self.magnet_range
-        self.fixed_start, self.fixed_end = effective_bpm_range.split("/", 1)
+        # Use magnet_range to determine fixed start and end points
+        self.fixed_start, self.fixed_end = self.magnet_range.split("/", 1)
 
         # Validate fixed points are in the model
-        if self.fixed_start not in self.all_bpms or self.fixed_end not in self.all_bpms:
+        if self.fixed_start not in self.bpms_in_range or self.fixed_end not in self.bpms_in_range:
             LOGGER.warning(
-                f"Fixed BPMs from range {effective_bpm_range} not found in model, using first available"
+                f"Fixed BPMs from range {self.magnet_range} not found in model, using first available"
             )
             self.fixed_start = self.start_bpms[0] if self.start_bpms else self.fixed_start
             self.fixed_end = self.end_bpms[0] if self.end_bpms else self.fixed_end
@@ -138,7 +137,7 @@ class ConfigurationManager:
         """Calculate number of data points for each BPM pair."""
         n_data_points = {}
         for start, end in self.bpm_pairs:
-            n_bpms, _ = self.mad_iface.count_bpms(f"{start}/{end}")
+            _, n_bpms, _ = self.mad_iface.count_bpms(f"{start}/{end}")
             n_data_points[(start, end)] = TrackingWorker.get_n_data_points(n_bpms)
             logging.info(f"{start}/{end}: {n_data_points[(start, end)]} data points")
         return n_data_points

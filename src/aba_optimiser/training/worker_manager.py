@@ -17,7 +17,7 @@ import numpy as np
 
 from aba_optimiser.config import PROTON_MASS
 from aba_optimiser.physics.deltap import dp2pt
-from aba_optimiser.training.utils import create_bpm_range_specs
+from aba_optimiser.training.utils import create_bpm_range_specs, extract_bpm_range_names
 from aba_optimiser.workers import (
     PrecomputedTrackingWeights,
     TrackingData,
@@ -67,6 +67,7 @@ class WorkerManager:
         accelerator: Accelerator,
         corrector_strengths_files: list[Path],
         tune_knobs_files: list[Path],
+        all_bpms: list[str],
         bad_bpms: list[str] | None = None,
         flattop_turns: int = 1000,
         num_tracks: int = 1,
@@ -106,6 +107,7 @@ class WorkerManager:
         self.tune_knobs_files = tune_knobs_files
         self._pos_cache: dict[int, dict[tuple[int, str], int]] = {}
         self.bad_bpms = bad_bpms
+        self.all_bpms = all_bpms
         self.use_fixed_bpm = use_fixed_bpm
         self.beam_energy = accelerator.beam_energy
         self.flattop_turns = flattop_turns
@@ -220,6 +222,30 @@ class WorkerManager:
 
         return payloads
 
+    def _generate_bpm_plane_masks(self, config: WorkerConfig) -> tuple[np.ndarray, np.ndarray]:
+        """Generate plane masks for a worker's BPM range.
+
+        Args:
+            config: Worker configuration containing BPM range and bad BPMs
+
+        Returns:
+            Tuple of (h_mask, v_mask) as numpy arrays with shape (1, n_bpms)
+        """
+        # Order BPMs correctly for tracking direction
+        bpm_list_ordered = extract_bpm_range_names(
+            self.all_bpms, config.start_bpm, config.end_bpm, config.sdir
+        )
+
+        # Generate masks from accelerator
+        bad_bpms = config.bad_bpms or []
+        h_mask, v_mask = config.accelerator.get_bpm_plane_mask(bpm_list_ordered, bad_bpms)
+
+        # Convert to numpy arrays with shape (1, n_bpms) for broadcasting
+        h_mask_array = np.array(h_mask, dtype=np.float64).reshape(1, -1)
+        v_mask_array = np.array(v_mask, dtype=np.float64).reshape(1, -1)
+
+        return h_mask_array, v_mask_array
+
     def _attach_global_weights(
         self,
         payloads: list[tuple[TrackingData, WorkerConfig, int]],
@@ -228,7 +254,8 @@ class WorkerManager:
         """Precompute globally normalised weights for all tracking workers.
 
         Weighting is computed once across all worker payloads to ensure
-        consistent scaling between workers.
+        consistent scaling between workers. Also applies BPM plane masks for
+        single-plane BPMs and per-plane bad BPM filtering.
         """
         if not payloads:
             return payloads
@@ -262,12 +289,21 @@ class WorkerManager:
         weight_cache: list[tuple[TrackingData, WorkerConfig, int, list[np.ndarray]]] = []
         global_max = 0.0
         for data, config, file_idx, var_slices in payload_data:
+            # Compute raw weights from variances
             raw_weights = [
                 WeightProcessor.variance_to_weight(
                     WeightProcessor.floor_variances(var_slice, floor_value=floor)
                 )
-                for var_slice, floor in zip(var_slices, floors)
+                for i, (var_slice, floor) in enumerate(zip(var_slices, floors))
             ]
+
+            # Apply BPM plane masks (handles single-plane BPMs and per-plane bad BPM filtering)
+            h_mask, v_mask = self._generate_bpm_plane_masks(config)
+            raw_weights[0] *= h_mask  # x
+            raw_weights[1] *= v_mask  # y
+            raw_weights[2] *= h_mask  # px
+            raw_weights[3] *= v_mask  # py
+
             global_max = max(
                 global_max,
                 max((np.max(w) if w.size else 0.0) for w in raw_weights),
