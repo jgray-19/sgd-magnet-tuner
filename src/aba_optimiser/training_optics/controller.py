@@ -350,15 +350,15 @@ def create_worker_payloads(
                 bpm_range=f"{start_bpm}/{end_bpm}",
                 bad_bpms=bad_bpms,  # Filter out bad BPMs
             )
-            all_bpms = temp_mad.all_bpms
+            extracted_bpms = temp_mad.bpms_in_range
             del temp_mad  # Clean up
 
-            additional_bad_bpms = list(set(all_bpms) - set(twiss_df.index))
-            all_bpms = [bpm for bpm in all_bpms if bpm in twiss_df.index]
+            additional_bad_bpms = list(set(extracted_bpms) - set(twiss_df.index))
+            extracted_bpms = [bpm for bpm in extracted_bpms if bpm in twiss_df.index]
 
             try:
                 # Get all BPMs in range from sequence (includes bad BPMs)
-                bpm_list = extract_bpm_range_names(all_bpms, start_bpm, end_bpm, sdir)
+                bpm_list = extract_bpm_range_names(extracted_bpms, start_bpm, end_bpm, sdir)
             except ValueError:
                 logger.warning(
                     f"Skipping BPM range {start_bpm} to {end_bpm} (sdir={sdir}): BPM(s) not found in model"
@@ -372,7 +372,7 @@ def create_worker_payloads(
                 continue
 
             logger.info(
-                f"Using {len(bpm_list)} BPMs in range {all_bpms[0]} to {all_bpms[-1]} (sdir={sdir})"
+                f"Using {len(bpm_list)} BPMs in range {extracted_bpms[0]} to {extracted_bpms[-1]} (sdir={sdir})"
             )
 
             # Extract phase advances

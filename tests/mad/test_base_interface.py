@@ -531,9 +531,13 @@ def test_get_bpm_list(loaded_interface: BaseMadInterface, end_num: int) -> None:
     end_bpm = f"BPM.{end_num}R2.B1"
     bpm_range = f"{start_bpm}/{end_bpm}"
     expected_bpms = [f"BPM.{i}R2.B1" for i in range(start_num, end_num + 1)]
-    bpm_names = interface.get_bpm_list(bpm_range)
+    all_bpms, bpm_names = interface.get_bpm_list(bpm_range)
 
-    # Verify it's a list of strings
+    # Verify all_bpms is a list of strings
+    assert isinstance(all_bpms, list)
+    assert all(isinstance(name, str) for name in all_bpms)
+
+    # Verify bpm_names (in range) is a list of strings
     assert isinstance(bpm_names, list)
     assert all(isinstance(name, str) for name in bpm_names)
 
