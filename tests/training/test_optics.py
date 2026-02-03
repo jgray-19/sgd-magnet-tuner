@@ -8,6 +8,10 @@ import logging
 from typing import TYPE_CHECKING
 
 import pytest
+
+pytest.importorskip("tmom_recon")
+pytest.importorskip("xtrack_tools")
+
 import tfs
 from omc3.scripts.fake_measurement_from_model import generate as fake_measurement
 
