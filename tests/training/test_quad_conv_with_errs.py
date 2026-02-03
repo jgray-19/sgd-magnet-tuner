@@ -141,6 +141,11 @@ def _make_optimiser_config_bend() -> OptimiserConfig:
     )
 
 
+# Skip if with can't have 30 processes which is needed for the parallelism in this test
+@pytest.mark.skipif(
+    os.cpu_count() is not None and (os.cpu_count() < 30),
+    reason="Requires at least 30 CPU cores for parallel processing",
+)
 @pytest.mark.slow
 def test_controller_bend_opt_simple(
     tmp_path: Path,
