@@ -1,85 +1,43 @@
 # sgd-magnet-tuner
 
 [![Coverage Status](https://github.com/jgray-19/sgd-magnet-tuner/actions/workflows/coverage.yml/badge.svg)](https://github.com/jgray-19/sgd-magnet-tuner/actions/workflows/coverage.yml)
-[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/jgray-19/sgd-magnet-tuner/python-coverage-comment-action-data/endpoint.json)](https://htmlpreview.github.io/?https://github.com/jgray-19/sgd-magnet-tuner/blob/python-coverage-comment-action-data/htmlcov/index.html)
 
-Tools for optimising accelerator magnet knob strengths using gradient-based methods with MAD-NG.
+Tools for optimising accelerator magnet knob strengths using gradient-based
+methods with MAD-NG. This README is short and focused — see the docs for
+full details.
 
-## Modules
+## Package overview
 
-Config
-------
-Configuration constants and dataclasses for the optimisation pipeline.
+High-level modules (concise):
 
-Dataframes
-----------
-Utilities for working with dataframes in the optimisation workflow.
+- `config` — configuration dataclasses and defaults
+- `training` — `Controller` runtime and orchestration (energy, quads, bends)
+- `training_optics` — optics-specific matching controller
+- `simulation` / `mad` — model creation and tracking utilities
+- `measurements` / `dataframes` / `filtering` — measurement IO and cleaning
+- `optimisers` — Adam / AMSGrad / L-BFGS implementations
+- `io` / `plotting` / `matching` — helpers and utilities
 
-Dispersion
-----------
-Dispersion estimation at corrector magnets using MAD-NG tracking.
+Use the tests in `tests/training/` as compact examples of real workflows.
 
-Filtering
----------
-Measurement preprocessing and noise suppression routines.
+## Dependencies (external projects)
 
-IO
---
-Input/output utilities for reading and writing data files.
+This project uses helper packages maintained in related repositories; install
+them before running the end-to-end workflows:
 
-MAD
----
-MAD-NG interface modules for accelerator simulation.
+- xtrack_tools: https://github.com/jgray-19/xtrack_tools
+- tmom-recon:  https://github.com/jgray-19/tmom-recon
 
-Matching
---------
-Tools for matching beta functions to target models.
+Install via pip from GitHub, for example::
 
-Measurements
-------------
-Data acquisition helpers for turn-by-turn measurements and optics data.
-
-Model Creator
--------------
-Utilities for creating LHC accelerator models.
-
-Momentum Recon
---------------
-Momentum reconstruction utilities for transverse and dispersive calculations.
-
-Optimisers
-----------
-Gradient descent optimiser implementations (Adam, AMSGrad, L-BFGS).
-
-Physics
--------
-Analytical helpers for beam dynamics and accelerator physics.
-
-Plotting
---------
-Visualisation helpers for optimisation diagnostics.
-
-Simulation
-----------
-Components for creating simulated accelerator data.
-
-Training
---------
-Orchestration of the complete optimisation workflow.
-
-Training Optics
----------------
-Controller for optics function optimisation tasks.
-
-Workers
--------
-Worker process implementations for parallel computation.
-
-Xsuite
-------
-Xsuite integration utilities for particle tracking and simulations.
+```bash
+pip install git+https://github.com/jgray-19/xtrack_tools.git
+pip install git+https://github.com/jgray-19/tmom-recon.git
+```
 
 ## Installation
+
+Clone and install in editable mode::
 
 ```bash
 git clone https://github.com/jgray-19/sgd-magnet-tuner.git
@@ -87,12 +45,15 @@ cd sgd-magnet-tuner
 pip install -e .
 ```
 
-For development:
+For development (tests + docs):
+
 ```bash
 pip install -e .[test,docs,tracking]
 ```
 
-## Usage
+## Quick usage
+
+Run the main scripts (examples):
 
 ```bash
 python scripts/run_optimiser.py
@@ -100,20 +61,68 @@ python scripts/optimise_energy.py
 python scripts/plot_results.py
 ```
 
-## Testing
+## Tests
+
+Run tests with pytest::
 
 ```bash
 pytest tests/
 pytest tests/ --cov=aba_optimiser
 ```
 
-## Documentation
+## Docs
 
-Build the documentation:
+Build docs::
+
 ```bash
 pip install -e .[docs]
-cd docs
-make html
+cd docs && make html
+```
+
+View at `docs/_build/html/index.html`.
+
+## Installation
+
+Clone and install in editable mode::
+
+```bash
+git clone https://github.com/jgray-19/sgd-magnet-tuner.git
+cd sgd-magnet-tuner
+pip install -e .
+```
+
+For development (tests + docs):
+
+```bash
+pip install -e .[test,docs,tracking]
+```
+
+## Quick usage
+
+Run the main scripts (examples):
+
+```bash
+python scripts/run_optimiser.py
+python scripts/optimise_energy.py
+python scripts/plot_results.py
+```
+
+## Tests
+
+Run tests with pytest::
+
+```bash
+pytest tests/
+pytest tests/ --cov=aba_optimiser
+```
+
+## Docs
+
+Build docs::
+
+```bash
+pip install -e .[docs]
+cd docs && make html
 ```
 
 View at `docs/_build/html/index.html`.

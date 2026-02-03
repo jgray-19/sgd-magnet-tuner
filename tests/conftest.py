@@ -15,7 +15,6 @@ import pytest
 import tfs
 
 from aba_optimiser.mad.base_mad_interface import BaseMadInterface
-from aba_optimiser.mad.tracking_interface import TrackingMadInterface
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -125,32 +124,6 @@ def beam2_interface(interface: BaseMadInterface, seq_b2: Path) -> BaseMadInterfa
     interface.setup_beam(particle="proton", beam_energy=6800.0)
     return interface
 
-
-@pytest.fixture(scope="function")
-def tracking_interface() -> Generator[TrackingMadInterface, None, None]:
-    """Create a fresh TrackingMadInterface for each test."""
-    iface = TrackingMadInterface()
-    yield iface
-    with contextlib.suppress(Exception):
-        del iface
-
-
-@pytest.fixture(scope="function")
-def loaded_tracking_interface(
-    tracking_interface: TrackingMadInterface, seq_b1: Path
-) -> TrackingMadInterface:
-    """Fixture that returns a tracking interface with the example sequence loaded."""
-    tracking_interface.load_sequence(seq_b1, "lhcb1")
-    return tracking_interface
-
-
-@pytest.fixture(scope="function")
-def loaded_tracking_interface_with_beam(
-    loaded_tracking_interface: TrackingMadInterface,
-) -> TrackingMadInterface:
-    """Fixture that returns a tracking interface with the example sequence loaded and beam set up."""
-    loaded_tracking_interface.setup_beam(particle="proton", beam_energy=6800.0)
-    return loaded_tracking_interface
 
 
 @pytest.fixture(scope="session")
