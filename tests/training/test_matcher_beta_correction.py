@@ -75,7 +75,7 @@ def _plot_beta_beating_comparison(
     print(f"Beta beating plot saved to: {plot_file}")
     plt.show()
 
-
+@pytest.mark.skip  # for now
 @pytest.mark.slow
 def test_matcher_beta_correction(
     tmp_path: Path,

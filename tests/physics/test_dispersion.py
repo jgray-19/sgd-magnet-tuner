@@ -25,7 +25,6 @@ from turn_by_turn.structures import TbtData
 from xtrack_tools.acd import run_ac_dipole_tracking_with_particles
 from xtrack_tools.env import initialise_env
 
-from aba_optimiser.accelerators import LHC
 from aba_optimiser.dispersion.dispersion_estimation import estimate_corrector_dispersions
 from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
@@ -269,7 +268,7 @@ def _validate_dispersion_estimates(
             f"Beam {beam}: Z-score validation failed ({', '.join(failures)}). Mean: {mean_z:.3f}, Std: {std_z:.3f}"
         )
 
-
+# Skip if model_dir_b1 or model_dir_b2 doesn't exist
 @pytest.mark.slow
 def test_dispersion_b1(
     tmp_path: Path,
@@ -285,6 +284,9 @@ def test_dispersion_b1(
     3. Estimates dispersion at correctors by tracking from nearby BPMs
     4. Validates estimates match model within tolerance
     """
+    if not model_dir_b1.exists():
+        pytest.skip(f"Model directory for beam 1 does not exist: {model_dir_b1}")
+
     beam = 1
 
     # Generate tracking data and analyze optics
@@ -327,6 +329,8 @@ def test_dispersion_b2(
     3. Estimates dispersion at correctors by tracking from nearby BPMs
     4. Validates estimates match model within tolerance
     """
+    if not model_dir_b2.exists():
+        pytest.skip(f"Model directory for beam 2 does not exist: {model_dir_b2}")
 
     beam = 2
     # Generate tracking data and analyze optics
