@@ -18,13 +18,13 @@ defaults:
 jobs:
   coverage:
     runs-on: ubuntu-latest
+    permissions:
+      # Gives the action the necessary permissions for pushing data to the
+      # python-coverage-comment-action branch, and for editing existing
+      # comments (to avoid publishing multiple comments in the same PR)
+      contents: write
     env:
         python-version: "3.13"
-        ALLOWED_COVERAGE_DECREASE: 0.05  # allowed decrease from reference coverage
-        MIN_COVERAGE: 0.80                            # minimum overall coverage
-        MIN_DIFF_COVERAGE: 0.60                  # minimum coverage for the diff in a PR
-        MINIMUM_GREEN: 90                          # If above or equal to this value, the badge will be green.
-        MINIMUM_ORANGE: 80                        # Same with orange. Below is red.
 
     steps:
       - uses: actions/checkout@v5
