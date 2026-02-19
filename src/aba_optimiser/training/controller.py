@@ -54,6 +54,7 @@ class Controller(BaseController):
         plots_dir: Path | None = None,
         debug: bool = False,
         mad_logfile: Path | None = None,
+        write_tensorboard_logs: bool = True,
     ):
         """
         Initialise the controller with all required managers.
@@ -72,6 +73,8 @@ class Controller(BaseController):
             plots_dir (Path | None, optional): Directory to save plots. Defaults to plots/.
             debug (bool, optional): Enable debug mode. Defaults to False.
             mad_logfile (Path | None, optional): Path to MAD log file. Defaults to None.
+            write_tensorboard_logs (bool, optional): Whether to write TensorBoard logs.
+                Defaults to True.
         """
 
         # Log optimisation targets
@@ -112,6 +115,7 @@ class Controller(BaseController):
             first_bpm=sequence_config.first_bpm,
             debug=debug,
             mad_logfile=mad_logfile,
+            write_tensorboard_logs=write_tensorboard_logs,
         )
 
         # Initialize tracking-specific managers
@@ -178,7 +182,7 @@ class Controller(BaseController):
         except KeyboardInterrupt:
             logger.warning("\nKeyboardInterrupt detected. Terminating early and writing results.")
             self.worker_manager.terminate_workers()
-            self.final_knobs = self.initial_knobs
+            self.final_knobs = self.optimisation_loop.best_knobs
             total_hessian = np.zeros((len(self.final_knobs), len(self.final_knobs)))
         uncertainties = self._save_results(total_hessian, writer)
         uncertainties = dict(zip(self.final_knobs.keys(), uncertainties))
@@ -202,7 +206,7 @@ class Controller(BaseController):
     def _save_results(
         self,
         total_hessian: np.ndarray,
-        writer: SummaryWriter,
+        writer: SummaryWriter | None,
     ) -> np.ndarray:
         """Clean up resources and save final results."""
         # Calculate uncertainties
@@ -210,7 +214,8 @@ class Controller(BaseController):
         uncertainties = np.sqrt(np.diag(cov))
 
         # Close logging and save results
-        writer.close()
+        if writer is not None:
+            writer.close()
 
         # Convert the knobs back from pt to dp if we had optimised energy
         if "pt" in self.final_knobs:

@@ -25,22 +25,21 @@ class LHC(Accelerator):
     PATTERN_RBEND = "MB[RXWAL]%w*%."
     PATTERN_MAIN_QUAD = "MQ%."
     PATTERN_CORRECTOR = "MCB"
+    PATTERN_QUAD_NON_TUNE = "MQ[MYX]"  # Explicitly not MQT or MQ.
 
     def __init__(
         self,
         beam: int,
         sequence_file: Path | str,
         beam_energy: float = 6800.0,
-
         optimise_quadrupoles: bool = False,
         optimise_sextupoles: bool = False,
-
         # LHC-specific bend control
         optimise_energy: bool = False,
         optimise_correctors: bool = False,
-
         optimise_bends: bool = False,
         normalise_bends: bool | None = None,
+        optimise_other_quadrupoles: bool = False,
     ):
         """Initialise LHC accelerator for a specific beam.
 
@@ -70,6 +69,7 @@ class LHC(Accelerator):
             normalise_bends = optimise_bends
         self.normalise_bends = normalise_bends
         self.optimise_correctors = optimise_correctors
+        self.optimise_other_quadrupoles = optimise_other_quadrupoles
 
 
         # Initialise base Accelerator
@@ -95,6 +95,7 @@ class LHC(Accelerator):
         return (
             self.optimise_bends
             or self.optimise_quadrupoles
+            or self.optimise_other_quadrupoles
             or self.optimise_sextupoles
             or self.optimise_correctors
             or self.optimise_energy
@@ -106,7 +107,9 @@ class LHC(Accelerator):
         if self.optimise_bends:
             targets.append("bends")
         if self.optimise_quadrupoles:
-            targets.append("quadrupoles")
+            targets.append("main quadrupoles")
+        if self.optimise_other_quadrupoles:
+            targets.append("other quadrupoles")
         if self.optimise_sextupoles:
             targets.append("sextupoles")
         if self.optimise_correctors:
@@ -132,18 +135,19 @@ class LHC(Accelerator):
             return normalise_lhcbend_magnets(true_strengths, bend_lengths)
         return true_strengths
 
-    def get_supported_knob_specs(self) -> list[tuple[str, str, str, bool]]:
+    def get_supported_knob_specs(self) -> list[tuple[str, str, str, bool, bool]]:
         """Return LHC-specific knob specifications.
 
         Returns:
-            List of (kind, attribute, pattern, zero_check) tuples defining
+            List of (kind, attribute, pattern, zero_check, optimise_flag) tuples defining
             all possible knobs that can be created for LHC optimization.
         """
         return [
-            ("sbend", "k0", self.PATTERN_MAIN_BEND, True),
-            ("rbend", "k0", self.PATTERN_RBEND, True),
-            ("quadrupole", "k1", self.PATTERN_MAIN_QUAD, True),
-            ("hkicker", "kick", self.PATTERN_CORRECTOR, False),
+            ("sbend", "k0", self.PATTERN_MAIN_BEND, True, self.optimise_bends),
+            ("rbend", "k0", self.PATTERN_RBEND, True, self.optimise_bends),
+            ("quadrupole", "k1", self.PATTERN_MAIN_QUAD, True, self.optimise_quadrupoles),
+            ("quadrupole", "k1", self.PATTERN_QUAD_NON_TUNE, True, self.optimise_other_quadrupoles),
+            ("hkicker", "kick", self.PATTERN_CORRECTOR, False, self.optimise_correctors),
         ]
 
     def parse_bad_bpm_specification(self, bad_bpm_spec: str) -> tuple[str, str | None]:

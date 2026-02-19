@@ -61,7 +61,7 @@ def _generate_family_colors_from_accelerator(
 
     # Extract unique families from patterns (e.g., "MB.*" -> "MB")
     families = set()
-    for _, _, pattern, _ in knob_specs:
+    for _, _, pattern, _, _ in knob_specs:
         # Extract family from pattern (first 2 chars before any special chars)
         family = pattern.split(".")[0][:2]  # e.g., "MB.*" -> "MB"
         families.add(family)
@@ -72,7 +72,7 @@ def _generate_family_colors_from_accelerator(
     # Generate colors using matplotlib's color cycle
     import matplotlib.cm as cm
 
-    tab10 = cm.get_cmap("tab10")
+    tab10 = plt.get_cmap("tab10")
     base_colors = [tab10(i / max(1, n_families - 1)) for i in range(n_families)]
 
     true_colors = {}

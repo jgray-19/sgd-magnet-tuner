@@ -55,6 +55,7 @@ class OpticsController(BaseController):
         true_strengths: Path | dict[str, float] | None = None,
         use_errors: bool = True,
         use_amplitude_beta: bool = True,
+        write_tensorboard_logs: bool = True,
     ):
         """
         Initialise the optics controller.
@@ -73,6 +74,7 @@ class OpticsController(BaseController):
             true_strengths (Path | dict[str, float] | None): True strengths (Path, dict, or None).
             use_errors (bool): Whether to use measurement errors in optimisation.
             use_amplitude_beta (bool): Use beta from amplitude (True) or phase (False
+            write_tensorboard_logs (bool): Whether to write TensorBoard logs.
         """
         logger.info("Optimising quadrupoles for beta functions")
 
@@ -97,6 +99,7 @@ class OpticsController(BaseController):
             true_strengths=true_strengths,
             bad_bpms=sequence_config.bad_bpms,
             first_bpm=sequence_config.first_bpm,
+            write_tensorboard_logs=write_tensorboard_logs,
         )
 
         # Store optics-specific attributes
@@ -162,7 +165,8 @@ class OpticsController(BaseController):
             uncertainties,
         )
 
-        writer.close()
+        if writer is not None:
+            writer.close()
         return self.final_knobs, dict(zip(self.final_knobs.keys(), uncertainties))
 
 

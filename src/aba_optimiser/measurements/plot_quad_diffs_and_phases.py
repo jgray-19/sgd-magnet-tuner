@@ -104,14 +104,16 @@ def get_arc_ranges(beam: int) -> dict[int, tuple[str, str]]:
     """
     if beam == 1:
         return {
-            1: ("BPM.13R1.B1", "BPM.12L2.B1"),
-            2: ("BPM.13R2.B1", "BPM.12L3.B1"),
-            3: ("BPM.13R3.B1", "BPM.12L4.B1"),
-            4: ("BPM.13R4.B1", "BPM.12L5.B1"),
-            5: ("BPM.13R5.B1", "BPM.12L6.B1"),
-            6: ("BPM.13R6.B1", "BPM.12L7.B1"),
-            7: ("BPM.13R7.B1", "BPM.12L8.B1"),
-            8: ("BPM.13R8.B1", "BPM.12L1.B1"),
+            # 1: ("BPM.13R1.B1", "BPM.12L2.B1"),
+            # 2: ("BPM.13R2.B1", "BPM.12L3.B1"),
+            # 3: ("BPM.13R3.B1", "BPM.12L4.B1"),
+            3: ("BPM.13L3.B1", "BPM.13R3.B1"),
+            # 4: ("BPM.13R4.B1", "BPM.12L5.B1"),
+            # 5: ("BPM.13R5.B1", "BPM.12L6.B1"),
+            6: ("BPM.13L6.B1", "BPM.13R6.B1"),
+            # 6: ("BPM.13R6.B1", "BPM.12L7.B1"),
+            # 7: ("BPM.13R7.B1", "BPM.12L8.B1"),
+            # 8: ("BPM.13R8.B1", "BPM.12L1.B1"),
         }
     return {
         1: ("BPM.13L1.B2", "BPM.12R2.B2"),
@@ -172,25 +174,41 @@ def get_twiss_through_arc(
         mad.set_magnet_strengths(estimated_magnets)
 
     # Optics at arc start (measurement beta0)
+    if arc_start not in meas_twiss.index:
+        raise KeyError(
+            f"Start BPM {arc_start} not found in measurement twiss; bet/alf are required."
+        )
+    row = meas_twiss.loc[arc_start]
+
+    # Ensure required optics (beta and alpha) are present and not NaN
+    required_cols = ("betx", "bety", "alfx", "alfy", "errbetx", "errbety", "erralfx", "erralfy")
+    missing = [c for c in required_cols if c not in row.index or pd.isna(row[c])]
+    if missing:
+        raise KeyError(
+            f"Missing required optics columns at {arc_start}: {missing}. betx/bety/alfx/alfy must be present."
+        )
+
+    # Use .get for optional columns so missing ones default to 0.0
     optics = {
-        "betx": meas_twiss.loc[arc_start, "betx"],
-        "bety": meas_twiss.loc[arc_start, "bety"],
-        "alfx": meas_twiss.loc[arc_start, "alfx"],
-        "alfy": meas_twiss.loc[arc_start, "alfy"],
-        "dx": meas_twiss.loc[arc_start, "dx"],
-        "dpx": meas_twiss.loc[arc_start, "dpx"],
-        "dy": meas_twiss.loc[arc_start, "dy"],
-        "dpy": meas_twiss.loc[arc_start, "dpy"],
+        "betx": row["betx"],
+        "bety": row["bety"],
+        "alfx": row["alfx"],
+        "alfy": row["alfy"],
+        "dx": row.get("dx", 0.0),
+        "dpx": row.get("dpx", 0.0),
+        "dy": row.get("dy", 0.0),
+        "dpy": row.get("dpy", 0.0),
     }
+
     optics_err = {
-        "betx": meas_twiss.loc[arc_start, "errbetx"],
-        "bety": meas_twiss.loc[arc_start, "errbety"],
-        "alfx": meas_twiss.loc[arc_start, "erralfx"],
-        "alfy": meas_twiss.loc[arc_start, "erralfy"],
-        "dx": meas_twiss.loc[arc_start, "errdx"],
-        "dpx": 0.0,
-        "dy": meas_twiss.loc[arc_start, "errdy"],
-        "dpy": 0.0,
+        "betx": row["errbetx"],
+        "bety": row["errbety"],
+        "alfx": row["erralfx"],
+        "alfy": row["erralfy"],
+        "dx": row.get("errdx", 0.0),
+        "dpx": row.get("errdpx", 0.0),
+        "dy": row.get("errdy", 0.0),
+        "dpy": row.get("errdpy", 0.0),
     }
 
     run_twiss_string = f"""

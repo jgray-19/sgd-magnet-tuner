@@ -81,7 +81,7 @@ def generate_model_with_errors(
     if magnet_type:
         magnet_strengths, _ = apply_magnet_perturbations(
             interface.mad,
-            rel_k1_std_dev=1e-4,
+            rel_k1_std_dev=None,  # Use default from ERROR_TABLE
             seed=42,
             magnet_type=magnet_type,
         )

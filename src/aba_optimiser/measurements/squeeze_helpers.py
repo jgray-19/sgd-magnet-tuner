@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import tfs
+
 from aba_optimiser.config import PROJECT_ROOT
 from aba_optimiser.model_creator.madx_utils import make_madx_sequence
 
@@ -196,3 +198,57 @@ def get_results_dir(beam: int) -> Path:
     results_dir = PROJECT_ROOT / f"b{beam}_squeeze_results"
     results_dir.mkdir(parents=True, exist_ok=True)
     return results_dir
+
+
+def get_ir_bpm_ranges_from_model(
+    model_dir: str | Path, beam: int, ip: int
+) -> tuple[str, list[str], list[str]]:
+    """Extract BPM ranges from twiss.dat file for IR optimisation.
+
+    Args:
+        model_dir: Path to the model directory containing twiss_elements.dat
+        beam: Beam number (1 or 2)
+
+    Returns:
+        Tuple of (magnet_ranges, bpm_starts, bpm_end_points)
+    """
+    import re
+
+    twiss_file = Path(model_dir) / "twiss_elements.dat"
+    twiss_df = tfs.read(twiss_file, index="NAME")
+
+    # Filter BPMs for this beam
+    bpm_mask = twiss_df.index.str.startswith("BPM") & twiss_df.index.str.endswith(f".B{beam}")
+    bpm_names = twiss_df.index[bpm_mask].tolist()
+
+    # Regex to match BPM names: BPM.*.(IP)(L|R).*.B(beam)
+    bpm_pattern = re.compile(r"BPM[A-Z]*\.(\d)([LR])(\d)\.B(\d+)")
+
+    # Collect all matching BPMs with ip and side
+    matches = [
+        (bpm, int(match.group(3)), match.group(2), int(match.group(1)))
+        for bpm in bpm_names
+        if (match := bpm_pattern.match(bpm))
+    ]
+
+    before_side = "L" if beam == 1 else "R"
+    after_side = "R" if beam == 1 else "L"
+    # Include BPMs from position 4 onwards to get more measurement points
+    min_from_ip = 4  # Adjust this threshold as needed to include more BPMs
+    before_bpms = [
+        bpm
+        for bpm, ip_num, side, from_ip in matches
+        if ip_num == ip and side == before_side and from_ip >= min_from_ip
+    ]
+    after_bpms = [
+        bpm
+        for bpm, ip_num, side, from_ip in matches
+        if ip_num == ip and side == after_side and from_ip >= min_from_ip
+    ]
+
+    # Remove all bpms with W in their names
+    # before_bpms = [bpm for bpm in before_bpms if "W" not in bpm]
+    # after_bpms = [bpm for bpm in after_bpms if "W" not in bpm]
+
+    magnet_range = f"BPM.9L{ip}.B1/BPM.9R{ip}.B1" if beam == 1 else f"BPM.9R{ip}.B2/BPM.9L{ip}.B2"
+    return magnet_range, before_bpms, after_bpms

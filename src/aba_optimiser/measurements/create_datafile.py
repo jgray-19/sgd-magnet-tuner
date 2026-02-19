@@ -288,7 +288,7 @@ def build_dict_from_nxcal_result(result: list[NXCALSResult]) -> dict[str, float]
 #     data.to_parquet(output_file)
 
 
-def _process_single_dataframe(
+def process_single_dataframe(
     df_with_index: tuple[int, pd.DataFrame],
     tws: pd.DataFrame,
     bad_bpms: list[str],
@@ -554,7 +554,7 @@ def process_measurements(
             with ThreadPoolExecutor(max_workers=effective_workers) as executor:
                 futures = {
                     executor.submit(
-                        _process_single_dataframe,
+                        process_single_dataframe,
                         (i, df),
                         tws,
                         bad_bpms,
@@ -580,7 +580,7 @@ def process_measurements(
             raise
     else:
         for i, df in enumerate(combined):
-            idx, processed_df = _process_single_dataframe(
+            idx, processed_df = process_single_dataframe(
                 df_with_index=(i, df),
                 tws=tws,
                 bad_bpms=bad_bpms,

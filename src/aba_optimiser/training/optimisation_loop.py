@@ -111,7 +111,7 @@ class OptimisationLoop:
         self,
         current_knobs: dict[str, float],
         parent_conns: list[Connection],
-        writer: SummaryWriter,
+        writer: SummaryWriter | None,
         run_start: float,
         total_turns: int,
     ) -> dict[str, float]:
@@ -342,7 +342,7 @@ class OptimisationLoop:
 
     def _log_epoch_stats(
         self,
-        writer: SummaryWriter,
+        writer: SummaryWriter | None,
         epoch: int,
         loss: float,
         grad_norm: float,
@@ -357,31 +357,32 @@ class OptimisationLoop:
     ) -> None:
         """Log statistics for the current epoch."""
         # Log scalars to TensorBoard
-        scalars = {
-            "loss": loss,
-            "grad_norm": grad_norm,
-            "learning_rate": lr,
-        }
-        if self.rel_sigma_step > 0:
-            scalars.update(
-                {
-                    "trust_region_clipping_ratio": clipping_ratio,
-                    "trust_region_rel_sigma_step": self.rel_sigma_step,
-                }
-            )
-        if self.use_true_strengths:
-            scalars.update(
-                {
-                    "true_diff": sum_true_diff,
-                    "rel_diff": sum_rel_diff,
-                }
-            )
-        else:
-            scalars["total_knob_value"] = np.sum(list(current_knobs.values()))
+        if writer is not None:
+            scalars = {
+                "loss": loss,
+                "grad_norm": grad_norm,
+                "learning_rate": lr,
+            }
+            if self.rel_sigma_step > 0:
+                scalars.update(
+                    {
+                        "trust_region_clipping_ratio": clipping_ratio,
+                        "trust_region_rel_sigma_step": self.rel_sigma_step,
+                    }
+                )
+            if self.use_true_strengths:
+                scalars.update(
+                    {
+                        "true_diff": sum_true_diff,
+                        "rel_diff": sum_rel_diff,
+                    }
+                )
+            else:
+                scalars["total_knob_value"] = np.sum(list(current_knobs.values()))
 
-        for key, value in scalars.items():
-            writer.add_scalar(key, value, epoch)
-        writer.flush()
+            for key, value in scalars.items():
+                writer.add_scalar(key, value, epoch)
+            writer.flush()
 
         # Calculate times
         epoch_time = time.time() - epoch_start

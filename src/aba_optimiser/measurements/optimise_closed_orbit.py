@@ -14,7 +14,10 @@ from nxcals.spark_session_builder import get_or_create
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
 from aba_optimiser.io.utils import save_knobs
-from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
+from aba_optimiser.measurements.create_datafile import (
+    process_measurements,
+    save_online_knobs,
+)
 from aba_optimiser.measurements.knob_extraction import get_energy
 from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
 from aba_optimiser.training.controller import Controller
@@ -105,6 +108,7 @@ def optimise_ranges(
     bad_bpms: list[str],
     title: str,
     energy: float,
+    write_tensorboard_logs: bool = True,
 ) -> tuple[list[float], list[float], list[float]]:
     """Optimise for a given range configuration.
 
@@ -151,6 +155,7 @@ def optimise_ranges(
             show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,
+            write_tensorboard_logs=write_tensorboard_logs,
         )
         final_knobs, uncs = controller.run()
         fitted_deltap = final_knobs["deltap"]

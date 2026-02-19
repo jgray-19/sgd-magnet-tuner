@@ -20,9 +20,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+ERROR_TABLE = {
+    "MQ.": 18e-4,
+    "MQM": 12e-4,
+    "MQY": 8e-4,
+    "MQX": 10e-4,
+    "MQW": 15e-4,
+    # "MQT": 75e-4,
+}
+
 
 def apply_magnet_perturbations(
-    mad: MAD, rel_k1_std_dev: float = 1e-4, seed: int = 42, magnet_type: str | list[str] = "all"
+    mad: MAD,
+    rel_k1_std_dev: float | None = 1e-4,
+    seed: int = 42,
+    magnet_type: str | list[str] = "all",
+    overwrite_strengths: bool = True,
 ) -> tuple[dict[str, float], dict[str, float]]:
     """
     Apply perturbations to magnets in the MAD sequence.
@@ -32,6 +45,7 @@ def apply_magnet_perturbations(
         rel_k1_std_dev: Relative standard deviation for K1 perturbations
         seed: Random seed for reproducibility
         magnet_type: Magnet types to apply perturbations to. Can be "all" or a list like ["q", "s"] ("q" for quadrupoles, "s" for sextupoles, "d" for dipoles)
+        overwrite_strengths: Whether to overwrite existing magnet strengths with perturbed values
     Returns:
         Tuple of (magnet_strengths, true_strengths)
     """
@@ -68,7 +82,10 @@ def apply_magnet_perturbations(
                 else:
                     raise ValueError(f"Bend error for {elm.name} not found in {BEND_ERROR_FILE}")
             k0l_error = bend_errors_dict[elem_name]
-            elm.k0 += k0l_error / elm.l
+            if overwrite_strengths:
+                elm.k0 += k0l_error / elm.l
+            else:
+                elm.dknl = [k0l_error]
             magnet_strengths[elm.name + ".k0"] = elm.k0
             true_strengths[elm.name] = elm.k0
             num_bends += 1
@@ -80,20 +97,25 @@ def apply_magnet_perturbations(
 
         # Quadrupoles
         if doquad_err and elm.kind == "quadrupole" and elm.k1 != 0:
-            if elm.name[:3] == "MQ.":
-                elm.k1 = elm.k1 + rng.normal(0, abs(elm.k1 * rel_k1_std_dev))
+            if elm.name[:3] in ERROR_TABLE:
+                # Take specific error from table if not set
+                rel_error = ERROR_TABLE[elm.name[:3]] if rel_k1_std_dev is None else rel_k1_std_dev
+                dk1 = rng.normal(0, abs(elm.k1 * rel_error))
+                if overwrite_strengths:
+                    elm.k1 = elm.k1 + dk1
+                else:
+                    elm.dknl = [0, dk1 * elm.l]
                 magnet_strengths[elm.name + ".k1"] = elm.k1
                 true_strengths[elm.name] = elm.k1
                 num_quads += 1
-            # elif elm.name[:3] != "MQT":
-            #     elm.k1 = elm.k1 + rng.normal(0, abs(elm.k1 * 1e-4))
-            #     magnet_strengths[elm.name + ".k1"] = elm.k1
-            #     true_strengths[elm.name] = elm.k1
-            #     num_quads += 1
 
         # Sextupoles
         elif dosext_err and elm.kind == "sextupole" and elm.k2 != 0 and elm.name[:3] == "MS.":
-            elm.k2 = elm.k2 + rng.normal(0, abs(elm.k2 * 1e-4))
+            dk2 = rng.normal(0, abs(elm.k2 * 1e-4))
+            if overwrite_strengths:
+                elm.k2 = elm.k2 + dk2
+            else:
+                elm.dknl = [0, 0, dk2 * elm.l]
             magnet_strengths[elm.name + ".k2"] = elm.k2
             true_strengths[elm.name] = elm.k2
             num_sexts += 1

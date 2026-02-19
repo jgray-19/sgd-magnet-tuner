@@ -9,13 +9,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from aba_optimiser.mad.optimising_mad_interface import BPM_PATTERN, GradientDescentMadInterface
+from aba_optimiser.accelerators import LHC
+from aba_optimiser.mad.optimising_mad_interface import (
+    BPM_PATTERN,
+    GradientDescentMadInterface,
+)
 from aba_optimiser.physics.lhc_bends import normalise_lhcbend_magnets
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from aba_optimiser.accelerators import LHC
 
 
 class LHCOptimisationMadInterface(GradientDescentMadInterface):
@@ -33,7 +35,9 @@ class LHCOptimisationMadInterface(GradientDescentMadInterface):
     """
 
     # Bend knob name extraction pattern
-    BEND_KNOB_NAME_PATTERN = 'string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".k0"'
+    BEND_KNOB_NAME_PATTERN = (
+        'string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".k0"'
+    )
 
     def __init__(
         self,
@@ -79,7 +83,7 @@ class LHCOptimisationMadInterface(GradientDescentMadInterface):
             discard_mad_output,
         )
 
-    def get_knob_specs(self) -> list[tuple[str, str, str, bool]]:
+    def get_knob_specs(self) -> list[tuple[str, str, str, bool, bool]]:
         """
         Get LHC-specific knob specifications for gradient descent optimization.
 
@@ -90,28 +94,17 @@ class LHCOptimisationMadInterface(GradientDescentMadInterface):
         """
         return self.accelerator.get_supported_knob_specs()
 
-    def _filter_knob_specs(
-        self, all_specs: list[tuple[str, str, str, bool]]
-    ) -> list[tuple[str, str, str, bool]]:
-        """Filter specs using LHC-specific knob types."""
-        filtered = super()._filter_knob_specs(all_specs)
-        for kind, attr, pattern, zero_check in all_specs:
-            if (
-                (kind in ("sbend", "rbend") and self.accelerator.optimise_bends)
-                or (kind in ("hkicker") and self.accelerator.optimise_correctors)
-            ):
-                filtered.append((kind, attr, pattern, zero_check))
-        return filtered
-
     def _prepare_knob_data(
         self, selected_specs: list[tuple[str, str, str, bool]]
     ) -> None:
         """Prepare bend normalization data when bends are selected."""
+        assert isinstance(self.accelerator, LHC)
         if self.accelerator.optimise_bends and self.accelerator.normalise_bends:
             self._make_bend_dict()
 
     def _get_attr_specs(self) -> dict[str, dict[str, str]]:
         """Provide LHC-specific attribute naming/value expressions."""
+        assert isinstance(self.accelerator, LHC)
         if self.accelerator.normalise_bends:
             return {
                 "sbend": {

@@ -3,11 +3,9 @@
 from typing import Final
 
 # Model configuration
-MODIFIER: Final[str] = "R2025aRP_A18cmC18cmA10mL200cm_Flat.madx"
 NAT_TUNES: Final[list[float]] = [0.28, 0.31]
 DRV_TUNES: Final[list[float]] = [0.27, 0.322]
-ENERGY: Final[int] = 6800
-YEAR: Final[str] = "2025"
+ENERGY: Final[float] = 6800.0
 MADX_FILENAME: Final[str] = "job.create_model_nominal.madx"
 
 # AC Dipole marker pattern - beam number will be formatted in

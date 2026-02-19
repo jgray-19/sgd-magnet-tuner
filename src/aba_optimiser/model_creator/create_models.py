@@ -8,12 +8,13 @@ This script orchestrates the complete model creation workflow:
 3. Updates model with MAD-NG (tune matching, twiss computation)
 4. Exports TFS files in MAD-X format
 """
+from __future__ import annotations
 
 import pathlib
 
 from omc3.model_creator import create_instance_and_model
 
-from .config import DRV_TUNES, ENERGY, MODIFIER, NAT_TUNES, YEAR
+from .config import DRV_TUNES, ENERGY, NAT_TUNES
 from .madng_utils import update_model_with_madng
 from .madx_utils import make_madx_sequence
 
@@ -21,11 +22,11 @@ from .madx_utils import make_madx_sequence
 def create_lhc_model(
     beam: int,
     output_dir: pathlib.Path,
+    year: str,
     *,
     nat_tunes: list[float] | None = None,
     drv_tunes: list[float] | None = None,
-    energy: int | None = None,
-    year: str | None = None,
+    energy: float | None = None,
     modifiers: str | list[str] | None = None,
     matching_knob: str = "_op",
 ) -> None:
@@ -43,14 +44,14 @@ def create_lhc_model(
         Beam number (1 or 2).
     output_dir : pathlib.Path
         Directory where model files will be created.
+    year : str
+        LHC year/era.
     nat_tunes : list[float], optional
         Natural fractional tunes [Q1, Q2]. Defaults to config values.
     drv_tunes : list[float], optional
         Driven fractional tunes [Q1, Q2]. Defaults to config values.
-    energy : int, optional
+    energy : float, optional
         Beam energy in GeV. Defaults to config value.
-    year : str, optional
-        LHC year/era. Defaults to config value.
     modifier : str, optional
         Optics modifier file name. Defaults to config value.
     matching_knob : str, optional
@@ -69,11 +70,8 @@ def create_lhc_model(
     nat_tunes = nat_tunes or NAT_TUNES
     drv_tunes = drv_tunes or DRV_TUNES
     energy = energy or ENERGY
-    year = year or YEAR
 
-    if not modifiers:
-        modifiers = [MODIFIER]
-    elif isinstance(modifiers, str):
+    if isinstance(modifiers, str):
         modifiers = [modifiers]
 
     print(f"\n{'=' * 70}")
@@ -144,12 +142,11 @@ def main() -> None:
 
     # Create Beam 1 model
     model_dir_b1 = data_dir / f"model_b1__t{nat_tunes[0]}_{nat_tunes[1]}_{optics_label}"
-    create_lhc_model(beam=1, output_dir=model_dir_b1)
+    create_lhc_model(beam=1, output_dir=model_dir_b1, year="2025")
 
     # Create Beam 2 model
     model_dir_b2 = data_dir / f"model_b2__t{nat_tunes[0]}_{nat_tunes[1]}_{optics_label}"
-    create_lhc_model(beam=2, output_dir=model_dir_b2)
-
+    create_lhc_model(beam=2, output_dir=model_dir_b2, year="2025")
     print("\n" + "=" * 70)
     print("All models created successfully!")
     print("=" * 70 + "\n")

@@ -251,7 +251,7 @@ class DataManager:
             actual_workers = num_batches * (num_starts * num_ends)
             symbol = "x"
         LOGGER.info(
-            f"Creating {num_batches} batches x ({num_starts} starts {symbol} {num_ends} ends) = {actual_workers} workers, {self.tracks_per_worker} turns/worker"
+            f"Creating 2 directions x {num_batches} batches x ({num_starts} starts {symbol} {num_ends} ends) = {actual_workers * 2} workers, {self.tracks_per_worker} turns/worker"
         )
 
         # Organise turns by file, then create batches round-robin

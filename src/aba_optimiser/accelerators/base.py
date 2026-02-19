@@ -123,7 +123,7 @@ class Accelerator(ABC):
         pass
 
     @abstractmethod
-    def get_supported_knob_specs(self) -> list[tuple[str, str, str, bool]]:
+    def get_supported_knob_specs(self) -> list[tuple[str, str, str, bool, bool]]:
         """Return the knob specifications supported by this accelerator.
 
         Returns:

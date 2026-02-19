@@ -146,6 +146,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             mad: MAD-NG interface object
             knob_order: Order of the DA expansion (1 for linear, 2 for quadratic)
         """
+        mad.send("coord_names = {'x', 'px', 'y', 'py', 't', 'pt'}")
         mad.send(
             f"da_x0_base = damap{{nv=#coord_names, np=#knob_names, "
             f"mo={knob_order}, po={knob_order}, vn=tblcat(coord_names, knob_names)}}"
@@ -187,6 +188,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             accelerator=self.config.accelerator,
             magnet_range=self.config.magnet_range,
             bpm_range=self.bpm_range,
+            start_bpm=self.config.start_bpm,
             corrector_strengths=self.config.corrector_strengths,
             tune_knobs_file=self.config.tune_knobs_file,
             bad_bpms=self.config.bad_bpms,

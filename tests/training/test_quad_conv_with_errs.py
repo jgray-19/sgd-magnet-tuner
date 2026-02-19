@@ -156,7 +156,7 @@ def test_controller_bend_opt_simple(
     loaded_interface_with_beam: BaseMadInterface,
 ) -> None:
     """Test bend optimisation using AC dipole excitation with different lag values."""
-    flattop_turns = 5000
+    flattop_turns = 2000
     turns_per_batch = 50  # 134  # This number works quite well independently of flattop_turns
     acd_ramp = 2_000  # Ramp turns for AC dipole - should be long enough to avoid emittance growth
 

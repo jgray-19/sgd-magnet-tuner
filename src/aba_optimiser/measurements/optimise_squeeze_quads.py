@@ -17,6 +17,7 @@ from aba_optimiser.measurements.squeeze_helpers import (
     ANALYSIS_DIRS,
     BETABEAT_DIR,
     MODEL_DIRS,
+    get_ir_bpm_ranges_from_model,
     get_measurement_date,
     get_or_make_sequence,
 )
@@ -124,20 +125,20 @@ MEAS_TIMES = {
         },
         "inj": {  # This has a special date in the squeeze_helpers.py
             ZEROHZ: ["16_49_56_490", "16_51_01_464", "16_52_08_398"],
-            PLUS_50HZ: ["16_58_06_419", "16_59_12_366", "17_00_27_504"],
-            PLUS_100HZ: ["17_03_16_394", "17_04_25_452", "17_05_53_444"],
-            PLUS_150HZ: ["17_10_45_523", "17_11_52_941", "17_12_57_191"],
-            PLUS_200HZ: ["17_20_55_315", "17_22_05_108", "17_23_09_370"],
-            PLUS_250HZ: ["17_26_28_349", "17_27_50_402", "17_29_16_374"],
-            PLUS_300HZ: ["17_33_14_338", "17_34_20_356", "17_35_28_317"],
-            PLUS_350HZ: ["17_40_25_475", "17_41_36_368", "17_42_54_434"],
-            MINUS_50HZ: ["17_51_38_387", "17_52_44_501", "17_53_50_407"],
-            MINUS_100HZ: ["17_57_13_340", "17_58_24_385", "17_59_32_491"],
-            MINUS_150HZ: ["18_02_51_331", "18_03_57_483", "18_05_05_332"],
-            MINUS_200HZ: ["18_06_53_392", "18_07_59_340", "18_09_04_349"],
-            MINUS_250HZ: ["18_11_32_374", "18_12_51_327", "18_14_23_472"],
-            MINUS_300HZ: ["18_16_36_372", "18_17_44_322", "18_18_52_182"],
-            MINUS_350HZ: ["18_20_38_431", "18_21_46_310", "18_22_51_320"],
+            # PLUS_50HZ: ["16_58_06_419", "16_59_12_366", "17_00_27_504"],
+            # PLUS_100HZ: ["17_03_16_394", "17_04_25_452", "17_05_53_444"],
+            # PLUS_150HZ: ["17_10_45_523", "17_11_52_941", "17_12_57_191"],
+            # PLUS_200HZ: ["17_20_55_315", "17_22_05_108", "17_23_09_370"],
+            # PLUS_250HZ: ["17_26_28_349", "17_27_50_402", "17_29_16_374"],
+            # PLUS_300HZ: ["17_33_14_338", "17_34_20_356", "17_35_28_317"],
+            # PLUS_350HZ: ["17_40_25_475", "17_41_36_368", "17_42_54_434"],
+            # MINUS_50HZ: ["17_51_38_387", "17_52_44_501", "17_53_50_407"],
+            # MINUS_100HZ: ["17_57_13_340", "17_58_24_385", "17_59_32_491"],
+            # MINUS_150HZ: ["18_02_51_331", "18_03_57_483", "18_05_05_332"],
+            # MINUS_200HZ: ["18_06_53_392", "18_07_59_340", "18_09_04_349"],
+            # MINUS_250HZ: ["18_11_32_374", "18_12_51_327", "18_14_23_472"],
+            # MINUS_300HZ: ["18_16_36_372", "18_17_44_322", "18_18_52_182"],
+            # MINUS_350HZ: ["18_20_38_431", "18_21_46_310", "18_22_51_320"],
         },
     },
     2: {
@@ -491,17 +492,24 @@ def load_frequency_results(
 def create_configs(
     beam: int,
     sequence_path: Path,
+    model_dir: Path,
     all_bad_bpms: set[str],
     arc_num: int,
     measurements: list[dict],
     energy: float,
+    run_in_irs: bool,
 ) -> tuple[LHC, SequenceConfig, list[str], list[str], MeasurementConfig]:
     """Create configuration objects for optimisation.
 
     Returns:
         Tuple of (accelerator, sequence_config, bpm_start_points, bpm_end_points, measurement_config)
     """
-    magnet_range, bpm_start_points, bpm_end_points = get_bpm_points(arc_num, beam)
+    if run_in_irs:
+        magnet_range, bpm_start_points, bpm_end_points = get_ir_bpm_ranges_from_model(
+            model_dir, beam, arc_num
+        )
+    else:
+        magnet_range, bpm_start_points, bpm_end_points = get_bpm_points(arc_num, beam)
 
     # Create LHC accelerator instance
     accelerator = LHC(
@@ -509,6 +517,7 @@ def create_configs(
         beam_energy=energy,
         sequence_file=sequence_path,
         optimise_quadrupoles=True,
+        optimise_other_quadrupoles=run_in_irs,
     )
 
     sequence_config = SequenceConfig(
@@ -548,11 +557,12 @@ def get_default_optimiser_config() -> OptimiserConfig:
 def get_default_simulation_config() -> SimulationConfig:
     """Get default simulation configuration."""
     return SimulationConfig(
-        tracks_per_worker=9_890,
+        tracks_per_worker=3299,
+        # tracks_per_worker=9_890,
         # tracks_per_worker=int(19700.0 / 2),
         num_batches=200,
         num_workers=60,
-        use_fixed_bpm=False,
+        use_fixed_bpm=True,
         optimise_momenta=True,  # Enable momentum optimisation (x, px, y, py) not just (x, y)
     )
 
@@ -574,6 +584,7 @@ def optimise_arc(
     arc_num: int,
     beam: int,
     sequence_path: Path,
+    model_dir: Path,
     measurements: list[dict],
     temp_analysis_dir: Path,
     results_dir: Path,
@@ -581,12 +592,15 @@ def optimise_arc(
     all_bad_bpms: set[str],
     energy: float,
     rewrite_file: bool = False,
+    run_in_irs: bool = False,
 ) -> None:
     """Optimise quadrupoles for a single arc."""
     logger.info(f"Optimising arc {arc_num} for {squeeze_step}")
 
     accelerator, sequence_config, bpm_start_points, bpm_end_points, measurement_config = (
-        create_configs(beam, sequence_path, all_bad_bpms, arc_num, measurements, energy)
+        create_configs(
+            beam, sequence_path, model_dir, all_bad_bpms, arc_num, measurements, energy, run_in_irs
+        )
     )
 
     final_knobs_arc = None  # Start from sequence values or previous arc results
@@ -618,6 +632,7 @@ def process_squeeze_step(
     results_dir: Path,
     skip_reload: bool = False,
     cleanup_temp: bool = False,
+    run_in_irs: bool = False,
 ) -> None:
     """Process a single squeeze step for quadrupole optimisation."""
     logger.info(f"Processing squeeze step {squeeze_step} for beam {beam}")
@@ -635,7 +650,7 @@ def process_squeeze_step(
     all_measurements = []
     all_bad_bpms = set()
     machine_deltap = None
-    if ZEROHZ in meas_times[squeeze_step]:
+    if ZEROHZ not in meas_times[squeeze_step]:
         raise NotImplementedError("Please process 0Hz frequency first for closed orbit and machine deltap.")
 
     if skip_reload:
@@ -748,6 +763,7 @@ def process_squeeze_step(
             arc_num,
             beam,
             sequence_path,
+            model_dir,
             all_measurements,
             temp_analysis_dir,
             results_dir,
@@ -755,6 +771,7 @@ def process_squeeze_step(
             all_bad_bpms,
             energy,
             rewrite_file=rewrite_file,
+            run_in_irs=run_in_irs,
         )
         rewrite_file = False  # Only rewrite for the first arc
 
@@ -780,6 +797,9 @@ def main():
         "--squeeze-step", type=str, required=True, help="Squeeze step (e.g., '1.2m', '0.6m')"
     )
     parser.add_argument("--skip-reload", action="store_true", help="Reuse existing processed data")
+    parser.add_argument(
+        "--irs", action="store_true", help="Optimise within the IRs instead of arcs"
+    )
     parser.add_argument(
         "--cleanup-temp",
         action="store_true",
@@ -807,6 +827,7 @@ def main():
         results_dir,
         args.skip_reload,
         args.cleanup_temp,
+        args.irs,
     )
 
 

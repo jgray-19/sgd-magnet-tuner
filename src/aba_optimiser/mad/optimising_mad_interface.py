@@ -290,7 +290,7 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
             )
 
     @abstractmethod
-    def get_knob_specs(self) -> list[tuple[str, str, str, bool]]:
+    def get_knob_specs(self) -> list[tuple[str, str, str, bool, bool]]:
         """
         Get the list of knob specifications for this accelerator.
 
@@ -305,7 +305,7 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
         """
 
     def _filter_knob_specs(
-        self, all_specs: list[tuple[str, str, str, bool]]
+        self, all_specs: list[tuple[str, str, str, bool, bool]]
     ) -> list[tuple[str, str, str, bool]]:
         """
         Filter knob specifications based on the accelerator's optimisation settings.
@@ -320,13 +320,11 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
         Returns:
             Filtered list of specs to actually create knobs for
         """
-        filtered = []
-        for kind, attr, pattern, zero_check in all_specs:
-            if (kind == "quadrupole" and self.accelerator.optimise_quadrupoles) or (
-                kind == "sextupole" and self.accelerator.optimise_sextupoles
-            ):
-                filtered.append((kind, attr, pattern, zero_check))
-        return filtered
+        return [
+            (kind, attr, pattern, zero_check)
+            for kind, attr, pattern, zero_check, optimise_flag in all_specs
+            if optimise_flag
+        ]
 
     def _prepare_knob_data(self, selected_specs: list[tuple[str, str, str, bool]]) -> None:
         """Prepare any accelerator-specific data required for knob creation.

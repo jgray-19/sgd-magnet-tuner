@@ -50,6 +50,7 @@ class BaseController(ABC):
         debug: bool = False,
         mad_logfile: Path | None = None,
         optimise_knobs: list[str] | None = None,
+        write_tensorboard_logs: bool = True,
     ):
         """Initialize base controller.
 
@@ -66,6 +67,7 @@ class BaseController(ABC):
             bad_bpms: List of bad BPMs to exclude
             first_bpm: First BPM in the sequence
             optimise_knobs: List of global knob names to optimise, or None
+            write_tensorboard_logs: Whether to write TensorBoard event logs
         """
         self.optimiser_config = optimiser_config
         self.simulation_config = simulation_config
@@ -73,6 +75,10 @@ class BaseController(ABC):
         self.show_plots = show_plots
         self.debug = debug
         self.mad_logfile = mad_logfile
+        self.write_tensorboard_logs = write_tensorboard_logs
+
+        if not accelerator.has_any_optimisation():
+            raise ValueError("No optimisation types enabled in the accelerator configuration.")
 
         # Filter bad BPMs
         bpm_start_points, bpm_end_points = filter_bad_bpms(
@@ -127,15 +133,19 @@ class BaseController(ABC):
             accelerator=self.accelerator,
         )
 
-    def setup_logging(self, log_suffix: str = "opt") -> SummaryWriter:
+    def setup_logging(self, log_suffix: str = "opt") -> SummaryWriter | None:
         """Set up TensorBoard logging.
 
         Args:
             log_suffix: Suffix for the log directory name
 
         Returns:
-            TensorBoard SummaryWriter instance
+            TensorBoard SummaryWriter instance or None when disabled
         """
+        if not self.write_tensorboard_logs:
+            LOGGER.info("TensorBoard logging disabled")
+            return None
+
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         return SummaryWriter(log_dir=f"runs/{timestamp}_{log_suffix}")
 

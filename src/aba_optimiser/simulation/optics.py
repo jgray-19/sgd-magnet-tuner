@@ -86,7 +86,7 @@ def perform_orbit_correction(
     machine_deltap: float,
     target_qx: float,
     target_qy: float,
-    corrector_file: Path,
+    corrector_file: Path | None,
     beam: int = 1,
     twiss_name: str = "zero_twiss",
 ) -> dict[str, float]:
@@ -109,7 +109,10 @@ def perform_orbit_correction(
     mad["machine_deltap"] = machine_deltap
     mad["qx"] = target_qx
     mad["qy"] = target_qy
-    mad["correct_file"] = str(corrector_file.absolute())
+    if corrector_file:
+        mad["correct_file"] = str(corrector_file.absolute())
+    else:
+        mad["correct_file"] = None
 
     logger.info(f"Starting orbit correction with corrector file: {corrector_file}")
     mad.send(rf"""
@@ -120,24 +123,29 @@ local tws_offmom = twiss {{ sequence=loaded_sequence, deltap=machine_deltap }}
 
 ! Increase file numerical formatting
 local fmt = option.numfmt ; option.numfmt = "% -.16e"
-correct {{ sequence=loaded_sequence, model=tws_offmom, target={twiss_name}, method="svd", info=1, plane="x" }} :write(correct_file)
+local tbl = correct {{ sequence=loaded_sequence, model=tws_offmom, target={twiss_name}, method="svd", info=1, plane="x" }}
+if correct_file then
+    tbl:write(correct_file)
+end
 option.numfmt = fmt ! restore formatting
 
 io.write("*** rematching tunes for off-momentum twiss\n")
 match {{
-  command := twiss {{sequence=loaded_sequence, observe=1, deltap=machine_deltap}},
-  variables = {{ rtol=1e-6, -- 1 ppm
+  command := twiss {{sequence=loaded_sequence, observe=0, deltap=machine_deltap}},
+  variables = {{ rtol=1e-4, -- 1 ppm
     {{ var = 'MADX.dqx_b{beam}_op', name='dQx.b{beam}_op' }},
     {{ var = 'MADX.dqy_b{beam}_op', name='dQy.b{beam}_op' }},
   }},
-  equalities = {{ tol = 1e-10,
+  equalities = {{ tol = 1e-6,
     {{ expr = \t -> t.q1-62-qx, name='q1' }},
     {{ expr = \t -> t.q2-60-qy, name='q2' }},
   }},
   info=2
 }}
+{mad.py_name}:send("Complete")
 """)
-    logger.info("Orbit correction and tune rematching completed")
+    if mad.receive() != "Complete":
+        raise RuntimeError("MAD did not complete orbit correction and tune matching successfully")
 
     # Store matched tunes in Python variables
     matched_tunes = {

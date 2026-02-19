@@ -39,7 +39,7 @@ class OptimiserConfig:
     # Constrains each parameter update: |Δp_i| <= expected_rel_error * max(|p_i|, param_floor)
     # This enforces per-step bounds independent of optimizer-proposed step size.
     # Set to 0 to disable trust region (use optimizer step directly).
-    expected_rel_error: float = field(default=1e-4)
+    expected_rel_error: float = field(default=18e-4)
 
     # Computed fields
     decay_epochs: int = field(init=False)
