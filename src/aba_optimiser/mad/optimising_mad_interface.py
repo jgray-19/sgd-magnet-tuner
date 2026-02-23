@@ -9,7 +9,7 @@ import tfs
 
 from aba_optimiser.io.utils import read_knobs
 
-from .base_mad_interface import BaseMadInterface
+from .aba_mad_interface import AbaMadInterface
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -47,7 +47,7 @@ coord_names = {{"x", "px", "y", "py", "t", "pt"}}
 """
 
 
-class GenericMadInterface(BaseMadInterface):
+class GenericMadInterface(AbaMadInterface):
     """
     Generic MAD interface for all setup tasks EXCEPT knob creation.
 

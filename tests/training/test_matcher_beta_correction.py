@@ -13,8 +13,7 @@ import tfs
 
 pytest.importorskip("tmom_recon")
 
-from aba_optimiser.accelerators import LHC
-from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 from aba_optimiser.matching.matcher import BetaMatcher
 from aba_optimiser.matching.matcher_config import MatcherConfig
 from tests.training.helpers import (
@@ -81,7 +80,7 @@ def test_matcher_beta_correction(
     tmp_path: Path,
     seq_b1: Path,
     estimated_strengths_file: Path,
-    loaded_interface_with_beam: BaseMadInterface,
+    loaded_interface_with_beam: AbaMadInterface,
 ) -> None:
     """Test beta matching using estimated quadrupole strengths from controller."""
     # Generate model with errors for validation (same setup as controller)
@@ -161,9 +160,9 @@ def test_matcher_beta_correction(
     for tune_knob in matched_tunes:
         assert tune_knob in final_knobs, f"Tune knob {tune_knob} not found in final knobs"
 
-    # Compute twiss with estimated strengths + final knobs using BaseMadInterface
+    # Compute twiss with estimated strengths + final knobs using AbaMadInterface
     # This includes both beta and tune knobs
-    new_interface = BaseMadInterface()
+    new_interface = AbaMadInterface()
     new_interface.load_sequence(seq_b1, "lhcb1")
     new_interface.setup_beam(beam_energy=6800)
     new_interface.set_magnet_strengths(all_estimates)  # Apply estimated strengths

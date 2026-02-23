@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
     from xtrack import xt
 
-    from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+    from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 
 def _run_track_with_acd(
@@ -153,7 +153,7 @@ def test_controller_bend_opt_simple(
     tmp_path: Path,
     seq_b1: Path,
     estimated_strengths_file: Path,
-    loaded_interface_with_beam: BaseMadInterface,
+    loaded_interface_with_beam: AbaMadInterface,
 ) -> None:
     """Test bend optimisation using AC dipole excitation with different lag values."""
     flattop_turns = 2000

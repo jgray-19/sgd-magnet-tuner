@@ -18,6 +18,7 @@ dependencies = [
     "tfs-pandas",
     "tensorboardX",
     "pymadng>=0.3.0",
+    "pymadng-utils",
     "matplotlib",
     "uncertainties",
 ]

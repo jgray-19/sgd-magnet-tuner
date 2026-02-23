@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     import pandas as pd
     import xtrack as xt
 
-    from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+    from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 
 logger = logging.getLogger(__name__)
@@ -112,7 +112,7 @@ def _run_track_with_model(
 
 
 def _generate_nonoise_track(
-    interface_with_beam: BaseMadInterface,
+    interface_with_beam: AbaMadInterface,
     sequence_file: Path,
     flattop_turns: int,
     destination: Path,
@@ -231,7 +231,7 @@ def test_controller_energy_opt(
     flattop_turns: int,
     seq_b1: Path,
     dpp_value: float,
-    loaded_interface_with_beam: BaseMadInterface,
+    loaded_interface_with_beam: AbaMadInterface,
 ) -> None:
     """Test that the controller initialises correctly with custom num_tracks and flattop_turns."""
     optimiser_config = _make_optimiser_config_energy()
@@ -310,7 +310,7 @@ def test_controller_quad_opt_simple(
     tmp_path: Path,
     seq_b1: Path,
     start_marker: str,
-    loaded_interface_with_beam: BaseMadInterface,
+    loaded_interface_with_beam: AbaMadInterface,
 ) -> None:
     """Test quadrupole optimisation using the simple opt script logic."""
     # Constants for the test

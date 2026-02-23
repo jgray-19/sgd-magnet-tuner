@@ -1,31 +1,23 @@
 """
-Tests for BaseMadInterface.
+Tests for AbaMadInterface.
 
-This module contains pytest tests for the BaseMadInterface class.
+This module contains pytest tests for the AbaMadInterface class.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import numpy as np
 import pytest
 
-from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 from src.aba_optimiser.physics.deltap import dp2pt as physics_dp2pt
 from tests.mad.helpers import (
-    check_beam_setup,
     check_corrector_strengths,
     check_corrector_strengths_zero,
-    check_element_observations,
     check_interface_basic_init,
-    check_sequence_loaded,
     cleanup_interface,
     get_marker_and_element_positions,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 @pytest.mark.parametrize(
@@ -37,49 +29,16 @@ if TYPE_CHECKING:
     ids=["default_py_name", "custom_py_name"],
 )
 def test_init(py_name, expected_py_name, var_name, var_value) -> None:
-    """Test initialization of BaseMadInterface."""
-    interface = BaseMadInterface() if py_name is None else BaseMadInterface(py_name=py_name)
+    """Test initialization of AbaMadInterface."""
+    interface = AbaMadInterface() if py_name is None else AbaMadInterface(py_name=py_name)
     check_interface_basic_init(interface, expected_py_name)
     interface.mad.send(f"{var_name} = {var_value}")
     assert getattr(interface.mad, var_name) == var_value
     cleanup_interface(interface)
 
 
-def test_load_sequence(interface: BaseMadInterface, seq_b1: Path) -> None:
-    """Test loading a sequence file."""
-    # this test explicitly checks load_sequence behaviour
-    interface.load_sequence(seq_b1, "lhcb1")
-    check_sequence_loaded(interface, "lhcb1")
-    assert (
-        interface.mad.loaded_sequence is not None and interface.mad.loaded_sequence != 0
-    )
-    assert interface.mad.MADX.lhcb1 is not None and interface.mad.MADX.lhcb1 != 0
 
-
-@pytest.mark.parametrize("energy", [6500.0, 7000.0])
-def test_setup_beam(loaded_interface: BaseMadInterface, energy) -> None:
-    """Test setting up beam parameters."""
-    interface = loaded_interface
-    interface.setup_beam(particle="proton", beam_energy=energy)
-    check_beam_setup(interface, particle="proton", energy=energy)
-
-
-@pytest.mark.parametrize(
-    "pattern",
-    ["MB.A33R2.B1", "BPM"],
-    ids=["SingleElement", "BPMElements"],
-)
-def test_observe_elements(
-    loaded_interface: BaseMadInterface,
-    pattern: str,
-) -> None:
-    """Test configuring element observation."""
-    loaded_interface.observe_elements(pattern)
-    check_element_observations(loaded_interface, f"elm.name:match('{pattern}')")
-    loaded_interface.unobserve_elements([pattern])
-
-
-def test_cycle_sequence(loaded_interface: BaseMadInterface) -> None:
+def test_cycle_sequence(loaded_interface: AbaMadInterface) -> None:
     """Test cycling sequence to a marker."""
     loaded_interface.mad.send("""py:send(loaded_sequence:raw_get("__cycle"))""")
     assert loaded_interface.mad.recv() is None
@@ -118,7 +77,7 @@ def test_cycle_sequence(loaded_interface: BaseMadInterface) -> None:
     ids=["default_marker", "custom_marker"],
 )
 def test_install_marker(
-    loaded_interface: BaseMadInterface,
+    loaded_interface: AbaMadInterface,
     element,
     marker_name,
     offset,
@@ -142,7 +101,7 @@ def test_install_marker(
     assert ret_name == expected_marker_name
 
 
-def test_getset_variables(interface: BaseMadInterface) -> None:
+def test_getset_variables(interface: AbaMadInterface) -> None:
     """Test setting MAD variables."""
     interface.set_variables(**{"KQTL_1L1_B1": 1.2, "KQTL_1L2_B1": 2.3})
     assert interface.mad.KQTL_1L1_B1 == 1.2
@@ -153,14 +112,14 @@ def test_getset_variables(interface: BaseMadInterface) -> None:
     assert v2 == 2.3
 
 
-def test_set_madx_variables(interface: BaseMadInterface) -> None:
+def test_set_madx_variables(interface: AbaMadInterface) -> None:
     """Test setting MAD-X variables."""
     interface.set_madx_variables(**{"kqtl_1l1_b1": 1.5, "KQTL_1L2_B1": 2.5})
     assert interface.mad.MADX.KQTL_1L1_B1 == 1.5
     assert interface.mad.MADX.kqtl_1l2_b1 == 2.5
 
 
-def test_set_magnet_strength(loaded_interface: BaseMadInterface) -> None:
+def test_set_magnet_strength(loaded_interface: AbaMadInterface) -> None:
     """Test setting magnet strengths."""
     magnet_strengths = {
         "MB.A8R2.B1.k0": 3.566169870533780e-04,
@@ -189,7 +148,7 @@ def test_set_magnet_strength(loaded_interface: BaseMadInterface) -> None:
         )
 
 
-def test_set_magnet_strengths_error(loaded_interface: BaseMadInterface) -> None:
+def test_set_magnet_strengths_error(loaded_interface: AbaMadInterface) -> None:
     """Test setting magnet strengths with incorrect naming raises error."""
     with pytest.raises(ValueError):
         loaded_interface.set_magnet_strengths(
@@ -212,7 +171,7 @@ def test_set_magnet_strengths_error(loaded_interface: BaseMadInterface) -> None:
         )
 
 
-def test_apply_corrector_strengths(loaded_interface: BaseMadInterface, corrector_table):
+def test_apply_corrector_strengths(loaded_interface: AbaMadInterface, corrector_table):
     # Check initial strengths are zero
     check_corrector_strengths_zero(loaded_interface, corrector_table)
 
@@ -222,7 +181,7 @@ def test_apply_corrector_strengths(loaded_interface: BaseMadInterface, corrector
     check_corrector_strengths(loaded_interface, corrector_table)
 
 
-def test_twiss(loaded_interface_with_beam: BaseMadInterface):
+def test_twiss(loaded_interface_with_beam: AbaMadInterface):
     """Test twiss function."""
     interface = loaded_interface_with_beam
     twiss_df = interface.run_twiss()
@@ -294,7 +253,7 @@ def test_twiss(loaded_interface_with_beam: BaseMadInterface):
     ],
 )
 def test_match_tunes(
-    loaded_interface_with_beam: BaseMadInterface,
+    loaded_interface_with_beam: AbaMadInterface,
     target_qx: float,
     target_qy: float,
     qx_knob: str,
@@ -336,108 +295,14 @@ def test_match_tunes(
             f"Returned knob value for {knob} does not match MAD value"
         )
 
-
-def test_run_tracking_default(loaded_interface_with_beam: BaseMadInterface):
-    """Test running tracking simulation with default parameters."""
-    interface = loaded_interface_with_beam
-
-    interface.run_tracking()
-    results_df = interface.mad.trk.to_df()
-
-    # Check that results dataframe has expected columns
-    expected_columns = ["turn", "name", "x", "px", "y", "py", "t", "pt"]
-    assert all(col in results_df.columns for col in expected_columns), (
-        f"Expected columns {expected_columns}, got {results_df.columns}"
-    )
-
-    # Check that there is only one row (one turn, one element observed)
-    assert len(results_df) == 1, f"Expected 1 tracking row, got {len(results_df)}"
-
-    # Check that the observed element is $end
-    assert results_df.iloc[0]["name"] == "$end", (
-        f"Expected observed element '$end', got {results_df.iloc[0]['name']}"
-    )
-
-    # Check that x, y, px, py, t, pt are all zero as we started on-axis with no errors
-    for coord in ["x", "y", "px", "py", "t", "pt"]:
-        assert abs(results_df.iloc[0][coord]) < 1e-7, (
-            f"Expected {coord} to be ~0, got {results_df.iloc[0][coord]}"
-        )
-
-
-def test_run_tracking_multiple_turns(loaded_interface_with_beam: BaseMadInterface):
-    """Test running tracking simulation for multiple turns."""
-    interface = loaded_interface_with_beam
-
-    nturns = 10
-    interface.run_tracking(nturns=nturns, reserve=0)
-    results_df = interface.mad.trk.to_df()
-
-    # Check that there are nturns rows
-    assert len(results_df) == nturns, (
-        f"Expected {nturns} tracking rows, got {len(results_df)}"
-    )
-
-    # Check that turn numbers are correct
-    for turn in range(1, nturns + 1):
-        turn_row = results_df[results_df["turn"] == turn]
-        assert len(turn_row) == 1, (
-            f"Expected 1 row for turn {turn}, got {len(turn_row)}"
-        )
-        assert turn_row.iloc[0]["turn"] == turn, (
-            f"Expected turn number {turn}, got {turn_row.iloc[0]['turn']}"
-        )
-
-    # Check that x, y, px, py, t, pt are still all zero
-    for coord in ["x", "y", "px", "py", "t", "pt"]:
-        assert all(abs(results_df[coord]) < 1e-7), (
-            f"Expected all {coord} to be ~0, got max {results_df[coord].abs().max()}"
-        )  # we have orbit bump knobs with the 12cm sequence
-
-
-def test_run_tracking_nonzero_initial(loaded_interface_with_beam: BaseMadInterface):
-    """Test running tracking simulation with non-zero initial conditions."""
-    interface = loaded_interface_with_beam
-
-    # Add a non-zero initial condition and check tracking
-    x0, px0, y0, py0, t0, pt0 = 1e-3, 1e-4, -1e-3, -1e-4, 1e-7, 1e-5
-    interface.run_tracking(x=x0, px=px0, y=y0, py=py0, t=t0, pt=pt0, nturns=5)
-    results_df = interface.mad.trk.to_df()
-
-    # Check that there are 5 rows
-    assert len(results_df) == 5, f"Expected 5 tracking rows, got {len(results_df)}"
-
-    # Check that all rows have non-zero values
-    for coord in ["x", "y", "px", "py", "t", "pt"]:
-        assert all(abs(results_df[coord]) > 1e-8), (
-            f"Expected all {coord} to be non-zero, got {results_df[coord].values}"
-        )
-
-
-def test_run_tracking_with_bpms(loaded_interface_with_beam: BaseMadInterface):
-    """Test running tracking simulation with BPMs observed."""
-    interface = loaded_interface_with_beam
-
-    # Observe BPMs and check tracking output
-    interface.observe_elements("BPM")
-    interface.run_tracking(nturns=1)
-    results_df = interface.mad.trk.to_df()
-
-    # Check that there are multiple rows for the BPMs
-    assert len(results_df) == 563, (
-        f"Expected 563 tracking rows for BPMs, got {len(results_df)}"
-    )
-    interface.unobserve_elements(["BPM"])
-
-
 class TestDp2pt:
-    def test_zero_dp(self, loaded_interface_with_beam: BaseMadInterface):
+    def test_zero_dp(self, loaded_interface_with_beam: AbaMadInterface):
         """Test dp2pt with dp=0 returns 0"""
         interface = loaded_interface_with_beam
         pt = interface.dp2pt(0.0)
         assert np.isclose(pt, 0.0, rtol=1e-12, atol=1e-15)
 
-    def test_positive_dp(self, loaded_interface_with_beam: BaseMadInterface):
+    def test_positive_dp(self, loaded_interface_with_beam: AbaMadInterface):
         """Test dp2pt with positive dp"""
         interface = loaded_interface_with_beam
         dp = 0.01
@@ -448,7 +313,7 @@ class TestDp2pt:
         expected_pt = physics_dp2pt(dp, mass, energy)
         assert np.isclose(pt, expected_pt, rtol=1e-12, atol=1e-13)
 
-    def test_negative_dp(self, loaded_interface_with_beam: BaseMadInterface):
+    def test_negative_dp(self, loaded_interface_with_beam: AbaMadInterface):
         """Test dp2pt with negative dp"""
         interface = loaded_interface_with_beam
         dp = -0.005
@@ -460,7 +325,7 @@ class TestDp2pt:
         assert np.isclose(pt, expected_pt, rtol=1e-12, atol=1e-13)
 
     def test_high_energy_approximation(
-        self, loaded_interface_with_beam: BaseMadInterface
+        self, loaded_interface_with_beam: AbaMadInterface
     ):
         """Test at high energy where pt ≈ dp"""
         interface = loaded_interface_with_beam
@@ -471,13 +336,13 @@ class TestDp2pt:
 
 
 class TestPt2dp:
-    def test_zero_pt(self, loaded_interface_with_beam: BaseMadInterface):
+    def test_zero_pt(self, loaded_interface_with_beam: AbaMadInterface):
         """Test pt2dp with pt=0 returns 0"""
         interface = loaded_interface_with_beam
         dp = interface.pt2dp(0.0)
         assert np.isclose(dp, 0.0, rtol=1e-12, atol=1e-15)
 
-    def test_positive_pt(self, loaded_interface_with_beam: BaseMadInterface):
+    def test_positive_pt(self, loaded_interface_with_beam: AbaMadInterface):
         """Test pt2dp with positive pt"""
         interface = loaded_interface_with_beam
         pt = 0.01
@@ -486,7 +351,7 @@ class TestPt2dp:
         pt_back = interface.dp2pt(dp)
         assert np.isclose(pt_back, pt, rtol=1e-12, atol=1e-15)
 
-    def test_negative_pt(self, loaded_interface_with_beam: BaseMadInterface):
+    def test_negative_pt(self, loaded_interface_with_beam: AbaMadInterface):
         """Test pt2dp with negative pt"""
         interface = loaded_interface_with_beam
         pt = -0.005
@@ -496,7 +361,7 @@ class TestPt2dp:
         assert np.isclose(pt_back, pt, rtol=1e-12, atol=1e-15)
 
 
-def test_pt2dp_dp2pt_consistency(loaded_interface_with_beam: BaseMadInterface):
+def test_pt2dp_dp2pt_consistency(loaded_interface_with_beam: AbaMadInterface):
     """Test that pt2dp and dp2pt are inverses of each other."""
     interface = loaded_interface_with_beam
     test_dps = [0.0, 0.001, -0.001, 0.01, -0.005]
@@ -518,7 +383,7 @@ def test_pt2dp_dp2pt_consistency(loaded_interface_with_beam: BaseMadInterface):
 
 
 @pytest.mark.parametrize("end_num", [10, 11, 12])
-def test_get_bpm_list(loaded_interface: BaseMadInterface, end_num: int) -> None:
+def test_get_bpm_list(loaded_interface: AbaMadInterface, end_num: int) -> None:
     """Test getting list of BPM names within a range."""
     interface = loaded_interface
 
@@ -544,39 +409,3 @@ def test_get_bpm_list(loaded_interface: BaseMadInterface, end_num: int) -> None:
     # Check that the list has expected BPMs
     assert bpm_names == expected_bpms, f"Expected BPMs {expected_bpms}, got {bpm_names}"
     interface.unobserve_elements(["BPM"])
-
-
-def test_install_ac_dipole_and_twiss(loaded_interface_with_beam: BaseMadInterface) -> None:
-    """Test AC dipole installation and verify that tunes change to driven values."""
-    interface = loaded_interface_with_beam
-
-    # Run initial twiss to get natural tunes
-    tws = interface.run_twiss(observe=0)
-    nat_qx = tws.headers["q1"] % 1
-    nat_qy = tws.headers["q2"] % 1
-
-    # Define AC dipole parameters
-    ac_marker = "MKQA.6L4.B1"
-    nat_tunes = (nat_qx, nat_qy)
-    drv_tunes = (0.27, 0.322)
-    # Use small positive offset to avoid overlapping with marker element
-    ac_offset = 1.583 / 2  # Standard AC dipole offset
-
-    # Install AC dipole
-    interface.install_ac_dipole(
-        marker_name=ac_marker, nat_tunes=nat_tunes, drv_tunes=drv_tunes, offset=ac_offset
-    )
-
-    # Run twiss after AC dipole installation
-    tws_ac = interface.run_twiss(observe=0)
-    drv_qx = tws_ac.headers["q1"] % 1
-    drv_qy = tws_ac.headers["q2"] % 1
-
-    # Verify that tunes have changed to driven values
-    tolerance = 1e-4
-    assert np.isclose(drv_qx, drv_tunes[0], atol=tolerance), (
-        f"Q1 not driven correctly: expected {drv_tunes[0]:.6f}, got {drv_qx:.6f}"
-    )
-    assert np.isclose(drv_qy, drv_tunes[1], atol=tolerance), (
-        f"Q2 not driven correctly: expected {drv_tunes[1]:.6f}, got {drv_qy:.6f}"
-    )

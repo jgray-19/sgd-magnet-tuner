@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     import tfs
 
 if TYPE_CHECKING:
-    from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+    from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 
 def _recv_n(mad: Any, n: int) -> list[Any]:
@@ -36,14 +36,14 @@ def cleanup_interface(interface: Any) -> None:
         del interface
 
 
-def check_sequence_loaded(interface: BaseMadInterface, seq_name: str = "lhcb1") -> None:
+def check_sequence_loaded(interface: AbaMadInterface, seq_name: str = "lhcb1") -> None:
     """Check that sequence is loaded correctly."""
     assert seq_name == interface.mad.SEQ_NAME
     assert interface.mad.loaded_sequence is not None
 
 
 def check_beam_setup(
-    interface: BaseMadInterface,
+    interface: AbaMadInterface,
     particle: str = "proton",
     energy: float | None = None,
     charge: int = 1,
@@ -58,7 +58,7 @@ def check_beam_setup(
 
 
 def check_element_observations(
-    interface: BaseMadInterface,
+    interface: AbaMadInterface,
     condition: str,
 ) -> None:
     """Helper to check element observations in MAD."""
@@ -81,7 +81,7 @@ py:send("PASS")""")
 
 
 def get_marker_and_element_positions(
-    interface: BaseMadInterface, marker_name: str, element_name: str
+    interface: AbaMadInterface, marker_name: str, element_name: str
 ) -> tuple[float, int, float, int]:
     """Helper to get positions and indices of marker and element."""
     interface.mad.send(f"""
@@ -104,7 +104,7 @@ py:send(elm_idx)""")
 
 
 def check_corrector_strengths_zero(
-    interface: BaseMadInterface, corrector_table: tfs.TfsDataFrame
+    interface: AbaMadInterface, corrector_table: tfs.TfsDataFrame
 ) -> None:
     """Check that all corrector strengths are initially zero."""
     for row in corrector_table.itertuples():
@@ -113,7 +113,7 @@ def check_corrector_strengths_zero(
 
 
 def check_corrector_strengths(
-    interface: BaseMadInterface,
+    interface: AbaMadInterface,
     corrector_table: tfs.TfsDataFrame,
 ) -> None:
     """Check that corrector strengths match expected values.

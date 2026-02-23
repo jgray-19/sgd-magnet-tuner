@@ -10,7 +10,7 @@ import tfs
 from xtrack_tools.env import initialise_env
 
 from aba_optimiser.accelerators import LHC
-from aba_optimiser.mad import BaseMadInterface, GenericMadInterface
+from aba_optimiser.mad import AbaMadInterface, GenericMadInterface
 from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
 from aba_optimiser.simulation.optics import perform_orbit_correction
 
@@ -35,7 +35,7 @@ TRACK_COLUMNS = (
 )
 
 
-def convert_rbends_to_true_rbends(mad: BaseMadInterface) -> None:
+def convert_rbends_to_true_rbends(mad: AbaMadInterface) -> None:
     """Convert all rbends in the sequence to true rbends for correct tracking."""
     mad.mad.send("""
 for _, elm in loaded_sequence:iter() do
@@ -47,7 +47,7 @@ end
 
 
 def generate_model_with_errors(
-    loaded_interface_with_beam: BaseMadInterface,
+    loaded_interface_with_beam: AbaMadInterface,
     sequence_file: Path,
     dpp_value: float,
     magnet_range: str,
@@ -106,7 +106,7 @@ def generate_model_with_errors(
 
 
 def generate_xsuite_env_with_errors(
-    loaded_interface_with_beam: BaseMadInterface,
+    loaded_interface_with_beam: AbaMadInterface,
     sequence_file: Path,
     dpp_value: float,
     magnet_range: str,

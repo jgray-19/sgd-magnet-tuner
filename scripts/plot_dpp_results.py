@@ -77,21 +77,23 @@ ARC_MAPPING = {
 }
 
 
+# Use tab10 colormap for consistent, colorblind-friendly plotting
+_tab10 = plt.get_cmap("tab10")
 BASE_COLORS = {
-    "0": "blue",
-    "0p1": "green",
-    "0p2": "red",
-    "m0p1": "orange",
-    "m0p2": "purple",
+    "0": _tab10(0),
+    "0p1": _tab10(1),
+    "0p2": _tab10(2),
+    "m0p1": _tab10(3),
+    "m0p2": _tab10(4),
 }
 
 
 READABLE_NAMES = {
     "0": "No shift",
-    "0p1": "+0.1",
-    "0p2": "+0.2",
-    "m0p1": "-0.1",
-    "m0p2": "-0.2",
+    "0p1": "$+1\\times10^{-4}$",
+    "0p2": "$+2\\times10^{-4}$",
+    "m0p1": "$-1\\times10^{-4}$",
+    "m0p2": "$-2\\times10^{-4}$",
 }
 
 
@@ -271,56 +273,41 @@ def get_beam_data(beam: int, dispersion_type: str = "estimated") -> BeamData:
 
 
 def plot_all_deltap_vs_range(beam_data_list):
-    """Plot deltap vs arc range across all result files."""
     if isinstance(beam_data_list, BeamData):
         beam_data_list = [beam_data_list]
-    plt.figure(figsize=(10, 6))
-    for beam_data in beam_data_list:
-        for file_key, d in beam_data.data.items():
-            # Plot arcs
-            if len(d["arcs"]) > 0:
-                mapped_arcs = [ARC_MAPPING.get(a, a) for a in d["arcs"]]
-                base_color = BASE_COLORS[file_key]
-                if beam_data.beam == 1:
-                    color = base_color
-                    linestyle = "-"
-                    marker = "o"
-                else:
-                    rgb = mcolors.to_rgb(base_color)
-                    color = tuple(min(1, c + 0.2) for c in rgb)
-                    linestyle = "--"
-                    marker = "s"
-                plt.plot(
-                    mapped_arcs,
-                    d["arc_deltaps"],
-                    linestyle=linestyle,
-                    marker=marker,
-                    color=color,
-                )
-    plt.xlabel("Arc", fontsize=16)
-    plt.ylabel(r"Deltap ($\times 10^{-5}$)", fontsize=16)
 
-    ax = plt.gca()
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}"))
-    ax.tick_params(axis="both", labelsize=14)
-    # Custom legend
-    handles = []
-    labels = []
-    for file_key in EXPECTED_MAP:
-        color = BASE_COLORS[file_key]
-        readable = READABLE_NAMES[file_key]
-        handle = plt.Line2D([0], [0], color=color, linestyle="-", linewidth=2)
-        handles.append(handle)
-        labels.append(readable)
-    # Add beam styles
-    handle_b1 = plt.Line2D([0], [0], color="black", linestyle="-", marker="o", markersize=6)
-    handles.append(handle_b1)
-    labels.append("Beam 1")
-    handle_b2 = plt.Line2D([0], [0], color="black", linestyle="--", marker="s", markersize=6)
-    handles.append(handle_b2)
-    labels.append("Beam 2")
-    plt.legend(handles, labels, loc="best", fontsize=14)
-    plt.grid(visible=True)
+    fig, axes = plt.subplots(1, len(beam_data_list), figsize=(12, 5), sharey=True)
+    if len(beam_data_list) == 1:
+        axes = [axes]
+
+    for ax, beam_data in zip(axes, beam_data_list):
+        for file_key, d in beam_data.data.items():
+            if len(d["arcs"]) == 0:
+                continue
+
+            mapped_arcs = [ARC_MAPPING.get(a, a) for a in d["arcs"]]
+            ax.plot(
+                mapped_arcs,
+                d["arc_deltaps"] / 10,
+                color=BASE_COLORS[file_key],
+                marker="o",
+                linewidth=2.2,
+                markersize=5,
+                label=READABLE_NAMES[file_key],
+            )
+
+        ax.axhline(0, color="0.35", linewidth=1.2, linestyle=":")
+        ax.set_title(f"Beam {beam_data.beam}", fontsize=18)
+        ax.set_xlabel("Arc", fontsize=17)
+        ax.tick_params(axis="both", labelsize=16)
+        ax.grid(True, alpha=0.25)
+
+    axes[0].set_ylabel(r"$\Delta p/p$ ($\times 10^{-4}$)", fontsize=17)
+    axes[0].yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}"))
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=5, frameon=False, fontsize=16)
+    fig.tight_layout(rect=(0, 0, 1, 0.9))
     if len(beam_data_list) == 1:
         plt.savefig(
             f"b{beam_data_list[0].beam}{co}_results/deltap_all_beam{beam_data_list[0].beam}.png",
@@ -357,11 +344,12 @@ def plot_difference_vs_arc(beam_data: BeamData):
         mean_diff = float(np.mean(diffs))
         std_diff = float(np.std(diffs))
         ci = 1.96 * std_diff / np.sqrt(n) if n > 1 else 0.0
+        color = BASE_COLORS[file_key]
         ax.plot(
             mapped_arcs,
             diffs,
             "o-",
-            color="blue",
+            color=color,
             label=f"{READABLE_NAMES[file_key]} Diff",
         )
         ax.axhline(
@@ -401,9 +389,9 @@ def plot_difference_vs_arc(beam_data: BeamData):
                 alpha=0.7,
                 label=f"Mean Arcs Diff: {mean_arcs_diff * 1e5:.1f}",
             )
-        ax.set_ylabel(r"Deltap Difference ($\times 10^{-5}$)", fontsize=16)
+        ax.set_ylabel(r"$\Delta p/p$ Difference ($\times 10^{-5}$)", fontsize=16)
         # ax.set_title(
-        #     f"Deltap Difference ({READABLE_NAMES[file_key]} - 0) vs ARC for Beam {beam_data.beam}\nStd Dev: {std_diff:.2e}"
+        #     f"$\Delta p/p$ Difference ({READABLE_NAMES[file_key]} - 0) vs ARC for Beam {beam_data.beam}\nStd Dev: {std_diff:.2e}"
         # )
         ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}"))
         ax.tick_params(axis="both", labelsize=14)
@@ -437,7 +425,7 @@ def plot_expected_vs_measured_mean_common(
         means = [p["measured"] for p in dlmn_points]
         stderr = [p["stderr"] for p in dlmn_points]
 
-        color = "blue" if beam_data.beam == 1 else "red"
+        color = BASE_COLORS["0"] if beam_data.beam == 1 else BASE_COLORS["0p2"]
         fit = None
         if include_fits and len(means) > 1:
             fit = np.polyfit(expecteds, means, 1)
@@ -473,7 +461,7 @@ def plot_expected_vs_measured_mean_common(
             means_est = [p["measured"] for p in corrector_points]
             stderr_est = [p["stderr"] for p in corrector_points]
 
-            color_est = "blue" if beam_data.beam == 1 else "red"
+            color_est = BASE_COLORS["0"] if beam_data.beam == 1 else BASE_COLORS["0p2"]
             marker = "s"
             fit_est = None
             if include_fits and len(means_est) > 1:
@@ -521,8 +509,8 @@ def plot_expected_vs_measured_mean_common(
             max_exp = max(all_expecteds)
             plt.plot([min_exp, max_exp], [min_exp, max_exp], "k--", label="Ideal: y = x")
 
-    plt.xlabel(r"Expected Deltap ($\times 10^{-5}$)", fontsize=16)
-    plt.ylabel(r"Measured Mean Deltap ($\times 10^{-5}$)", fontsize=16)
+    plt.xlabel(r"Expected $\Delta p/p$ ($\times 10^{-5}$)", fontsize=16)
+    plt.ylabel(r"Measured Mean $\Delta p/p$ ($\times 10^{-5}$)", fontsize=16)
     fit_suffix = "" if include_fits else ", No Fit"
 
     ax = plt.gca()
@@ -606,7 +594,7 @@ def plot_difference_vs_measured_difference(beam_data_list):
         ss_res = np.sum((np.array(measured_diffs) - y_pred) ** 2)
         ss_tot = np.sum((np.array(measured_diffs) - np.mean(measured_diffs)) ** 2)
         r_squared = 1 - ss_res / ss_tot
-        color = "blue" if beam_data.beam == 1 else "red"
+        color = BASE_COLORS["0"] if beam_data.beam == 1 else BASE_COLORS["0p2"]
         plt.scatter(
             expected_diffs,
             measured_diffs,

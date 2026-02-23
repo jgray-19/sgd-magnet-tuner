@@ -37,13 +37,13 @@ if TYPE_CHECKING:
 
     import pandas as pd
 
-    from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+    from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 logger = logging.getLogger(__name__)
 
 
 def _generate_nonoise_track(
-    mad: BaseMadInterface,
+    mad: AbaMadInterface,
     tmp_dir: Path,
     model_dir: Path,
     sequence_file: Path,
@@ -274,7 +274,7 @@ def test_dispersion_b1(
     tmp_path: Path,
     seq_b1: Path,
     model_dir_b1: Path,
-    loaded_interface_with_beam: BaseMadInterface,
+    loaded_interface_with_beam: AbaMadInterface,
 ) -> None:
     """Test that dispersion estimation reproduces model values at correctors.
 
@@ -319,7 +319,7 @@ def test_dispersion_b2(
     tmp_path: Path,
     seq_b2: Path,
     model_dir_b2: Path,
-    beam2_interface: BaseMadInterface,
+    beam2_interface: AbaMadInterface,
 ) -> None:
     """Test that dispersion estimation reproduces model values at correctors.
 

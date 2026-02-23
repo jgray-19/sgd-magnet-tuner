@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import pytest
 import tfs
 
-from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -96,29 +96,29 @@ def corrector_table(corrector_file: Path) -> tfs.TfsDataFrame:
 
 
 @pytest.fixture(scope="function")
-def interface() -> Generator[BaseMadInterface, None, None]:
-    """Create a fresh BaseMadInterface for each test."""
-    iface = BaseMadInterface()
+def interface() -> Generator[AbaMadInterface, None, None]:
+    """Create a fresh AbaMadInterface for each test."""
+    iface = AbaMadInterface()
     yield iface
     with contextlib.suppress(Exception):
         del iface
 
 
 @pytest.fixture(scope="function")
-def loaded_interface(interface: BaseMadInterface, seq_b1: Path) -> BaseMadInterface:
+def loaded_interface(interface: AbaMadInterface, seq_b1: Path) -> AbaMadInterface:
     """Fixture that returns an interface with the example sequence loaded."""
     interface.load_sequence(seq_b1, "lhcb1")
     return interface
 
 
 @pytest.fixture(scope="function")
-def loaded_interface_with_beam(loaded_interface: BaseMadInterface) -> BaseMadInterface:
+def loaded_interface_with_beam(loaded_interface: AbaMadInterface) -> AbaMadInterface:
     """Fixture that returns an interface with the example sequence loaded and beam set up."""
     loaded_interface.setup_beam(particle="proton", beam_energy=6800.0)
     return loaded_interface
 
 @pytest.fixture(scope="function")
-def beam2_interface(interface: BaseMadInterface, seq_b2: Path) -> BaseMadInterface:
+def beam2_interface(interface: AbaMadInterface, seq_b2: Path) -> AbaMadInterface:
     """Fixture that returns an interface with the example sequence loaded and beam set up."""
     interface.load_sequence(seq_b2, "lhcb2")
     interface.setup_beam(particle="proton", beam_energy=6800.0)

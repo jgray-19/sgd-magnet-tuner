@@ -26,7 +26,7 @@ from aba_optimiser.training_optics import OpticsController
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+    from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ TRACK_COLUMNS = (
 def _generate_fake_measurement(
     tmp_path: Path,
     model_dir: Path,
-    interface: BaseMadInterface,
+    interface: AbaMadInterface,
     flattop_turns: int,
     dpp_value: float,
     magnet_range: str,
@@ -113,7 +113,7 @@ def _generate_fake_measurement(
 def test_controller_opt(
     tmp_path: Path,
     seq_b1: Path,
-    loaded_interface_with_beam: BaseMadInterface,
+    loaded_interface_with_beam: AbaMadInterface,
     model_dir_b1: Path,
 ) -> None:
     """Test that the controller initializes correctly with custom num_tracks and flattop_turns."""

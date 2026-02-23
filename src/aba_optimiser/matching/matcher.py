@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
+
 if TYPE_CHECKING:
     import tfs
 
@@ -501,12 +503,11 @@ end
         Sets up the MAD-NG interface with the sequence file and applies
         the estimated quadrupole strengths from the controller.
         """
-        from aba_optimiser.mad.base_mad_interface import BaseMadInterface
 
         logger.info("Initialising MAD-NG interface for beta matching")
 
         # Create MAD interface
-        self.mad_interface = BaseMadInterface()
+        self.mad_interface = AbaMadInterface()
 
         # Load sequence
         self.mad_interface.load_sequence(self.config.sequence_file_path, self.config.seq_name)
@@ -541,7 +542,7 @@ end
         Returns:
             List of BPM names within the specified magnet range.
         """
-        # `BaseMadInterface.get_bpm_list` returns a tuple of (all_bpms, bpms_in_range).
+        # `AbaMadInterface.get_bpm_list` returns a tuple of (all_bpms, bpms_in_range).
         # We only want the list of BPMs within the requested range.
         all_bpms, bpms_in_range = self.mad_interface.get_bpm_list(self.config.magnet_range)
         return bpms_in_range

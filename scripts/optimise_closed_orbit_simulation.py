@@ -18,7 +18,7 @@ from xtrack_tools.monitors import process_tracking_data
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
 from aba_optimiser.io.utils import save_knobs
-from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
 from aba_optimiser.simulation.optics import perform_orbit_correction
 from aba_optimiser.training.controller import Controller
@@ -189,7 +189,7 @@ def generate_track_with_errors(
     destination_dir.mkdir(parents=True, exist_ok=True)
     measurement_file = destination_dir / "pz_data.parquet"
 
-    iface = BaseMadInterface()
+    iface = AbaMadInterface()
     seq_name = f"lhcb{beam}"
     iface.load_sequence(sequence_path, seq_name)
     iface.setup_beam(particle="proton", beam_energy=BEAM_ENERGY_GEV)

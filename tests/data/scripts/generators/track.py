@@ -28,7 +28,7 @@ from xtrack_tools import (
     line_to_dataframes,
 )
 
-from aba_optimiser.mad.base_mad_interface import BaseMadInterface
+from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 from aba_optimiser.simulation.magnet_perturbations import (
     apply_magnet_perturbations,
 )
@@ -179,7 +179,7 @@ def generate_model_data():
     )
 
     # Create MAD interface and load sequence
-    mad = BaseMadInterface()
+    mad = AbaMadInterface()
     mad.load_sequence(SEQUENCE_FILE, "lhcb1")
     mad.setup_beam(beam_energy=BEAM_ENERGY)
     mad.run_twiss(observe=0, coupling=True)

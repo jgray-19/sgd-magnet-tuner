@@ -47,7 +47,7 @@ jobs:
         run: uv pip install '.[test,tracking]'
 
       - name: Install dependencies from GitHub
-        run: uv pip install git+https://github.com/jgray-19/xtrack_tools.git git+https://github.com/jgray-19/tmom-recon.git
+        run: uv pip install git+https://github.com/jgray-19/xtrack_tools.git git+https://github.com/jgray-19/tmom-recon.git git+https://github.com/jgray-19/pymadng-utils.git
 
       # - name: Prebuild xsuite kernels
       #   run: xsuite-prebuild r
