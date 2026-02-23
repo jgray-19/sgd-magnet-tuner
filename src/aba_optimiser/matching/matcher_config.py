@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from pymadng_utils.io.utils import read_knobs
+
 
 @dataclass
 class MatcherConfig:
@@ -61,7 +63,5 @@ class MatcherConfig:
         """
         if isinstance(self.estimated_strengths, dict):
             return self.estimated_strengths.copy()
-
-        from aba_optimiser.io.utils import read_knobs
 
         return read_knobs(self.estimated_strengths)

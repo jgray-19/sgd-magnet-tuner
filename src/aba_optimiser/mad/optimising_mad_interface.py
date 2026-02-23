@@ -6,8 +6,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import tfs
-
-from aba_optimiser.io.utils import read_knobs
+from pymadng_utils.io.utils import read_knobs
 
 from .aba_mad_interface import AbaMadInterface
 
@@ -120,7 +119,6 @@ class GenericMadInterface(AbaMadInterface):
         self.accelerator = accelerator
         self.magnet_range = magnet_range
         self.bpm_range = bpm_range if bpm_range is not None else magnet_range
-        self.bpm_pattern = bpm_pattern
 
         # Type hints for attributes that may be set during initialization or by subclasses
         self.nbpms: int
@@ -142,10 +140,9 @@ class GenericMadInterface(AbaMadInterface):
         # Set MAD variables for ranges and patterns
         self.mad["magnet_range"] = self.magnet_range
         self.mad["bpm_range"] = self.bpm_range
-        self.mad["bpm_pattern"] = self.bpm_pattern
 
         # Setup observation and ranges
-        self._observe_bpms(bad_bpms)
+        self.observe_bpms(bpm_pattern, bad_bpms)
         self.bpms_in_range, self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
 
         # Apply corrector strengths if provided
@@ -166,14 +163,6 @@ class GenericMadInterface(AbaMadInterface):
         nbpms = len(bpms_in_range)
         LOGGER.info(f"Counted {nbpms} BPMs in range: {bpm_range}")
         return bpms_in_range, nbpms, all_bpms
-
-    def _observe_bpms(self, bad_bpms: list[str] | None) -> None:
-        """Set up the MAD-NG session to observe BPMs."""
-        self.observe_elements(self.bpm_pattern)
-        LOGGER.info(f"Set up observation for BPMs matching pattern: {self.bpm_pattern}")
-        if bad_bpms:
-            self.unobserve_elements(bad_bpms)
-            LOGGER.info(f"Set up observation for bad BPMs: {bad_bpms}")
 
     def _set_correctors(self, corrector_strengths: Path) -> None:
         """Load corrector strengths from file and apply them to the sequence."""

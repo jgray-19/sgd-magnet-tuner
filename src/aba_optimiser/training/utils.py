@@ -6,6 +6,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pymadng_utils.io.utils import read_knobs
+
 if TYPE_CHECKING:
     import pandas as pd
 
@@ -55,8 +57,6 @@ def normalize_true_strengths(
     Returns:
         Dictionary of true strengths (empty if None was provided)
     """
-    from aba_optimiser.io.utils import read_knobs
-
     if true_strengths is None:
         return {}
     if isinstance(true_strengths, Path):

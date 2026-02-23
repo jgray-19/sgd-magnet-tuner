@@ -14,10 +14,10 @@ pytest.importorskip("xtrack_tools")
 
 import tfs
 from omc3.scripts.fake_measurement_from_model import generate as fake_measurement
+from pymadng_utils.io.utils import save_knobs
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig
-from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
 from aba_optimiser.simulation.optics import perform_orbit_correction
 from aba_optimiser.training.controller_config import SequenceConfig

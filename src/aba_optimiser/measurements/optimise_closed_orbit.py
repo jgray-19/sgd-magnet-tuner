@@ -10,10 +10,10 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 from nxcals.spark_session_builder import get_or_create
+from pymadng_utils.io.utils import save_knobs
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
-from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.measurements.create_datafile import (
     process_measurements,
     save_online_knobs,

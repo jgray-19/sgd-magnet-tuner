@@ -12,6 +12,7 @@ import pandas as pd
 import tfs
 from omc3.hole_in_one import hole_in_one_entrypoint
 from pymadng import MAD
+from pymadng_utils.io.utils import save_knobs
 from tmom_recon import calculate_pz_measurement
 from tmom_recon.svd import svd_clean_measurements
 from turn_by_turn import TbtData, read_tbt
@@ -24,7 +25,7 @@ from aba_optimiser.config import (
     PROJECT_ROOT,
     TUNE_KNOBS_FILE,
 )
-from aba_optimiser.io.utils import get_lhc_file_path, save_knobs
+from aba_optimiser.io.utils import get_lhc_file_path
 from aba_optimiser.mad import LHCOptimisationMadInterface
 from aba_optimiser.model_creator.madng_utils import (
     compute_and_export_twiss_tables,

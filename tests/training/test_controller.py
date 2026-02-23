@@ -13,12 +13,12 @@ import pytest
 pytest.importorskip("tmom_recon")
 pytest.importorskip("xtrack_tools")
 
+from pymadng_utils.io.utils import save_knobs
 from xtrack_tools.monitors import line_to_dataframes
 from xtrack_tools.tracking import run_tracking_without_ac_dipole
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
-from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig

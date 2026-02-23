@@ -9,9 +9,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+from pymadng_utils.io.utils import read_knobs
 
 from aba_optimiser.accelerators import LHC
-from aba_optimiser.io.utils import read_knobs
 from aba_optimiser.mad.lhc_optimising_interface import LHCOptimisationMadInterface
 from aba_optimiser.mad.optimising_mad_interface import GenericMadInterface
 from tests.mad.helpers import (
