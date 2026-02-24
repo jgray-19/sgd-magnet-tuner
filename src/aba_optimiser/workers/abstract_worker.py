@@ -251,7 +251,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         self.send_initial_conditions(mad)
 
         # Initialize MAD environment for computation
-        self._initialize_mad_computation(mad)
+        self._initialise_mad_computation(mad)
 
         LOGGER.debug(f"Worker {self.worker_id}: Ready for computation with {nbpms} BPMs")
 
@@ -272,10 +272,10 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         del mad
 
     @abstractmethod
-    def _initialize_mad_computation(self, mad: MAD) -> None:
-        """Initialize MAD-NG environment for computation.
+    def _initialise_mad_computation(self, mad: MAD) -> None:
+        """Initialise MAD-NG environment for computation.
 
-        This method should load any initialization scripts needed
+        This method should load any initialisation scripts needed
         before the main computation loop.
 
         Args:

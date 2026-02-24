@@ -199,8 +199,8 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
         if not mad.send("python:send(true)").recv():
             raise RuntimeError(f"Worker {self.worker_id}: Failed to send initial conditions to MAD")
 
-    def _initialize_mad_computation(self, mad: MAD) -> None:
-        """Initialize MAD-NG environment for optics computations.
+    def _initialise_mad_computation(self, mad: MAD) -> None:
+        """Initialise MAD-NG environment for optics computations.
 
         Args:
             mad: MAD-NG interface object

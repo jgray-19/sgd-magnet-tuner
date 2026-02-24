@@ -194,8 +194,10 @@ class GenericMadInterface(AbaMadInterface):
 
             LOGGER.info(f"Set {len(knobs)} corrector knobs from {corrector_strengths}")
 
-        self.mad.send(f"{self.py_name}:send(true)")
-        assert self.mad.recv(), "Failed to set corrector strengths"
+        self.mad.send(f"{self.py_name}:send('done')")
+        self._check_mad_response(
+            "done", f"Failed to apply corrector strengths from {corrector_strengths}"
+        )
 
     def _set_tune_knobs(self, tune_knobs_file: Path) -> None:
         """Load and set predefined tune knobs from file."""
@@ -206,11 +208,19 @@ class GenericMadInterface(AbaMadInterface):
         for name, val in tune_knobs.items():
             self.mad.send(f"MADX['{name}'] = {val}")
 
-        self.mad.send(f"{self.py_name}:send(true)")
-        assert self.mad.recv(), "Failed to set tune knobs"
+        self.mad.send(f"{self.py_name}:send('done')")
+        self._check_mad_response("done", f"Failed to set tune knobs from {tune_knobs_file}")
 
         LOGGER.debug(f"Previous tune knob values: {prev}")
         LOGGER.debug(f"Set tune knobs from {tune_knobs_file}: {len(tune_knobs)}")
+
+    def _check_mad_response(self, expected: str, error_msg: str) -> None:
+        """Check that the response from MAD-NG matches the expected value."""
+        try:
+            if (result := self.mad.recv()) != expected:
+                raise RuntimeError(f"Unexpected response from MAD-NG: {result}. {error_msg}")
+        except Exception as e:
+            raise RuntimeError(error_msg) from e
 
 
 class GradientDescentMadInterface(GenericMadInterface, ABC):

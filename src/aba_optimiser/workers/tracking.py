@@ -280,8 +280,8 @@ for i=1,num_batches do
 end
 """)
 
-    def _initialize_mad_computation(self, mad: MAD) -> None:
-        """Initialize MAD-NG environment for tracking computations.
+    def _initialise_mad_computation(self, mad: MAD) -> None:
+        """Initialise MAD-NG environment for tracking computations.
 
         Args:
             mad: MAD-NG interface object
@@ -440,7 +440,7 @@ end
         self.send_initial_conditions(mad)
 
         # Initialize MAD environment for computation
-        self._initialize_mad_computation(mad)
+        self._initialise_mad_computation(mad)
 
         LOGGER.debug(f"Worker {self.worker_id}: Ready for computation with {nbpms} BPMs")
 

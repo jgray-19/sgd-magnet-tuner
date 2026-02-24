@@ -163,7 +163,7 @@ weights_y = python:recv()
 
         mad, nbpms = self.setup_mad_interface(knob_values)
         self.send_initial_conditions(mad)
-        self._initialize_mad_computation(mad)
+        self._initialise_mad_computation(mad)
 
         LOGGER.debug(f"Worker {self.worker_id}: Ready for position-only computation with {nbpms} BPMs")
 

@@ -144,8 +144,11 @@ match {{
 }}
 {mad.py_name}:send("Complete")
 """)
-    if mad.receive() != "Complete":
-        raise RuntimeError("MAD did not complete orbit correction and tune matching successfully")
+    try:
+        if (result := mad.recv()) != "Complete":
+            raise RuntimeError(f"Unexpected response from MAD-NG: {result}")
+    except Exception as e:
+        raise RuntimeError("Error during MAD-NG orbit correction and tune matching") from e
 
     # Store matched tunes in Python variables
     matched_tunes = {
