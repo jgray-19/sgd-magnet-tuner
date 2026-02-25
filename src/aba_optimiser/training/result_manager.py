@@ -54,14 +54,14 @@ class ResultManager:
         self.accelerator = accelerator
 
         # Lazy import defaults if not provided
-        if output_knobs_path is None or knob_table_path is None:
-            from aba_optimiser.config import KNOB_TABLE, OUTPUT_KNOBS
+        # if output_knobs_path is None or knob_table_path is None:
+        #     from aba_optimiser.config import KNOB_TABLE, OUTPUT_KNOBS
 
-            self.output_knobs_path = output_knobs_path or OUTPUT_KNOBS
-            self.knob_table_path = knob_table_path or KNOB_TABLE
-        else:
-            self.output_knobs_path = output_knobs_path
-            self.knob_table_path = knob_table_path
+        #     self.output_knobs_path = output_knobs_path or OUTPUT_KNOBS
+        #     self.knob_table_path = knob_table_path or KNOB_TABLE
+        # else:
+        self.output_knobs_path = output_knobs_path
+        self.knob_table_path = knob_table_path
 
         # Set plots directory with default
         from pathlib import Path

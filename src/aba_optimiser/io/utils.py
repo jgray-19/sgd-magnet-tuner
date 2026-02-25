@@ -31,7 +31,7 @@ def save_results(
     knob_names: list[str],
     knob_strengths: dict[str, float],
     uncertainties: np.ndarray,
-    output_path: str | Path,
+    output_path: str | Path | None,
 ) -> None:
     """
     Save the final knob strengths and uncertainties to a file.
@@ -42,6 +42,9 @@ def save_results(
         uncertainties: List of uncertainties for each knob.
         output_path: Path to the output file.
     """
+    if output_path is None:
+        logger.warning("No output path provided, skipping saving results.")
+        return
     with Path(output_path).open("w") as f:
         f.write("Knob Name\tStrength\tUncertainty\n")
         for idx, knob in enumerate(knob_names):
