@@ -100,23 +100,23 @@ class ResultManager:
 
         # Order rows by relative difference (descending order)
         rows.sort(key=lambda row: abs(row["reldiff"]), reverse=True)
-
-        with self.knob_table_path.open("w") as f:
-            f.write(
-                "| Index |   Knob   |   True   |   Final   |   Diff   | Uncertainty | Relative Diff | Relative Uncertainty |\n"
-                "|-------|----------|----------|----------|----------|-------------|---------------|----------------------|\n"
-            )
-            for row in rows:
+        if self.knob_table_path is not None:
+            with self.knob_table_path.open("w") as f:
                 f.write(
-                    f"|{row['index']}|{row['knob']}|"
-                    f"{scientific_notation(row['true'])}|"
-                    f"{scientific_notation(row['final'])}|"
-                    f"{scientific_notation(row['diff'])}|"
-                    f"{scientific_notation(row['uncertainty'])}|"
-                    f"{scientific_notation(row['reldiff'])}|"
-                    f"{scientific_notation(row['rel_uncertainty'])}|\n"
+                    "| Index |   Knob   |   True   |   Final   |   Diff   | Uncertainty | Relative Diff | Relative Uncertainty |\n"
+                    "|-------|----------|----------|----------|----------|-------------|---------------|----------------------|\n"
                 )
-        LOGGER.info("Results saved successfully.")
+                for row in rows:
+                    f.write(
+                        f"|{row['index']}|{row['knob']}|"
+                        f"{scientific_notation(row['true'])}|"
+                        f"{scientific_notation(row['final'])}|"
+                        f"{scientific_notation(row['diff'])}|"
+                        f"{scientific_notation(row['uncertainty'])}|"
+                        f"{scientific_notation(row['reldiff'])}|"
+                        f"{scientific_notation(row['rel_uncertainty'])}|\n"
+                    )
+            LOGGER.info("Results saved successfully.")
 
     def generate_plots(
         self,
