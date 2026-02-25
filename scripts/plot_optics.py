@@ -1,12 +1,16 @@
 from matplotlib import pyplot as plt
+from pymadng_utils.io.utils import read_knobs
 
 from aba_optimiser.config import TRUE_STRENGTHS_FILE
-from aba_optimiser.io.utils import get_lhc_file_path, read_knobs
-from aba_optimiser.mad.optimising_mad_interface import OptimisationMadInterface
+from aba_optimiser.io.utils import get_lhc_file_path
+from aba_optimiser.mad.optimising_mad_interface import GenericMadInterface
 
 MAGNET_RANGES = [f"BPM.11R{i}.B1/BPM.11L{i % 8 + 1}.B1" for i in range(1, 9)]
-mad = OptimisationMadInterface(
-    sequence_file=get_lhc_file_path(beam=1), bpm_pattern="BPM", corrector_strengths=None, tune_knobs_file=None
+mad = GenericMadInterface(
+    sequence_file=get_lhc_file_path(beam=1),
+    bpm_pattern="BPM",
+    corrector_strengths=None,
+    tune_knobs_file=None,
 )
 mad.mad["full_tws", "mflw"] = mad.mad.twiss(
     sequence="loaded_sequence", observe=1, savemap=True

@@ -19,27 +19,17 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from omc3.machine_data_extraction.lsa_utils import calc_k_from_iref
-from omc3.machine_data_extraction.mqt_extraction import get_mqt_vals
-from omc3.machine_data_extraction.nxcals_knobs import (
-    NXCALSResult,
-    get_energy,
-    get_knob_vals,
-)
+from omc3.machine_data_extraction.nxcals_knobs import get_knob_vals
 
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from omc3.machine_data_extraction.nxcals_knobs import NXCALSResult
     from pyspark.sql import SparkSession
 
 logger = logging.getLogger(__name__)
 
-# Re-export commonly used items for backward compatibility
 __all__ = [
-    "NXCALSResult",
-    "get_energy",
-    "calc_k_from_iref",
-    "get_mqt_vals",
     "get_mb_vals",
     "get_ms_vals",
     "get_mq_vals",

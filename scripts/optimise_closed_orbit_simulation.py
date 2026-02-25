@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 import tfs
+from pymadng_utils.io.utils import save_knobs
 from xobjects import ContextCpu as Context
 from xtrack_tools.acd import prepare_acd_line_with_monitors
 from xtrack_tools.env import initialise_env
@@ -17,7 +18,6 @@ from xtrack_tools.monitors import process_tracking_data
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
-from aba_optimiser.io.utils import save_knobs
 from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
 from aba_optimiser.simulation.optics import perform_orbit_correction

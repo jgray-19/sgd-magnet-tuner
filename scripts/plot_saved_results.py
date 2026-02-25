@@ -1,4 +1,5 @@
 import numpy as np
+from pymadng_utils.io.utils import read_knobs
 
 # from aba_optimiser.plotting.strengths import (
 #     plot_strengths_comparison,
@@ -9,7 +10,7 @@ from aba_optimiser.config import (
     OUTPUT_KNOBS,
     TRUE_STRENGTHS_FILE,
 )
-from aba_optimiser.io.utils import get_lhc_file_path, read_knobs, read_results
+from aba_optimiser.io.utils import get_lhc_file_path, read_results
 from aba_optimiser.mad import GenericMadInterface
 from aba_optimiser.training.result_manager import ResultManager
 

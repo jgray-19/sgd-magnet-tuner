@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 from nxcals.spark_session_builder import get_or_create
+from omc3.machine_data_extraction.nxcals_knobs import get_energy
 from pymadng_utils.io.utils import save_knobs
 
 from aba_optimiser.accelerators import LHC
@@ -18,7 +19,6 @@ from aba_optimiser.measurements.create_datafile import (
     process_measurements,
     save_online_knobs,
 )
-from aba_optimiser.measurements.knob_extraction import get_energy
 from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import SequenceConfig
