@@ -109,16 +109,17 @@ def optimise_ranges(
     title: str,
     energy: float,
     write_tensorboard_logs: bool = True,
-) -> tuple[list[float], list[float], list[float]]:
+) -> tuple[list[float], list[float], list[float], float]:
     """Optimise for a given range configuration.
 
     Returns:
-        Tuple of (deltap_wrt_6800_list, deltap_uncertainties, fitted_deltap_list).
+        Tuple of (deltap_wrt_ref_list, deltap_uncertainties, fitted_deltap_list, e_ref).
     """
     results = []
     uncertainties = []
     fitted_deltaps = []
     num_ranges = len(range_config.magnet_ranges)
+    e_ref = 6800 if abs(energy - 6800) < abs(energy - 450) else 450
     for i in range(num_ranges):
         logger.info(f"Starting optimisation for {range_type} {i + 1}/{num_ranges} for {title}")
 
@@ -161,15 +162,15 @@ def optimise_ranges(
         fitted_deltap = final_knobs["deltap"]
         fitted_deltaps.append(fitted_deltap)
         # Convert to reference energy 6800 GeV (assume beta is 1 and in GeV)
-        e_ref = 6800
+        # Choose eref as 6800 or 450 GeV depending on which is closer to the measured energy
         e_meas = energy * (1 + fitted_deltap)
-        deltap_wrt_6800 = (e_meas - e_ref) / e_ref
-        results.append(deltap_wrt_6800)
+        deltap_wrt_ref = (e_meas - e_ref) / e_ref
+        results.append(deltap_wrt_ref)
         # results.append(fitted_deltap)
         uncertainties.append(uncs["deltap"])  # Assuming uncs is a dict with 'deltap'
         logger.info(f"{range_type.capitalize()} {i + 1}: deltap = {results[-1]}")
         logger.info(f"Finished optimisation for {range_type} {i + 1}/{num_ranges} for {title}")
-    return results, uncertainties, fitted_deltaps
+    return results, uncertainties, fitted_deltaps, e_ref
 
 
 def optimise_corrector_ranges(
@@ -539,7 +540,7 @@ def process_single_config(
         optimise_momenta=True,
     )
 
-    results_arcs, uncs_arcs, fitted_deltaps = optimise_ranges(
+    results_arcs, uncs_arcs, fitted_deltaps, _ = optimise_ranges(
         config.arc_config,
         "arc",
         config.beam,
