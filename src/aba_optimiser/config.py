@@ -94,8 +94,8 @@ class SimulationConfig:
     # not perform screening, or when working with very small datasets where
     # discarding any measurements would overly weaken constraints.
     enable_preloop_outlier_screening: bool = field(default=True)
-    bpm_loss_outlier_sigma: float = field(default=2.0)
-    worker_loss_outlier_sigma: float = field(default=2.0)
+    bpm_loss_outlier_sigma: float = field(default=3.0)
+    worker_loss_outlier_sigma: float = field(default=3.0)
 
     # Computed fields
     total_tracks: int = field(init=False)

@@ -230,6 +230,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         """
         pass
 
+    @abstractmethod
     def run(self) -> None:
         """Main worker run loop.
 
@@ -240,36 +241,36 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         4. Loop: receive knobs -> compute -> send results
         5. Cleanup on termination signal (None received)
         """
-        # Initial handshake
-        self.conn.recv()
-        knob_name_vals, batch = self.conn.recv()
+        pass
+        # # Initial handshake
+        # knob_name_vals, batch = self.conn.recv()
 
-        # Setup MAD interface
-        mad, nbpms = self.setup_mad_interface(knob_name_vals)
+        # # Setup MAD interface
+        # mad, nbpms = self.setup_mad_interface(knob_name_vals)
 
-        # Send initial conditions
-        self.send_initial_conditions(mad)
+        # # Send initial conditions
+        # self.send_initial_conditions(mad)
 
-        # Initialize MAD environment for computation
-        self._initialise_mad_computation(mad)
+        # # Initialize MAD environment for computation
+        # self._initialise_mad_computation(mad)
 
-        LOGGER.debug(f"Worker {self.worker_id}: Ready for computation with {nbpms} BPMs")
+        # LOGGER.debug(f"Worker {self.worker_id}: Ready for computation with {nbpms} BPMs")
 
-        # Main computation loop
-        while knob_name_vals is not None:
-            # Compute gradients and loss
-            grad, loss = self.compute_gradients_and_loss(mad, knob_name_vals, batch)
+        # # Main computation loop
+        # while knob_name_vals is not None:
+        #     # Compute gradients and loss
+        #     grad, loss = self.compute_gradients_and_loss(mad, knob_name_vals, batch)
 
-            # Normalise and send results
-            self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
+        #     # Normalise and send results
+        #     self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
 
-            # Wait for next knob values
-            knob_name_vals, batch = self.conn.recv()
+        #     # Wait for next knob values
+        #     knob_name_vals, batch = self.conn.recv()
 
-        # Cleanup
-        LOGGER.debug(f"Worker {self.worker_id}: Terminating")
-        mad.send("shush()")
-        del mad
+        # # Cleanup
+        # LOGGER.debug(f"Worker {self.worker_id}: Terminating")
+        # mad.send("shush()")
+        # del mad
 
     @abstractmethod
     def _initialise_mad_computation(self, mad: MAD) -> None:

@@ -173,7 +173,6 @@ weights_y = python:recv()
 
     def run(self) -> None:
         """Main worker run loop with Hessian calculation."""
-        self.conn.recv()
         knob_values, batch = self.conn.recv()
         n_knobs = len(knob_values)
 
@@ -183,26 +182,31 @@ weights_y = python:recv()
 
         LOGGER.debug(f"Worker {self.worker_id}: Ready for position-only computation with {nbpms} BPMs")
 
-        message: tuple[dict[str, float] | None, int | None] | dict[str, object] = (
-            knob_values,
-            batch,
-        )
+        computation_success = True
+        message: tuple[dict[str, float] | None, int | None] | dict[str, object] = self.conn.recv()
+        if isinstance(message, dict):
+            self._handle_control_command(mad, message, nbpms)
+            message = self.conn.recv()
+            self._handle_control_command(mad, message, nbpms)
+            message = self.conn.recv()
+
         while True:
-            if isinstance(message, dict):
-                self._handle_control_command(mad, message, nbpms)
-
-                message = self.conn.recv()
-                continue
-
             knob_values, batch = message
-            if knob_values is None:
+            if knob_values is None or batch is None:
+                LOGGER.debug(f"Worker {self.worker_id}: Received termination signal")
                 break
-
-            if self.worker_disabled:
-                self.conn.send((self.worker_id, np.zeros(n_knobs), 0.0))
-            else:
-                grad, loss = self.compute_gradients_and_loss(mad, knob_values, int(batch))
-                self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
+            try:
+                if self.worker_disabled:
+                    self.conn.send((self.worker_id, np.zeros(n_knobs), 0.0))
+                else:
+                    grad, loss = self.compute_gradients_and_loss(mad, knob_values, int(batch))
+                    self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
+            except RuntimeError as e:
+                LOGGER.error(f"Worker {self.worker_id}: Error during computation: {e}")
+                zero_grad: np.ndarray = np.zeros(n_knobs)
+                self.conn.send((self.worker_id, zero_grad, float("inf")))
+                computation_success = False
+                break
 
             message = self.conn.recv()
 

@@ -161,6 +161,7 @@ class Controller(BaseController):
                 self.config_manager.end_bpms,
                 self.simulation_config,
                 self.machine_deltaps,
+                self.initial_knobs,
             )
 
             # Pre-loop diagnostics: mask BPM and worker outliers before optimisation

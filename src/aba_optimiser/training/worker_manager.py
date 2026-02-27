@@ -452,6 +452,7 @@ class WorkerManager:
         end_bpms: list[str],
         simulation_config: SimulationConfig,
         machine_deltaps: list[float],
+        initial_knobs: dict[str, float],
     ):
         """Start worker processes.
 
@@ -490,7 +491,7 @@ class WorkerManager:
             w.start()
             self.parent_conns.append(parent)
             self.workers.append(w)
-            parent.send(None)
+            parent.send((initial_knobs, -1))
             self.worker_metadata.append(
                 {
                     "worker_id": worker_id,

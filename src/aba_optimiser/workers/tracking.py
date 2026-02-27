@@ -519,39 +519,29 @@ end
         after the main optimisation loop completes.
         """
         # Initial handshake
-        self.conn.recv()
         knob_values, batch = self.conn.recv()
         n_knobs = len(knob_values)
 
         # Setup MAD interface
         mad, nbpms = self.setup_mad_interface(knob_values)
-
-        # Send initial conditions
         self.send_initial_conditions(mad)
-
-        # Initialize MAD environment for computation
         self._initialise_mad_computation(mad)
 
         LOGGER.debug(f"Worker {self.worker_id}: Ready for computation with {nbpms} BPMs")
 
         computation_success = True
+        message: tuple[dict[str, float] | None, int | None] | dict[str, object] = self.conn.recv()
+        if isinstance(message, dict):
+            self._handle_control_command(mad, message, nbpms)
+            message = self.conn.recv()
+            self._handle_control_command(mad, message, nbpms)
+            message = self.conn.recv()
 
-        # Main computation loop
-        message: tuple[dict[str, float] | None, int | None] | dict[str, object] = (
-            knob_values,
-            batch,
-        )
         while True:
-            if isinstance(message, dict):
-                self._handle_control_command(mad, message, nbpms)
-
-                message = self.conn.recv()
-                continue
-
             knob_values, batch = message
-            if knob_values is None:
+            if knob_values is None or batch is None:
+                LOGGER.debug(f"Worker {self.worker_id}: Received termination signal")
                 break
-
             try:
                 if self.worker_disabled:
                     self.conn.send((self.worker_id, np.zeros(n_knobs), 0.0))
