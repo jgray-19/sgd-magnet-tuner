@@ -40,8 +40,8 @@ class ConfigurationManager:
         self.fixed_end: str = ""
         self.bend_lengths: dict | None = None
 
-        self.accelerator = accelerator
-        self.start_bpms = bpm_start_points
+        self.accelerator: Accelerator = accelerator
+        self.start_bpms: list[str] = bpm_start_points
         self.end_bpms: list[str] = bpm_end_points
         self.magnet_range = magnet_range
         self.simulation_config = simulation_config
@@ -71,7 +71,7 @@ class ConfigurationManager:
 
         self.all_bpms = self.mad_iface.all_bpms
         self.bpms_in_range = self.mad_iface.bpms_in_range
-        LOGGER.warning(f"Total BPMs in model: {len(self.all_bpms)}, BPMs in specified range {self.magnet_range}: {len(self.bpms_in_range)}")
+        LOGGER.info(f"Total BPMs in model: {len(self.all_bpms)}, BPMs in specified range {self.magnet_range}: {len(self.bpms_in_range)}")
 
         self.start_bpms = [bpm for bpm in self.start_bpms if bpm in self.bpms_in_range]
         self.end_bpms = [bpm for bpm in self.end_bpms if bpm in self.bpms_in_range]
