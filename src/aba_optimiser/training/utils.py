@@ -182,11 +182,9 @@ def create_bpm_range_specs(
             (fixed_start, e, -1) for e in bpm_end_points
         ]
     else:
-        LOGGER.warning("Using cartesian product of BPM pairs for optimisation. This will create many more measurement combinations, which can provide stronger constraints but may be less robust to bad data.")
         # Cartesian product: every start with every end in both directions
         range_specs = [
             (s, e, sdir) for s in bpm_start_points for e in bpm_end_points for sdir in (1, -1)
         ]
-        LOGGER.warning(f"Created {len(range_specs)} BPM range specifications from {len(bpm_start_points)} start and {len(bpm_end_points)} end BPMs.")
 
     return range_specs

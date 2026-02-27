@@ -71,6 +71,7 @@ class ConfigurationManager:
 
         self.all_bpms = self.mad_iface.all_bpms
         self.bpms_in_range = self.mad_iface.bpms_in_range
+        LOGGER.warning(f"Total BPMs in model: {len(self.all_bpms)}, BPMs in specified range {self.magnet_range}: {len(self.bpms_in_range)}")
 
         self.start_bpms = [bpm for bpm in self.start_bpms if bpm in self.bpms_in_range]
         self.end_bpms = [bpm for bpm in self.end_bpms if bpm in self.bpms_in_range]
