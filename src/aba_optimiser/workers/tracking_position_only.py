@@ -133,8 +133,9 @@ class PositionOnlyTrackingWorker(TrackingWorker):
         self, results: dict[str, np.ndarray], batch: int
     ) -> tuple[np.ndarray, float]:
         """Compute weighted loss and gradients using position data only."""
-        wx = self.weights.x[batch]
-        wy = self.weights.y[batch]
+        bpm_mask = self.keep_bpm_mask.reshape(1, -1)
+        wx = self.weights.x[batch] * bpm_mask
+        wy = self.weights.y[batch] * bpm_mask
 
         residual_x = results["x"] - self.comparisons.x[batch]
         residual_y = results["y"] - self.comparisons.y[batch]
@@ -142,24 +143,39 @@ class PositionOnlyTrackingWorker(TrackingWorker):
         gx = np.einsum("pkm,pm->k", results["dx_dk"], wx * residual_x)
         gy = np.einsum("pkm,pm->k", results["dy_dk"], wy * residual_y)
 
-        loss_x = np.sum(wx * residual_x**2)
-        loss_y = np.sum(wy * residual_y**2)
+        loss_bpm = np.sum(wx * residual_x**2 + wy * residual_y**2, axis=0)
 
-        return 2.0 * (gx + gy), loss_x + loss_y
+        return 2.0 * (gx + gy), float(np.sum(loss_bpm))
+
+    def _compute_loss_and_bpm_contributions(
+        self, results: dict[str, np.ndarray], batch: int
+    ) -> tuple[float, np.ndarray]:
+        """Compute total and per-BPM loss contributions for position-only mode."""
+        bpm_mask = self.keep_bpm_mask.reshape(1, -1)
+        wx = self.weights.x[batch] * bpm_mask
+        wy = self.weights.y[batch] * bpm_mask
+
+        residual_x = results["x"] - self.comparisons.x[batch]
+        residual_y = results["y"] - self.comparisons.y[batch]
+
+        loss_bpm = np.sum(wx * residual_x**2 + wy * residual_y**2, axis=0)
+        return float(np.sum(loss_bpm)), loss_bpm
 
     def _send_hessian_weights(self, mad: MAD) -> None:
         """Send Hessian weights to MAD (position only, no momentum weights)."""
+        hmask = self.keep_bpm_mask.astype(np.float64)
         mad.send("""
 weights_x = python:recv()
 weights_y = python:recv()
 """)
-        mad.send(self.hessian_weight_x.tolist())
-        mad.send(self.hessian_weight_y.tolist())
+        mad.send((self.hessian_weight_x * hmask).tolist())
+        mad.send((self.hessian_weight_y * hmask).tolist())
 
     def run(self) -> None:
         """Main worker run loop with Hessian calculation."""
         self.conn.recv()
         knob_values, batch = self.conn.recv()
+        n_knobs = len(knob_values)
 
         mad, nbpms = self.setup_mad_interface(knob_values)
         self.send_initial_conditions(mad)
@@ -167,15 +183,36 @@ weights_y = python:recv()
 
         LOGGER.debug(f"Worker {self.worker_id}: Ready for position-only computation with {nbpms} BPMs")
 
-        while knob_values is not None:
-            grad, loss = self.compute_gradients_and_loss(mad, knob_values, batch)
-            self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
-            knob_values, batch = self.conn.recv()
+        message: tuple[dict[str, float] | None, int | None] | dict[str, object] = (
+            knob_values,
+            batch,
+        )
+        while True:
+            if isinstance(message, dict):
+                self._handle_control_command(mad, message, nbpms)
 
-        LOGGER.debug(f"Worker {self.worker_id}: Computing Hessian approximation (position-only)")
-        self._send_hessian_weights(mad)
-        mad.send(HESSIAN_SCRIPT_POS_ONLY.read_text())
-        self.conn.send(mad.recv())
+                message = self.conn.recv()
+                continue
+
+            knob_values, batch = message
+            if knob_values is None:
+                break
+
+            if self.worker_disabled:
+                self.conn.send((self.worker_id, np.zeros(n_knobs), 0.0))
+            else:
+                grad, loss = self.compute_gradients_and_loss(mad, knob_values, int(batch))
+                self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
+
+            message = self.conn.recv()
+
+        if self.worker_disabled:
+            self.conn.send(np.zeros((n_knobs, n_knobs)))
+        else:
+            LOGGER.debug(f"Worker {self.worker_id}: Computing Hessian approximation (position-only)")
+            self._send_hessian_weights(mad)
+            mad.send(HESSIAN_SCRIPT_POS_ONLY.read_text())
+            self.conn.send(mad.recv())
 
         LOGGER.debug(f"Worker {self.worker_id}: Terminating")
         del mad

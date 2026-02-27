@@ -78,16 +78,26 @@ class ConfigurationManager:
         # Accelerator-specific bend normalisation (no-op by default)
         self.bend_lengths = self.accelerator.get_bend_lengths(self.mad_iface)
 
-        # Use magnet_range to determine fixed start and end points
-        self.fixed_start, self.fixed_end = self.magnet_range.split("/", 1)
+        # When use_fixed_bpm is True we derive a fixed BPM window from magnet_range and
+        # store its start/end in fixed_start/fixed_end. When it is False we intentionally
+        # leave fixed_start/fixed_end at their default values (empty strings), which
+        # indicates to downstream code that no fixed BPM window should be enforced and
+        # that the active BPM range should instead be taken from start_bpms/end_bpms or
+        # other model-derived information.
+        if self.simulation_config.use_fixed_bpm:
+            # Use magnet_range to determine fixed start and end points
+            self.fixed_start, self.fixed_end = self.magnet_range.split("/", 1)
 
-        # Validate fixed points are in the model
-        if self.fixed_start not in self.bpms_in_range or self.fixed_end not in self.bpms_in_range:
-            LOGGER.warning(
-                f"Fixed BPMs from range {self.magnet_range} not found in model, using first available"
-            )
-            self.fixed_start = self.start_bpms[0] if self.start_bpms else self.fixed_start
-            self.fixed_end = self.end_bpms[0] if self.end_bpms else self.fixed_end
+            # Validate fixed points are in the model
+            if (
+                self.fixed_start not in self.bpms_in_range
+                or self.fixed_end not in self.bpms_in_range
+            ):
+                LOGGER.warning(
+                    f"Fixed BPMs from range {self.magnet_range} not found in model, using first available"
+                )
+                self.fixed_start = self.start_bpms[0] if self.start_bpms else self.fixed_start
+                self.fixed_end = self.end_bpms[0] if self.end_bpms else self.fixed_end
 
     @property
     def bpm_pairs(self) -> list[tuple[str, str]]:

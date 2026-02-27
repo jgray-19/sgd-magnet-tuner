@@ -163,6 +163,14 @@ class Controller(BaseController):
                 self.machine_deltaps,
             )
 
+            # Pre-loop diagnostics: mask BPM and worker outliers before optimisation
+            if self.simulation_config.enable_preloop_outlier_screening:
+                self.worker_manager.screen_initial_outliers(
+                    self.initial_knobs,
+                    bpm_sigma_threshold=self.simulation_config.bpm_loss_outlier_sigma,
+                    worker_sigma_threshold=self.simulation_config.worker_loss_outlier_sigma,
+                )
+
             # Clean up memory after workers are started
             self._cleanup_memory()
 

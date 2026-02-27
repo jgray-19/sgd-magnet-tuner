@@ -83,6 +83,20 @@ class SimulationConfig:
     # Logging level for worker processes (separate from main process)
     worker_logging_level: int = field(default=logging.WARNING)
 
+    # Pre-optimisation outlier screening.
+    # When enabled, workers are probed at the initial knob settings before the main
+    # optimisation loop starts. BPMs/workers whose losses have z-scores above the
+    # thresholds below are masked/disabled and excluded from subsequent fitting,
+    # which can make the optimisation more robust to obviously bad data or failing
+    # workers at the cost of using fewer measurements.
+    # You may want to disable this for debugging (to see raw behaviour of all
+    # BPMs/workers), for reproducibility/benchmarking against legacy runs that did
+    # not perform screening, or when working with very small datasets where
+    # discarding any measurements would overly weaken constraints.
+    enable_preloop_outlier_screening: bool = field(default=True)
+    bpm_loss_outlier_sigma: float = field(default=2.0)
+    worker_loss_outlier_sigma: float = field(default=2.0)
+
     # Computed fields
     total_tracks: int = field(init=False)
 

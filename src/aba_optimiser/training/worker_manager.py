@@ -115,6 +115,7 @@ class WorkerManager:
         self.debug = debug
         self.mad_logfile = mad_logfile
         self.optimise_knobs = optimise_knobs
+        self.worker_metadata: list[dict[str, object]] = []
 
     def _compute_pt(self, file_idx: int, machine_deltaps: list[float]) -> float:
         """Compute transverse momentum based on file index."""
@@ -218,6 +219,10 @@ class WorkerManager:
             LOGGER.warning(
                 f"Only {len(file_usage)}/{num_files} measurement files are being used by workers! "
                 f"This may lead to poor optimisation if different files have different deltap values."
+            )
+        if len(file_usage) == 0:
+            raise ValueError(
+                "No worker payloads were created; check your input data and batch configuration"
             )
 
         return payloads
@@ -478,6 +483,7 @@ class WorkerManager:
             worker_class = PositionOnlyTrackingWorker
             LOGGER.info("Using PositionOnlyTrackingWorker (position only)")
 
+        self.worker_metadata = []
         for worker_id, (data, config, _file_idx) in enumerate(payloads):
             parent, child = mp.Pipe()
             w = worker_class(child, worker_id, data, config, simulation_config, mode="arc-by-arc")
@@ -485,6 +491,179 @@ class WorkerManager:
             self.parent_conns.append(parent)
             self.workers.append(w)
             parent.send(None)
+            self.worker_metadata.append(
+                {
+                    "worker_id": worker_id,
+                    "start_bpm": config.start_bpm,
+                    "end_bpm": config.end_bpm,
+                    "sdir": config.sdir,
+                    "bpm_names": extract_bpm_range_names(
+                        self.all_bpms,
+                        config.start_bpm,
+                        config.end_bpm,
+                        config.sdir,
+                    ),
+                }
+            )
+
+    @staticmethod
+    def _compute_positive_z_scores(values: np.ndarray) -> np.ndarray:
+        """Compute positive-side z-scores; values below mean map to 0."""
+        v = np.asarray(values, dtype=np.float64)
+        finite = np.isfinite(v)
+        z = np.zeros_like(v, dtype=np.float64)
+        if finite.sum() < 2:
+            return z
+
+        mean = float(np.mean(v[finite]))
+        std = float(np.std(v[finite]))
+        if std <= 0.0:
+            return z
+
+        z_vals = (v - mean) / std
+        z[finite] = np.maximum(z_vals[finite], 0.0)
+        return z
+
+    def _request_worker_diagnostics(
+        self, initial_knobs: dict[str, float]
+    ) -> list[dict[str, object]]:
+        """Request diagnostics from all workers and return validated payloads."""
+        for conn in self.parent_conns:
+            conn.send({"cmd": "diagnostics", "knobs": initial_knobs})
+
+        diagnostics: list[dict[str, object]] = []
+        for conn in self.parent_conns:
+            result = conn.recv()
+            if not isinstance(result, dict):
+                raise RuntimeError(f"Unexpected diagnostics payload from worker: {type(result)}")
+            diagnostics.append(result)
+        return diagnostics
+
+    def _build_bpm_masks_from_diagnostics(
+        self,
+        diagnostics: list[dict[str, object]],
+        bpm_sigma_threshold: float,
+    ) -> tuple[list[np.ndarray], np.ndarray]:
+        """Build keep-masks from per-BPM losses and return adjusted worker losses."""
+        bpm_masks: list[np.ndarray] = []
+        adjusted_worker_losses: list[float] = []
+
+        for meta, diag in zip(self.worker_metadata, diagnostics, strict=True):
+            worker_id = int(diag["worker_id"])
+            bpm_names = list(meta["bpm_names"])
+            loss_per_bpm = np.asarray(diag["loss_per_bpm"], dtype=np.float64)
+            if loss_per_bpm.size != len(bpm_names):
+                raise RuntimeError(
+                    f"Worker {worker_id}: diagnostics size mismatch "
+                    f"({loss_per_bpm.size} losses vs {len(bpm_names)} BPMs)"
+                )
+
+            bpm_z = self._compute_positive_z_scores(loss_per_bpm)
+            keep_mask = np.ones(loss_per_bpm.shape[0], dtype=bool)
+            outlier_indices = np.where(bpm_z > bpm_sigma_threshold)[0]
+
+            for bpm_idx in outlier_indices:
+                keep_mask[bpm_idx] = False
+                LOGGER.warning(
+                    "Worker %d: loss at BPM %s is %.2f standard deviations away from the mean, ignoring for optimisation.",
+                    worker_id,
+                    bpm_names[bpm_idx],
+                    bpm_z[bpm_idx],
+                )
+
+            bpm_masks.append(keep_mask)
+            adjusted_worker_losses.append(float(np.sum(loss_per_bpm[keep_mask])))
+
+        return bpm_masks, np.asarray(adjusted_worker_losses, dtype=np.float64)
+
+    def _classify_worker_outliers(
+        self,
+        worker_losses: np.ndarray,
+        worker_sigma_threshold: float,
+    ) -> list[bool]:
+        """Identify high-loss worker outliers from adjusted worker losses."""
+        worker_z = self._compute_positive_z_scores(worker_losses)
+        worker_disabled: list[bool] = []
+
+        for idx, meta in enumerate(self.worker_metadata):
+            worker_id = int(meta["worker_id"])
+            start_bpm = str(meta["start_bpm"])
+            z_score = float(worker_z[idx])
+            disable = z_score > worker_sigma_threshold
+            worker_disabled.append(disable)
+            if disable:
+                LOGGER.warning(
+                    "Worker %d with starting BPM %s is %.2f standard deviations away from the mean, ignoring.",
+                    worker_id,
+                    start_bpm,
+                    z_score,
+                )
+
+        return worker_disabled
+
+    def _apply_screening_actions(
+        self,
+        bpm_masks: list[np.ndarray],
+        worker_disabled: list[bool],
+    ) -> None:
+        """Send mask/disable settings to workers and verify acknowledgements."""
+        for conn, keep_mask, disable in zip(
+            self.parent_conns, bpm_masks, worker_disabled, strict=True
+        ):
+            conn.send(
+                {
+                    "cmd": "apply_mask",
+                    "keep_bpm_mask": keep_mask.tolist(),
+                    "disable_worker": disable,
+                }
+            )
+
+        for conn in self.parent_conns:
+            ack = conn.recv()
+            if not isinstance(ack, dict) or ack.get("status") != "ok":
+                raise RuntimeError(f"Failed to apply worker mask settings: {ack}")
+
+    def screen_initial_outliers(
+        self,
+        initial_knobs: dict[str, float],
+        bpm_sigma_threshold: float = 2.0,
+        worker_sigma_threshold: float = 2.0,
+    ) -> None:
+        """Screen and mask outliers before optimisation starts.
+
+        Performs two checks using diagnostics evaluated at initial knobs:
+        1. Per-worker BPM losses: masks BPMs with z-score > bpm_sigma_threshold.
+        2. Per-worker total losses: disables workers with z-score > worker_sigma_threshold.
+        """
+        if not self.parent_conns:
+            LOGGER.warning("No workers available for pre-optimisation outlier screening")
+            return
+
+        LOGGER.info(
+            "Running pre-optimisation outlier screening (BPM=%.1fσ, worker=%.1fσ)",
+            bpm_sigma_threshold,
+            worker_sigma_threshold,
+        )
+
+        diagnostics = self._request_worker_diagnostics(initial_knobs)
+        bpm_masks, adjusted_worker_losses = self._build_bpm_masks_from_diagnostics(
+            diagnostics,
+            bpm_sigma_threshold,
+        )
+        worker_disabled = self._classify_worker_outliers(
+            adjusted_worker_losses,
+            worker_sigma_threshold,
+        )
+        self._apply_screening_actions(bpm_masks, worker_disabled)
+
+        n_masked_bpms = sum(int((~mask).sum()) for mask in bpm_masks)
+        n_disabled_workers = sum(worker_disabled)
+        LOGGER.info(
+            "Pre-optimisation screening complete: masked %d BPM entries across workers, disabled %d/%d workers",
+            n_masked_bpms,
+            n_disabled_workers,
+            len(self.parent_conns),
+        )
 
     def collect_worker_results(self, total_turns: int) -> tuple[float, np.ndarray]:
         """Collect results from all workers for an epoch.

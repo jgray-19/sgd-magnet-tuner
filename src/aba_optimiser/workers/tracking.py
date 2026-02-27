@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
@@ -139,6 +139,9 @@ class TrackingWorker(AbstractWorker[TrackingData]):
             raise ValueError("Precomputed weights must be provided for TrackingWorker")
         self._load_precomputed_weights(data.precomputed_weights, n_init)
         self._prepare_batches(init_coords, data.init_pts, num_batches)
+
+        self.worker_disabled = False
+        self.keep_bpm_mask = np.ones(self.comparisons.x[0].shape[1], dtype=bool)
 
         # Load MAD-NG tracking scripts
         self.run_track_script = TRACK_SCRIPT.read_text()
@@ -305,28 +308,7 @@ end
         Returns:
             Tuple of (gradient array, loss value)
         """
-        # Extract and update energy deviation
-        machine_pt = knob_updates.pop("pt", 0.0)
-
-        # Send knob updates to MAD-NG
-        update_commands = [f"MADX['{name}']:set0({val:.15e})" for name, val in knob_updates.items()]
-        mad.send("\n".join(update_commands))
-
-        # Set batch index (Lua uses 1-based indexing)
-        mad.send(f"batch = {batch + 1}")
-
-        # Update energy deviation for this batch
-        mad.send(f"""
-for i = 1, batch_size do
-    da_x0_c[batch][i].pt:set0({machine_pt:.15e} + init_pts[batch][i])
-end
-""")
-
-        # Run tracking
-        mad.send(self.run_track_script)
-
-        # Receive results symmetrically for all phase space dimensions
-        results = self._receive_tracking_results(mad)
+        results = self._run_tracking_batch(mad, knob_updates, batch)
 
         # Compute loss and gradients
         return self._compute_loss_and_gradients(results, batch)
@@ -377,6 +359,122 @@ end
             "dpy_dk": dpy_dk,
         }
 
+    def _run_tracking_batch(
+        self, mad: MAD, knob_updates: dict[str, float], batch: int
+    ) -> dict[str, np.ndarray]:
+        """Run MAD-NG tracking for a single batch and return all outputs."""
+        machine_pt = knob_updates.get("pt", 0.0)
+
+        update_commands = [
+            f"MADX['{name}']:set0({val:.15e})" for name, val in knob_updates.items() if name != "pt"
+        ]
+        if update_commands:
+            mad.send("\n".join(update_commands))
+
+        mad.send(f"batch = {batch + 1}")
+        mad.send(f"""
+for i = 1, batch_size do
+    da_x0_c[batch][i].pt:set0({machine_pt:.15e} + init_pts[batch][i])
+end
+""")
+        mad.send(self.run_track_script)
+        return self._receive_tracking_results(mad)
+
+    def _masked_phase_space_weights(
+        self, batch: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return batch weights with runtime BPM masking applied."""
+        bpm_mask = self.keep_bpm_mask.reshape(1, -1)
+        wx = self.weights.x[batch] * bpm_mask
+        wy = self.weights.y[batch] * bpm_mask
+        wpx = self.weights.px[batch] * bpm_mask
+        wpy = self.weights.py[batch] * bpm_mask
+        return wx, wy, wpx, wpy
+
+    def _compute_loss_and_bpm_contributions(
+        self, results: dict[str, np.ndarray], batch: int
+    ) -> tuple[float, np.ndarray]:
+        """Compute total loss and per-BPM contributions for one batch."""
+        wx, wy, wpx, wpy = self._masked_phase_space_weights(batch)
+
+        residual_x = results["x"] - self.comparisons.x[batch]
+        residual_y = results["y"] - self.comparisons.y[batch]
+        residual_px = results["px"] - self.comparisons.px[batch]
+        residual_py = results["py"] - self.comparisons.py[batch]
+
+        loss_bpm = np.sum(
+            wx * residual_x**2 + wy * residual_y**2 + wpx * residual_px**2 + wpy * residual_py**2,
+            axis=0,
+        )
+        return float(np.sum(loss_bpm)), loss_bpm
+
+    def compute_diagnostics(
+        self, mad: MAD, knob_updates: dict[str, float]
+    ) -> tuple[float, np.ndarray]:
+        """Compute total and per-BPM losses across all batches at current knobs."""
+        total_loss = 0.0
+        loss_per_bpm = np.zeros_like(self.keep_bpm_mask, dtype=np.float64)
+
+        for batch in range(self.num_batches):
+            results = self._run_tracking_batch(mad, knob_updates, batch)
+            batch_loss, batch_loss_bpm = self._compute_loss_and_bpm_contributions(results, batch)
+            total_loss += batch_loss
+            loss_per_bpm += batch_loss_bpm
+
+        return total_loss, loss_per_bpm
+
+    def _apply_runtime_mask(self, keep_bpm_mask: np.ndarray) -> None:
+        """Apply BPM keep-mask for subsequent optimisation and Hessian steps."""
+        if keep_bpm_mask.ndim != 1:
+            raise ValueError("keep_bpm_mask must be a 1D array")
+        if keep_bpm_mask.size != self.keep_bpm_mask.size:
+            raise ValueError(
+                f"Mask size mismatch for worker {self.worker_id}: "
+                f"expected {self.keep_bpm_mask.size}, got {keep_bpm_mask.size}"
+            )
+        self.keep_bpm_mask = keep_bpm_mask.astype(bool, copy=True)
+
+    def _handle_control_command(self, mad: MAD, command: dict[str, object], nbpms: int) -> None:
+        """Handle control-plane commands from parent process."""
+        cmd = command.get("cmd")
+        if cmd == "diagnostics":
+            raw_knobs = command.get("knobs", {})
+            if not isinstance(raw_knobs, dict):
+                raise ValueError(
+                    f"Worker {self.worker_id}: diagnostics command missing knob dictionary"
+                )
+            diagnostic_knobs: dict[str, float] = {}
+            for knob_name, knob_value in raw_knobs.items():
+                if not isinstance(knob_name, str):
+                    raise ValueError(
+                        f"Worker {self.worker_id}: knob name {knob_name!r} is not a string"
+                    )
+                if not isinstance(knob_value, int | float | np.floating):
+                    raise ValueError(
+                        f"Worker {self.worker_id}: knob {knob_name!r} has non-numeric value {knob_value!r}"
+                    )
+                diagnostic_knobs[knob_name] = float(knob_value)
+            total_loss, loss_per_bpm = self.compute_diagnostics(mad, diagnostic_knobs)
+            self.conn.send(
+                {
+                    "worker_id": self.worker_id,
+                    "total_loss": total_loss / nbpms,
+                    "loss_per_bpm": (loss_per_bpm / nbpms).tolist(),
+                }
+            )
+            return
+
+        if cmd == "apply_mask":
+            keep_bpm_mask = np.asarray(command.get("keep_bpm_mask", []), dtype=bool)
+            disable_worker = bool(command.get("disable_worker", False))
+            if keep_bpm_mask.size:
+                self._apply_runtime_mask(keep_bpm_mask)
+            self.worker_disabled = disable_worker
+            self.conn.send({"worker_id": self.worker_id, "status": "ok"})
+            return
+
+        raise ValueError(f"Worker {self.worker_id}: Unknown command {cmd}")
+
     def _compute_loss_and_gradients(
         self, results: dict[str, np.ndarray], batch: int
     ) -> tuple[np.ndarray, float]:
@@ -391,11 +489,8 @@ end
         Returns:
             Tuple of (gradient array, loss value)
         """
-        # Get weights and comparisons for this batch
-        wx = self.weights.x[batch]
-        wy = self.weights.y[batch]
-        wpx = self.weights.px[batch]
-        wpy = self.weights.py[batch]
+        # Get masked weights and comparisons for this batch
+        wx, wy, wpx, wpy = self._masked_phase_space_weights(batch)
 
         # Compute residuals symmetrically
         residual_x = results["x"] - self.comparisons.x[batch]
@@ -411,15 +506,10 @@ end
         gpy = np.einsum("pkm,pm->k", results["dpy_dk"], wpy * residual_py)
 
         # Compute loss (weighted sum of squared residuals)
-        loss_x = np.sum(wx * residual_x**2)
-        loss_y = np.sum(wy * residual_y**2)
-        loss_px = np.sum(wpx * residual_px**2)
-        loss_py = np.sum(wpy * residual_py**2)
+        loss, _ = self._compute_loss_and_bpm_contributions(results, batch)
 
         # Total gradient and loss (factor of 2 from derivative of squared residuals)
         grad = 2.0 * (gx + gy + gpx + gpy)
-        loss = loss_x + loss_y + loss_px + loss_py
-
         return grad, loss
 
     def run(self) -> None:
@@ -447,38 +537,51 @@ end
         computation_success = True
 
         # Main computation loop
-        while knob_values is not None:
-            try:
-                # Compute gradients and loss
-                grad, loss = self.compute_gradients_and_loss(mad, knob_values, batch)
+        message: tuple[dict[str, float] | None, int | None] | dict[str, object] = (
+            knob_values,
+            batch,
+        )
+        while True:
+            if isinstance(message, dict):
+                self._handle_control_command(mad, message, nbpms)
 
-                # Normalize and send results
-                self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
+                message = self.conn.recv()
+                continue
+
+            knob_values, batch = message
+            if knob_values is None:
+                break
+
+            try:
+                if self.worker_disabled:
+                    self.conn.send((self.worker_id, np.zeros(n_knobs), 0.0))
+                else:
+                    grad, loss = self.compute_gradients_and_loss(mad, knob_values, int(batch))
+                    self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
             except RuntimeError as e:
                 LOGGER.error(f"Worker {self.worker_id}: Error during computation: {e}")
-                # Send error signal to main process
                 zero_grad: np.ndarray = np.zeros(n_knobs)
                 self.conn.send((self.worker_id, zero_grad, float("inf")))
                 computation_success = False
                 break
 
-            # Wait for next knob values
-            knob_values, batch = self.conn.recv()
+            message = self.conn.recv()
 
         # Compute Hessian approximation only if computation was successful
-        if computation_success:
+        if computation_success and not self.worker_disabled:
             LOGGER.debug(f"Worker {self.worker_id}: Computing Hessian approximation")
             try:
+                hmask = self.keep_bpm_mask.astype(np.float64)
                 mad.send("""
 weights_x = python:recv()
 weights_px = python:recv()
 weights_y = python:recv()
 weights_py = python:recv()
 """)
-                mad.send(self.hessian_weight_x.tolist())
-                mad.send(self.hessian_weight_px.tolist())
-                mad.send(self.hessian_weight_y.tolist())
-                mad.send(self.hessian_weight_py.tolist())
+                mad.send((self.hessian_weight_x * hmask).tolist())
+                mad.send((self.hessian_weight_px * hmask).tolist())
+                mad.send((self.hessian_weight_y * hmask).tolist())
+                mad.send((self.hessian_weight_py * hmask).tolist())
                 mad.send(HESSIAN_SCRIPT.read_text())
                 h_part = mad.recv()
                 self.conn.send(h_part)  # shape (n_knobs, n_knobs)
