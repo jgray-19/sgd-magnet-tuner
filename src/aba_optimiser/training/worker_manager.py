@@ -544,10 +544,9 @@ class WorkerManager:
         self,
         diagnostics: list[dict[str, object]],
         bpm_sigma_threshold: float,
-    ) -> tuple[list[np.ndarray], np.ndarray]:
-        """Build keep-masks from per-BPM losses and return adjusted worker losses."""
+    ) -> list[np.ndarray]:
+        """Build keep-masks from per-BPM losses."""
         bpm_masks: list[np.ndarray] = []
-        adjusted_worker_losses: list[float] = []
 
         for meta, diag in zip(self.worker_metadata, diagnostics, strict=True):
             worker_id = int(diag["worker_id"])
@@ -573,9 +572,8 @@ class WorkerManager:
                 )
 
             bpm_masks.append(keep_mask)
-            adjusted_worker_losses.append(float(np.sum(loss_per_bpm[keep_mask])))
 
-        return bpm_masks, np.asarray(adjusted_worker_losses, dtype=np.float64)
+        return bpm_masks
 
     def _classify_worker_outliers(
         self,
@@ -587,8 +585,13 @@ class WorkerManager:
         worker_disabled: list[bool] = []
 
         for idx, meta in enumerate(self.worker_metadata):
-            worker_id = int(meta["worker_id"])
-            start_bpm = str(meta["start_bpm"])
+            worker_id_value = meta["worker_id"]
+            start_bpm_value = meta["start_bpm"]
+            if not isinstance(worker_id_value, int) or not isinstance(start_bpm_value, str):
+                raise RuntimeError(f"Invalid worker metadata at index {idx}: {meta}")
+
+            worker_id = worker_id_value
+            start_bpm = start_bpm_value
             z_score = float(worker_z[idx])
             disable = z_score > worker_sigma_threshold
             worker_disabled.append(disable)
@@ -647,13 +650,20 @@ class WorkerManager:
         )
 
         diagnostics = self._request_worker_diagnostics(initial_knobs)
-        bpm_masks, adjusted_worker_losses = self._build_bpm_masks_from_diagnostics(
-            diagnostics,
-            bpm_sigma_threshold,
+        worker_losses = np.asarray(
+            [
+                float(np.sum(np.asarray(diag["loss_per_bpm"], dtype=np.float64)))
+                for diag in diagnostics
+            ],
+            dtype=np.float64,
         )
         worker_disabled = self._classify_worker_outliers(
-            adjusted_worker_losses,
+            worker_losses,
             worker_sigma_threshold,
+        )
+        bpm_masks = self._build_bpm_masks_from_diagnostics(
+            diagnostics,
+            bpm_sigma_threshold,
         )
         self._apply_screening_actions(bpm_masks, worker_disabled)
 
