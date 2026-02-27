@@ -84,6 +84,7 @@ class BaseController(ABC):
         bpm_start_points, bpm_end_points = filter_bad_bpms(
             bpm_start_points, bpm_end_points, bad_bpms
         )
+        LOGGER.warning(f"After filtering bad BPMs, using BPM start points: {bpm_start_points}, end points: {bpm_end_points}")
 
         # Initialize configuration manager
         self.config_manager = ConfigurationManager(

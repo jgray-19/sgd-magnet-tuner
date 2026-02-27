@@ -145,6 +145,8 @@ def optimise_ranges(
             tune_knobs_files=tune_knobs_file,
         )
 
+        logger.warning(f"Found the start and end BPMs for this range: {range_config.bpm_starts[i]} to {range_config.bpm_end_points[i]}")
+
         controller = Controller(
             accelerator,
             optimiser_config,
