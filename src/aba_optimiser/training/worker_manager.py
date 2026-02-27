@@ -583,6 +583,7 @@ class WorkerManager:
         """Identify high-loss worker outliers from adjusted worker losses."""
         worker_z = self._compute_positive_z_scores(worker_losses)
         worker_disabled: list[bool] = []
+        n_disabled = 0
 
         for idx, meta in enumerate(self.worker_metadata):
             worker_id_value = meta["worker_id"]
@@ -596,12 +597,21 @@ class WorkerManager:
             disable = z_score > worker_sigma_threshold
             worker_disabled.append(disable)
             if disable:
+                n_disabled += 1
                 LOGGER.warning(
                     "Worker %d with starting BPM %s is %.2f standard deviations away from the mean, ignoring.",
                     worker_id,
                     start_bpm,
                     z_score,
                 )
+
+        if n_disabled == 0:
+            max_z = float(np.max(worker_z)) if worker_z.size else 0.0
+            LOGGER.warning(
+                "Worker outlier screening: no workers exceeded threshold %.2fσ (max z-score %.2f).",
+                worker_sigma_threshold,
+                max_z,
+            )
 
         return worker_disabled
 
@@ -650,15 +660,17 @@ class WorkerManager:
         )
 
         diagnostics = self._request_worker_diagnostics(initial_knobs)
-        worker_losses = np.asarray(
-            [
-                float(np.sum(np.asarray(diag["loss_per_bpm"], dtype=np.float64)))
-                for diag in diagnostics
-            ],
-            dtype=np.float64,
-        )
+        worker_losses: list[float] = []
+        for idx, diag in enumerate(diagnostics):
+            total_loss_raw = diag.get("total_loss")
+            if not isinstance(total_loss_raw, int | float | np.floating):
+                raise RuntimeError(
+                    f"Worker diagnostics at index {idx} missing numeric total_loss: {diag}"
+                )
+            worker_losses.append(float(total_loss_raw))
+
         worker_disabled = self._classify_worker_outliers(
-            worker_losses,
+            np.asarray(worker_losses, dtype=np.float64),
             worker_sigma_threshold,
         )
         bpm_masks = self._build_bpm_masks_from_diagnostics(
@@ -669,7 +681,7 @@ class WorkerManager:
 
         n_masked_bpms = sum(int((~mask).sum()) for mask in bpm_masks)
         n_disabled_workers = sum(worker_disabled)
-        LOGGER.info(
+        LOGGER.warning(
             "Pre-optimisation screening complete: masked %d BPM entries across workers, disabled %d/%d workers",
             n_masked_bpms,
             n_disabled_workers,
