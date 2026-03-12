@@ -5,7 +5,6 @@ Plotting utilities for the ABA optimiser results.
 from __future__ import annotations
 
 import logging
-import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,7 +28,7 @@ MB_COLOUR = "#2ca02c"  # tab:green (fallback)
 MQ_COLOUR = "#1f77b4"  # tab:blue (fallback)
 MS_COLOUR = "#ff7f0e"  # tab:orange (fallback)
 
-# Distinct colors per (series × family)
+# Distinct colors per (series x family)
 MB_TRUE_COLOUR = "#2ca02c"  # tab:green
 MB_FINAL_COLOUR = "#98df8a"  # tab:lightgreen
 MQ_TRUE_COLOUR = "#1f77b4"  # tab:blue
@@ -68,9 +67,6 @@ def _generate_family_colors_from_accelerator(
 
     families = sorted(families)
     n_families = len(families)
-
-    # Generate colors using matplotlib's color cycle
-    import matplotlib.cm as cm
 
     tab10 = plt.get_cmap("tab10")
     base_colors = [tab10(i / max(1, n_families - 1)) for i in range(n_families)]
@@ -117,6 +113,11 @@ def _prepare_plot_data(final_vals, true_vals, uncertainties, initial_vals, plot_
     baseline = initial_vals if initial_vals is not None else true_vals
     baseline_abs = np.abs(baseline)
     zero_mask = baseline_abs == 0
+    if all(zero_mask) and not plot_real:
+        LOGGER.warning(
+            "All baseline values are zero: relative difference undefined. Plotting raw values instead."
+        )
+        plot_real = True
 
     if plot_real:
         final_plot = np.asarray(final_vals)
@@ -129,7 +130,7 @@ def _prepare_plot_data(final_vals, true_vals, uncertainties, initial_vals, plot_
         final_plot *= 1e4
         uncertainties_on_plot *= 1e4
         if any(zero_mask):
-            warnings.warn(
+            LOGGER.warning(
                 "Some baseline elements are zero: relative difference undefined for those indices."
             )
             final_plot = np.where(zero_mask, np.nan, final_plot)
@@ -142,15 +143,43 @@ def _prepare_plot_data(final_vals, true_vals, uncertainties, initial_vals, plot_
     return final_plot, true_plot, uncertainties_on_plot, baseline, zero_mask
 
 
-def _compute_y_top(final_vals, baseline, zero_mask, plot_real):
-    if plot_real:
-        top = np.ceil(np.max(final_vals)) * 1.1
-    else:
-        final_diff = np.abs(final_vals - baseline) / np.abs(baseline)
-        final_diff = np.where(zero_mask, np.nan, final_diff)
-        final_diff *= 1e4
-        top = np.ceil(np.nanmax(final_diff)) * 1.1
-    return top
+def _compute_y_limits(
+    values: list[np.ndarray],
+    errors: np.ndarray | None = None,
+    *,
+    include_zero: bool = True,
+) -> tuple[float, float]:
+    finite_values = []
+    for arr in values:
+        arr_np = np.asarray(arr, dtype=float)
+        finite = arr_np[np.isfinite(arr_np)]
+        if finite.size:
+            finite_values.append(finite)
+
+    if not finite_values:
+        return (0.0, 1.0)
+
+    y_min = float(min(np.min(arr) for arr in finite_values))
+    y_max = float(max(np.max(arr) for arr in finite_values))
+
+    if errors is not None:
+        err = np.asarray(errors, dtype=float)
+        err = np.where(np.isfinite(err), np.abs(err), 0.0)
+        base = np.asarray(values[0], dtype=float)
+        upper = base + err
+        upper_finite = upper[np.isfinite(upper)]
+        if upper_finite.size:
+            y_max = max(y_max, float(np.max(upper_finite)))
+
+    if include_zero:
+        y_min = min(y_min, 0.0)
+
+    if y_max <= y_min:
+        span = max(abs(y_max), 1.0)
+        return (y_min - 0.1 * span, y_max + 0.1 * span)
+
+    margin = 0.08 * (y_max - y_min)
+    return (y_min - margin, y_max + margin)
 
 
 def _save_plot(fig, save_path, dpi):
@@ -192,6 +221,14 @@ def _get_family_colors_and_masks(magnet_names, accelerator: Accelerator | None =
     return families, true_colours, final_colours, is_mq, is_ms, is_mb
 
 
+def _ordered_unique_families(families: list[str]) -> list[str]:
+    preferred_order = ["MQ", "MS", "MB"]
+    present = set(families)
+    ordered = [fam for fam in preferred_order if fam in present]
+    ordered.extend([fam for fam in sorted(present) if fam not in preferred_order])
+    return ordered
+
+
 def plot_strengths_comparison(
     magnet_names: list[str],
     final_vals: np.ndarray,
@@ -218,6 +255,8 @@ def plot_strengths_comparison(
 
     n = _validate_inputs(magnet_names, final_vals, true_vals, uncertainties, initial_vals)
 
+    LOGGER.info(f"Plotting strengths comparison for {n} magnets")
+
     families, true_colours, final_colours, _, _, _ = _get_family_colors_and_masks(
         magnet_names, accelerator
     )
@@ -225,6 +264,7 @@ def plot_strengths_comparison(
     final_plot, true_plot, uncertainties_on_plot, baseline, zero_mask = _prepare_plot_data(
         final_vals, true_vals, uncertainties, initial_vals, plot_real
     )
+    plot_real = plot_real or all(zero_mask)  # Force raw plotting if baseline is all zeros
 
     x = np.arange(n)
 
@@ -304,44 +344,66 @@ def plot_strengths_comparison(
     ax.set_xticks(x)
     ax.set_xticklabels(magnet_names, rotation=45, ha="right")
 
-    # Y limit based on initial or true diff (keeps your original behavior)
-    top = _compute_y_top(final_vals, baseline, zero_mask, plot_real)
-    ax.set_ylim(top=top, bottom=0)
+    y_series = [final_plot]
+    if initial_vals is not None or plot_real:
+        y_series.append(true_plot)
+    y_bottom, y_top = _compute_y_limits(y_series, uncertainties_on_plot if show_errorbars else None)
+    ax.set_ylim(bottom=y_bottom, top=y_top)
 
     # Legend: True as line, Finals as bars
-    unique_families = set(families)
-    legend_handles = [
-        Line2D(
-            [0],
-            [0],
-            color="red",
-            linestyle="--",
-            linewidth=2,
-            marker="o",
-            markersize=5,
-            label="True",
-        ),
-    ]
+    unique_families = _ordered_unique_families(families)
+    legend_handles = []
 
+    true_colors_dict: dict[str, str]
+    final_colors_dict: dict[str, str]
     if accelerator is not None:
         true_colors_dict, final_colors_dict = _generate_family_colors_from_accelerator(accelerator)
-        for fam in sorted(unique_families):
+    else:
+        true_colors_dict, final_colors_dict = TRUE_COLOURS, FINAL_COLOURS
+
+    if initial_vals is not None:
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color="red",
+                linestyle="--",
+                linewidth=2,
+                marker="o",
+                markersize=5,
+                label="True",
+            )
+        )
+        for fam in unique_families:
             if fam in final_colors_dict:
                 legend_handles.append(
                     Patch(
-                        facecolor=final_colors_dict[fam],
-                        edgecolor="black",
-                        label=f"{fam} • Estimate",
+                        facecolor=final_colors_dict[fam], edgecolor="black", label=f"{fam} • Final"
+                    )
+                )
+    elif plot_real:
+        for fam in unique_families:
+            if fam in true_colors_dict:
+                legend_handles.append(
+                    Patch(facecolor=true_colors_dict[fam], edgecolor="black", label=f"{fam} • True")
+                )
+            if fam in final_colors_dict:
+                legend_handles.append(
+                    Patch(
+                        facecolor=final_colors_dict[fam], edgecolor="black", label=f"{fam} • Final"
                     )
                 )
     else:
-        # Fallback to hardcoded families
-        for fam in ["MQ", "MS", "MB"]:
-            if fam in unique_families:
-                colour = {"MQ": MQ_FINAL_COLOUR, "MS": MS_FINAL_COLOUR, "MB": MB_FINAL_COLOUR}[fam]
+        for fam in unique_families:
+            if fam in final_colors_dict:
                 legend_handles.append(
-                    Patch(facecolor=colour, edgecolor="black", label=f"{fam} • Estimate")
+                    Patch(
+                        facecolor=final_colors_dict[fam], edgecolor="black", label=f"{fam} • Final"
+                    )
                 )
+
+    if legend_handles:
+        ax.legend(handles=legend_handles, title="Legend", loc="upper right")
 
     ax.margins(x=0.01)
     ax.tick_params(axis="x", labelsize=12)
@@ -381,8 +443,17 @@ def plot_strengths_vs_position(
         elem_spos, final_vals, true_vals, uncertainties, initial_vals, magnet_names
     )
 
+    LOGGER.info(f"Plotting strengths vs position for {n} elements")
+
     # Ensure numpy arrays for boolean mask indexing (elem_spos may be a list)
     spos_arr = np.asarray(elem_spos)
+
+    true_colors_dict: dict[str, str]
+    final_colors_dict: dict[str, str]
+    if accelerator is not None:
+        true_colors_dict, final_colors_dict = _generate_family_colors_from_accelerator(accelerator)
+    else:
+        true_colors_dict, final_colors_dict = TRUE_COLOURS, FINAL_COLOURS
 
     if magnet_names is not None:
         families, _, _, is_mq, is_ms, is_mb = _get_family_colors_and_masks(
@@ -394,6 +465,7 @@ def plot_strengths_vs_position(
     final_plot, true_plot, uncertainties_on_plot, baseline, zero_mask = _prepare_plot_data(
         final_vals, true_vals, uncertainties, initial_vals, plot_real
     )
+    plot_real = plot_real or all(zero_mask)  # Force raw plotting if baseline is all zeros
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
@@ -443,12 +515,12 @@ def plot_strengths_vs_position(
         # TRUE and FINAL relative to INITIAL (or raw if plot_real)
         if magnet_names is not None:
             # Plot MQ, then MS, then MB to get per-family colors + series markers
-            _plot_subset(is_mq, MQ_TRUE_COLOUR, "MQ • True", "True")
-            _plot_subset(is_ms, MS_TRUE_COLOUR, "MS • True", "True")
-            _plot_subset(is_mb, MB_TRUE_COLOUR, "MB • True", "True")
-            _plot_subset(is_mq, MQ_FINAL_COLOUR, "MQ • Final", "Final")
-            _plot_subset(is_ms, MS_FINAL_COLOUR, "MS • Final", "Final")
-            _plot_subset(is_mb, MB_FINAL_COLOUR, "MB • Final", "Final")
+            _plot_subset(is_mq, true_colors_dict.get("MQ", "#808080"), "MQ • True", "True")
+            _plot_subset(is_ms, true_colors_dict.get("MS", "#808080"), "MS • True", "True")
+            _plot_subset(is_mb, true_colors_dict.get("MB", "#808080"), "MB • True", "True")
+            _plot_subset(is_mq, final_colors_dict.get("MQ", "#808080"), "MQ • Final", "Final")
+            _plot_subset(is_ms, final_colors_dict.get("MS", "#808080"), "MS • Final", "Final")
+            _plot_subset(is_mb, final_colors_dict.get("MB", "#808080"), "MB • Final", "Final")
         else:
             # Single color fallback
             _plot_subset(np.ones(n, dtype=bool), MQ_TRUE_COLOUR, "True", "True")
@@ -458,27 +530,29 @@ def plot_strengths_vs_position(
         if plot_real:
             # Show both True and Final also when no initial (as in your original)
             if magnet_names is not None:
-                _plot_subset(is_mq, MQ_TRUE_COLOUR, "MQ • True", "True")
-                _plot_subset(is_ms, MS_TRUE_COLOUR, "MS • True", "True")
-                _plot_subset(is_mb, MB_TRUE_COLOUR, "MB • True", "True")
-                _plot_subset(is_mq, MQ_FINAL_COLOUR, "MQ • Final", "Final")
-                _plot_subset(is_ms, MS_FINAL_COLOUR, "MS • Final", "Final")
-                _plot_subset(is_mb, MB_FINAL_COLOUR, "MB • Final", "Final")
+                _plot_subset(is_mq, true_colors_dict.get("MQ", "#808080"), "MQ • True", "True")
+                _plot_subset(is_ms, true_colors_dict.get("MS", "#808080"), "MS • True", "True")
+                _plot_subset(is_mb, true_colors_dict.get("MB", "#808080"), "MB • True", "True")
+                _plot_subset(is_mq, final_colors_dict.get("MQ", "#808080"), "MQ • Final", "Final")
+                _plot_subset(is_ms, final_colors_dict.get("MS", "#808080"), "MS • Final", "Final")
+                _plot_subset(is_mb, final_colors_dict.get("MB", "#808080"), "MB • Final", "Final")
             else:
                 _plot_subset(np.ones(n, dtype=bool), MQ_TRUE_COLOUR, "True", "True")
                 _plot_subset(np.ones(n, dtype=bool), MQ_FINAL_COLOUR, "Final", "Final")
         else:
             # Final only
             if magnet_names is not None:
-                _plot_subset(is_mq, MQ_FINAL_COLOUR, "MQ • Final", "Final")
-                _plot_subset(is_ms, MS_FINAL_COLOUR, "MS • Final", "Final")
-                _plot_subset(is_mb, MB_FINAL_COLOUR, "MB • Final", "Final")
+                _plot_subset(is_mq, final_colors_dict.get("MQ", "#808080"), "MQ • Final", "Final")
+                _plot_subset(is_ms, final_colors_dict.get("MS", "#808080"), "MS • Final", "Final")
+                _plot_subset(is_mb, final_colors_dict.get("MB", "#808080"), "MB • Final", "Final")
             else:
                 _plot_subset(np.ones(n, dtype=bool), MQ_FINAL_COLOUR, "Final", "Final")
 
-    # Y limit when initial provided (keeps original behavior)
-    top = _compute_y_top(final_vals, baseline, zero_mask, plot_real)
-    ax.set_ylim(top=top, bottom=0)
+    y_series = [final_plot]
+    if initial_vals is not None or plot_real:
+        y_series.append(true_plot)
+    y_bottom, y_top = _compute_y_limits(y_series, uncertainties_on_plot if show_errorbars else None)
+    ax.set_ylim(bottom=y_bottom, top=y_top)
 
     ax.set_xlabel("Element Position [m]")
     if plot_real:
@@ -488,61 +562,31 @@ def plot_strengths_vs_position(
 
     if magnet_names is not None:
         assert families is not None
-        unique_families = set(families)
+        unique_families = _ordered_unique_families(families)
         handles = []
 
-        if accelerator is not None:
-            true_colors_dict, final_colors_dict = _generate_family_colors_from_accelerator(
-                accelerator
-            )
-            for fam in sorted(unique_families):
-                if fam in true_colors_dict and fam in final_colors_dict:
-                    handles.append(
-                        Line2D(
-                            [0],
-                            [0],
-                            marker="s",
-                            linestyle="None",
-                            color=true_colors_dict[fam],
-                            label=f"{fam} • True",
-                        )
+        for fam in unique_families:
+            if fam in true_colors_dict and fam in final_colors_dict:
+                handles.append(
+                    Line2D(
+                        [0],
+                        [0],
+                        marker="s",
+                        linestyle="None",
+                        color=true_colors_dict[fam],
+                        label=f"{fam} • True",
                     )
-                    handles.append(
-                        Line2D(
-                            [0],
-                            [0],
-                            marker="o",
-                            linestyle="None",
-                            color=final_colors_dict[fam],
-                            label=f"{fam} • Final",
-                        )
+                )
+                handles.append(
+                    Line2D(
+                        [0],
+                        [0],
+                        marker="o",
+                        linestyle="None",
+                        color=final_colors_dict[fam],
+                        label=f"{fam} • Final",
                     )
-        else:
-            # Fallback to hardcoded families
-            for fam in ["MQ", "MS", "MB"]:
-                if fam in unique_families:
-                    true_color = TRUE_COLOURS[fam]
-                    final_color = FINAL_COLOURS[fam]
-                    handles.append(
-                        Line2D(
-                            [0],
-                            [0],
-                            marker="s",
-                            linestyle="None",
-                            color=true_color,
-                            label=f"{fam} • True",
-                        )
-                    )
-                    handles.append(
-                        Line2D(
-                            [0],
-                            [0],
-                            marker="o",
-                            linestyle="None",
-                            color=final_color,
-                            label=f"{fam} • Final",
-                        )
-                    )
+                )
         ax.legend(handles=handles, title="Legend", loc="upper right")
     else:
         handles = [
@@ -591,6 +635,8 @@ def plot_deltap_comparison(
         plt.style.use(style)
     # Make a wider figure so legend can sit above the bar without overlapping
     fig, ax = plt.subplots(figsize=(5.5, 6))
+
+    LOGGER.info("Plotting deltap comparison")
 
     x = [0]
     labels = ["Estimated"]

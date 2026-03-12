@@ -1,3 +1,5 @@
+"""Shared plotting helpers for figure styling and interactive display."""
+
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
@@ -42,4 +44,5 @@ def setup_scientific_formatting(
 
 
 def show_plots():
+    """Display all queued matplotlib figures."""
     plt.show()

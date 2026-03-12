@@ -4,5 +4,5 @@ The package bundles configuration helpers, optimiser implementations, and
 simulation orchestrators for magnet knob tuning studies.
 """
 
-# Importing * is a bad practice and you should be punished for using it
+# The top-level package intentionally does not re-export a large symbol surface.
 __all__ = []
