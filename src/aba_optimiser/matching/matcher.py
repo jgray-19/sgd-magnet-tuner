@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from aba_optimiser.accelerators import LHC, SPS
 from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 if TYPE_CHECKING:
@@ -71,6 +72,7 @@ class BetaMatcher:
 
         # Load the estimated quadrupole strengths using config.get_estimated_strengths()
         self.estimated_strengths = self.config.get_estimated_strengths()
+        self.accelerator = self._build_accelerator_from_config()
 
         logger.info("Initialising BetaMatcher")
         logger.info(f"  Target model twiss: {config.model_twiss_file}")
@@ -506,14 +508,8 @@ end
 
         logger.info("Initialising MAD-NG interface for beta matching")
 
-        # Create MAD interface
-        self.mad_interface = AbaMadInterface()
-
-        # Load sequence
-        self.mad_interface.load_sequence(self.config.sequence_file_path, self.config.seq_name)
-
-        # Set up beam
-        self.mad_interface.setup_beam(self.config.beam_energy)
+        # AbaMadInterface eagerly loads sequence and sets up beam from accelerator.
+        self.mad_interface = AbaMadInterface(accelerator=self.accelerator)
 
         # Observe the bpms
         self.mad_interface.observe_elements()
@@ -535,6 +531,24 @@ end
         self.cached_derivatives = None
         self.cached_loss = None
 
+    def _build_accelerator_from_config(self) -> LHC | SPS:
+        """Build an accelerator instance from matcher configuration."""
+        seq_name = str(getattr(self.config, "seq_name", "") or "").lower()
+        seq_file = self.config.sequence_file_path
+        beam_energy = self.config.beam_energy
+
+        if "sps" in seq_name or "sps" in seq_file.stem.lower():
+            return SPS(
+                sequence_file=seq_file,
+                beam_energy=beam_energy,
+            )
+
+        beam = 2 if "b2" in seq_name else 1
+        return LHC(
+            beam=beam,
+            sequence_file=seq_file,
+            beam_energy=beam_energy,
+        )
 
     def _get_bpm_list(self) -> list[str]:
         """Get list of BPM names in the magnet range.

@@ -39,7 +39,6 @@ class MatcherConfig:
     tune_knobs: dict[str, float]
     sequence_file_path: Path
     magnet_range: str
-    seq_name: str
     beam_energy: float = 6800.0
     output_dir: Path | None = None
     # knob_limits: dict[str, tuple[float, float]] | None = None
