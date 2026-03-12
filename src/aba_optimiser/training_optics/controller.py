@@ -13,7 +13,7 @@ from omc3.optics_measurements.constants import PHASE_ADV
 from tmom_recon import build_twiss_from_measurements
 
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
-from aba_optimiser.mad import get_mad_interface
+from aba_optimiser.mad import GradientDescentMadInterface
 from aba_optimiser.training.base_controller import BaseController
 from aba_optimiser.training.utils import extract_bpm_range_names
 from aba_optimiser.training.worker_lifecycle import WorkerLifecycleManager
@@ -143,11 +143,14 @@ class OpticsController(BaseController):
             [(data, config, self.simulation_config) for config, data in self.worker_payloads],
             send_handshake=True,
         )
+        channels = worker_manager.channels
+        if channels is None:
+            raise RuntimeError("Worker channels are not initialised")
 
         # Run optimisation
         self.final_knobs = self.optimisation_loop.run_optimisation(
             self.initial_knobs,
-            worker_manager.parent_conns,
+            channels,
             writer,
             run_start=time.time(),
             total_turns=1,
@@ -348,7 +351,7 @@ def create_worker_payloads(
             init_bpm = start_bpm if sdir == 1 else end_bpm
 
             # Get all BPMs in the sequence for range extraction
-            temp_mad = get_mad_interface(accelerator)(
+            temp_mad = GradientDescentMadInterface(
                 accelerator,
                 magnet_range=template_config.magnet_range,
                 bpm_range=f"{start_bpm}/{end_bpm}",

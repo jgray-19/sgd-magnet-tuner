@@ -18,8 +18,6 @@ from pymadng_utils.io.utils import save_knobs
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig
-from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
-from aba_optimiser.simulation.optics import perform_orbit_correction
 from aba_optimiser.training.controller_config import SequenceConfig
 from aba_optimiser.training_optics import OpticsController
 
@@ -41,7 +39,6 @@ TRACK_COLUMNS = (
     "var_y",
     "var_px",
     "var_py",
-    "kick_plane",
 )
 
 
@@ -64,20 +61,17 @@ def _generate_fake_measurement(
     magnet_strengths = {}
     magnet_type = ("q" if perturb_quads else "") + ("d" if perturb_bends else "")
     if magnet_type:
-        magnet_strengths, _ = apply_magnet_perturbations(
-            interface.mad,
-            rel_k1_std_dev=1e-4,
+        magnet_strengths, _ = interface.apply_magnet_perturbations(
+            rel_error=1e-4,
             seed=42,
             magnet_type=magnet_type,
         )
 
-    matched_tunes = perform_orbit_correction(
-        mad=interface.mad,
+    matched_tunes = interface.perform_orbit_correction(
         machine_deltap=dpp_value,
         target_qx=0.28,
         target_qy=0.31,
         corrector_file=corrector_file,
-        beam=1,
     )
     # Read corrector table
     corrector_table = tfs.read(corrector_file)
@@ -113,7 +107,7 @@ def _generate_fake_measurement(
 def test_controller_opt(
     tmp_path: Path,
     seq_b1: Path,
-    loaded_interface_with_beam: AbaMadInterface,
+    loaded_interface: AbaMadInterface,
     model_dir_b1: Path,
 ) -> None:
     """Test that the controller initializes correctly with custom num_tracks and flattop_turns."""
@@ -122,7 +116,7 @@ def test_controller_opt(
     corrector_file, magnet_strengths, tune_knobs_file, analysis_dir = _generate_fake_measurement(
         tmp_path,
         model_dir_b1,
-        loaded_interface_with_beam,
+        loaded_interface,
         6600,
         0e-4,
         magnet_range,

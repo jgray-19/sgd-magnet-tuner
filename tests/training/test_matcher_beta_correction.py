@@ -13,6 +13,7 @@ import tfs
 
 pytest.importorskip("tmom_recon")
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 from aba_optimiser.matching.matcher import BetaMatcher
 from aba_optimiser.matching.matcher_config import MatcherConfig
@@ -74,30 +75,27 @@ def _plot_beta_beating_comparison(
     print(f"Beta beating plot saved to: {plot_file}")
     plt.show()
 
-@pytest.mark.skip  # for now
+# @pytest.mark.skip  # for now
 @pytest.mark.slow
 def test_matcher_beta_correction(
     tmp_path: Path,
     seq_b1: Path,
     estimated_strengths_file: Path,
-    loaded_interface_with_beam: AbaMadInterface,
+    loaded_interface: AbaMadInterface,
 ) -> None:
     """Test beta matching using estimated quadrupole strengths from controller."""
     # Generate model with errors for validation (same setup as controller)
     corrector_file = tmp_path / "corrector_track_off_magnet.tfs"
     magnet_strengths, matched_tunes, _ = generate_model_with_errors(
-        loaded_interface_with_beam,
-        sequence_file=seq_b1,
+        loaded_interface,
         dpp_value=0,
-        magnet_range="$start/$end",
         corrector_file=corrector_file,
-        beam=1,
         perturb_quads=True,
         perturb_bends=True,
     )
     # Select only BPMs from the twiss with errors
-    loaded_interface_with_beam.observe_elements()
-    twiss_errs = loaded_interface_with_beam.run_twiss(observe=1)  # Observe all elements
+    loaded_interface.observe_elements()
+    twiss_errs = loaded_interface.run_twiss(observe=1)  # Observe all elements
 
     # Read estimated strengths from file (written by test_quad_conv_with_errs)
     if not estimated_strengths_file.exists():
@@ -146,7 +144,6 @@ def test_matcher_beta_correction(
         knobs_list=knobs_list,
         tune_knobs=matched_tunes,
         sequence_file_path=seq_b1,
-        seq_name="lhcb1",
         magnet_range="$start/$end",
         beam_energy=6800,
         output_dir=tmp_path / "matcher_output",
@@ -162,16 +159,14 @@ def test_matcher_beta_correction(
 
     # Compute twiss with estimated strengths + final knobs using AbaMadInterface
     # This includes both beta and tune knobs
-    new_interface = AbaMadInterface()
-    new_interface.load_sequence(seq_b1, "lhcb1")
-    new_interface.setup_beam(beam_energy=6800)
+    new_interface = AbaMadInterface(accelerator=LHC(beam=1, sequence_file=seq_b1))
     new_interface.set_magnet_strengths(all_estimates)  # Apply estimated strengths
     new_interface.set_madx_variables(**final_knobs)  # Apply correction knobs
     new_interface.observe_elements()
     tws_corrected = new_interface.run_twiss(observe=1)  # Observe
     # If you want to test if the estimated strengths actually allow beta beating correction, use this.
-    loaded_interface_with_beam.set_madx_variables(**final_knobs)
-    tws_corrected = loaded_interface_with_beam.run_twiss(observe=1)  # Observe all elements
+    loaded_interface.set_madx_variables(**final_knobs)
+    tws_corrected = loaded_interface.run_twiss(observe=1)  # Observe all elements
 
     # print the stats on the x and y column of tws_corrected
     print("Twiss Corrected Stats:")
