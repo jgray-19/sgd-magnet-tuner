@@ -48,13 +48,24 @@ autodoc_default_options = {
     "show-inheritance": True,
 }
 autodoc_typehints = "description"
-napoleon_google_docstring = False
+napoleon_google_docstring = True
 napoleon_numpy_docstring = True
 napoleon_use_param = False
 napoleon_use_rtype = False
 
 templates_path = ["_templates"]
-exclude_patterns: list[str] = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns: list[str] = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    "_autosummary/aba_optimiser.rst",
+    "_autosummary/aba_optimiser.accelerators.rst",
+    "_autosummary/aba_optimiser.mad.rst",
+    "_autosummary/aba_optimiser.optimisers.rst",
+    "_autosummary/aba_optimiser.training.rst",
+    "_autosummary/aba_optimiser.training_optics.rst",
+    "_autosummary/aba_optimiser.workers.rst",
+]
 
 todo_include_todos = True
 nitpicky = False
@@ -76,11 +87,8 @@ html_theme_options = {
 
 # -- Intersphinx configuration ----------------------------------------------
 
-intersphinx_mapping: dict[str, tuple[str, str | None]] = {
-    "python": ("https://docs.python.org/3", None),
-    "numpy": ("https://numpy.org/doc/stable/", None),
-    "pandas": ("https://pandas.pydata.org/pandas-docs/stable/", None),
-}
+# Keep the docs build self-contained in offline environments.
+intersphinx_mapping: dict[str, tuple[str, str | None]] = {}
 
 # -- MyST configuration ------------------------------------------------------
 

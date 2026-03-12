@@ -1,188 +1,137 @@
 Getting Started
 ===============
 
-Welcome to ``aba_optimiser``! This package provides tools for stochastic optimization of accelerator magnet knobs using machine learning techniques. Whether you're optimizing beam energy, quadrupole strengths, bend fields, or matching optics, this guide will help you get up and running quickly.
-
-Prerequisites
--------------
-
-Before installing ``aba_optimiser``, ensure you have:
-
-* **Python 3.9+**: The package requires Python 3.9 or higher
-* **MAD-NG**: Accelerator simulation software (MAD-NG) for model creation
-* **Git**: For cloning repositories and version control
-* **Virtual environment tools**: ``venv`` (built-in) or ``conda``
+This page gives a practical overview of how to install ``aba_optimiser``,
+prepare inputs, and identify the main entry points in the codebase.
 
 Installation
 ------------
 
-Install the project and its dependencies into a virtual environment::
+Create a virtual environment and install the package:
 
-   # Create and activate virtual environment
+.. code-block:: bash
+
    python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-   # Install the package
+   source .venv/bin/activate
    pip install -e .
 
-For development with testing and documentation tools::
+For development with tests, tracking extras, and documentation tools:
+
+.. code-block:: bash
 
    pip install -e .[test,docs,tracking]
 
 
-Quick Start Examples
---------------------
+Main Concepts
+-------------
 
-Here are some quick examples to get you started. For detailed optimization workflows, see the :doc:`optimization guide <api_reference>`.
+``Accelerator``
+   Encapsulates machine-specific behaviour such as sequence files, knob
+   families, and BPM naming conventions.
 
-**Basic Energy Optimization**
+``OptimiserConfig``
+   Controls epochs, optimiser type, learning rates, and convergence criteria.
+
+``SimulationConfig``
+   Controls worker counts, batching, tracking mode, and runtime physics flags.
+
+``MeasurementConfig`` / ``SequenceConfig``
+   Describe the input files and the magnet/BPM ranges used by a controller.
+
+``Controller``
+   Coordinates the full optimisation workflow: data loading, worker startup,
+   epoch/batch execution, and result collection.
+
+
+Typical Workflow
+----------------
+
+1. Prepare a measurement parquet file and any supporting corrector/tune-knob
+   files.
+2. Instantiate an accelerator, usually :class:`aba_optimiser.accelerators.LHC`.
+3. Build optimiser, simulation, measurement, and sequence configuration
+   dataclasses.
+4. Construct :class:`aba_optimiser.training.controller.Controller`.
+5. Call ``run()`` to obtain estimated knob strengths and uncertainties.
+
+
+Minimal Example
+---------------
 
 .. code-block:: python
+
+   from pathlib import Path
 
    from aba_optimiser.accelerators import LHC
    from aba_optimiser.config import OptimiserConfig, SimulationConfig
    from aba_optimiser.training.controller import Controller
    from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
 
-   # Set up accelerator
-   accelerator = LHC(beam=1, sequence_file="lhcb1.seq", optimise_energy=True)
+   accelerator = LHC(
+       beam=1,
+       beam_energy=6800,
+       sequence_file=Path("lhcb1.seq"),
+       optimise_quadrupoles=True,
+   )
 
-   # Configure optimization
-   optimiser_config = OptimiserConfig(max_epochs=100, max_lr=1e-6)
-   simulation_config = SimulationConfig(num_workers=4, optimise_momenta=True)
-
-   # Define measurements
+   optimiser_config = OptimiserConfig(max_epochs=100, optimiser_type="lbfgs")
+   simulation_config = SimulationConfig(
+       tracks_per_worker=10,
+       num_workers=4,
+       num_batches=1,
+       use_fixed_bpm=True,
+   )
+   sequence_config = SequenceConfig(magnet_range="BPM.9R1.B1/BPM.9L2.B1")
    measurement_config = MeasurementConfig(
-       measurement_files="tracking_data.parquet",
-       corrector_files="correctors.tfs",
-       tune_knobs_files="tune_knobs.txt",
-       flattop_turns=1000
-   Getting Started (Short)
-   =======================
+       measurement_files=Path("tracking_data.parquet"),
+       corrector_files=Path("correctors.tfs"),
+       tune_knobs_files=Path("tune_knobs.txt"),
+       flattop_turns=1000,
+       bunches_per_file=1,
+   )
 
-   Quick, minimal guide to start using ``aba_optimiser``.
+   controller = Controller(
+       accelerator,
+       optimiser_config,
+       simulation_config,
+       sequence_config,
+       measurement_config,
+       bpm_start_points=["BPM.9R1.B1"],
+       bpm_end_points=["BPM.9L2.B1"],
+       show_plots=False,
+   )
+   estimate, uncertainties = controller.run()
 
-   Install
-   -------
 
-   Create a virtual environment and install the package:
+Tests and Examples
+------------------
 
-   .. code-block:: bash
+The most useful runnable examples are in ``tests/training/``. They exercise the
+same controller and worker code paths used in production-style runs.
 
-      python -m venv .venv
-      source .venv/bin/activate
-      pip install -e .[test,docs,tracking]
+Useful commands:
 
-   Verify installation::
+.. code-block:: bash
 
-      python -c "import aba_optimiser; print('OK')"
+   pytest tests/training/
+   pytest tests/ -k quadrupole
 
-   Run a simple optimization
-   ------------------------
 
-   Minimal example (energy or quadrupole optimization uses the same Controller API):
+Building the Docs
+-----------------
 
-   .. code-block:: python
+With the docs extras installed, build the HTML site with:
 
-      from aba_optimiser.accelerators import LHC
-      from aba_optimiser.config import OptimiserConfig, SimulationConfig
-      from aba_optimiser.training.controller import Controller
-      from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
-
-      accel = LHC(beam=1, sequence_file="lhcb1.seq", optimise_energy=True)
-      opt_cfg = OptimiserConfig(max_epochs=100, max_lr=1e-6)
-      sim_cfg = SimulationConfig(num_workers=4, optimise_momenta=True)
-
-      meas_cfg = MeasurementConfig(measurement_files="data.parquet",
-                                   corrector_files="correctors.tfs",
-                                   tune_knobs_files="tune_knobs.txt",
-                                   flattop_turns=1000)
-
-      ctrl = Controller(accel, opt_cfg, sim_cfg, SequenceConfig(), meas_cfg, [], [])
-      estimate, uncertainty = ctrl.run()
-
-   Commands
-   --------
-
-   Run tests::
-
-   .. code-block:: bash
-
-      pytest tests/
-
-   Build docs::
-
-   .. code-block:: bash
-
-      cd docs && make html
-
-   Where to go next
-   -----------------
-
-   - See the short ``Optimization Guide`` (:doc:`api_reference`) for how to choose configs and prepare data.
-   - Use the tests in ``tests/training/`` as compact examples of real workflows.
-
-   That's it — minimal steps to install and run a basic optimization.
-   # Run specific test categories
-   pytest tests/training/  # Training-related tests
-   pytest tests/mad/       # MAD interface tests
-   pytest tests/ -k "energy"  # Tests containing "energy"
-
-Building Documentation
-----------------------
-
-With the documentation extras installed, you can build the HTML documentation::
+.. code-block:: bash
 
    cd docs
    make html
 
-The rendered site will be available under ``docs/_build/html/index.html``.
+The rendered output will be written to ``docs/_build/html/index.html``.
 
-You can also build other formats::
 
-   make pdf    # PDF documentation
-   make epub   # EPUB format
+Where To Read Next
+------------------
 
-Project Structure
------------------
-
-The ``aba_optimiser`` package is organized into several key modules:
-
-**Core Optimization**
-
-* :mod:`aba_optimiser.config` - Configuration dataclasses and defaults
-* :mod:`aba_optimiser.optimisers` - Optimization algorithms (Adam, AMSGrad, L-BFGS)
-* :mod:`aba_optimiser.training` - Training pipelines and controller classes
-* :mod:`aba_optimiser.training_optics` - Optics-specific optimization
-
-**Simulation & Physics**
-
-* :mod:`aba_optimiser.mad` - MAD-NG interface for accelerator simulation
-* :mod:`aba_optimiser.physics` - Beam dynamics calculations
-* :mod:`aba_optimiser.simulation` - Tracking and optics simulation
-* :mod:`aba_optimiser.xsuite` - Xsuite integration utilities
-
-**Data Handling**
-
-* :mod:`aba_optimiser.measurements` - Data acquisition and processing
-* :mod:`aba_optimiser.io` - File I/O utilities
-* :mod:`aba_optimiser.dataframes` - Data manipulation helpers
-* :mod:`aba_optimiser.filtering` - Signal processing and noise reduction
-
-**Utilities**
-
-* :mod:`aba_optimiser.plotting` - Visualization tools
-* :mod:`aba_optimiser.matching` - Optics matching algorithms
-* :mod:`aba_optimiser.model_creator` - Model generation utilities
-* :mod:`aba_optimiser.momentum_recon` - Momentum reconstruction
-* :mod:`aba_optimiser.dispersion` - Dispersion estimation
-
-Next Steps
-----------
-
-Now that you're set up, here are some recommended next steps:
-
-1. **Run the Tests**: Familiarize yourself with the testing framework
-2. **Check the API Reference**: Complete documentation for all modules
-
-For questions or issues, please check the project repository or contact the maintainers.
+* :doc:`modules` for a package-by-package overview.
+* :doc:`api_reference` for the public runtime entry points.

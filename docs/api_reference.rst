@@ -1,57 +1,57 @@
-API (short)
-===============
+API Reference
+=============
 
-Very short guide to the main runtime entry points and what each one does.
+This section focuses on the public runtime entry points that most users need to
+understand before running or extending the project.
 
-1. `Controller` (aba_optimiser.training.controller)
-   - Orchestrates optimisation runs (energy, quadrupoles, bends).
-   - Inputs: `Accelerator`, `OptimiserConfig`, `SimulationConfig`,
-     `SequenceConfig`, `MeasurementConfig`, BPM lists.
-   - Call: `estimate, unc = Controller(...).run()`
+Main Entry Points
+-----------------
 
-2. `OpticsController` (aba_optimiser.training_optics.controller)
-   - Uses TFS measurement files to match optics via knob adjustments.
+``aba_optimiser.training.controller.Controller``
+   Main controller for worker-based tracking optimisation.
 
-3. Configuration dataclasses
-   - `OptimiserConfig`: learning rates, epochs, optimiser type.
-   - `SimulationConfig`: worker distribution, tracks per worker, flags.
-   - `SequenceConfig`, `MeasurementConfig`: define magnet ranges and files.
+``aba_optimiser.training_optics.controller.OpticsController``
+   Optics-focused controller for beta/phase style matching problems.
 
-4. Data utilities
-   - `prepare_track_dataframe` (simulation.data_processing): convert
-     raw tracking to the expected parquet format.
-   - `save_knobs` (io.utils): write matched tune knobs.
+``aba_optimiser.config.OptimiserConfig`` and ``aba_optimiser.config.SimulationConfig``
+   Dataclasses that define optimisation behaviour, batching, and worker setup.
 
-Data expected
--------------
-- Tracking parquet: columns `turn, name, x, px, y, py, ...`
-- Corrector TFS files
-- Tune knobs files
+``aba_optimiser.accelerators.LHC`` / ``aba_optimiser.accelerators.SPS``
+   Machine-specific accelerator definitions.
 
-Minimal example
----------------
 
-.. code-block:: python
+Typical Workflow
+----------------
 
-   from aba_optimiser.accelerators import LHC
-   from aba_optimiser.config import OptimiserConfig, SimulationConfig
-   from aba_optimiser.training.controller import Controller
+1. Choose an accelerator and a magnet range.
+2. Build optimiser and simulation configuration dataclasses.
+3. Prepare measurement files or generated parquet tracking data.
+4. Construct a controller and call ``run()``.
 
-   accel = LHC(beam=1, sequence_file="lhcb1.seq", optimise_quadrupoles=True)
-   opt_cfg = OptimiserConfig(max_epochs=100)
-   sim_cfg = SimulationConfig(num_workers=4)
-   ctrl = Controller(accel, opt_cfg, sim_cfg, None, None, [], [])
-   estimate, unc = ctrl.run()
+The tests under ``tests/training/`` are compact runnable examples of that
+workflow.
 
-See tests
---------
-The tests in `tests/training/` are compact, runnable examples of each workflow.
 
-Autosummary
------------
+Public Modules
+--------------
 
 .. autosummary::
    :toctree: _autosummary
-   :recursive:
 
-   aba_optimiser
+   aba_optimiser.config
+   aba_optimiser.accelerators.lhc
+   aba_optimiser.accelerators.sps
+   aba_optimiser.mad.optimising_mad_interface
+   aba_optimiser.optimisers.adam
+   aba_optimiser.optimisers.amsgrad
+   aba_optimiser.optimisers.lbfgs
+   aba_optimiser.training.controller
+   aba_optimiser.training.controller_config
+   aba_optimiser.training.optimisation_loop
+   aba_optimiser.training.scheduler
+   aba_optimiser.training.worker_manager
+   aba_optimiser.training_optics.controller
+   aba_optimiser.workers.common
+   aba_optimiser.workers.tracking
+   aba_optimiser.workers.tracking_position_only
+   aba_optimiser.workers.optics
