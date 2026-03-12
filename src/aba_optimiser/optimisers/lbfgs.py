@@ -1,3 +1,5 @@
+"""Limited-memory BFGS optimiser with an adaptive step-length heuristic."""
+
 from __future__ import annotations
 
 import numpy as np

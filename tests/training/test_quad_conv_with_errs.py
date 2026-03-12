@@ -4,9 +4,13 @@ Integration test for quadrupole convergence with errors using AC dipole excitati
 
 from __future__ import annotations
 
+import json
+import logging
+
 # import re
 from typing import TYPE_CHECKING
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
@@ -21,7 +25,6 @@ from pymadng_utils.io.utils import save_knobs
 from tmom_recon import (
     calculate_dispersive_pz,
     calculate_transverse_pz,
-    inject_noise_xy_inplace,
 )
 from tmom_recon.svd import svd_clean_measurements
 from xtrack_tools.acd import run_ac_dipole_tracking_with_particles
@@ -29,6 +32,7 @@ from xtrack_tools.monitors import line_to_dataframes
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
+from aba_optimiser.noise import apply_bpm_noise
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
@@ -44,6 +48,13 @@ if TYPE_CHECKING:
     from xtrack import xt
 
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
+
+logger = logging.getLogger(__name__)
+
+
+def _should_plot() -> bool:
+    """Determine whether to generate plots based on environment variable."""
+    return os.getenv("PLOT_TEST_OUTPUT", "0") == "1"
 
 
 def _run_track_with_acd(
@@ -107,14 +118,16 @@ def _run_track_with_acd(
         # Process dataframe - only keep flattop turns (after ramp)
         for true_df in true_dfs:
             # Filter to only include turns after the ramp
-            df = true_df[true_df["turn"] >= acd_ramp].copy()
+            df = true_df[true_df["turn"] > acd_ramp].copy()
             # Renumber turns to start from 0
             df["turn"] = df["turn"] - acd_ramp
 
-            df = prepare_track_dataframe(df, 0, flattop_turns, kick_both_planes=True)
+            # Remove the bpmcs\. bpms which are not seen when measuring
+            df = df[~df["name"].str.contains("bpmcs\\.", case=False, regex=True)].copy()
+
+            df = prepare_track_dataframe(df, 0, flattop_turns)
             df = df.loc[:, TRACK_COLUMNS].copy()
             df["name"] = df["name"].astype(str)
-            df["kick_plane"] = df["kick_plane"].astype(str)
 
             if return_dataframes:
                 processed_dfs.append(df)
@@ -133,19 +146,20 @@ def _run_track_with_acd(
 
 def _make_optimiser_config_bend() -> OptimiserConfig:
     return OptimiserConfig(
-        max_epochs=200,
-        warmup_epochs=5,
-        warmup_lr_start=4e-8,
-        max_lr=4e-8,
-        min_lr=4e-8,
-        gradient_converged_value=3e-11,
+        max_epochs=50,
+        warmup_epochs=20,
+        warmup_lr_start=4e-6,
+        max_lr=4e-7,
+        min_lr=4e-7,
+        gradient_converged_value=1e-10,
         optimiser_type="adam",
+        expected_rel_error=1e-3,
     )
 
 
 # Skip if with can't have 30 processes which is needed for the parallelism in this test
 @pytest.mark.skipif(
-    os.cpu_count() is not None and (os.cpu_count() < 30),
+    os.cpu_count() is not None and (os.cpu_count() < 30),  # ty:ignore[unsupported-operator]
     reason="Requires at least 30 CPU cores for parallel processing",
 )
 @pytest.mark.slow
@@ -153,10 +167,10 @@ def test_controller_bend_opt_simple(
     tmp_path: Path,
     seq_b1: Path,
     estimated_strengths_file: Path,
-    loaded_interface_with_beam: AbaMadInterface,
+    loaded_interface: AbaMadInterface,
 ) -> None:
     """Test bend optimisation using AC dipole excitation with different lag values."""
-    flattop_turns = 2000
+    flattop_turns = 400
     turns_per_batch = 50  # 134  # This number works quite well independently of flattop_turns
     acd_ramp = 2_000  # Ramp turns for AC dipole - should be long enough to avoid emittance growth
 
@@ -166,16 +180,13 @@ def test_controller_bend_opt_simple(
 
     # Generate model with errors for all arcs
     env, magnet_strengths, matched_tunes, _ = generate_xsuite_env_with_errors(
-        loaded_interface_with_beam,
-        sequence_file=seq_b1,
+        loaded_interface,
         dpp_value=0,
-        magnet_range="$start/$end",
         corrector_file=corrector_file,
-        beam=1,
         perturb_quads=True,
         perturb_bends=True,
     )
-    twiss_errs = loaded_interface_with_beam.run_twiss(observe=0)  # Observe all elements
+    twiss_errs = loaded_interface.run_twiss(observe=0)  # Observe all elements
     save_knobs(matched_tunes, tune_knobs_file)
 
     # Get clean twiss for pz calculation
@@ -210,11 +221,10 @@ def test_controller_bend_opt_simple(
     for idx, track_df in enumerate(track_dfs):
         # Add noise to the tracking data and apply SVD cleaning
         track_df_noisy = track_df.copy(deep=True)
-        inject_noise_xy_inplace(
-            track_df_noisy,
-            track_df,
+        apply_bpm_noise(
+            track_df_noisy.set_index("name"),
             np.random.default_rng(42 + idx),
-            noise_std=1e-4,  # 10 microns noise
+            accelerator_type="lhc",
         )
         cleaned = svd_clean_measurements(track_df_noisy.reset_index())
         cleaned["name"] = cleaned["name"].str.upper()
@@ -254,6 +264,8 @@ def test_controller_bend_opt_simple(
         no_mean_file["py"] = (
             cleaned["py"] - cleaned["name"].map(co_py) + cleaned["name"].map(model_co_py)
         )
+        assert no_mean_file["var_x"].notna().all()
+        assert no_mean_file["var_y"].notna().all()
         del cleaned
 
         # Plot phase space at a specific BPM for investigation
@@ -267,32 +279,9 @@ def test_controller_bend_opt_simple(
             x_mean = np.mean(x_vals)
             px_mean = np.mean(px_vals)
 
-            # from matplotlib import pyplot as plt
-
-            # plt.figure(figsize=(8, 8))
-            # plt.scatter(x_vals, px_vals, alpha=0.5, s=10, label="Phase space points")
-            # plt.scatter(
-            #     [x_mean],
-            #     [px_mean],
-            #     color="red",
-            #     s=100,
-            #     marker="x",
-            #     linewidths=3,
-            #     label=f"Mean ({x_mean:.2e}, {px_mean:.2e})",
-            # )
-            # plt.scatter(
-            #     [0], [0], color="green", s=100, marker="+", linewidths=3, label="Zero point"
-            # )
-            # plt.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
-            # plt.axvline(x=0, color="gray", linestyle="--", alpha=0.5)
-            # plt.xlabel("x [m]")
-            # plt.ylabel("px [rad]")
-            # plt.title(f"Phase space at {bpm_to_plot} (lag {idx})")
-            # plt.legend()
-            # plt.grid(True, alpha=0.3)
-            # plt.show()
-
-            print(f"Lag {idx}, BPM {bpm_to_plot}: x_mean = {x_mean:.6e}, px_mean = {px_mean:.6e}")
+            logger.info(
+                f"Lag {idx}, BPM {bpm_to_plot}: x_mean = {x_mean:.6e}, px_mean = {px_mean:.6e}"
+            )
 
         # Save processed file
         output_path = (
@@ -300,6 +289,11 @@ def test_controller_bend_opt_simple(
         )
         no_mean_file.to_parquet(output_path, index=False)
         processed_files.append(output_path)
+        # Print the min and max turn numbers to verify the expected number of turns
+        logger.info(
+            f"Processed track with lag {lags[idx]:.2f}: saved to {output_path}, "
+            f"turns range: {no_mean_file['turn'].min()} to {no_mean_file['turn'].max()} (expected {flattop_turns} turns)"
+        )
 
     # Create empty corrector file
     corrector_file = tmp_path / "corrector_file.txt"
@@ -312,23 +306,24 @@ def test_controller_bend_opt_simple(
     optimiser_config = _make_optimiser_config_bend()
     all_estimates = {}
 
-    for arc_num in range(1, 9):
-        a1, a2 = int(arc_num), int(arc_num) % 8 + 1
-        magnet_range = f"BPM.13R{a1}.B1/BPM.13L{a2}.B1"
-        bpm_start_points = [f"BPM.{s}R{a1}.B1" for s in range(13, 30, 6)] + [
-            f"BPM.{s}R{a1}.B1" for s in range(14, 30, 6)
-        ]
-        bpm_end_points = [f"BPM.{s}L{a2}.B1" for s in range(13, 30, 6)] + [
-            f"BPM.{s}L{a2}.B1" for s in range(14, 30, 6)
-        ]
-        print(f"\nOptimising arc {arc_num} with magnets in range {magnet_range}")
-        print(f"  BPM start points: {bpm_start_points}")
-        print(f"  BPM end points: {bpm_end_points}")
-
-        num_workers = 60 // (len(bpm_start_points) + len(bpm_end_points))
+    def _run_optimisation_for_range(
+        magnet_range: str,
+        start_points: list[str],
+        end_points: list[str],
+        optimise_quadrupoles: bool,
+        optimise_other_quadrupoles: bool,
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        num_workers = 60 // (len(start_points) + len(end_points))
         tracks_per_worker = flattop_turns - 3
         num_batches = int(np.ceil(tracks_per_worker / turns_per_batch))
-        lhc_accelerator = LHC(beam=1, sequence_file=seq_b1, optimise_quadrupoles=True)
+
+        lhc_accelerator = LHC(
+            beam=1,
+            sequence_file=seq_b1,
+            optimise_correctors=False,
+            optimise_quadrupoles=optimise_quadrupoles,
+            optimise_other_quadrupoles=optimise_other_quadrupoles,
+        )
 
         sim_config = SimulationConfig(
             tracks_per_worker=tracks_per_worker,
@@ -340,7 +335,7 @@ def test_controller_bend_opt_simple(
 
         sequence_config = SequenceConfig(
             magnet_range=magnet_range,
-            # first_bpm="MSIA.EXIT.B1",
+            first_bpm="MSIA.EXIT.B1",
         )
 
         measurement_config = MeasurementConfig(
@@ -352,8 +347,8 @@ def test_controller_bend_opt_simple(
             bunches_per_file=1,
         )
 
-        # Create arc-specific plots directory
-        arc_plots_dir = tmp_path / f"arc_{arc_num}_plots"
+        plots_dir_name = magnet_range.replace("/", "_").replace(".", "_")
+        plots_dir = tmp_path / f"plots_{plots_dir_name}"
 
         ctrl = Controller(
             accelerator=lhc_accelerator,
@@ -361,28 +356,47 @@ def test_controller_bend_opt_simple(
             simulation_config=sim_config,
             sequence_config=sequence_config,
             measurement_config=measurement_config,
-            bpm_start_points=bpm_start_points,
-            bpm_end_points=bpm_end_points,
+            bpm_start_points=start_points,
+            bpm_end_points=end_points,
             show_plots=False,
             true_strengths=magnet_strengths,
-            plots_dir=arc_plots_dir,
+            plots_dir=plots_dir,
         )
-        estimate, unc = ctrl.run()
+        return ctrl.run()
+
+    for arc_num in range(1, 9):
+        a1, a2 = int(arc_num), int(arc_num) % 8 + 1
+        magnet_range = f"BPM.13R{a1}.B1/BPM.13L{a2}.B1"
+        bpm_start_points = [f"BPM.{s}R{a1}.B1" for s in range(13, 30, 3)] + [
+            f"BPM.{s}R{a1}.B1" for s in range(14, 30, 3)
+        ]
+        bpm_end_points = [f"BPM.{s}L{a2}.B1" for s in range(13, 30, 3)] + [
+            f"BPM.{s}L{a2}.B1" for s in range(14, 30, 3)
+        ]
+        print(f"\nOptimising arc {arc_num} with magnets in range {magnet_range}")
+        print(f"  BPM start points: {bpm_start_points}")
+        print(f"  BPM end points: {bpm_end_points}")
+        estimate, unc = _run_optimisation_for_range(
+            magnet_range=magnet_range,
+            start_points=bpm_start_points,
+            end_points=bpm_end_points,
+            optimise_quadrupoles=True,
+            optimise_other_quadrupoles=False,
+        )
 
         all_estimates.update(estimate)
+    plt.close("all")
 
-        for magnet, value in estimate.items():
-            true_value = magnet_strengths[magnet]
-            rel_diff = abs(value - true_value) / abs(true_value) if true_value != 0 else abs(value)
-            fail_or_pass = "PASS" if rel_diff < 1e-4 else "FAIL"
-            print(
-                f"Magnet {magnet}: {fail_or_pass}, estimated {value}, "
-                f"true {true_value}, rel diff {rel_diff}"
-            )
+    for magnet, value in all_estimates.items():
+        true_value = magnet_strengths[magnet]
+        rel_diff = abs(value - true_value) / abs(true_value) if true_value != 0 else abs(value)
+        fail_or_pass = "PASS" if rel_diff < 1e-4 else "FAIL"
+        print(
+            f"Magnet {magnet}: {fail_or_pass}, estimated {value}, "
+            f"true {true_value}, rel diff {rel_diff}"
+        )
 
     # Save estimates to file
-    import json
-
     with estimated_strengths_file.open("w") as f:
         json.dump(all_estimates, f)
 
@@ -425,6 +439,32 @@ def test_controller_bend_opt_simple(
     )
     beta_beating_after_file = tmp_path / "beta_beating_after_correction.tfs"
     tfs.write(beta_beating_after_file, beta_beating_after)
+
+    if _should_plot():
+        plt.figure(figsize=(12, 6))
+        plt.subplot(1, 2, 1)
+        plt.plot(tws_errs_betax * 100, label="BetaX error before correction")
+        plt.plot(tws_est_betax * 100, label="BetaX error after correction")
+        plt.xlabel("Element index")
+        plt.ylabel("BetaX error (%)")
+        plt.title("BetaX beating before and after correction")
+        plt.legend()
+        plt.grid()
+
+        plt.subplot(1, 2, 2)
+        plt.plot(tws_errs_betay * 100, label="BetaY error before correction")
+        plt.plot(tws_est_betay * 100, label="BetaY error after correction")
+        plt.xlabel("Element index")
+        plt.ylabel("BetaY error (%)")
+        plt.title("BetaY beating before and after correction")
+        plt.legend()
+        plt.grid()
+
+        plot_file = tmp_path / "beta_beating_comparison.png"
+        plt.tight_layout()
+        plt.savefig(plot_file)
+        plt.show()
+        print(f"Saved beta beating comparison plot to {plot_file}")
 
     assert all(tws_est_betax.abs() < 0.0025), "BetaX errors exceed 0.25% after optimisation"
     assert all(tws_est_betay.abs() < 0.005), "BetaY errors exceed 0.5% after optimisation"

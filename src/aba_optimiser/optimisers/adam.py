@@ -1,3 +1,5 @@
+"""Adam optimiser implementation used by the training loop."""
+
 from __future__ import annotations
 
 import logging
@@ -8,16 +10,10 @@ LOGGER = logging.getLogger(__name__)
 
 
 class AdamOptimiser:
-    """
-    Implements the Adam optimisation algorithm as a stateful optimiser.
+    """Stateful Adam optimiser for dense NumPy parameter vectors.
 
-    Usage:
-        optim = AdamOptimiser(shape=params.shape,
-                              beta1=0.9,
-                              beta2=0.999,
-                              eps=1e-8,
-                              weight_decay=0.0)
-        new_params = optim.step(params, grads, lr)
+    Instantiate once for a given parameter shape and call :meth:`step` for
+    each optimisation update.
     """
 
     def __init__(

@@ -1,3 +1,5 @@
+"""AMSGrad optimiser implementation built on top of :class:`AdamOptimiser`."""
+
 from __future__ import annotations
 
 import logging
