@@ -22,22 +22,22 @@ from turn_by_turn.structures import TbtData, TransverseData
 from xobjects import ContextCpu  # noqa: E402
 from xtrack_tools import (
     create_xsuite_environment,
+    get_monitor_names_at_pattern,
     initialise_env,
     insert_ac_dipole,
-    insert_particle_monitors_at_pattern,
     line_to_dataframes,
+    run_tracking,
 )
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
-from aba_optimiser.simulation.magnet_perturbations import (
-    apply_magnet_perturbations,
-)
-from aba_optimiser.simulation.optics import perform_orbit_correction
 
 # Setup logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+LOGGER = logging.getLogger(__name__)
 
 # Constants
 DATA_DIR = Path(__file__).parent.parent
@@ -153,7 +153,7 @@ def write_tfs(
 
 def generate_model_data():
     """Generate the model data without writing files."""
-    logging.info("Generating model data...")
+    LOGGER.info("Generating model data...")
 
     # Create xsuite environment
     env = create_xsuite_environment(
@@ -179,9 +179,8 @@ def generate_model_data():
     )
 
     # Create MAD interface and load sequence
-    mad = AbaMadInterface()
-    mad.load_sequence(SEQUENCE_FILE, "lhcb1")
-    mad.setup_beam(beam_energy=BEAM_ENERGY)
+    accel = LHC(beam=1, sequence_file=SEQUENCE_FILE)
+    mad = AbaMadInterface(accel)
     mad.run_twiss(observe=0, coupling=True)
     mad.mad.send("""
 local melmcol in MAD.gphys
@@ -190,8 +189,7 @@ melmcol(tws, {'k1l' , 'k2l', 'k1sl', 'k3l', 'k4l'})
     ng_tws = mad.mad.tws.convert_to_dataframe()
 
     # Perform orbit correction for off-momentum beam
-    matched_tunes = perform_orbit_correction(
-        mad=mad.mad,
+    matched_tunes = mad.perform_orbit_correction(
         machine_deltap=DELTA_P,
         target_qx=NATURAL_TUNES[0],
         target_qy=NATURAL_TUNES[1],
@@ -201,8 +199,9 @@ melmcol(tws, {'k1l' , 'k2l', 'k1sl', 'k3l', 'k4l'})
     corrector_table = tfs.read(CORRECTOR_FILE_PATH)
     corrector_table = corrector_table[corrector_table["kind"] != "monitor"]
 
-    magnet_strengths, _ = apply_magnet_perturbations(
-        mad.mad, rel_k1_std_dev=1e-4, seed=123
+    magnet_strengths, _ = mad.apply_magnet_perturbations(
+        rel_error=1e-4,
+        seed=123,
     )
     assert magnet_strengths, "Expected magnet perturbations to update strengths"
 
@@ -226,7 +225,7 @@ def write_model_files(
     ng_tws: tfs.TfsDataFrame,
 ):
     """Write model files to the specified directory."""
-    logging.info(f"Writing model files to {model_dir}")
+    LOGGER.info(f"Writing model files to {model_dir}")
 
     # Create the model directory
     model_dir.mkdir(exist_ok=True)
@@ -248,7 +247,7 @@ def write_model_files(
 
 def perform_tracking(line, tws, files):
     """Perform particle tracking with AC dipole."""
-    logging.info("Performing tracking...")
+    LOGGER.info("Performing tracking...")
 
     # Insert AC dipole
     trk_line = insert_ac_dipole(
@@ -260,13 +259,7 @@ def perform_tracking(line, tws, files):
         driven_tunes=DRIVEN_TUNES,
     )
 
-    # Insert particle monitors
-    trk_line = insert_particle_monitors_at_pattern(
-        line=trk_line,
-        pattern=r"^bpm.*\.b1$",
-        num_turns=NTURNS,
-        num_particles=1,
-    )
+    monitor_names = get_monitor_names_at_pattern(trk_line, r"^bpm.*\.b1$")
 
     # Build and track particles
     ctx = ContextCpu()
@@ -279,7 +272,7 @@ def perform_tracking(line, tws, files):
         delta=DELTA_P,
     )
 
-    trk_line.track(particles, num_turns=NTURNS, with_progress=True)
+    run_tracking(trk_line, particles, NTURNS, monitor_names=monitor_names)
     tracking_df = line_to_dataframes(trk_line)[0]
 
     # Write the true tracking data without noise as parquet for reference
@@ -344,7 +337,7 @@ def perform_tracking(line, tws, files):
 
 def run_analysis(files, model_dir):
     """Run analysis on the tracking data."""
-    logging.info("Running analysis...")
+    LOGGER.info("Running analysis...")
 
     # Run Harpy analysis
     hole_in_one_entrypoint(  # harpy
