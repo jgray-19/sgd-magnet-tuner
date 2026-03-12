@@ -99,7 +99,7 @@ def merge_horizontal_vertical_bpms(
     Returns:
         Merged DataFrame with both planes for all BPMs. Single-plane BPMs will have
         NaN values in the plane they don't measure. Columns: ['name', 'turn', 'x', 'y',
-        'var_x', 'var_y', 'px', 'py', 'var_px', 'var_py', 'kick_plane']
+        'var_x', 'var_y', 'px', 'py', 'var_px', 'var_py']
 
     Note:
         - BPMs present only in horizontal data will have NaN for y, var_y, py, var_py
@@ -129,16 +129,11 @@ def merge_horizontal_vertical_bpms(
     v_cols = [col for col in df_vertical.columns if col not in ["name", "turn"]]
     merged = merged.merge(df_vertical[["name", "turn"] + v_cols], on=["name", "turn"], how="left")
 
-    # Set kick_plane based on which measurements are present
     # Dual-plane: both x and y are non-NaN -> "xy"
     # H-only: x is non-NaN, y is NaN -> "x"
     # V-only: y is non-NaN, x is NaN -> "y"
     has_x = merged["x"].notna()
     has_y = merged["y"].notna()
-
-    merged["kick_plane"] = "xy"
-    merged.loc[has_x & ~has_y, "kick_plane"] = "x"
-    merged.loc[~has_x & has_y, "kick_plane"] = "y"
 
     # Convert name to category for efficiency
     merged["name"] = merged["name"].astype("category")

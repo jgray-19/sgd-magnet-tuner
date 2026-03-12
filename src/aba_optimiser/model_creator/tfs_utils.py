@@ -1,10 +1,12 @@
 """TFS file format conversion utilities."""
 
+import logging
 from pathlib import Path
 
 import pandas as pd
 import tfs
 
+LOGGER = logging.getLogger(__name__)
 
 def convert_tfs_to_madx(tfs_df: pd.DataFrame, remove_drifts=True) -> pd.DataFrame:
     """
@@ -81,7 +83,7 @@ def export_tfs_to_madx(tfs_file: Path) -> None:
     tfs_df = convert_tfs_to_madx(tfs_df)
     tfs.write(tfs_file, tfs_df, save_index="NAME")
 
-    print(f"Converted TFS file to MAD-X format: {tfs_file.name}")
+    LOGGER.info(f"Converted TFS file to MAD-X format: {tfs_file.name}")
 
 
 def convert_multiple_tfs_files(tfs_files: list[Path]) -> None:

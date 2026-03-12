@@ -14,7 +14,7 @@ import pathlib
 
 from omc3.model_creator import create_instance_and_model
 
-from .config import DRV_TUNES, ENERGY, NAT_TUNES
+from .config import DRV_TUNES, ENERGY, NAT_TUNES, YEAR
 from .madng_utils import update_model_with_madng
 from .madx_utils import make_madx_sequence
 
@@ -28,14 +28,13 @@ def create_lhc_model(
     drv_tunes: list[float] | None = None,
     energy: float | None = None,
     modifiers: str | list[str] | None = None,
-    matching_knob: str = "_op",
 ) -> None:
     """
     Create a complete LHC model for the specified beam.
 
     This function performs the full workflow:
     1. Creates model instance using omc3
-    2. Generates MAD-X sequence files (including beam4 for tracking if beam=2)
+    2. Generates MAD-X sequence files from the model creator scripts
     3. Updates model with MAD-NG (tune matching and twiss computation)
 
     Parameters
@@ -107,7 +106,7 @@ def create_lhc_model(
 
     # Step 2: Generate MAD-X sequences
     print("Step 2: Generating MAD-X sequences...")
-    make_madx_sequence(beam, output_dir, beam4=(beam == 2), matching_knob=matching_knob)
+    make_madx_sequence(output_dir)
     print("✓ MAD-X sequences generated\n")
 
     # Step 3: Update with MAD-NG
@@ -117,7 +116,6 @@ def create_lhc_model(
         output_dir,
         tunes=nat_tunes,
         drv_tunes=drv_tunes,
-        matching_knob=matching_knob,
     )
     print("✓ Model update complete\n")
 
@@ -142,11 +140,11 @@ def main() -> None:
 
     # Create Beam 1 model
     model_dir_b1 = data_dir / f"model_b1__t{nat_tunes[0]}_{nat_tunes[1]}_{optics_label}"
-    create_lhc_model(beam=1, output_dir=model_dir_b1, year="2025")
+    create_lhc_model(beam=1, output_dir=model_dir_b1, year=YEAR)
 
     # Create Beam 2 model
     model_dir_b2 = data_dir / f"model_b2__t{nat_tunes[0]}_{nat_tunes[1]}_{optics_label}"
-    create_lhc_model(beam=2, output_dir=model_dir_b2, year="2025")
+    create_lhc_model(beam=2, output_dir=model_dir_b2, year=YEAR)
     print("\n" + "=" * 70)
     print("All models created successfully!")
     print("=" * 70 + "\n")

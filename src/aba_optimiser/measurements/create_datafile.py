@@ -1,3 +1,11 @@
+"""Create parquet training data from raw turn-by-turn measurements.
+
+The functions in this module convert operational or simulated turn-by-turn
+files into the parquet format consumed by the optimisation controllers. The
+pipeline also saves supporting corrector and tune-knob files alongside the
+processed tracking data.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -26,12 +34,14 @@ from aba_optimiser.config import (
     TUNE_KNOBS_FILE,
 )
 from aba_optimiser.io.utils import get_lhc_file_path
-from aba_optimiser.mad import LHCOptimisationMadInterface
+from aba_optimiser.mad import GradientDescentMadInterface
+from aba_optimiser.measurements.squeeze_helpers import extract_tunes_from_job_file
 from aba_optimiser.model_creator.madng_utils import (
     compute_and_export_twiss_tables,
     initialise_madng_model,
 )
 from aba_optimiser.model_creator.madx_utils import make_madx_sequence
+from aba_optimiser.noise import assign_bpm_variances
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
 
@@ -87,7 +97,6 @@ def convert_measurements(
             # Convert from mm to metres
             df_combined["x"] = df_combined["x"] / 1000
             df_combined["y"] = df_combined["y"] / 1000
-            df_combined["kick_plane"] = "xy"
 
             # Reorder the rows based on BPM names to match the original order
             original_order = df_x.index.tolist()
@@ -129,76 +138,16 @@ def compute_uniform_vars(
 
 def compute_vars_from_known_noise(combined: pd.DataFrame, bad_bpms: list[str]) -> pd.DataFrame:
     """Compute variances for x and y planes based on known noise levels."""
-    # Read the file in the same directory as this script
-    script_dir = Path(__file__).parent
-    noise_file = script_dir / "bpm_std.txt"
-
-    # The file has three columns: name, x_std, y_std, separated by a space
-    # The units are mm, convert to meters
-    noise_data = pd.read_csv(
-        noise_file,
-        sep=r"\s+",
-        header=0,
-        names=["name", "Horizontal_STD", "Vertical_STD"],
-    )
-    noise_data["Horizontal_STD"] /= 1000  # Convert mm to m
-    noise_data["Vertical_STD"] /= 1000  # Convert mm to m
-    noise_dict_x = noise_data.set_index("name")["Horizontal_STD"].to_dict()
-    noise_dict_y = noise_data.set_index("name")["Vertical_STD"].to_dict()
-    # Replace any 0 std values with infinity, as these should have zero weight (infinite variance)
-    noise_dict_x = {k: (v if v != 0 else float("inf")) for k, v in noise_dict_x.items()}
-    noise_dict_y = {k: (v if v != 0 else float("inf")) for k, v in noise_dict_y.items()}
-
-    # Extract BPM types and compute mean std per type
-    def get_bpm_type(name):
-        if not name.startswith("BPM"):
-            raise ValueError(f"Invalid BPM name: {name}")
-        parts = name.split(".")
-        if len(parts) < 2:
-            raise ValueError(f"Invalid BPM name: {name}")
-        type_ = parts[0].strip("BPM")
-        # Special handling for BPMW variations: treat all as type 'W'
-        if type_.startswith("W") and len(type_) >= 2:
-            return "W"
-        return type_
-
-    noise_data["type"] = noise_data["name"].apply(get_bpm_type)
-
-    type_means_x = {}
-    type_means_y = {}
-    for type_, group in noise_data.groupby("type"):
-        x_vals = group["Horizontal_STD"]
-        y_vals = group["Vertical_STD"]
-        non_zero_x = x_vals[x_vals != 0]
-        non_zero_y = y_vals[y_vals != 0]
-        type_means_x[type_] = (non_zero_x**2).mean() if len(non_zero_x) > 0 else float("inf")
-        type_means_y[type_] = (non_zero_y**2).mean() if len(non_zero_y) > 0 else float("inf")
-
-    def get_variance(bpm, noise_dict, type_means):
-        if bpm in noise_dict:
-            val = noise_dict[bpm] ** 2
-        else:
-            type_ = get_bpm_type(bpm)
-            if type_ not in type_means:
-                raise ValueError(f"Unknown BPM type '{type_}' for BPM {bpm}")
-            val = type_means[type_]
-        if val == float("inf"):
-            return float("inf")
-        return val
-
-    combined["var_x"] = combined["name"].apply(
-        lambda bpm: get_variance(bpm, noise_dict_x, type_means_x)
-    )
-    combined["var_y"] = combined["name"].apply(
-        lambda bpm: get_variance(bpm, noise_dict_y, type_means_y)
-    )
-    combined.loc[combined["name"].isin(bad_bpms), "var_x"] = float("inf")
-    combined.loc[combined["name"].isin(bad_bpms), "var_y"] = float("inf")
-    return combined
+    return assign_bpm_variances(combined, accelerator_type="lhc", bad_bpms=bad_bpms)
 
 
 def run_analysis(
-    analysis_dir: str | Path, model_dir: str | Path, files: list[Path], beam: int
+    analysis_dir: str | Path,
+    model_dir: str | Path,
+    files: list[Path],
+    beam: int,
+    nattunes: list[float],
+    tunes: list[float],
 ) -> list[str]:
     """Load, combine, and process data from multiple files."""
     analysis_dir = Path(analysis_dir)
@@ -210,12 +159,11 @@ def run_analysis(
         outputdir=analysis_dir / "lin_files",
         unit="mm",
         driven_excitation="acd",
-        # nat_tunes=[0.28, 0.31],
         first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
         is_free_kick=False,
         keep_exact_zeros=False,
         max_peak=0.02,
-        nattunes=[0.28, 0.31, 0.0],
+        nattunes=nattunes,
         num_svd_iterations=3,
         opposite_direction=beam == 2,
         output_bits=10,
@@ -225,7 +173,7 @@ def run_analysis(
         svd_dominance_limit=0.925,
         to_write=["lin", "spectra", "full_spectra", "bpm_summary"],
         tune_clean_limit=1e-05,
-        tunes=[0.27, 0.322, 0.0],
+        tunes=tunes,
         turn_bits=14,
         model_dir=model_dir,
         turns=[0, 50000],
@@ -320,7 +268,9 @@ def process_single_dataframe(
     if use_uniform_vars:
         df = compute_uniform_vars(df, bad_bpms)
     else:
+        df.set_index("name", inplace=True)
         df = compute_vars_from_known_noise(df, bad_bpms)
+        df.reset_index(inplace=True)
 
 
     # Calculate pz
@@ -331,6 +281,7 @@ def process_single_dataframe(
         include_errors=True,
         include_optics_errors=True,
         reverse_meas_tws=beam == 2,
+        dpp_override=0.0,
     )
 
     # Divide the variances by 10 because of the svd cleaning reducing noise
@@ -355,6 +306,8 @@ def save_online_knobs(
     """Load and save knob data from NXCal."""
     try:
         from nxcals.spark_session_builder import get_or_create
+        from omc3.machine_data_extraction.mqt_extraction import get_mqt_vals
+        from omc3.machine_data_extraction.nxcals_knobs import get_energy
 
         from aba_optimiser.measurements import knob_extraction
     except ImportError as e:
@@ -364,10 +317,10 @@ def save_online_knobs(
 
     spark = get_or_create()
     if energy is None:
-        energy, _ = knob_extraction.get_energy(spark, meas_time)
+        energy, _ = get_energy(spark, meas_time)
 
     mq_results = knob_extraction.get_mq_vals(spark, meas_time, beam, energy=energy)
-    mqt_results = knob_extraction.get_mqt_vals(spark, meas_time, beam, energy=energy)
+    mqt_results = get_mqt_vals(spark, meas_time, beam, energy=energy)
     ms_results = knob_extraction.get_ms_vals(spark, meas_time, beam, energy=energy)
     mb_results = knob_extraction.get_mb_vals(spark, meas_time, beam, energy=energy)
     corrector_results = knob_extraction.get_mcb_vals(spark, meas_time, beam, energy=energy)
@@ -444,34 +397,39 @@ def detect_bad_bpms(
     bad_bpms[:] = list(set(bad_bpms))
 
 
-def build_madng_twiss_table(model_dir: Path, beam: int, output_dir: Path) -> pd.DataFrame:
+def build_madng_twiss_table(
+    model_dir: Path, beam: int, output_dir: Path, nattunes: list[float], tunes: list[float]
+) -> pd.DataFrame:
     """Create MAD-NG Twiss DataFrame for the given model directory and beam.
 
     Args:
         model_dir: Directory containing the MAD-NG model files
         beam: Beam number (1 or 2)
+        output_dir: Directory to save the generated Twiss table
     Returns:
         Twiss DataFrame with optics parameters
     """
     tws_file = output_dir / "twiss.dat"
     if not tws_file.exists():
-        LOGGER.warning("Generating MAD-NG Twiss tables, TUNES and DRV_TUNES are hardcoded.")
-        tunes = [0.28, 0.31]
-        drv_tunes = [0.27, 0.322]
+        LOGGER.info(
+            f"Generating MAD-NG Twiss tables with extracted model tunes: {nattunes}, {tunes}"
+        )
+        natural_tunes = nattunes[:2]
+        driven_tunes = tunes[:2]
         seq_path = output_dir / f"lhcb{beam}_saved.seq"
         if not seq_path.exists():
-            make_madx_sequence(beam, model_dir, seq_outdir=output_dir, beam4=beam == 2)
+            make_madx_sequence(model_dir, seq_outdir=output_dir)
         with MAD() as mad:
             # Initialize and match tunes
-            initialise_madng_model(mad, beam, output_dir, tunes=tunes)
+            initialise_madng_model(mad, beam, output_dir, tunes=natural_tunes)
 
             # Compute and export twiss tables
             compute_and_export_twiss_tables(
                 mad,
                 beam,
                 output_dir,
-                tunes=tunes,
-                drv_tunes=drv_tunes,
+                tunes=natural_tunes,
+                drv_tunes=driven_tunes,
             )
     return tfs.read(tws_file)
 
@@ -488,6 +446,8 @@ def process_measurements(
     num_workers: int | None = None,
     sequence_path: Path | None = None,
     combine_files: bool = True,
+    nattunes: list[float] | None = None,
+    tunes: list[float] | None = None,
 ) -> tuple[dict[str, pd.DataFrame], list[str], dict[str, Path], pd.DataFrame]:
     """Process measurement files to compute pz data and identify bad BPMs.
 
@@ -503,12 +463,26 @@ def process_measurements(
         sequence_path: Path to the MAD-X sequence file
         combine_files: If True, combine all processed dataframes into one dict entry with key 'combined';
                       if False, return dict with file paths as keys
+        nattunes: Natural tunes [Qx, Qy, Qz] (None to extract from model)
+        tunes: Driven tunes [Qx, Qy, Qz] (None to extract from model)
 
     Returns:
         Tuple of (dict mapping file paths to dataframes, bad_bpms_list, dict mapping keys to output paths, twiss_df)
     """
+    if nattunes is None or tunes is None:
+        job_file = Path(model_dir) / "job.create_model_nominal.madx"
+        nat_x, nat_y, drv_x, drv_y = extract_tunes_from_job_file(job_file)
+        if nattunes is None:
+            nattunes = [nat_x, nat_y, 0.0]
+        if tunes is None:
+            tunes = [drv_x, drv_y, 0.0]
+        LOGGER.info(f"Extracted tunes: nattunes={nattunes}, tunes={tunes}")
+
+    if nattunes is None or tunes is None:
+        raise ValueError("Could not determine natural and driven tunes for measurement processing.")
+
     if bad_bpms is None or previous_analysis_dir is None:
-        bad_bpms = run_analysis(output_dir, model_dir, files, beam)
+        bad_bpms = run_analysis(output_dir, model_dir, files, beam, nattunes, tunes)
         LOGGER.warning(
             "Previous analysis directory not provided; ran analysis for processing measurements."
         )
@@ -527,7 +501,7 @@ def process_measurements(
     data = load_files(files)
     combined = convert_measurements(data, bad_bpms, combine_measurements=combine_files)
     LOGGER.info(f"Combined data has {len(combined)} DataFrames from different files/bunches.")
-    tws = build_madng_twiss_table(Path(model_dir), beam, output_dir)
+    tws = build_madng_twiss_table(Path(model_dir), beam, output_dir, nattunes, tunes)
     tws.columns = [col.lower() for col in tws.columns]
     tws = tws.rename(
         columns={
@@ -622,7 +596,7 @@ def process_measurements(
     sequence_path = sequence_path or get_lhc_file_path(beam)
 
     accelerator = LHC(beam=beam, beam_energy=6800, sequence_file=sequence_path)
-    mad_iface = LHCOptimisationMadInterface(accelerator)
+    mad_iface = GradientDescentMadInterface(accelerator)
     all_bpms = set(mad_iface.all_bpms)
     del mad_iface
 

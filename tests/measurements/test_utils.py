@@ -37,9 +37,18 @@ class TestMergeHorizontalVerticalBPMs:
 
         # Check all measurements are present
         assert len(merged) == 4
-        assert list(merged.columns) == ["name", "turn", "x", "var_x", "px", "var_px",
-                                         "y", "var_y", "py", "var_py", "kick_plane"]
-        assert merged["kick_plane"].iloc[0] == "xy"
+        assert list(merged.columns) == [
+            "name",
+            "turn",
+            "x",
+            "var_x",
+            "px",
+            "var_px",
+            "y",
+            "var_y",
+            "py",
+            "var_py",
+        ]
         assert not merged["x"].isna().any()
         assert not merged["y"].isna().any()
 
@@ -70,14 +79,12 @@ class TestMergeHorizontalVerticalBPMs:
         bpm1_data = merged[merged["name"] == "BPM1"]
         assert not bpm1_data["x"].isna().any()
         assert not bpm1_data["y"].isna().any()
-        assert (bpm1_data["kick_plane"] == "xy").all()
 
         # BPM2 should only have horizontal (y is NaN)
         bpm2_data = merged[merged["name"] == "BPM2"]
         assert not bpm2_data["x"].isna().any()
         assert bpm2_data["y"].isna().all()
         assert bpm2_data["var_y"].isna().all()
-        assert (bpm2_data["kick_plane"] == "x").all()
 
     def test_merge_vertical_only(self) -> None:
         """Test merging when some BPMs only have vertical measurements."""
@@ -106,14 +113,12 @@ class TestMergeHorizontalVerticalBPMs:
         bpm1_data = merged[merged["name"] == "BPM1"]
         assert not bpm1_data["x"].isna().any()
         assert not bpm1_data["y"].isna().any()
-        assert (bpm1_data["kick_plane"] == "xy").all()
 
         # BPM2 should only have vertical (x is NaN)
         bpm2_data = merged[merged["name"] == "BPM2"]
         assert bpm2_data["x"].isna().all()
         assert not bpm2_data["y"].isna().any()
         assert bpm2_data["var_x"].isna().all()
-        assert (bpm2_data["kick_plane"] == "y").all()
 
     def test_merge_mixed_scenario(self) -> None:
         """Test complex scenario with dual-plane, H-only, and V-only BPMs."""
@@ -139,20 +144,6 @@ class TestMergeHorizontalVerticalBPMs:
 
         # Check we have all 3 BPMs
         assert set(merged["name"].unique()) == {"BPM1", "BPM2", "BPM3"}
-
-        # BPM1: dual-plane
-        bpm1_data = merged[merged["name"] == "BPM1"]
-        assert (bpm1_data["kick_plane"] == "xy").all()
-
-        # BPM2: horizontal-only
-        bpm2_data = merged[merged["name"] == "BPM2"]
-        assert (bpm2_data["kick_plane"] == "x").all()
-        assert bpm2_data["y"].isna().all()
-
-        # BPM3: vertical-only
-        bpm3_data = merged[merged["name"] == "BPM3"]
-        assert (bpm3_data["kick_plane"] == "y").all()
-        assert bpm3_data["x"].isna().all()
 
     def test_merge_preserves_turn_structure(self) -> None:
         """Test that turn structure is preserved correctly."""

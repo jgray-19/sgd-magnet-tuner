@@ -65,7 +65,13 @@ class SimulationConfig:
     optimise_momenta: bool = field(default=True)
 
     # Worker mode: arc-by-arc vs whole ring
+    # True: single-turn, range-limited tracking
+    # False: multi-turn tracking with range=nil
     run_arc_by_arc: bool = field(default=True)
+
+    # Number of turns to track in multi-turn worker mode.
+    # Ignored when run_arc_by_arc=True.
+    n_run_turns: int = field(default=1)
 
     # Whether to use different turns for each BPM range
     different_turns_per_range: bool = field(default=False)
@@ -101,6 +107,8 @@ class SimulationConfig:
     total_tracks: int = field(init=False)
 
     def __post_init__(self):
+        if self.n_run_turns < 1:
+            raise ValueError("SimulationConfig.n_run_turns must be >= 1")
         self.total_tracks = self.tracks_per_worker * self.num_workers
 
 
@@ -193,7 +201,6 @@ FILE_COLUMNS: tuple[str, ...] = (
     "var_y",
     "var_px",
     "var_py",
-    "kick_plane",
 )
 
 # =============================================================================
@@ -226,18 +233,7 @@ BEND_ERROR_FILE = PROJECT_ROOT / "data/bend_errors.tfs"
 # TODO AND NOTES
 # =============================================================================
 
-"""
-This has the current problem of no matter the number of files included in the simulation,
-I cannot reduce the error on the final result significantly. I am still limited to 5e-4.
-Potentially, I can get better results by doing the following method:
-1. Optimise the Main Quadrupoles
-3. Optimise the skew quadrupoles ???
-
-S location as a degree of freedom?
-Find out where individual errors might be reduced most.
-
-TODO:
-- Look at adding two more simulations with off momentum errors.
-- Look at understanding the uncertainty - mathematically, where it arises, and
-    which parameters reduce it and how.
-"""
+# Historical notes preserved from development:
+# - the optimisation used to plateau near 5e-4 even when more files were added
+# - follow-up ideas included staged optimisation by magnet family and additional
+#   off-momentum simulations for uncertainty studies

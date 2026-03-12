@@ -1,6 +1,6 @@
 """Model creator utilities for LHC accelerator models."""
 
-from .config import DRV_TUNES, ENERGY, NAT_TUNES
+from .config import DRV_TUNES, ENERGY, NAT_TUNES, YEAR
 from .create_models import create_lhc_model, main
 from .madng_utils import (
     compute_and_export_twiss_tables,
@@ -37,5 +37,4 @@ __all__ = [
     "DRV_TUNES",
     "ENERGY",
     "YEAR",
-    "MODIFIER",
 ]

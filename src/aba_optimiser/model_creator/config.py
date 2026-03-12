@@ -3,10 +3,10 @@
 from typing import Final
 
 # Model configuration
+YEAR: Final[str] = "2025"
 NAT_TUNES: Final[list[float]] = [0.28, 0.31]
 DRV_TUNES: Final[list[float]] = [0.27, 0.322]
 ENERGY: Final[float] = 6800.0
-MADX_FILENAME: Final[str] = "job.create_model_nominal.madx"
 
 # AC Dipole marker pattern - beam number will be formatted in
 AC_MARKER_PATTERN: Final[str] = "MKQA.6L4.B{beam}"

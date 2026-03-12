@@ -34,6 +34,7 @@ MODEL_DIRS = {
         "0.25m": "b1_24cm_flat_injTunes",
         "0.18m": "b1_18cm_flat_injTunes",
         "inj": "OMC3_LHCB1_2025_28m010_31p012",
+        "inj_rdt": "OMC3_LHCB1_2025_inj_28m008_313p010",
     },
     2: {
         "1.2m": "b2_120cm_injTunes",
@@ -46,6 +47,7 @@ MODEL_DIRS = {
         "0.25m": "b2_24cm_flat_injTunes",
         "0.18m": "b2_18cm_flat_injTunes",
         "inj": "OMC_LHCB2_2025_inj_28m010_31p012",
+        "inj_rdt": "2025_LHCB2_inj_028m008_0313p010",
     },
 }
 
@@ -54,14 +56,17 @@ ANALYSIS_DIRS = {
         "1.2m": "2025-04-27_B1_120cm_injTunes_onOffMom",
         "1.2m_agc": "2025-04-27_B1_120cm_injTunes_onOffMom_afterGlobal",
         "inj": "2025-04-20_LHCB1_28m010_31p012_inj_onmom",
+        "inj_rdt": "LHCB1_inj_28m008_313p010_a3b3_RDTs_20-04-25",
     },
     2: {
         "1.2m": "2025-04-27_B2_120cm_injTunes_onOffMom",
+        "inj_rdt": "17-29-02_ANALYSIS_highkicks_Injection",
     },
 }
 
 MEASUREMENT_DATES = {
     "inj": "2025-04-20",
+    "inj_rdt": "2025-04-20",
 }
 
 
@@ -96,7 +101,7 @@ def get_or_make_sequence(beam: int, model_dir: Path) -> Path:
         return seq_path
 
     logger.info(f"Generating new sequence: {seq_path}")
-    make_madx_sequence(beam, model_dir, seq_outdir=sequences_dir)
+    make_madx_sequence(model_dir, seq_outdir=sequences_dir)
     generated = sequences_dir / f"lhcb{beam}_saved.seq"
     generated.rename(seq_path)
     return seq_path
@@ -252,3 +257,37 @@ def get_ir_bpm_ranges_from_model(
 
     magnet_range = f"BPM.9L{ip}.B1/BPM.9R{ip}.B1" if beam == 1 else f"BPM.9R{ip}.B2/BPM.9L{ip}.B2"
     return magnet_range, before_bpms, after_bpms
+
+
+def extract_tunes_from_job_file(job_file_path: Path) -> tuple[float, float, float, float]:
+    """Extract natural and driven tunes from the MAD-X job file.
+
+    Args:
+        job_file_path: Path to the job.create_model_nominal.madx file
+
+    Returns:
+        Tuple of (nat_x, nat_y, drv_x, drv_y)
+    """
+    import re
+
+    with job_file_path.open("r") as f:
+        content = f.read()
+
+    # Regex to match twiss_ac_dipole(nat_x, nat_y, drv_x, drv_y, ...)
+    number_pattern = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
+    match = re.search(
+        rf"twiss_ac_dipole\(\s*({number_pattern})\s*,\s*({number_pattern})\s*,\s*({number_pattern})\s*,\s*({number_pattern})\s*,",
+        content,
+    )
+    if not match:
+        raise ValueError(f"Could not find twiss_ac_dipole call in {job_file_path}")
+
+    nat_x = float(match.group(1))
+    nat_y = float(match.group(2))
+    drv_x = float(match.group(3))
+    drv_y = float(match.group(4))
+
+    logger.info(
+        f"Extracted tunes from {job_file_path}: nat_x={nat_x}, nat_y={nat_y}, drv_x={drv_x}, drv_y={drv_y}"
+    )
+    return nat_x, nat_y, drv_x, drv_y
