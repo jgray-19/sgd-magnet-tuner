@@ -109,6 +109,7 @@ class BaseController(ABC):
                 true_strengths_dict, initial_knob_strengths
             )
         )
+        self._validate_knob_initialisation()
 
         # Use initial knobs as true strengths if none provided
         if not true_strengths_dict:
@@ -133,6 +134,24 @@ class BaseController(ABC):
             show_plots=self.show_plots,
             accelerator=self.accelerator,
         )
+
+    def _validate_knob_initialisation(self) -> None:
+        """Validate that controller setup produced a usable knob set."""
+        knob_names = self.config_manager.knob_names
+        if not knob_names:
+            raise ValueError(
+                "No optimisation knobs were created for this controller configuration. "
+                f"Optimisation is enabled, but the MAD model returned zero knobs for "
+                f"magnet range '{self.config_manager.magnet_range}'. Check that the "
+                "selected optimisation flags match elements present in the loaded "
+                "sequence and range."
+            )
+
+        if len(self.initial_knobs) != len(knob_names):
+            raise ValueError(
+                "Knob initialisation produced an inconsistent result: "
+                f"{len(knob_names)} knob names but {len(self.initial_knobs)} initial values."
+            )
 
     def setup_logging(self, log_suffix: str = "opt") -> SummaryWriter | None:
         """Set up TensorBoard logging.

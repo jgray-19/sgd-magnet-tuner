@@ -12,12 +12,10 @@ from pathlib import Path
 
 @dataclass
 class SequenceConfig:
-    """Configuration for MAD-NG sequence and beam parameters.
+    """Configuration for the sequence segment used during optimisation.
 
-    Attributes:
-        magnet_range: Range of magnets to optimize (e.g., "BPM.9R2.B1/BPM.9L3.B1")
-        first_bpm: First BPM in the sequence (None for auto-detection)
-        bad_bpms: List of BPM names to exclude from analysis
+    The fields define the magnet range to expose to MAD-NG, the optional BPM
+    used as the sequence start, and any BPMs that should be ignored.
     """
 
     magnet_range: str
@@ -27,15 +25,11 @@ class SequenceConfig:
 
 @dataclass
 class MeasurementConfig:
-    """Configuration for measurement data files.
+    """Measurement inputs and associated machine-state files.
 
-    Attributes:
-        measurement_files: Measurement data file(s) - can be single file or list
-        corrector_files: Corrector strength file(s) - can be single file or list
-        tune_knobs_files: Tune knob file(s) - can be single file or list
-        machine_deltaps: Machine momentum offset(s) - can be single value or list
-        num_tracks: Number of particle tracks per measurement file
-        flattop_turns: Number of turns recorded on the flat top
+    Single file or scalar inputs are normalised to lists in ``__post_init__``
+    so the rest of the training stack can treat multi-file and single-file
+    runs uniformly.
     """
 
     measurement_files: list[Path] | Path

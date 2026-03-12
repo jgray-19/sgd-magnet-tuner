@@ -54,6 +54,7 @@ class Controller(BaseController):
         plots_dir: Path | None = None,
         debug: bool = False,
         mad_logfile: Path | None = None,
+        optimise_knobs: list[str] | None = None,
         write_tensorboard_logs: bool = True,
     ):
         """
@@ -73,6 +74,7 @@ class Controller(BaseController):
             plots_dir (Path | None, optional): Directory to save plots. Defaults to plots/.
             debug (bool, optional): Enable debug mode. Defaults to False.
             mad_logfile (Path | None, optional): Path to MAD log file. Defaults to None.
+            optimise_knobs (list[str] | None, optional): List of global knob names to optimise.
             write_tensorboard_logs (bool, optional): Whether to write TensorBoard logs.
                 Defaults to True.
         """
@@ -115,6 +117,7 @@ class Controller(BaseController):
             first_bpm=sequence_config.first_bpm,
             debug=debug,
             mad_logfile=mad_logfile,
+            optimise_knobs=optimise_knobs,
             write_tensorboard_logs=write_tensorboard_logs,
         )
 
@@ -174,10 +177,13 @@ class Controller(BaseController):
 
             # Clean up memory after workers are started
             self._cleanup_memory()
+            channels = self.worker_manager.channels
+            if channels is None:
+                raise RuntimeError("Worker channels are not initialised")
 
             self.final_knobs = self.optimisation_loop.run_optimisation(
                 self.initial_knobs,
-                self.worker_manager.parent_conns,
+                channels,
                 writer,
                 run_start,
                 total_turns,
@@ -313,6 +319,7 @@ class Controller(BaseController):
             corrector_strengths_files=self.corrector_files,
             tune_knobs_files=self.tune_knobs_files,
             all_bpms=self.config_manager.all_bpms,
+            file_kick_planes=self.data_manager.file_kick_planes,
             bad_bpms=bad_bpms,
             flattop_turns=flattop_turns,
             num_tracks=num_tracks,
@@ -339,9 +346,7 @@ class Controller(BaseController):
                 true_strengths_dict["pt"] = self.config_manager.mad_iface.dp2pt(
                     true_strengths_dict.pop("deltap")
                 )
-        return self.accelerator.normalise_true_strengths(
-            true_strengths_dict, self.config_manager.bend_lengths
-        )
+        return self.accelerator.normalise_true_strengths(true_strengths_dict)
 
     def _process_initial_knobs(self, initial_knob_strengths) -> dict[str, float] | None:
         """Process initial knob strengths, converting deltap to pt if present."""

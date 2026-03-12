@@ -7,6 +7,8 @@ import logging
 import multiprocessing as mp
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+from aba_optimiser.workers.protocol import WorkerChannels
+
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
@@ -34,6 +36,13 @@ class WorkerLifecycleManager(Generic[WorkerType, PayloadType]):
         self.worker_class = worker_class
         self.workers: list[WorkerType] = []
         self.parent_conns: list[Connection] = []
+        self.channels: WorkerChannels | None = None
+
+    def _channels(self) -> WorkerChannels:
+        """Return the active worker channels."""
+        if self.channels is None:
+            raise RuntimeError("Worker channels are not initialised")
+        return self.channels
 
     def create_and_start_workers(
         self,
@@ -63,6 +72,7 @@ class WorkerLifecycleManager(Generic[WorkerType, PayloadType]):
             if send_handshake:
                 parent.send(None)
 
+        self.channels = WorkerChannels(self.parent_conns, self.workers)
         LOGGER.info(f"Successfully started {len(self.workers)} workers")
 
     def terminate_workers(self, termination_signal: Any = (None, None)) -> None:
@@ -74,11 +84,17 @@ class WorkerLifecycleManager(Generic[WorkerType, PayloadType]):
         LOGGER.info("Terminating workers...")
 
         # Send termination signal to all workers
-        for conn in self.parent_conns:
+        if self.channels is not None:
             try:
-                conn.send(termination_signal)
+                self.channels.send_all(termination_signal)
             except (OSError, ConnectionError) as e:
                 LOGGER.warning(f"Error sending termination signal: {e}")
+        else:
+            for conn in self.parent_conns:
+                try:
+                    conn.send(termination_signal)
+                except (OSError, ConnectionError) as e:
+                    LOGGER.warning(f"Error sending termination signal: {e}")
 
         # Wait for all workers to finish
         for worker in self.workers:
@@ -103,8 +119,7 @@ class WorkerLifecycleManager(Generic[WorkerType, PayloadType]):
         Args:
             message: Message to send to all workers
         """
-        for conn in self.parent_conns:
-            conn.send(message)
+        self._channels().send_all(message)
 
     def collect_results(self) -> list[Any]:
         """Collect results from all workers.
@@ -112,12 +127,10 @@ class WorkerLifecycleManager(Generic[WorkerType, PayloadType]):
         Returns:
             List of results from each worker
         """
-        results = []
-        for conn in self.parent_conns:
-            results.append(conn.recv())
-        return results
+        return self._channels().recv_all()
 
     def cleanup(self) -> None:
         """Clean up resources."""
         self.workers.clear()
         self.parent_conns.clear()
+        self.channels = None

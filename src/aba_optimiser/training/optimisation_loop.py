@@ -14,11 +14,10 @@ from aba_optimiser.optimisers.lbfgs import LBFGSOptimiser
 from aba_optimiser.training.scheduler import LRScheduler
 
 if TYPE_CHECKING:
-    from multiprocessing.connection import Connection
-
     from tensorboardX import SummaryWriter
 
     from aba_optimiser.config import OptimiserConfig, SimulationConfig
+    from aba_optimiser.workers.protocol import WorkerChannels
 
 LOGGER = logging.getLogger(__name__)
 
@@ -110,7 +109,7 @@ class OptimisationLoop:
     def run_optimisation(
         self,
         current_knobs: dict[str, float],
-        parent_conns: list[Connection],
+        channels: WorkerChannels,
         writer: SummaryWriter | None,
         run_start: float,
         total_turns: int,
@@ -130,11 +129,9 @@ class OptimisationLoop:
             lr = self.scheduler(epoch)
 
             for batch in range(self.num_batches):
-                # Send knobs to workers
-                for conn in parent_conns:
-                    conn.send((current_knobs, batch))
+                channels.send_all((current_knobs, batch))
 
-                batch_loss, batch_grad = self._collect_batch_results(parent_conns)
+                batch_loss, batch_grad = self._collect_batch_results(channels)
                 epoch_loss += batch_loss
                 epoch_grad += batch_grad
 
@@ -206,7 +203,7 @@ class OptimisationLoop:
 
         return self.best_knobs
 
-    def _collect_batch_results(self, parent_conns: list[Connection]) -> tuple[float, np.ndarray]:
+    def _collect_batch_results(self, channels: WorkerChannels) -> tuple[float, np.ndarray]:
         """Collect results from all workers for a batch.
 
         Aggregates gradients using per-knob averaging: each knob's gradient is
@@ -217,9 +214,11 @@ class OptimisationLoop:
         """
         total_loss = 0.0
         agg_grad = np.zeros(len(self.knob_names), dtype=float)
+        for result in channels.recv_all():
+            if not isinstance(result, tuple) or len(result) != 3:
+                raise RuntimeError(f"Unexpected worker result payload: {result!r}")
 
-        for conn in parent_conns:
-            _, grad, loss = conn.recv()
+            _, grad, loss = result
             if loss == float("inf"):
                 LOGGER.error("Worker error detected, stopping optimisation immediately.")
                 raise RuntimeError("Worker error detected during optimisation")

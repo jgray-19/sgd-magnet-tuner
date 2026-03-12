@@ -127,8 +127,9 @@ def load_tfs_files(
 
     Args:
         directory: Directory containing the TFS files
-        file_specs: Dict mapping keys to (prefix, suffix) tuples
-            Example: {"beta_x": ("beta_phase_", "x")} -> beta_phase_x.tfs
+        file_specs: Mapping from result keys to ``(prefix, suffix)`` tuples.
+            For example, ``{"beta_x": ("beta_phase_", "x")}`` loads the file
+            named ``beta_phase_x.tfs``.
 
     Returns:
         Dictionary mapping keys to loaded DataFrames

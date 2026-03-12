@@ -1,9 +1,8 @@
-"""Worker management for the optimisation controller.
+"""Worker orchestration for tracking optimisation.
 
-This module provides the WorkerManager class which handles the creation,
-management, and coordination of worker processes for parallel optimisation
-tasks in the ABA optimiser framework. It facilitates distributed computation
-of loss functions and gradients across multiple worker processes.
+`WorkerManager` intentionally focuses on process orchestration, screening, and
+result collection. Worker-range selection lives in :mod:`worker_setup`, and
+payload construction lives in :mod:`worker_payloads`.
 """
 
 from __future__ import annotations
@@ -15,16 +14,16 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.config import PROTON_MASS
-from aba_optimiser.physics.deltap import dp2pt
-from aba_optimiser.training.utils import create_bpm_range_specs, extract_bpm_range_names
+from aba_optimiser.training.worker_payloads import WorkerPayloadBuilder
+from aba_optimiser.training.worker_setup import WorkerRuntimeMetadata, WorkerSetupHelper
 from aba_optimiser.workers import (
-    PrecomputedTrackingWeights,
+    SinglePlanePositionOnlyTrackingWorker,
+    SinglePlaneTrackingWorker,
     TrackingData,
     TrackingWorker,
-    WeightProcessor,
     WorkerConfig,
 )
+from aba_optimiser.workers.protocol import WorkerChannels, raise_for_worker_error_payload
 from aba_optimiser.workers.tracking_position_only import PositionOnlyTrackingWorker
 
 if TYPE_CHECKING:
@@ -41,21 +40,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class WorkerManager:
-    """Manages worker processes for parallel optimisation.
-
-    The WorkerManager is responsible for:
-    - Creating and distributing work payloads to worker processes
-    - Starting and managing multiprocessing workers
-    - Collecting results and gradients from workers
-    - Coordinating communication between the main process and workers
-    - Handling worker termination and cleanup
-
-    Attributes:
-        Worker (type[BaseWorker]): The worker class to instantiate for each process
-        n_data_points (dict[str, int]): Number of data points per BPM for payload creation
-        parent_conns (list[Connection]): List of parent connections to worker processes
-        workers (list[mp.Process]): List of worker process objects
-    """
+    """Create worker payloads, launch processes, and manage runtime coordination."""
 
     def __init__(
         self,
@@ -68,6 +53,7 @@ class WorkerManager:
         corrector_strengths_files: list[Path],
         tune_knobs_files: list[Path],
         all_bpms: list[str],
+        file_kick_planes: dict[int, str] | None = None,
         bad_bpms: list[str] | None = None,
         flattop_turns: int = 1000,
         num_tracks: int = 1,
@@ -75,26 +61,8 @@ class WorkerManager:
         debug: bool = False,
         mad_logfile: Path | None = None,
         optimise_knobs: list[str] | None = None,
-    ):
-        """Initialise the WorkerManager.
-
-        Args:
-            n_data_points: Number of data points per BPM pair
-            ybpm: Y BPM name
-            magnet_range: Range of magnets
-            fixed_start: Fixed start BPM
-            fixed_end: Fixed end BPM
-            accelerator: Accelerator instance encapsulating machine parameters
-            corrector_strengths_files: List of corrector strength files
-            tune_knobs_files: List of tune knob files
-            bad_bpms: List of bad BPMs
-            flattop_turns: Number of flattop turns
-            num_tracks: Number of tracks
-            use_fixed_bpm: Whether to use fixed BPM
-            debug: Debug mode
-            mad_logfile: MAD log file path
-            optimise_knobs: List of knobs to optimize
-        """
+    ) -> None:
+        # `n_data_points` is kept for constructor compatibility with existing callers.
         self.n_data_points = n_data_points
         self.parent_conns: list[Connection] = []
         self.workers: list[mp.Process] = []
@@ -105,9 +73,9 @@ class WorkerManager:
         self.accelerator = accelerator
         self.corrector_strengths_files = corrector_strengths_files
         self.tune_knobs_files = tune_knobs_files
-        self._pos_cache: dict[int, dict[tuple[int, str], int]] = {}
         self.bad_bpms = bad_bpms
         self.all_bpms = all_bpms
+        self.file_kick_planes = file_kick_planes or {}
         self.use_fixed_bpm = use_fixed_bpm
         self.beam_energy = accelerator.beam_energy
         self.flattop_turns = flattop_turns
@@ -115,11 +83,83 @@ class WorkerManager:
         self.debug = debug
         self.mad_logfile = mad_logfile
         self.optimise_knobs = optimise_knobs
-        self.worker_metadata: list[dict[str, object]] = []
+        self.worker_metadata: list[WorkerRuntimeMetadata] = []
+        self.channels: WorkerChannels | None = None
 
-    def _compute_pt(self, file_idx: int, machine_deltaps: list[float]) -> float:
-        """Compute transverse momentum based on file index."""
-        return dp2pt(machine_deltaps[file_idx], PROTON_MASS, self.beam_energy)
+        self.setup_helper = WorkerSetupHelper(
+            accelerator=accelerator,
+            all_bpms=all_bpms,
+            fixed_start=fixed_start,
+            fixed_end=fixed_end,
+            use_fixed_bpm=use_fixed_bpm,
+            bad_bpms=bad_bpms,
+            file_kick_planes=self.file_kick_planes,
+            magnet_range=magnet_range,
+            corrector_strengths_files=corrector_strengths_files,
+            tune_knobs_files=tune_knobs_files,
+            debug=debug,
+            mad_logfile=mad_logfile,
+        )
+        self.payload_builder = WorkerPayloadBuilder(
+            accelerator=accelerator,
+            all_bpms=all_bpms,
+            beam_energy=self.beam_energy,
+        )
+
+    def _sync_helpers(self) -> None:
+        """Keep helper objects aligned with mutable manager attributes."""
+        self.setup_helper.bad_bpms = self.bad_bpms
+        self.setup_helper.file_kick_planes = self.file_kick_planes
+        self.setup_helper.corrector_strengths_files = self.corrector_strengths_files
+        self.setup_helper.tune_knobs_files = self.tune_knobs_files
+        self.payload_builder.all_bpms = self.all_bpms
+
+    def _channels(self) -> WorkerChannels:
+        """Return the active worker channels."""
+        if self.channels is None:
+            raise RuntimeError("Worker channels are not initialised")
+        return self.channels
+
+    @staticmethod
+    def _select_worker_class(kick_plane: str, optimise_momenta: bool):
+        """Select the worker implementation for a payload."""
+        if kick_plane == "xy":
+            return TrackingWorker if optimise_momenta else PositionOnlyTrackingWorker
+        if kick_plane in {"x", "y"}:
+            return (
+                SinglePlaneTrackingWorker
+                if optimise_momenta
+                else SinglePlanePositionOnlyTrackingWorker
+            )
+        raise ValueError(f"Unsupported kick plane {kick_plane!r}")
+
+    @staticmethod
+    def _summarise_file_usage(
+        payloads: list[tuple[TrackingData, WorkerConfig, int]],
+        num_files: int,
+    ) -> None:
+        """Log measurement-file usage and validate that at least one worker exists."""
+        file_usage: dict[int, int] = {}
+        for _, _, file_idx in payloads:
+            file_usage[file_idx] = file_usage.get(file_idx, 0) + 1
+
+        LOGGER.info(
+            "Created %d workers using files: %s",
+            len(payloads),
+            ", ".join(f"file_{idx}={count} workers" for idx, count in sorted(file_usage.items())),
+        )
+
+        if len(file_usage) < num_files:
+            LOGGER.warning(
+                "Only %d/%d measurement files are being used by workers! "
+                "This may lead to poor optimisation if different files have different deltap values.",
+                len(file_usage),
+                num_files,
+            )
+        if not file_usage:
+            raise ValueError(
+                "No worker payloads were created; check your input data and batch configuration"
+            )
 
     def create_worker_payloads(
         self,
@@ -128,320 +168,63 @@ class WorkerManager:
         file_turn_map: dict[int, int],
         start_bpms: list[str],
         end_bpms: list[str],
+        simulation_config: SimulationConfig,
         machine_deltaps: list[float],
     ) -> list[tuple[TrackingData, WorkerConfig, int]]:
-        """Create payloads for all workers.
-
-        Args:
-            track_data: Dictionary mapping file indices to track data DataFrames
-            turn_batches: List of turn batches, each containing turn numbers for a worker
-            file_turn_map: Mapping from turn numbers to file indices
-            start_bpms: List of start BPMs (varying starts, track forward to fixed_end)
-            end_bpms: List of end BPMs (varying ends, track backward from fixed_start)
-            machine_deltaps: List of machine deltaps corresponding to each file
-        """
+        """Create per-worker data/config payloads from measurement files."""
+        self._sync_helpers()
         payloads: list[tuple[TrackingData, WorkerConfig, int]] = []
-        arrays_cache = {idx: self._extract_arrays(df) for idx, df in track_data.items()}
+        arrays_cache = {idx: self.payload_builder.extract_arrays(df) for idx, df in track_data.items()}
+        range_specs = self.setup_helper.build_range_specs(start_bpms, end_bpms, simulation_config)
 
-        # Build range specs: (start, end, sdir)
-        range_specs = create_bpm_range_specs(
-            start_bpms, end_bpms, self.use_fixed_bpm, self.fixed_start, self.fixed_end
-        )
+        LOGGER.info("Creating %d range specs x %d batches", len(range_specs), len(turn_batches))
 
-        LOGGER.info(f"Creating {len(range_specs)} range specs × {len(turn_batches)} batches")
-
-        for start_bpm, end_bpm, sdir in range_specs:
+        for range_spec in range_specs:
             for batch_idx, turn_batch in enumerate(turn_batches):
                 if not turn_batch:
-                    raise ValueError(f"Empty batch {batch_idx} for {start_bpm}/{end_bpm}")
+                    raise ValueError(
+                        f"Empty batch {batch_idx} for {range_spec.start_bpm}/{range_spec.end_bpm}"
+                    )
 
-                # All turns must be from same file
-                primary_file_idx = file_turn_map[turn_batch[0]]
-                if any(file_turn_map[t] != primary_file_idx for t in turn_batch):
-                    raise ValueError(f"Batch {batch_idx} has turns from multiple files")
+                primary_file_idx = self.setup_helper.get_primary_file_idx(turn_batch, file_turn_map)
+                plans = self.setup_helper.build_observation_plans(range_spec, primary_file_idx)
+                if not plans:
+                    LOGGER.debug(
+                        "Skipping worker for %s/%s sdir=%d on file %d: no valid observation plan",
+                        range_spec.start_bpm,
+                        range_spec.end_bpm,
+                        range_spec.sdir,
+                        primary_file_idx,
+                    )
+                    continue
 
-                # Create payload arrays
-                pos, mom, pos_var, mom_var, init_coords, pts = self._make_worker_payload(
-                    turn_batch,
-                    file_turn_map,
-                    start_bpm,
-                    end_bpm,
-                    self.n_data_points[(start_bpm, end_bpm)],
-                    sdir,
-                    machine_deltaps,
-                    arrays_cache,
-                    track_data,
-                )
+                for plan in plans:
+                    data = self.payload_builder.make_tracking_data(
+                        turn_batch=turn_batch,
+                        file_turn_map=file_turn_map,
+                        plan=plan,
+                        machine_deltaps=machine_deltaps,
+                        arrays_cache=arrays_cache,
+                        track_data=track_data,
+                        n_run_turns=simulation_config.n_run_turns,
+                    )
+                    config = self.setup_helper.make_worker_config(plan)
+                    payloads.append((data, config, primary_file_idx))
 
-                for arr in (pos, mom, pos_var, mom_var):
-                    arr.setflags(write=False)
+                    LOGGER.debug(
+                        "Worker %d: file=%d, range=%s/%s, sdir=%d, turns=%d, kick_plane=%s, observed_bpms=%d",
+                        len(payloads) - 1,
+                        primary_file_idx,
+                        range_spec.start_bpm,
+                        range_spec.end_bpm,
+                        range_spec.sdir,
+                        len(turn_batch),
+                        plan.kick_plane,
+                        len(plan.bpm_names),
+                    )
 
-                LOGGER.debug(
-                    f"Worker {len(payloads)}: file={primary_file_idx}, range={start_bpm}/{end_bpm}, sdir={sdir}, turns={len(turn_batch)}"
-                )
-                data = TrackingData(
-                    position_comparisons=pos,
-                    momentum_comparisons=mom,
-                    position_variances=pos_var,
-                    momentum_variances=mom_var,
-                    init_coords=init_coords,
-                    init_pts=pts,
-                    precomputed_weights=None,
-                )
-                config = WorkerConfig(
-                    accelerator=self.accelerator,
-                    start_bpm=start_bpm,
-                    end_bpm=end_bpm,
-                    magnet_range=self.magnet_range,
-                    corrector_strengths=self.corrector_strengths_files[primary_file_idx],
-                    tune_knobs_file=self.tune_knobs_files[primary_file_idx],
-                    sdir=sdir,
-                    bad_bpms=self.bad_bpms,
-                    debug=self.debug,
-                    mad_logfile=self.mad_logfile,
-                )
-
-                payloads.append((data, config, primary_file_idx))
-
-        # Log summary of worker file assignments
-        file_usage = {}
-        for _, _, file_idx in payloads:
-            file_usage[file_idx] = file_usage.get(file_idx, 0) + 1
-
-        LOGGER.info(
-            f"Created {len(payloads)} workers using files: "
-            + ", ".join(f"file_{idx}={count} workers" for idx, count in sorted(file_usage.items()))
-        )
-
-        # Verify all files are used if we have enough batches
-        num_files = len(self.corrector_strengths_files)
-        if len(file_usage) < num_files:
-            LOGGER.warning(
-                f"Only {len(file_usage)}/{num_files} measurement files are being used by workers! "
-                f"This may lead to poor optimisation if different files have different deltap values."
-            )
-        if len(file_usage) == 0:
-            raise ValueError(
-                "No worker payloads were created; check your input data and batch configuration"
-            )
-
+        self._summarise_file_usage(payloads, len(self.corrector_strengths_files))
         return payloads
-
-    def _generate_bpm_plane_masks(self, config: WorkerConfig) -> tuple[np.ndarray, np.ndarray]:
-        """Generate plane masks for a worker's BPM range.
-
-        Args:
-            config: Worker configuration containing BPM range and bad BPMs
-
-        Returns:
-            Tuple of (h_mask, v_mask) as numpy arrays with shape (1, n_bpms)
-        """
-        # Order BPMs correctly for tracking direction
-        bpm_list_ordered = extract_bpm_range_names(
-            self.all_bpms, config.start_bpm, config.end_bpm, config.sdir
-        )
-
-        # Generate masks from accelerator
-        bad_bpms = config.bad_bpms or []
-        h_mask, v_mask = config.accelerator.get_bpm_plane_mask(bpm_list_ordered, bad_bpms)
-
-        # Convert to numpy arrays with shape (1, n_bpms) for broadcasting
-        h_mask_array = np.array(h_mask, dtype=np.float64).reshape(1, -1)
-        v_mask_array = np.array(v_mask, dtype=np.float64).reshape(1, -1)
-
-        return h_mask_array, v_mask_array
-
-    def _attach_global_weights(
-        self,
-        payloads: list[tuple[TrackingData, WorkerConfig, int]],
-        num_batches: int,
-    ) -> list[tuple[TrackingData, WorkerConfig, int]]:
-        """Precompute globally normalised weights for all tracking workers.
-
-        Weighting is computed once across all worker payloads to ensure
-        consistent scaling between workers. Also applies BPM plane masks for
-        single-plane BPMs and per-plane bad BPM filtering.
-        """
-        if not payloads:
-            return payloads
-
-        # Extract variance slices for all payloads (shape: pos[:,:,0], pos[:,:,1], mom[:,:,0], mom[:,:,1])
-        payload_data: list[tuple[TrackingData, WorkerConfig, int, list[np.ndarray]]] = []
-        for data, config, file_idx in payloads:
-            n_init = len(data.init_coords) - (len(data.init_coords) % num_batches)
-            if n_init <= 0:
-                raise ValueError(
-                    f"Worker payload for file {file_idx} has no usable particles after batching"
-                )
-            var_slices = [
-                data.position_variances[:n_init, :, 0],  # x
-                data.position_variances[:n_init, :, 1],  # y
-                data.momentum_variances[:n_init, :, 0],  # px
-                data.momentum_variances[:n_init, :, 1],  # py
-            ]
-            payload_data.append((data, config, file_idx, var_slices))
-
-        # Compute variance floors for all dimensions
-        all_variances = [[var_slices[i] for _, _, _, var_slices in payload_data] for i in range(4)]
-        floors = [
-            WeightProcessor.compute_variance_floor(
-                np.concatenate([v.reshape(-1) for v in dim_vars])
-            )
-            for dim_vars in all_variances
-        ]
-
-        # Compute weights and find global max (raw, unnormalised)
-        weight_cache: list[tuple[TrackingData, WorkerConfig, int, list[np.ndarray]]] = []
-        global_max = 0.0
-        for data, config, file_idx, var_slices in payload_data:
-            # Compute raw weights from variances
-            raw_weights = [
-                WeightProcessor.variance_to_weight(
-                    WeightProcessor.floor_variances(var_slice, floor_value=floor)
-                )
-                for i, (var_slice, floor) in enumerate(zip(var_slices, floors))
-            ]
-
-            # Apply BPM plane masks (handles single-plane BPMs and per-plane bad BPM filtering)
-            h_mask, v_mask = self._generate_bpm_plane_masks(config)
-            raw_weights[0] *= h_mask  # x
-            raw_weights[1] *= v_mask  # y
-            raw_weights[2] *= h_mask  # px
-            raw_weights[3] *= v_mask  # py
-
-            global_max = max(
-                global_max,
-                max((np.max(w) if w.size else 0.0) for w in raw_weights),
-            )
-            weight_cache.append((data, config, file_idx, raw_weights))
-
-        # Normalize and attach weights
-        normaliser = global_max if global_max > 0.0 else 1.0
-        if global_max == 0.0:
-            LOGGER.warning("All computed weights are zero; skipping global normalisation")
-
-        for data, config, file_idx, raw_weights in weight_cache:
-            normalized = [w / normaliser for w in raw_weights]
-            data.precomputed_weights = PrecomputedTrackingWeights(
-                x=normalized[0],
-                y=normalized[1],
-                px=normalized[2],
-                py=normalized[3],
-                hessian_x=WeightProcessor.aggregate_hessian_weights(raw_weights[0]),
-                hessian_y=WeightProcessor.aggregate_hessian_weights(raw_weights[1]),
-                hessian_px=WeightProcessor.aggregate_hessian_weights(raw_weights[2]),
-                hessian_py=WeightProcessor.aggregate_hessian_weights(raw_weights[3]),
-            )
-            LOGGER.debug(
-                f"Attached precomputed weights to worker payload for file {file_idx}\n"
-                f"x max={np.max(normalized[0]):.3e}, min={np.min(normalized[0]):.3e}, mean={np.mean(normalized[0]):.3e}\n"
-                f"y max={np.max(normalized[1]):.3e}, min={np.min(normalized[1]):.3e}, mean={np.mean(normalized[1]):.3e}\n"
-                f"px max={np.max(normalized[2]):.3e}, min={np.min(normalized[2]):.3e}, mean={np.mean(normalized[2]):.3e}\n"
-                f"py max={np.max(normalized[3]):.3e}, min={np.min(normalized[3]):.3e}, mean={np.mean(normalized[3]):.3e}\n",
-            )
-
-        LOGGER.info(
-            "Global weight normalisation complete: max weight=%.3e across %d payloads",
-            global_max,
-            len(payloads),
-        )
-
-        return payloads
-
-    def _extract_arrays(self, df: pd.DataFrame) -> dict[str, np.ndarray]:
-        """Extract numpy arrays from DataFrame once for memory efficiency."""
-        return {
-            "x": df["x"].to_numpy(dtype="float64", copy=False),
-            "y": df["y"].to_numpy(dtype="float64", copy=False),
-            "px": df["px"].to_numpy(dtype="float64", copy=False),
-            "py": df["py"].to_numpy(dtype="float64", copy=False),
-            "var_x": df["var_x"].to_numpy(dtype="float64", copy=False),
-            "var_y": df["var_y"].to_numpy(dtype="float64", copy=False),
-            "var_px": df["var_px"].to_numpy(dtype="float64", copy=False),
-            "var_py": df["var_py"].to_numpy(dtype="float64", copy=False),
-        }
-
-    def _make_worker_payload(
-        self,
-        turn_batch: list[int],
-        file_turn_map: dict[int, int],
-        start_bpm: str,
-        end_bpm: str,
-        n_data_points: int,
-        sdir: int,
-        machine_deltaps: list[float],
-        arrays_cache: dict[int, dict[str, np.ndarray]],
-        track_data: dict[int, pd.DataFrame],
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Create arrays for worker payload."""
-        n_turns = len(turn_batch)
-        pos = np.empty((n_turns, n_data_points, 2), dtype="float64")
-        mom = np.empty((n_turns, n_data_points, 2), dtype="float64")
-        pos_var = np.empty((n_turns, n_data_points, 2), dtype="float64")
-        mom_var = np.empty((n_turns, n_data_points, 2), dtype="float64")
-        init_coords = np.empty((n_turns, 6), dtype="float64")
-        pts = np.empty((n_turns,), dtype="float64")
-        init_bpm = start_bpm if sdir == 1 else end_bpm
-
-        for i, turn in enumerate(turn_batch):
-            file_idx = file_turn_map[turn]
-            cache = arrays_cache[file_idx]
-            df = track_data[file_idx]
-            arr_x, arr_y, arr_px, arr_py = cache["x"], cache["y"], cache["px"], cache["py"]
-            arr_vx, arr_vy, arr_vpx, arr_vpy = (
-                cache["var_x"],
-                cache["var_y"],
-                cache["var_px"],
-                cache["var_py"],
-            )
-
-            pts[i] = self._compute_pt(file_idx, machine_deltaps)
-
-            # Determine initial turn for backward tracking
-            init_turn = turn
-            if sdir == -1:
-                start_pos = self._get_pos(df, turn, start_bpm)
-                end_pos = start_pos + n_data_points - 1
-                init_turn = self.get_turn(df, end_pos)
-
-            init_pos = self._get_pos(df, init_turn, init_bpm)
-
-            # Extract kick plane and zero out non-kicked planes in initial conditions
-            kick_plane = df.iloc[init_pos]["kick_plane"]
-            x_val = arr_x[init_pos] if "x" in kick_plane else 0.0
-            px_val = arr_px[init_pos] if "x" in kick_plane else 0.0
-            y_val = arr_y[init_pos] if "y" in kick_plane else 0.0
-            py_val = arr_py[init_pos] if "y" in kick_plane else 0.0
-
-            init_coords[i, :] = [x_val, px_val, y_val, py_val, 0.0, pts[i]]
-
-            # Extract data slice
-            sl = (
-                slice(init_pos, init_pos - n_data_points, -1)
-                if sdir == -1
-                else slice(init_pos, init_pos + n_data_points)
-            )
-            pos[i, :, 0], pos[i, :, 1] = arr_x[sl], arr_y[sl]
-            mom[i, :, 0], mom[i, :, 1] = arr_px[sl], arr_py[sl]
-            pos_var[i, :, 0], pos_var[i, :, 1] = arr_vx[sl], arr_vy[sl]
-            mom_var[i, :, 0], mom_var[i, :, 1] = arr_vpx[sl], arr_vpy[sl]
-
-        return pos, mom, pos_var, mom_var, init_coords, pts
-
-    def _get_pos(self, df: pd.DataFrame, turn: int, bpm: str) -> int:
-        """Fast integer index position for MultiIndex (turn, bpm) with caching."""
-        df_id = id(df)
-        bucket = self._pos_cache.setdefault(df_id, {})
-        key = (turn, bpm)
-        pos = bucket.get(key)
-        if pos is None:
-            pos = int(df.index.get_loc((turn, bpm)))
-            bucket[key] = pos
-        return pos
-
-    def get_turn(self, df: pd.DataFrame, pos: int) -> int:
-        """Get the turn number from a DataFrame position."""
-        return df.index[pos][0]
 
     def start_workers(
         self,
@@ -453,59 +236,64 @@ class WorkerManager:
         simulation_config: SimulationConfig,
         machine_deltaps: list[float],
         initial_knobs: dict[str, float],
-    ):
-        """Start worker processes.
-
-        Args:
-            track_data: Dictionary mapping file indices to track data DataFrames
-            turn_batches: List of turn batches for worker distribution
-            file_turn_map: Mapping from turn numbers to file indices
-            start_bpms: List of start BPMs
-            end_bpms: List of end BPMs
-            simulation_config: Simulation configuration
-            machine_deltaps: List of machine deltaps corresponding to each file
-        """
+    ) -> None:
+        """Start worker processes and cache metadata needed at runtime."""
         payloads = self.create_worker_payloads(
             track_data,
             turn_batches,
             file_turn_map,
             start_bpms,
             end_bpms,
+            simulation_config,
             machine_deltaps,
         )
-        payloads = self._attach_global_weights(payloads, simulation_config.num_batches)
-        LOGGER.info(f"Starting {len(payloads)} workers...")
+        n_run_turns = 1 if simulation_config.run_arc_by_arc else simulation_config.n_run_turns
+        payloads = self.payload_builder.attach_global_weights(payloads, simulation_config.num_batches)
 
-        # Select worker class based on whether momenta optimisation is enabled
-        if simulation_config.optimise_momenta:
-            worker_class = TrackingWorker
-            LOGGER.info("Using TrackingWorker (position + momentum)")
-        else:
-            worker_class = PositionOnlyTrackingWorker
-            LOGGER.info("Using PositionOnlyTrackingWorker (position only)")
+        LOGGER.info("Starting %d workers...", len(payloads))
+        worker_mode = "arc-by-arc" if simulation_config.run_arc_by_arc else "multi-turn"
+        LOGGER.info(
+            "Worker tracking mode: %s (n_run_turns=%d)",
+            worker_mode,
+            simulation_config.n_run_turns,
+        )
 
         self.worker_metadata = []
         for worker_id, (data, config, _file_idx) in enumerate(payloads):
             parent, child = mp.Pipe()
-            w = worker_class(child, worker_id, data, config, simulation_config, mode="arc-by-arc")
-            w.start()
-            self.parent_conns.append(parent)
-            self.workers.append(w)
-            parent.send((initial_knobs, -1))
-            self.worker_metadata.append(
-                {
-                    "worker_id": worker_id,
-                    "start_bpm": config.start_bpm,
-                    "end_bpm": config.end_bpm,
-                    "sdir": config.sdir,
-                    "bpm_names": extract_bpm_range_names(
-                        self.all_bpms,
-                        config.start_bpm,
-                        config.end_bpm,
-                        config.sdir,
-                    ),
-                }
+            worker_class = self._select_worker_class(
+                config.kick_plane,
+                simulation_config.optimise_momenta,
             )
+            worker = worker_class(
+                child,
+                worker_id,
+                data,
+                config,
+                simulation_config,
+                mode=worker_mode,
+            )
+            worker.start()
+            self.parent_conns.append(parent)
+            self.workers.append(worker)
+            parent.send((initial_knobs, -1))
+            bpm_names = self.setup_helper.get_worker_bpm_names(
+                config.start_bpm,
+                config.end_bpm,
+                config.sdir,
+                config.kick_plane,
+                config.bad_bpms,
+            )
+            self.worker_metadata.append(
+                self.setup_helper.make_runtime_metadata(
+                    worker_id=worker_id,
+                    config=config,
+                    bpm_names=bpm_names,
+                    n_run_turns=n_run_turns,
+                )
+            )
+
+        self.channels = WorkerChannels(self.parent_conns, self.workers)
 
     @staticmethod
     def _compute_positive_z_scores(values: np.ndarray) -> np.ndarray:
@@ -529,12 +317,10 @@ class WorkerManager:
         self, initial_knobs: dict[str, float]
     ) -> list[dict[str, object]]:
         """Request diagnostics from all workers and return validated payloads."""
-        for conn in self.parent_conns:
-            conn.send({"cmd": "diagnostics", "knobs": initial_knobs})
-
         diagnostics: list[dict[str, object]] = []
-        for conn in self.parent_conns:
-            result = conn.recv()
+        channels = self._channels()
+        channels.send_all({"cmd": "diagnostics", "knobs": initial_knobs})
+        for result in channels.recv_all():
             if not isinstance(result, dict):
                 raise RuntimeError(f"Unexpected diagnostics payload from worker: {type(result)}")
             diagnostics.append(result)
@@ -550,16 +336,15 @@ class WorkerManager:
 
         for meta, diag in zip(self.worker_metadata, diagnostics, strict=True):
             worker_id = int(diag["worker_id"])
-            bpm_names = list(meta["bpm_names"])
-            loss_per_bpm = np.asarray(diag["loss_per_bpm"], dtype=np.float64)
-            if loss_per_bpm.size != len(bpm_names):
-                raise RuntimeError(
-                    f"Worker {worker_id}: diagnostics size mismatch "
-                    f"({loss_per_bpm.size} losses vs {len(bpm_names)} BPMs)"
-                )
-
+            loss_per_point = np.asarray(diag["loss_per_bpm"], dtype=np.float64)
+            loss_per_bpm = self.payload_builder.diagnostic_loss_per_bpm(
+                loss_per_point=loss_per_point,
+                bpm_names=meta.bpm_names,
+                n_run_turns=meta.n_run_turns,
+                worker_id=worker_id,
+            )
             bpm_z = self._compute_positive_z_scores(loss_per_bpm)
-            keep_mask = np.ones(loss_per_bpm.shape[0], dtype=bool)
+            keep_mask = np.ones(len(meta.bpm_names), dtype=bool)
             outlier_indices = np.where(bpm_z > bpm_sigma_threshold)[0]
 
             for bpm_idx in outlier_indices:
@@ -567,7 +352,7 @@ class WorkerManager:
                 LOGGER.warning(
                     "Worker %d: loss at BPM %s is %.2f standard deviations away from the mean, ignoring for optimisation.",
                     worker_id,
-                    bpm_names[bpm_idx],
+                    meta.bpm_names[bpm_idx],
                     bpm_z[bpm_idx],
                 )
 
@@ -586,13 +371,6 @@ class WorkerManager:
         n_disabled = 0
 
         for idx, meta in enumerate(self.worker_metadata):
-            worker_id_value = meta["worker_id"]
-            start_bpm_value = meta["start_bpm"]
-            if not isinstance(worker_id_value, int) or not isinstance(start_bpm_value, str):
-                raise RuntimeError(f"Invalid worker metadata at index {idx}: {meta}")
-
-            worker_id = worker_id_value
-            start_bpm = start_bpm_value
             z_score = float(worker_z[idx])
             disable = z_score > worker_sigma_threshold
             worker_disabled.append(disable)
@@ -600,8 +378,8 @@ class WorkerManager:
                 n_disabled += 1
                 LOGGER.warning(
                     "Worker %d with starting BPM %s is %.2f standard deviations away from the mean, ignoring.",
-                    worker_id,
-                    start_bpm,
+                    meta.worker_id,
+                    meta.start_bpm,
                     z_score,
                 )
 
@@ -621,19 +399,24 @@ class WorkerManager:
         worker_disabled: list[bool],
     ) -> None:
         """Send mask/disable settings to workers and verify acknowledgements."""
-        for conn, keep_mask, disable in zip(
-            self.parent_conns, bpm_masks, worker_disabled, strict=True
+        for conn, keep_mask, disable, meta in zip(
+            self.parent_conns, bpm_masks, worker_disabled, self.worker_metadata, strict=True
         ):
+            expanded_mask = self.payload_builder.expand_bpm_mask(keep_mask, meta.n_run_turns)
             conn.send(
                 {
                     "cmd": "apply_mask",
-                    "keep_bpm_mask": keep_mask.tolist(),
+                    "keep_bpm_mask": expanded_mask.tolist(),
                     "disable_worker": disable,
                 }
             )
 
-        for conn in self.parent_conns:
-            ack = conn.recv()
+        acknowledgements = (
+            [conn.recv() for conn in self.parent_conns]
+            if self.channels is None
+            else self._channels().recv_all()
+        )
+        for ack in acknowledgements:
             if not isinstance(ack, dict) or ack.get("status") != "ok":
                 raise RuntimeError(f"Failed to apply worker mask settings: {ack}")
 
@@ -643,12 +426,7 @@ class WorkerManager:
         bpm_sigma_threshold: float = 2.0,
         worker_sigma_threshold: float = 2.0,
     ) -> None:
-        """Screen and mask outliers before optimisation starts.
-
-        Performs two checks using diagnostics evaluated at initial knobs:
-        1. Per-worker BPM losses: masks BPMs with z-score > bpm_sigma_threshold.
-        2. Per-worker total losses: disables workers with z-score > worker_sigma_threshold.
-        """
+        """Screen and mask outliers before optimisation starts."""
         if not self.parent_conns:
             LOGGER.warning("No workers available for pre-optimisation outlier screening")
             return
@@ -673,97 +451,61 @@ class WorkerManager:
             np.asarray(worker_losses, dtype=np.float64),
             worker_sigma_threshold,
         )
-        bpm_masks = self._build_bpm_masks_from_diagnostics(
-            diagnostics,
-            bpm_sigma_threshold,
-        )
+        bpm_masks = self._build_bpm_masks_from_diagnostics(diagnostics, bpm_sigma_threshold)
         self._apply_screening_actions(bpm_masks, worker_disabled)
 
-        n_masked_bpms = sum(int((~mask).sum()) for mask in bpm_masks)
-        n_disabled_workers = sum(worker_disabled)
         LOGGER.warning(
             "Pre-optimisation screening complete: masked %d BPM entries across workers, disabled %d/%d workers",
-            n_masked_bpms,
-            n_disabled_workers,
+            sum(int((~mask).sum()) for mask in bpm_masks),
+            sum(worker_disabled),
             len(self.parent_conns),
         )
 
     def collect_worker_results(self, total_turns: int) -> tuple[float, np.ndarray]:
-        """Collect results from all workers for an epoch.
-
-        Aggregates gradients using per-knob averaging: each knob's gradient is
-        averaged only over the workers that contributed a non-zero gradient for
-        that knob. This prevents magnets at the edges of the BPM range (which
-        are only visible to fewer workers) from being under-weighted compared
-        to magnets in the middle (which contribute gradients from all workers).
-
-        Args:
-            total_turns (int): Total number of turns across all workers for normalisation
-
-        Returns:
-            tuple[float, np.ndarray]: A tuple containing:
-                - total_loss: average loss across all turns
-                - agg_grad: per-knob averaged gradient array
-        """
+        """Collect results from all workers for an epoch."""
         total_loss = 0.0
         agg_grad = np.zeros_like(self.optimise_knobs, dtype=np.float64)
-        # contrib_count = None  # Count of non-zero contributions per knob
-        if len(self.parent_conns) == 0:
+        if not self.parent_conns:
             raise RuntimeError("No workers to collect results from!")
 
-        for i, conn in enumerate(self.parent_conns):
-            _, grad, loss = conn.recv()
+        for i, result in enumerate(self._channels().recv_all()):
+            if not isinstance(result, tuple) or len(result) != 3:
+                raise_for_worker_error_payload(result)
+            _, grad, loss = result
             grad_flat = grad.flatten()
-
             if i == 0:
                 agg_grad = grad_flat.copy()
-                # contrib_count = (grad_flat != 0).astype(np.float64)
             else:
                 agg_grad += grad_flat
-                # contrib_count += (grad_flat != 0).astype(np.float64)
-
             total_loss += loss
-
-        # Average each knob's gradient by the number of workers that contributed
-        # to it (avoiding division by zero for knobs with no contributions)
-        # contrib_count = np.maximum(contrib_count, 1.0)
-        # avg_grad = agg_grad  / contrib_count
 
         return total_loss / total_turns, agg_grad
 
     def terminate_workers(self) -> None:
         """Terminate all workers and clean up processes."""
         LOGGER.info("Terminating workers...")
-        for conn in self.parent_conns:
+        if self.channels is not None:
             with contextlib.suppress(BrokenPipeError, EOFError):
-                conn.send((None, None))
+                self.channels.send_all((None, None))
+        else:
+            for conn in self.parent_conns:
+                with contextlib.suppress(BrokenPipeError, EOFError):
+                    conn.send((None, None))
 
-        for w in self.workers:
-            w.join()
+        for worker in self.workers:
+            worker.join()
 
     def termination_and_hessian(self, n_knobs: int) -> np.ndarray:
-        """Terminate all workers and collect final Hessian information.
-
-        Returns:
-            np.ndarray: Global Hessian matrix computed as the sum of all worker Hessians
-
-        Note:
-            This method signals all workers to stop, collects their final Hessian
-            contributions, and waits for all processes to finish before returning.
-        """
+        """Terminate all workers and collect final Hessian information."""
         LOGGER.info("Terminating workers...")
-        for conn in self.parent_conns:
-            conn.send((None, None))
-
+        del n_knobs
+        channels = self._channels()
+        channels.send_all((None, None))
         hessians = []
-        for conn in self.parent_conns:
-            try:
-                h = conn.recv()
-            except EOFError:
-                # Worker already terminated, use zero Hessian
-                h = np.zeros((n_knobs, n_knobs))
-            hessians.append(h)
-        for w in self.workers:
-            w.join()
-
+        for hessian in channels.recv_all():
+            if not isinstance(hessian, np.ndarray):
+                raise RuntimeError(f"Unexpected Hessian payload from worker: {hessian!r}")
+            hessians.append(hessian)
+        for worker in self.workers:
+            worker.join()
         return sum(hessians)

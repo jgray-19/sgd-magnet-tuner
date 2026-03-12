@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.mad import GradientDescentMadInterface, get_mad_interface
+from aba_optimiser.mad import GradientDescentMadInterface
 from aba_optimiser.workers import TrackingWorker
 
 if TYPE_CHECKING:
@@ -38,7 +38,6 @@ class ConfigurationManager:
         self.initial_strengths: np.ndarray = np.array([])
         self.fixed_start: str = ""
         self.fixed_end: str = ""
-        self.bend_lengths: dict | None = None
 
         self.accelerator: Accelerator = accelerator
         self.start_bpms: list[str] = bpm_start_points
@@ -55,7 +54,7 @@ class ConfigurationManager:
     ) -> None:
         """Initialise the MAD-NG interface and get basic model parameters."""
 
-        self.mad_iface = get_mad_interface(self.accelerator)(
+        self.mad_iface = GradientDescentMadInterface(
             accelerator=self.accelerator,
             start_bpm=first_bpm,
             magnet_range=self.magnet_range,
@@ -75,9 +74,6 @@ class ConfigurationManager:
 
         self.start_bpms = [bpm for bpm in self.start_bpms if bpm in self.bpms_in_range]
         self.end_bpms = [bpm for bpm in self.end_bpms if bpm in self.bpms_in_range]
-
-        # Accelerator-specific bend normalisation (no-op by default)
-        self.bend_lengths = self.accelerator.get_bend_lengths(self.mad_iface)
 
         # When use_fixed_bpm is True we derive a fixed BPM window from magnet_range and
         # store its start/end in fixed_start/fixed_end. When it is False we intentionally
@@ -104,18 +100,32 @@ class ConfigurationManager:
     def bpm_pairs(self) -> list[tuple[str, str]]:
         """Return BPM ranges as explicit (start, end) tuples.
 
+        When run_arc_by_arc is False (multi-turn mode), workers are start-driven:
+        only start BPMs are configured explicitly, and end BPM is auto-defined as
+        the BPM immediately behind each start BPM in ring order.
+
         When use_fixed_bpm is True (default), creates pairs by varying starts
         with fixed end and varying ends with fixed start.
 
         When use_fixed_bpm is False, creates all combinations (Cartesian product)
         of start_bpms with end_bpms (every start with every end).
         """
+        if not self.simulation_config.run_arc_by_arc:
+            return [(start, self._bpm_behind(start)) for start in self.start_bpms]
+
         if self.simulation_config.use_fixed_bpm:
             return [(s, self.fixed_end) for s in self.start_bpms] + [
                 (self.fixed_start, e) for e in self.end_bpms
             ]
         # Cartesian product: every start with every end
         return [(s, e) for s in self.start_bpms for e in self.end_bpms]
+
+    def _bpm_behind(self, bpm: str) -> str:
+        """Return the BPM immediately behind `bpm` in ring order."""
+        if bpm not in self.all_bpms:
+            raise ValueError(f"Start BPM '{bpm}' not found in model BPM list")
+        idx = self.all_bpms.index(bpm)
+        return self.all_bpms[idx - 1]
 
     def initialise_knob_strengths(
         self,
@@ -147,8 +157,12 @@ class ConfigurationManager:
     def calculate_n_data_points(self) -> dict[tuple[str, str], int]:
         """Calculate number of data points for each BPM pair."""
         n_data_points = {}
+        n_turns = 1 if self.simulation_config.run_arc_by_arc else self.simulation_config.n_run_turns
         for start, end in self.bpm_pairs:
             _, n_bpms, _ = self.mad_iface.count_bpms(f"{start}/{end}")
-            n_data_points[(start, end)] = TrackingWorker.get_n_data_points(n_bpms)
-            logging.info(f"{start}/{end}: {n_data_points[(start, end)]} data points")
+            n_data_points[(start, end)] = TrackingWorker.get_n_data_points(n_bpms, n_turns=n_turns)
+            LOGGER.info(
+                f"{start}/{end}: {n_data_points[(start, end)]} data points "
+                f"({n_bpms} BPMs x {n_turns} turn(s))"
+            )
         return n_data_points

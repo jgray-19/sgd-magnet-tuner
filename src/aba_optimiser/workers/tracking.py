@@ -8,12 +8,16 @@ both position and momentum observables with full symmetry between x/y planes.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.mad.scripts import HESSIAN_SCRIPT, TRACK_INIT, TRACK_SCRIPT
+from aba_optimiser.mad.scripts import (
+    build_tracking_hessian_script,
+    build_tracking_init_script,
+    build_tracking_script,
+    dump_debug_script,
+)
 from aba_optimiser.workers.abstract_worker import AbstractWorker
 from aba_optimiser.workers.common import (
     PrecomputedTrackingWeights,
@@ -31,39 +35,12 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 
-
-@dataclass
-class PhaseSpaceWeights:
-    """Container for weights in all phase space dimensions.
-
-    Attributes:
-        x: Weights for horizontal position
-        y: Weights for vertical position
-        px: Weights for horizontal momentum
-        py: Weights for vertical momentum
-    """
-
-    x: list[np.ndarray]  # List of batches, each (batch_size, n_data_points)
-    y: list[np.ndarray]
-    px: list[np.ndarray]
-    py: list[np.ndarray]
-
-
-@dataclass
-class PhaseSpaceComparisons:
-    """Container for reference data in all phase space dimensions.
-
-    Attributes:
-        x: Reference horizontal positions
-        y: Reference vertical positions
-        px: Reference horizontal momenta
-        py: Reference vertical momenta
-    """
-
-    x: list[np.ndarray]  # List of batches, each (batch_size, n_data_points)
-    y: list[np.ndarray]
-    px: list[np.ndarray]
-    py: list[np.ndarray]
+OBSERVABLE_SPECS: dict[str, tuple[str, int]] = {
+    "x": ("position_comparisons", 0),
+    "y": ("position_comparisons", 1),
+    "px": ("momentum_comparisons", 0),
+    "py": ("momentum_comparisons", 1),
+}
 
 
 class TrackingWorker(AbstractWorker[TrackingData]):
@@ -81,6 +58,10 @@ class TrackingWorker(AbstractWorker[TrackingData]):
     The implementation treats x/y and position/momentum symmetrically,
     ensuring consistent handling of all phase space dimensions.
     """
+
+    observables: tuple[str, ...] = ("x", "y", "px", "py")
+    include_momentum = True
+    hessian_weight_order: tuple[str, ...] = ("x", "y", "px", "py")
 
     def __init__(
         self,
@@ -112,13 +93,14 @@ class TrackingWorker(AbstractWorker[TrackingData]):
     def prepare_data(self, data: TrackingData) -> None:
         """Process and prepare tracking data for computation.
 
-        Extracts position and momentum data for both planes, computes
-        weights from variances, splits data into batches, and prepares
-        initial conditions.
+        Extracts the active observables, loads precomputed weights, splits
+        data into batches, and prepares initial conditions.
 
         Args:
             data: TrackingData container with reference measurements
         """
+        self.observables = self._resolve_observables()
+        self.hessian_weight_order = self.observables
         num_batches = self.simulation_config.num_batches
 
         # Ensure data is divisible by number of batches
@@ -133,49 +115,81 @@ class TrackingWorker(AbstractWorker[TrackingData]):
         if np.isnan(init_coords).any():
             raise ValueError(f"Worker {self.worker_id}: NaNs found in initial coordinates")
 
-        # Extract and process comparison data symmetrically for all dimensions
-        self._extract_comparisons(data, n_init)
+        self.comparison_arrays = self._extract_observable_arrays(data, n_init)
         if data.precomputed_weights is None:
             raise ValueError("Precomputed weights must be provided for TrackingWorker")
-        self._load_precomputed_weights(data.precomputed_weights, n_init)
+        self.weight_arrays, self.hessian_weights = self._load_precomputed_weights(
+            data.precomputed_weights,
+            n_init,
+        )
         self._prepare_batches(init_coords, data.init_pts, num_batches)
 
         self.worker_disabled = False
-        self.keep_bpm_mask = np.ones(self.comparisons.x[0].shape[1], dtype=bool)
+        n_points = self.comparisons[self.observables[0]][0].shape[1]
+        self.keep_bpm_mask = np.ones(n_points, dtype=bool)
 
-        # Load MAD-NG tracking scripts
-        self.run_track_script = TRACK_SCRIPT.read_text()
-        self.run_track_init_path = TRACK_INIT
+        self.run_track_init_text = build_tracking_init_script(self.observables)
+        self.run_track_script = build_tracking_script(self.observables)
+        self.hessian_script_text = build_tracking_hessian_script(self.observables)
+        self._dump_debug_scripts()
 
-    def _extract_comparisons(self, data: TrackingData, n_init: int) -> None:
-        """Extract reference data for all phase space dimensions.
+    def _dump_debug_scripts(self) -> None:
+        """Write generated MAD scripts to disk when debugging is enabled."""
+        dump_debug_script(
+            "run_track_init",
+            self.run_track_init_text,
+            debug=self.config.debug,
+            mad_logfile=self.config.mad_logfile,
+            worker_id=self.worker_id,
+        )
+        dump_debug_script(
+            "run_track",
+            self.run_track_script,
+            debug=self.config.debug,
+            mad_logfile=self.config.mad_logfile,
+            worker_id=self.worker_id,
+        )
+        dump_debug_script(
+            "estimate_hessian",
+            self.hessian_script_text,
+            debug=self.config.debug,
+            mad_logfile=self.config.mad_logfile,
+            worker_id=self.worker_id,
+        )
 
-        Args:
-            data: TrackingData container
-            n_init: Number of particles to use
-        """
-        # Extract position data (x, y)
-        positions = data.position_comparisons[:n_init]
-        self.x_comparisons_full = positions[:, :, 0]
-        self.y_comparisons_full = positions[:, :, 1]
+    def _resolve_observables(self) -> tuple[str, ...]:
+        """Return the observables active for this worker configuration."""
+        kick_plane = self.config.kick_plane
+        if kick_plane == "xy":
+            return ("x", "y", "px", "py") if self.include_momentum else ("x", "y")
+        if kick_plane == "x":
+            return ("x", "px") if self.include_momentum else ("x",)
+        if kick_plane == "y":
+            return ("y", "py") if self.include_momentum else ("y",)
+        raise ValueError(f"Unsupported kick plane {kick_plane!r}")
 
-        # Extract momentum data (px, py)
-        momenta = data.momentum_comparisons[:n_init]
-        self.px_comparisons_full = momenta[:, :, 0]
-        self.py_comparisons_full = momenta[:, :, 1]
+    def _extract_observable_arrays(self, data: TrackingData, n_init: int) -> dict[str, np.ndarray]:
+        """Return comparison arrays for the observables used by this worker."""
+        arrays: dict[str, np.ndarray] = {}
+        for observable in self.observables:
+            source_attr, plane_idx = OBSERVABLE_SPECS[observable]
+            source = getattr(data, source_attr)[:n_init]
+            arrays[observable] = source[:, :, plane_idx]
+        return arrays
 
-    def _load_precomputed_weights(self, weights: PrecomputedTrackingWeights, n_init: int) -> None:
-        """Use globally precomputed weights instead of per-worker computation."""
-
-        self.x_weights_full = weights.x[:n_init]
-        self.y_weights_full = weights.y[:n_init]
-        self.px_weights_full = weights.px[:n_init]
-        self.py_weights_full = weights.py[:n_init]
-
-        self.hessian_weight_x = weights.hessian_x
-        self.hessian_weight_y = weights.hessian_y
-        self.hessian_weight_px = weights.hessian_px
-        self.hessian_weight_py = weights.hessian_py
+    def _load_precomputed_weights(
+        self,
+        weights: PrecomputedTrackingWeights,
+        n_init: int,
+    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+        """Return per-particle and Hessian weights for the active observables."""
+        batch_weights = {
+            observable: getattr(weights, observable)[:n_init] for observable in self.observables
+        }
+        hessian_weights = {
+            observable: getattr(weights, f"hessian_{observable}") for observable in self.observables
+        }
+        return batch_weights, hessian_weights
 
     def _prepare_batches(
         self, init_coords: np.ndarray, init_pts: np.ndarray, num_batches: int
@@ -197,21 +211,14 @@ class TrackingWorker(AbstractWorker[TrackingData]):
         self.batch_size = len(self.init_coords[0])
         self.num_batches = num_batches
 
-        # Split comparison data into batches (symmetrically)
-        self.comparisons = PhaseSpaceComparisons(
-            x=split_array_to_batches(self.x_comparisons_full, num_batches),
-            y=split_array_to_batches(self.y_comparisons_full, num_batches),
-            px=split_array_to_batches(self.px_comparisons_full, num_batches),
-            py=split_array_to_batches(self.py_comparisons_full, num_batches),
-        )
-
-        # Split weights into batches (symmetrically)
-        self.weights = PhaseSpaceWeights(
-            x=split_array_to_batches(self.x_weights_full, num_batches),
-            y=split_array_to_batches(self.y_weights_full, num_batches),
-            px=split_array_to_batches(self.px_weights_full, num_batches),
-            py=split_array_to_batches(self.py_weights_full, num_batches),
-        )
+        self.comparisons = {
+            observable: split_array_to_batches(values, num_batches)
+            for observable, values in self.comparison_arrays.items()
+        }
+        self.weights = {
+            observable: split_array_to_batches(values, num_batches)
+            for observable, values in self.weight_arrays.items()
+        }
 
     def setup_mad_sequence(self, mad: MAD) -> None:
         """Configure MAD-NG sequence for tracking.
@@ -226,11 +233,13 @@ class TrackingWorker(AbstractWorker[TrackingData]):
         mad["num_batches"] = self.num_batches
         mad["optimise_energy"] = self.config.accelerator.optimise_energy
 
+        mad["tracking_range"] = self.tracking_range
         if self.mode == "arc-by-arc":
             # Single-turn tracking for arc-by-arc mode
             mad["n_run_turns"] = 1
-            # Set tracking range (starts at turn 0 for single turn)
-            mad["tracking_range"] = self.tracking_range
+        else:
+            # Multi-turn tracking over the full ring, each worker gets its own init BPM.
+            mad["n_run_turns"] = self.simulation_config.n_run_turns
 
     def _setup_da_maps(self, mad: MAD) -> None:
         """Setup differential algebra maps for tracking.
@@ -289,7 +298,7 @@ end
         Args:
             mad: MAD-NG interface object
         """
-        mad.send(self.run_track_init_path.read_text())
+        mad.send(self.run_track_init_text)
 
     def compute_gradients_and_loss(
         self, mad: MAD, knob_updates: dict[str, float], batch: int
@@ -320,44 +329,15 @@ end
             mad: MAD-NG interface object
 
         Returns:
-            Dictionary with keys: x, y, px, py, dx_dk, dy_dk, dpx_dk, dpy_dk
+            Dictionary with one result array and one derivative array per active
+            observable.
         """
-        # Receive position and momentum data
-        x_results = mad.recv()
-        y_results = mad.recv()
-        px_results = mad.recv()
-        py_results = mad.recv()
-
-        # Receive derivatives
-        dx_dk_results = mad.recv()
-        dy_dk_results = mad.recv()
-        dpx_dk_results = mad.recv()
-        dpy_dk_results = mad.recv()
-
-        # Convert to numpy arrays
-        # Shape: (n_particles, n_data_points)
-        x = np.asarray(x_results).squeeze(-1)
-        y = np.asarray(y_results).squeeze(-1)
-        px = np.asarray(px_results).squeeze(-1)
-        py = np.asarray(py_results).squeeze(-1)
-
-        # Shape: (n_particles, n_knobs, n_data_points)
-        dx_dk = np.stack(dx_dk_results, axis=0)
-        dy_dk = np.stack(dy_dk_results, axis=0)
-        dpx_dk = np.stack(dpx_dk_results, axis=0)
-        dpy_dk = np.stack(dpy_dk_results, axis=0)
-        dpy_dk = np.stack(dpy_dk_results, axis=0)
-
-        return {
-            "x": x,
-            "y": y,
-            "px": px,
-            "py": py,
-            "dx_dk": dx_dk,
-            "dy_dk": dy_dk,
-            "dpx_dk": dpx_dk,
-            "dpy_dk": dpy_dk,
-        }
+        results: dict[str, np.ndarray] = {}
+        for observable in self.observables:
+            results[observable] = np.asarray(mad.recv()).squeeze(-1)
+        for observable in self.observables:
+            results[self._gradient_key(observable)] = np.stack(mad.recv(), axis=0)
+        return results
 
     def _run_tracking_batch(
         self, mad: MAD, knob_updates: dict[str, float], batch: int
@@ -380,32 +360,35 @@ end
         mad.send(self.run_track_script)
         return self._receive_tracking_results(mad)
 
-    def _masked_phase_space_weights(
-        self, batch: int
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    @staticmethod
+    def _gradient_key(observable: str) -> str:
+        """Return the gradient result key for an observable."""
+        return f"d{observable}_dk"
+
+    def _masked_weights(self, batch: int) -> dict[str, np.ndarray]:
         """Return batch weights with runtime BPM masking applied."""
         bpm_mask = self.keep_bpm_mask.reshape(1, -1)
-        wx = self.weights.x[batch] * bpm_mask
-        wy = self.weights.y[batch] * bpm_mask
-        wpx = self.weights.px[batch] * bpm_mask
-        wpy = self.weights.py[batch] * bpm_mask
-        return wx, wy, wpx, wpy
+        return {
+            observable: self.weights[observable][batch] * bpm_mask
+            for observable in self.observables
+        }
+
+    def _residuals(self, results: dict[str, np.ndarray], batch: int) -> dict[str, np.ndarray]:
+        """Return residual arrays for the current batch."""
+        return {
+            observable: results[observable] - self.comparisons[observable][batch]
+            for observable in self.observables
+        }
 
     def _compute_loss_and_bpm_contributions(
         self, results: dict[str, np.ndarray], batch: int
     ) -> tuple[float, np.ndarray]:
         """Compute total loss and per-BPM contributions for one batch."""
-        wx, wy, wpx, wpy = self._masked_phase_space_weights(batch)
-
-        residual_x = results["x"] - self.comparisons.x[batch]
-        residual_y = results["y"] - self.comparisons.y[batch]
-        residual_px = results["px"] - self.comparisons.px[batch]
-        residual_py = results["py"] - self.comparisons.py[batch]
-
-        loss_bpm = np.sum(
-            wx * residual_x**2 + wy * residual_y**2 + wpx * residual_px**2 + wpy * residual_py**2,
-            axis=0,
-        )
+        weights = self._masked_weights(batch)
+        residuals = self._residuals(results, batch)
+        loss_bpm = np.zeros(self.keep_bpm_mask.size, dtype=np.float64)
+        for observable in self.observables:
+            loss_bpm += np.sum(weights[observable] * residuals[observable] ** 2, axis=0)
         return float(np.sum(loss_bpm)), loss_bpm
 
     def compute_diagnostics(
@@ -475,6 +458,26 @@ end
 
         raise ValueError(f"Worker {self.worker_id}: Unknown command {cmd}")
 
+    def _send_hessian_weights(self, mad: MAD) -> None:
+        """Send Hessian weights to MAD for the active observables."""
+        hmask = self.keep_bpm_mask.astype(np.float64)
+        bindings = "\n".join(
+            f"weights_{observable} = python:recv()" for observable in self.hessian_weight_order
+        )
+        mad.send(f"{bindings}\n")
+        for observable in self.hessian_weight_order:
+            mad.send((self.hessian_weights[observable] * hmask).tolist())
+
+    def _get_hessian_script(self) -> str:
+        """Get the MAD script used for Hessian approximation."""
+        return self.hessian_script_text
+
+    def _compute_hessian_part(self, mad: MAD, n_knobs: int) -> np.ndarray:
+        """Compute this worker's Hessian contribution."""
+        self._send_hessian_weights(mad)
+        mad.send(self._get_hessian_script())
+        return np.asarray(mad.recv())
+
     def _compute_loss_and_gradients(
         self, results: dict[str, np.ndarray], batch: int
     ) -> tuple[np.ndarray, float]:
@@ -489,28 +492,18 @@ end
         Returns:
             Tuple of (gradient array, loss value)
         """
-        # Get masked weights and comparisons for this batch
-        wx, wy, wpx, wpy = self._masked_phase_space_weights(batch)
-
-        # Compute residuals symmetrically
-        residual_x = results["x"] - self.comparisons.x[batch]
-        residual_y = results["y"] - self.comparisons.y[batch]
-        residual_px = results["px"] - self.comparisons.px[batch]
-        residual_py = results["py"] - self.comparisons.py[batch]
-
-        # Compute gradients using Einstein summation (symmetric for all dimensions)
-        # einsum("pkm,pm->k") computes: sum over particles and data points
-        gx = np.einsum("pkm,pm->k", results["dx_dk"], wx * residual_x)
-        gy = np.einsum("pkm,pm->k", results["dy_dk"], wy * residual_y)
-        gpx = np.einsum("pkm,pm->k", results["dpx_dk"], wpx * residual_px)
-        gpy = np.einsum("pkm,pm->k", results["dpy_dk"], wpy * residual_py)
-
-        # Compute loss (weighted sum of squared residuals)
+        weights = self._masked_weights(batch)
+        residuals = self._residuals(results, batch)
+        gradient_shape = results[self._gradient_key(self.observables[0])].shape[1]
+        grad = np.zeros(gradient_shape, dtype=np.float64)
+        for observable in self.observables:
+            grad += np.einsum(
+                "pkm,pm->k",
+                results[self._gradient_key(observable)],
+                weights[observable] * residuals[observable],
+            )
         loss, _ = self._compute_loss_and_bpm_contributions(results, batch)
-
-        # Total gradient and loss (factor of 2 from derivative of squared residuals)
-        grad = 2.0 * (gx + gy + gpx + gpy)
-        return grad, loss
+        return 2.0 * grad, loss
 
     def run(self) -> None:
         """Main worker run loop with Hessian calculation.
@@ -518,77 +511,63 @@ end
         Extends the base run method to compute approximate Hessian
         after the main optimisation loop completes.
         """
-        # Initial handshake
-        knob_values, batch = self.conn.recv()
-        n_knobs = len(knob_values)
-
-        # Setup MAD interface
-        mad, nbpms = self.setup_mad_interface(knob_values)
-        self.send_initial_conditions(mad)
-        self._initialise_mad_computation(mad)
-
-        LOGGER.debug(f"Worker {self.worker_id}: Ready for computation with {nbpms} BPMs")
-
+        mad: MAD | None = None
+        n_knobs = 0
         computation_success = True
-        message: tuple[dict[str, float] | None, int | None] | dict[str, object] = self.conn.recv()
-        if isinstance(message, dict):
-            self._handle_control_command(mad, message, nbpms)
-            message = self.conn.recv()
-            self._handle_control_command(mad, message, nbpms)
-            message = self.conn.recv()
 
-        while True:
-            knob_values, batch = message
-            if knob_values is None or batch is None:
-                LOGGER.debug(f"Worker {self.worker_id}: Received termination signal")
-                break
-            try:
-                if self.worker_disabled:
-                    self.conn.send((self.worker_id, np.zeros(n_knobs), 0.0))
-                else:
-                    grad, loss = self.compute_gradients_and_loss(mad, knob_values, int(batch))
-                    self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
-            except RuntimeError as e:
-                LOGGER.error(f"Worker {self.worker_id}: Error during computation: {e}")
-                zero_grad: np.ndarray = np.zeros(n_knobs)
-                self.conn.send((self.worker_id, zero_grad, float("inf")))
-                computation_success = False
-                break
+        try:
+            knob_values, batch = self.conn.recv()
+            if knob_values is None:
+                return
+            n_knobs = len(knob_values)
 
-            message = self.conn.recv()
+            mad, nbpms = self.setup_mad_interface(knob_values)
+            self.send_initial_conditions(mad)
+            self._initialise_mad_computation(mad)
 
-        # Compute Hessian approximation only if computation was successful
-        if computation_success and not self.worker_disabled:
-            LOGGER.debug(f"Worker {self.worker_id}: Computing Hessian approximation")
-            try:
-                hmask = self.keep_bpm_mask.astype(np.float64)
-                mad.send("""
-weights_x = python:recv()
-weights_px = python:recv()
-weights_y = python:recv()
-weights_py = python:recv()
-""")
-                mad.send((self.hessian_weight_x * hmask).tolist())
-                mad.send((self.hessian_weight_px * hmask).tolist())
-                mad.send((self.hessian_weight_y * hmask).tolist())
-                mad.send((self.hessian_weight_py * hmask).tolist())
-                mad.send(HESSIAN_SCRIPT.read_text())
-                h_part = mad.recv()
-                self.conn.send(h_part)  # shape (n_knobs, n_knobs)
-            except RuntimeError as e:
-                LOGGER.error(f"Worker {self.worker_id}: Error during Hessian computation: {e}")
-                # Send zero Hessian
+            LOGGER.debug(f"Worker {self.worker_id}: Ready for computation with {nbpms} BPMs")
+
+            message: tuple[dict[str, float] | None, int | None] | dict[str, object] = (
+                self.conn.recv()
+            )
+            while isinstance(message, dict):
+                self._handle_control_command(mad, message, nbpms)
+                message = self.conn.recv()
+
+            while True:
+                knob_values, batch = message
+                if knob_values is None or batch is None:
+                    LOGGER.debug(f"Worker {self.worker_id}: Received termination signal")
+                    break
+                try:
+                    if self.worker_disabled:
+                        self.conn.send((self.worker_id, np.zeros(n_knobs), 0.0))
+                    else:
+                        grad, loss = self.compute_gradients_and_loss(mad, knob_values, int(batch))
+                        self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
+                except Exception as exc:  # noqa: BLE001
+                    self.send_error_payload(exc, phase="computation")
+                    computation_success = False
+                    break
+
+                message = self.conn.recv()
+
+            if computation_success and not self.worker_disabled:
+                LOGGER.debug(f"Worker {self.worker_id}: Computing Hessian approximation")
+                try:
+                    self.conn.send(self._compute_hessian_part(mad, n_knobs))
+                except Exception as exc:  # noqa: BLE001
+                    self.send_error_payload(exc, phase="hessian")
+                    computation_success = False
+            else:
                 self.conn.send(np.zeros((n_knobs, n_knobs)))
-        else:
-            # If computation failed, send zero Hessian to indicate failure
-            self.conn.send(np.zeros((n_knobs, n_knobs)))
-
-        # Cleanup
-
-        # Cleanup
-        LOGGER.debug(f"Worker {self.worker_id}: Terminating")
-        mad.send("shush()")
-        del mad
+        except Exception as exc:  # noqa: BLE001
+            self.send_error_payload(exc, phase="startup")
+        finally:
+            LOGGER.debug(f"Worker {self.worker_id}: Terminating")
+            if mad is not None:
+                mad.send("shush()")
+                del mad
 
     @staticmethod
     def get_n_data_points(nbpms: int, n_turns: int = 1) -> int:

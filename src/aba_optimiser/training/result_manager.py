@@ -141,7 +141,7 @@ class ResultManager:
         # Ensure plots directory exists
         self.plots_dir.mkdir(parents=True, exist_ok=True)
         save_prefix = f"{self.plots_dir}/"
-        show_errorbars = True
+        show_errorbars = False
 
         if len(knob_names) > 0:
             plot_strengths_comparison(

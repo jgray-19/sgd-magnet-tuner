@@ -8,11 +8,13 @@ interface setup, and communication protocol with the main process.
 from __future__ import annotations
 
 import logging
+import traceback
 from abc import ABC, abstractmethod
 from multiprocessing import Process
 from typing import TYPE_CHECKING, Generic, TypeVar
 
-from aba_optimiser.mad import get_mad_interface
+from aba_optimiser.mad import GradientDescentMadInterface
+from aba_optimiser.workers.protocol import WorkerErrorPayload
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -152,6 +154,35 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             f"mo={knob_order}, po={knob_order}, vn=tblcat(coord_names, knob_names)}}"
         )
 
+    def build_error_payload(self, exc: BaseException, *, phase: str) -> WorkerErrorPayload:
+        """Build a structured error payload for parent-side handling."""
+        return {
+            "worker_id": self.worker_id,
+            "status": "error",
+            "phase": phase,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        }
+
+    def send_error_payload(self, exc: BaseException, *, phase: str) -> None:
+        """Best-effort send of a structured worker failure message."""
+        payload = self.build_error_payload(exc, phase=phase)
+        LOGGER.error(
+            "Worker %s failed during %s: %s",
+            self.worker_id,
+            phase,
+            payload["error"],
+        )
+        try:
+            self.conn.send(payload)
+        except (BrokenPipeError, EOFError, OSError):
+            LOGGER.exception(
+                "Worker %s could not send error payload to parent during %s",
+                self.worker_id,
+                phase,
+            )
+
     def setup_mad_interface(self, init_knobs: dict[str, float]) -> tuple[MAD, int]:
         """Initialize and configure the MAD-NG interface.
 
@@ -184,11 +215,12 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
                 worker_logfile = logfile_path.with_name(f"{logfile_path.name}_worker_{self.worker_id}")
 
         # Use accelerator factory to create MAD interface
-        mad_iface = get_mad_interface(self.config.accelerator)(
+        init_bpm = self.config.start_bpm if self.config.sdir > 0 else self.config.end_bpm
+        mad_iface = GradientDescentMadInterface(
             accelerator=self.config.accelerator,
             magnet_range=self.config.magnet_range,
             bpm_range=self.bpm_range,
-            start_bpm=self.config.start_bpm,
+            start_bpm=init_bpm,
             corrector_strengths=self.config.corrector_strengths,
             tune_knobs_file=self.config.tune_knobs_file,
             bad_bpms=self.config.bad_bpms,
@@ -242,35 +274,6 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         5. Cleanup on termination signal (None received)
         """
         pass
-        # # Initial handshake
-        # knob_name_vals, batch = self.conn.recv()
-
-        # # Setup MAD interface
-        # mad, nbpms = self.setup_mad_interface(knob_name_vals)
-
-        # # Send initial conditions
-        # self.send_initial_conditions(mad)
-
-        # # Initialize MAD environment for computation
-        # self._initialise_mad_computation(mad)
-
-        # LOGGER.debug(f"Worker {self.worker_id}: Ready for computation with {nbpms} BPMs")
-
-        # # Main computation loop
-        # while knob_name_vals is not None:
-        #     # Compute gradients and loss
-        #     grad, loss = self.compute_gradients_and_loss(mad, knob_name_vals, batch)
-
-        #     # Normalise and send results
-        #     self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
-
-        #     # Wait for next knob values
-        #     knob_name_vals, batch = self.conn.recv()
-
-        # # Cleanup
-        # LOGGER.debug(f"Worker {self.worker_id}: Terminating")
-        # mad.send("shush()")
-        # del mad
 
     @abstractmethod
     def _initialise_mad_computation(self, mad: MAD) -> None:

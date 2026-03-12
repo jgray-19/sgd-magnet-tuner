@@ -1,3 +1,5 @@
+"""Learning-rate schedulers used by optimisation controllers."""
+
 import logging
 import math
 
@@ -5,18 +7,10 @@ LOGGER = logging.getLogger(__name__)
 
 
 class LRScheduler:
-    """
-    Cosine-decay learning-rate scheduler with cosine warmup.
+    """Cosine warmup followed by cosine decay.
 
-    Usage:
-        scheduler = LRScheduler(
-            warmup_epochs=2000,
-            decay_epochs=3000,
-            start_lr=1e-6,
-            max_lr=1e-4,
-            min_lr=1e-5,
-        )
-        lr = scheduler(epoch)
+    Typical usage is to instantiate the scheduler once and call it with the
+    current zero-based epoch index inside the optimisation loop.
     """
 
     def __init__(

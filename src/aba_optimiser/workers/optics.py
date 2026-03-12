@@ -25,14 +25,7 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class OpticsWeights:
-    """Container for optics function weights.
-
-    Attributes:
-        phase_adv_x: Weights for horizontal phase advances
-        phase_adv_y: Weights for vertical phase advances
-        beta_x: Weights for horizontal beta functions
-        beta_y: Weights for vertical beta functions
-    """
+    """Weight arrays for each optics observable family."""
 
     phase_adv_x: np.ndarray  # Shape: (n_bpms-1,)
     phase_adv_y: np.ndarray  # Shape: (n_bpms-1,)
@@ -42,14 +35,7 @@ class OpticsWeights:
 
 @dataclass
 class OpticsComparisons:
-    """Container for reference optics data.
-
-    Attributes:
-        phase_adv_x: Reference horizontal phase advances between consecutive BPMs
-        phase_adv_y: Reference vertical phase advances between consecutive BPMs
-        beta_x: Reference horizontal beta functions at each BPM
-        beta_y: Reference vertical beta functions at each BPM
-    """
+    """Reference optics values grouped by observable family."""
 
     phase_adv_x: np.ndarray  # Shape: (n_bpms-1,)
     phase_adv_y: np.ndarray  # Shape: (n_bpms-1,)

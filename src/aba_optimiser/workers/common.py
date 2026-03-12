@@ -7,7 +7,7 @@ used across different worker implementations (tracking and optics modes).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -16,27 +16,16 @@ if TYPE_CHECKING:
 
     from aba_optimiser.accelerators import Accelerator
 
+KickPlane = Literal["x", "y", "xy"]
+
 
 @dataclass
 class WorkerConfig:
-    """Configuration parameters common to all worker types.
+    """Configuration shared by all worker processes.
 
-    Instead of passing many individual parameters (sequence_file, beam_energy,
-    seq_name, etc.), we pass an Accelerator instance that encapsulates all
-    machine-specific configuration and can create MAD interfaces.
-
-    Attributes:
-        accelerator: Accelerator instance (e.g., LHC) with machine parameters
-        start_bpm: Name of the starting BPM in the range
-        end_bpm: Name of the ending BPM in the range
-        magnet_range: MAD-NG range specification for magnets
-        corrector_strengths: Path to corrector strength configuration
-        tune_knobs_file: Path to tune knob definitions
-        sdir: Direction of propagation (+1 forward, -1 backward)
-        bad_bpms: List of BPM names to exclude from analysis
-        debug: Enable debug mode for MAD interface
-        mad_logfile: Path to MAD log file (can be None)
-        optimise_knobs: List of global knob names to optimise
+    The accelerator object bundles machine-specific setup, while the remaining
+    fields describe the local BPM range, tracking direction, and optional input
+    files needed by the worker.
     """
 
     accelerator: Accelerator
@@ -46,6 +35,7 @@ class WorkerConfig:
     corrector_strengths: Path | None
     tune_knobs_file: Path | None
     sdir: int = 1
+    kick_plane: KickPlane = "xy"
     bad_bpms: list[str] | None = None
     debug: bool = False
     mad_logfile: Path | None = None
@@ -53,17 +43,11 @@ class WorkerConfig:
 
 @dataclass
 class PrecomputedTrackingWeights:
-    """Precomputed weights shared across tracking workers.
+    """Per-observable weights reused by multiple tracking workers.
 
-    Attributes:
-        x: Normalised weights for horizontal position
-        y: Normalised weights for vertical position
-        px: Normalised weights for horizontal momentum
-        py: Normalised weights for vertical momentum
-        hessian_x: Aggregated Hessian weights for x (unnormalised inverse-variance)
-        hessian_y: Aggregated Hessian weights for y (unnormalised inverse-variance)
-        hessian_px: Aggregated Hessian weights for px (unnormalised inverse-variance)
-        hessian_py: Aggregated Hessian weights for py (unnormalised inverse-variance)
+    The normalised arrays are used in the loss and gradient calculation, while
+    the Hessian arrays keep the unfloored aggregate weights needed for the
+    approximate second-order terms.
     """
 
     x: np.ndarray
@@ -78,19 +62,11 @@ class PrecomputedTrackingWeights:
 
 @dataclass
 class TrackingData:
-    """Data container for particle tracking simulations.
+    """Reference data for a tracking-loss evaluation.
 
-    All comparison and variance arrays have shape (n_particles, n_data_points, 2)
-    where the last dimension is [x, y] or [px, py].
-
-    Attributes:
-        position_comparisons: Reference position data [x, y] per particle and data point
-        momentum_comparisons: Reference momentum data [px, py] per particle and data point
-        position_variances: Measurement uncertainties for positions
-        momentum_variances: Measurement uncertainties for momenta
-        init_coords: Initial particle coordinates for tracking
-        init_pts: Initial transverse momentum values per particle
-        precomputed_weights: Optional globally precomputed weights shared by all workers
+    Position and momentum comparison arrays use shape
+    ``(n_particles, n_data_points, 2)``, with the last axis storing the two
+    transverse components for each observable family.
     """
 
     position_comparisons: np.ndarray  # Shape: (n_particles, n_data_points, 2)
@@ -104,17 +80,11 @@ class TrackingData:
 
 @dataclass
 class OpticsData:
-    """Data container for optics function measurements.
+    """Reference optics measurements for an optics worker.
 
-    Attributes:
-        comparisons: Reference phase advance values [phase_adv_x, phase_adv_y] between consecutive BPMs
-        variances: Measurement uncertainties for phase advances
-        beta_comparisons: Reference beta function values [beta_x, beta_y] at each BPM
-        beta_variances: Measurement uncertainties for beta functions
-        init_coords: Initial Twiss parameters and dispersion
-
-    Note: Phase advances are measured between consecutive BPMs, so there are (n_bpms - 1) measurements.
-          Beta functions are measured at each BPM, so there are n_bpms measurements.
+    Phase advances are stored between consecutive BPMs, so those arrays have
+    ``n_bpms - 1`` rows. Beta-function arrays are defined per BPM and therefore
+    have ``n_bpms`` rows.
     """
 
     comparisons: np.ndarray  # Shape: (n_bpms-1, 2) - [phase_adv_x, phase_adv_y]
