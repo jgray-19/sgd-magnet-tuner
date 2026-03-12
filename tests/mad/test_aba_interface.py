@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 from src.aba_optimiser.physics.deltap import dp2pt as physics_dp2pt
 from tests.mad.helpers import (
@@ -26,14 +27,18 @@ from tests.mad.helpers import (
     ],
     ids=["default_py_name", "custom_py_name"],
 )
-def test_init(py_name, expected_py_name, var_name, var_value) -> None:
+def test_init(py_name, expected_py_name, var_name, var_value, seq_b1) -> None:
     """Test initialization of AbaMadInterface."""
-    interface = AbaMadInterface() if py_name is None else AbaMadInterface(py_name=py_name)
+    accel = LHC(beam=1, sequence_file=seq_b1)
+    interface = (
+        AbaMadInterface(accelerator=accel)
+        if py_name is None
+        else AbaMadInterface(accelerator=accel, py_name=py_name)
+    )
     check_interface_basic_init(interface, expected_py_name)
     interface.mad.send(f"{var_name} = {var_value}")
     assert getattr(interface.mad, var_name) == var_value
     cleanup_interface(interface)
-
 
 
 def test_cycle_sequence(loaded_interface: AbaMadInterface) -> None:
@@ -86,40 +91,38 @@ def test_install_marker(
     """Test installing a marker element."""
     interface = loaded_interface
     if marker_name and offset is not None:
-        ret_name = interface.install_marker(
-            element, marker_name=marker_name, offset=offset
-        )
+        ret_name = interface.install_marker(element, marker_name=marker_name, offset=offset)
     else:
         ret_name = interface.install_marker(element)
-    marker_position, marker_index, elem_position, elem_index = (
-        get_marker_and_element_positions(interface, expected_marker_name, element)
+    marker_position, marker_index, elem_position, elem_index = get_marker_and_element_positions(
+        interface, expected_marker_name, element
     )
     assert index_check(marker_index, elem_index)
     assert pos_check(marker_position, elem_position)
     assert ret_name == expected_marker_name
 
 
-def test_getset_variables(interface: AbaMadInterface) -> None:
+def test_getset_variables(loaded_interface: AbaMadInterface) -> None:
     """Test setting MAD variables."""
-    interface.set_variables(**{"KQTL_1L1_B1": 1.2, "KQTL_1L2_B1": 2.3})
-    assert interface.mad.KQTL_1L1_B1 == 1.2
-    assert interface.mad.KQTL_1L2_B1 == 2.3
+    loaded_interface.set_variables(**{"KQTL_1L1_B1": 1.2, "KQTL_1L2_B1": 2.3})
+    assert loaded_interface.mad.KQTL_1L1_B1 == 1.2
+    assert loaded_interface.mad.KQTL_1L2_B1 == 2.3
 
-    v1, v2 = interface.get_variables("KQTL_1L1_B1", "KQTL_1L2_B1")
+    v1, v2 = loaded_interface.get_variables("KQTL_1L1_B1", "KQTL_1L2_B1")
     assert v1 == 1.2
     assert v2 == 2.3
 
 
-def test_set_madx_variables(interface: AbaMadInterface) -> None:
+def test_set_madx_variables(loaded_interface: AbaMadInterface) -> None:
     """Test setting MAD-X variables."""
-    interface.set_madx_variables(**{"kqtl_1l1_b1": 1.5, "KQTL_1L2_B1": 2.5})
-    assert interface.mad.MADX.KQTL_1L1_B1 == 1.5
-    assert interface.mad.MADX.kqtl_1l2_b1 == 2.5
+    loaded_interface.set_madx_variables(**{"kqtl_1l1_b1": 1.5, "KQTL_1L2_B1": 2.5})
+    assert loaded_interface.mad.MADX.KQTL_1L1_B1 == 1.5
+    assert loaded_interface.mad.MADX.kqtl_1l2_b1 == 2.5
 
 
-def test_twiss(loaded_interface_with_beam: AbaMadInterface):
+def test_twiss(loaded_interface: AbaMadInterface):
     """Test twiss function."""
-    interface = loaded_interface_with_beam
+    interface = loaded_interface
     twiss_df = interface.run_twiss()
 
     # Assert the columns we expect are present
@@ -135,9 +138,7 @@ def test_twiss(loaded_interface_with_beam: AbaMadInterface):
         "dy",
     ]
     for col in expected_columns:
-        assert col in twiss_df.columns, (
-            f"Expected column {col} not found in twiss output"
-        )
+        assert col in twiss_df.columns, f"Expected column {col} not found in twiss output"
     assert "name" not in twiss_df.columns, "Column 'name' should be the index"
     assert twiss_df.index.name == "name", (
         f"Expected index name to be 'name', got {twiss_df.index.name}"
@@ -146,9 +147,7 @@ def test_twiss(loaded_interface_with_beam: AbaMadInterface):
     # There should only be one entry, since by default observe = 1 and nothing has been set to be observed
     assert len(twiss_df) == 1, f"Expected 1 twiss entry, got {len(twiss_df)}"
     # Check the marker is named $end
-    assert twiss_df.index[0] == "$end", (
-        f"Expected marker name '$end', got {twiss_df.index[0]}"
-    )
+    assert twiss_df.index[0] == "$end", f"Expected marker name '$end', got {twiss_df.index[0]}"
 
     # Check the tunes
     assert abs(twiss_df.headers["q1"] - 62.28) < 3e-7, f"Unexpected Qx: {twiss_df.q1}"
@@ -158,12 +157,8 @@ def test_twiss(loaded_interface_with_beam: AbaMadInterface):
     twiss_df = interface.run_twiss(observe=0)
     # There should be loads of entries now, including drifts
     assert len(twiss_df) > 1000, f"Expected >1000 twiss entries, got {len(twiss_df)}"
-    assert "drift__3" in twiss_df.index, (
-        "Expected to find drift elements in twiss output"
-    )
-    assert "MB.A33R2.B1" in twiss_df.index, (
-        "Expected to find magnet elements in twiss output"
-    )
+    assert "drift__3" in twiss_df.index, "Expected to find drift elements in twiss output"
+    assert "MB.A33R2.B1" in twiss_df.index, "Expected to find magnet elements in twiss output"
     assert abs(twiss_df.headers["q1"] - 62.28) < 3e-7, f"Unexpected Qx: {twiss_df.headers['q1']}"
     assert abs(twiss_df.headers["q2"] - 60.31) < 3e-7, f"Unexpected Qy: {twiss_df.headers['q2']}"
 
@@ -172,47 +167,37 @@ def test_twiss(loaded_interface_with_beam: AbaMadInterface):
     twiss_df = interface.run_twiss()
     # There should only be BPMs observed
     assert len(twiss_df) == 563, f"Expected 563 twiss entries, got {len(twiss_df)}"
-    assert all(twiss_df.index.str.match(r"^BPM.*")), (
-        "Expected only BPM elements in twiss output"
-    )
+    assert all(twiss_df.index.str.match(r"^BPM.*")), "Expected only BPM elements in twiss output"
     assert abs(twiss_df.headers["q1"] - 62.28) < 3e-7, f"Unexpected Qx: {twiss_df.headers['q1']}"
     assert abs(twiss_df.headers["q2"] - 60.31) < 3e-7, f"Unexpected Qy: {twiss_df.headers['q2']}"
     interface.unobserve_elements(["BPM"])
 
 
 @pytest.mark.parametrize(
-    "target_qx,target_qy,qx_knob,qy_knob",
+    "target_qx,target_qy",
     [
-        (0.2801, 0.3101, None, None),
-        (0.29, 0.32, "dqx_b1", "dqy_b1"),
-        (0.27, 0.30, None, None),
+        (0.2801, 0.3101),
+        (0.29, 0.32),
+        (0.27, 0.30),
     ],
 )
 def test_match_tunes(
-    loaded_interface_with_beam: AbaMadInterface,
+    loaded_interface: AbaMadInterface,
     target_qx: float,
     target_qy: float,
-    qx_knob: str,
-    qy_knob: str,
 ):
     """Test matching tunes."""
-    interface = loaded_interface_with_beam
-    default_qx = qx_knob or "dqx_b1_op"
-    default_qy = qy_knob or "dqy_b1_op"
-    knobs = {
-        default_qx: interface.mad.MADX[default_qx],
-        default_qy: interface.mad.MADX[default_qy],
+    interface = loaded_interface
+    tune_qx, tune_qy = interface.accelerator.get_tune_variables()
+    initial_knobs = {
+        tune_qx: interface.mad.MADX[tune_qx],
+        tune_qy: interface.mad.MADX[tune_qy],
     }
-    print("Initial knobs:", knobs)
-
-    kwargs = {}
-    if qx_knob:
-        kwargs["qx_knob"] = qx_knob
-    if qy_knob:
-        kwargs["qy_knob"] = qy_knob
+    print("Initial knobs:", initial_knobs)
 
     new_knobs = interface.match_tunes(
-        target_qx=target_qx, target_qy=target_qy, **kwargs
+        target_qx=target_qx,
+        target_qy=target_qy,
     )
 
     twiss_df = interface.run_twiss()
@@ -224,23 +209,24 @@ def test_match_tunes(
     )
 
     # Check that knobs have been changed
-    for knob, old_value in knobs.items():
+    for knob, old_value in initial_knobs.items():
         new_value = interface.mad.MADX[knob]
         assert new_value != old_value, f"Knob {knob} value did not change"
         assert new_value == new_knobs[knob], (
             f"Returned knob value for {knob} does not match MAD value"
         )
 
+
 class TestDp2pt:
-    def test_zero_dp(self, loaded_interface_with_beam: AbaMadInterface):
+    def test_zero_dp(self, loaded_interface: AbaMadInterface):
         """Test dp2pt with dp=0 returns 0"""
-        interface = loaded_interface_with_beam
+        interface = loaded_interface
         pt = interface.dp2pt(0.0)
         assert np.isclose(pt, 0.0, rtol=1e-12, atol=1e-15)
 
-    def test_positive_dp(self, loaded_interface_with_beam: AbaMadInterface):
+    def test_positive_dp(self, loaded_interface: AbaMadInterface):
         """Test dp2pt with positive dp"""
-        interface = loaded_interface_with_beam
+        interface = loaded_interface
         dp = 0.01
         pt = interface.dp2pt(dp)
         # Compare with physics calculation
@@ -249,9 +235,9 @@ class TestDp2pt:
         expected_pt = physics_dp2pt(dp, mass, energy)
         assert np.isclose(pt, expected_pt, rtol=1e-12, atol=1e-13)
 
-    def test_negative_dp(self, loaded_interface_with_beam: AbaMadInterface):
+    def test_negative_dp(self, loaded_interface: AbaMadInterface):
         """Test dp2pt with negative dp"""
-        interface = loaded_interface_with_beam
+        interface = loaded_interface
         dp = -0.005
         pt = interface.dp2pt(dp)
         # Compare with physics calculation
@@ -260,11 +246,9 @@ class TestDp2pt:
         expected_pt = physics_dp2pt(dp, mass, energy)
         assert np.isclose(pt, expected_pt, rtol=1e-12, atol=1e-13)
 
-    def test_high_energy_approximation(
-        self, loaded_interface_with_beam: AbaMadInterface
-    ):
+    def test_high_energy_approximation(self, loaded_interface: AbaMadInterface):
         """Test at high energy where pt ≈ dp"""
-        interface = loaded_interface_with_beam
+        interface = loaded_interface
         dp = 0.01
         pt = interface.dp2pt(dp)
         # At high energy, pt should be close to dp
@@ -272,24 +256,24 @@ class TestDp2pt:
 
 
 class TestPt2dp:
-    def test_zero_pt(self, loaded_interface_with_beam: AbaMadInterface):
+    def test_zero_pt(self, loaded_interface: AbaMadInterface):
         """Test pt2dp with pt=0 returns 0"""
-        interface = loaded_interface_with_beam
+        interface = loaded_interface
         dp = interface.pt2dp(0.0)
         assert np.isclose(dp, 0.0, rtol=1e-12, atol=1e-15)
 
-    def test_positive_pt(self, loaded_interface_with_beam: AbaMadInterface):
+    def test_positive_pt(self, loaded_interface: AbaMadInterface):
         """Test pt2dp with positive pt"""
-        interface = loaded_interface_with_beam
+        interface = loaded_interface
         pt = 0.01
         dp = interface.pt2dp(pt)
         # Check inverse consistency
         pt_back = interface.dp2pt(dp)
         assert np.isclose(pt_back, pt, rtol=1e-12, atol=1e-15)
 
-    def test_negative_pt(self, loaded_interface_with_beam: AbaMadInterface):
+    def test_negative_pt(self, loaded_interface: AbaMadInterface):
         """Test pt2dp with negative pt"""
-        interface = loaded_interface_with_beam
+        interface = loaded_interface
         pt = -0.005
         dp = interface.pt2dp(pt)
         # Check inverse consistency
@@ -297,9 +281,9 @@ class TestPt2dp:
         assert np.isclose(pt_back, pt, rtol=1e-12, atol=1e-15)
 
 
-def test_pt2dp_dp2pt_consistency(loaded_interface_with_beam: AbaMadInterface):
+def test_pt2dp_dp2pt_consistency(loaded_interface: AbaMadInterface):
     """Test that pt2dp and dp2pt are inverses of each other."""
-    interface = loaded_interface_with_beam
+    interface = loaded_interface
     test_dps = [0.0, 0.001, -0.001, 0.01, -0.005]
     test_pts = [0.0, 0.001, -0.001, 0.01, -0.005]
 

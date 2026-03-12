@@ -12,13 +12,31 @@ from aba_optimiser.accelerators.base import Accelerator
 class ConcreteAccelerator(Accelerator):
     """Concrete implementation of Accelerator for testing."""
 
-    def get_seq_name(self) -> str:
+    def __init__(self, *args, bpm_pattern: str = "^BPM", **kwargs):
+        super().__init__(*args, bpm_pattern=bpm_pattern, **kwargs)  # ty:ignore[parameter-already-assigned]
+
+    @property
+    def seq_name(self) -> str:
         """Return a test sequence name."""
         return "test_seq"
 
     def get_supported_knob_specs(self) -> list[tuple[str, str, str, bool, bool]]:
         """Return a list of supported knob specifications."""
         return [("quadrupole", "k1", "MQ", True, True)]
+
+    @staticmethod
+    def infer_monitor_plane(bpm_name: str) -> str:
+        del bpm_name
+        return "HV"
+
+    def get_tune_variables(self) -> tuple[str, str]:
+        """Return dummy tune variable names for abstract interface compliance."""
+        return "qx_test", "qy_test"
+
+    def get_tune_integers(self) -> tuple[int, int]:
+        """Return dummy integer tune parts for abstract interface compliance."""
+        return 62, 60
+
 
 class TestAcceleratorBase:
     """Tests for base Accelerator functionality."""
@@ -38,7 +56,7 @@ class TestAcceleratorBase:
         )
         assert acc.sequence_file == test_sequence_file
         assert acc.beam_energy == 6800.0
-        assert acc.seq_name is None
+        assert acc.seq_name == "test_seq"
         assert acc.optimise_energy is False
         assert acc.optimise_quadrupoles is False
         assert acc.optimise_sextupoles is False
@@ -49,9 +67,8 @@ class TestAcceleratorBase:
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
             beam_energy=6800.0,
-            seq_name="lhcb1",
         )
-        assert acc.seq_name == "lhcb1"
+        assert acc.seq_name == "test_seq"
 
     def test_init_with_optimise_energy(self, test_sequence_file: Path) -> None:
         """Test initialization with energy optimization enabled."""
@@ -136,7 +153,7 @@ class TestAcceleratorBase:
             sequence_file=test_sequence_file,
             beam_energy=6800.0,
         )
-        result = acc.get_bend_lengths(None)
+        result = acc.get_bend_lengths()
         assert result is None
 
     def test_normalise_true_strengths_returns_unchanged(

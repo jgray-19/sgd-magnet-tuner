@@ -13,6 +13,9 @@ LOGGER = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from aba_optimiser.mad.optimising_mad_interface import GradientDescentMadInterface
+
+
 class LHC(Accelerator):
     """Large Hadron Collider accelerator configuration.
 
@@ -25,21 +28,32 @@ class LHC(Accelerator):
     PATTERN_RBEND = "MB[RXWAL]%w*%."
     PATTERN_MAIN_QUAD = "MQ%."
     PATTERN_CORRECTOR = "MCB"
-    PATTERN_QUAD_NON_TUNE = "MQ[MYX]"  # Explicitly not MQT or MQ.
+    PATTERN_QUAD_NON_TUNE = "MQ[^T.]"  # Explicitly not MQT or MQ.
+    PATTERN_QUAD_DISPLACEMENT = "MQ%."  # "MQX.*[LR][15]"
+    QUAD_ERROR_TABLE = {
+        "MQ.": 18e-4,
+        "MQM": 12e-4,
+        "MQY": 8e-4,
+        "MQX": 10e-4,
+        "MQW": 15e-4,
+    }
+    BPM_PATTERN = "^BPM%."
 
     def __init__(
         self,
         beam: int,
         sequence_file: Path | str,
         beam_energy: float = 6800.0,
+        bpm_pattern: str = BPM_PATTERN,
         optimise_quadrupoles: bool = False,
         optimise_sextupoles: bool = False,
-        # LHC-specific bend control
         optimise_energy: bool = False,
+        # LHC-specific control
         optimise_correctors: bool = False,
         optimise_bends: bool = False,
         normalise_bends: bool | None = None,
         optimise_other_quadrupoles: bool = False,
+        optimise_quad_dx: bool = False,
     ):
         """Initialise LHC accelerator for a specific beam.
 
@@ -49,7 +63,7 @@ class LHC(Accelerator):
             beam_energy: Beam energy in GeV
             optimise_quadrupoles: Whether to optimise quadrupoles
             optimise_sextupoles: Whether to optimise sextupoles
-
+            bpm_pattern: Pattern for identifying BPMs in the sequence
             optimise_bends: Whether to optimise dipole bends
             normalise_bends: Whether to normalise bend strengths
             optimise_correctors: Whether to optimise corrector magnets
@@ -70,19 +84,21 @@ class LHC(Accelerator):
         self.normalise_bends = normalise_bends
         self.optimise_correctors = optimise_correctors
         self.optimise_other_quadrupoles = optimise_other_quadrupoles
+        self.optimise_quad_dx = optimise_quad_dx
 
 
         # Initialise base Accelerator
         super().__init__(
             sequence_file=sequence_file,
             beam_energy=beam_energy,
-            seq_name=f"lhcb{beam}",
+            bpm_pattern=bpm_pattern,
             optimise_energy=optimise_energy,
             optimise_quadrupoles=optimise_quadrupoles,
             optimise_sextupoles=optimise_sextupoles,
         )
 
-    def get_seq_name(self) -> str:
+    @property
+    def seq_name(self) -> str:
         """Return the sequence name for this LHC beam."""
         return f"lhcb{self.beam}"
 
@@ -99,6 +115,7 @@ class LHC(Accelerator):
             or self.optimise_sextupoles
             or self.optimise_correctors
             or self.optimise_energy
+            or self.optimise_quad_dx
         )
 
     def log_optimisation_targets(self) -> None:
@@ -116,21 +133,27 @@ class LHC(Accelerator):
             targets.append("correctors")
         if self.optimise_energy:
             targets.append("beam energy")
+        if self.optimise_quad_dx:
+            targets.append("quadrupole horizontal offsets")
         if targets:
             LOGGER.info(f"Optimisation targets: {', '.join(targets)}")
         else:
             LOGGER.info("No optimisation targets set.")
 
-    def get_bend_lengths(self, mad_iface) -> dict[str, float] | None:
+    def get_bend_lengths(self) -> dict[str, float] | None:
         """Return LHC bend lengths when bend normalisation is enabled."""
         if not (self.optimise_bends and self.normalise_bends):
             return None
-        return getattr(mad_iface, "bend_lengths", None)
+        return self.bend_lengths
 
     def normalise_true_strengths(
-        self, true_strengths: dict[str, float], bend_lengths: dict[str, float] | None
+        self,
+        true_strengths: dict[str, float],
+        bend_lengths: dict[str, float] | None = None,
     ) -> dict[str, float]:
-        """Normalize LHC bend strengths when applicable."""
+        """Normalise LHC bend strengths when applicable."""
+        if bend_lengths is None:
+            bend_lengths = self.bend_lengths
         if self.optimise_bends and bend_lengths:
             return normalise_lhcbend_magnets(true_strengths, bend_lengths)
         return true_strengths
@@ -148,74 +171,87 @@ class LHC(Accelerator):
             ("quadrupole", "k1", self.PATTERN_MAIN_QUAD, True, self.optimise_quadrupoles),
             ("quadrupole", "k1", self.PATTERN_QUAD_NON_TUNE, True, self.optimise_other_quadrupoles),
             ("hkicker", "kick", self.PATTERN_CORRECTOR, False, self.optimise_correctors),
+            ("vkicker", "kick", self.PATTERN_CORRECTOR, False, self.optimise_correctors),
+            ("quadrupole", "dx", self.PATTERN_QUAD_DISPLACEMENT, False, self.optimise_quad_dx),
         ]
 
-    def parse_bad_bpm_specification(self, bad_bpm_spec: str) -> tuple[str, str | None]:
-        """Parse LHC bad BPM specification into BPM name and optional plane.
+    def prepare_mad_for_knob_creation(
+        self,
+        mad_iface: GradientDescentMadInterface,
+        selected_specs: list[tuple[str, str, str, bool]],
+    ) -> None:
+        """Prepare LHC-specific MAD state for knob creation."""
+        del selected_specs
+        if self.optimise_bends and self.normalise_bends:
+            mad_iface.mad.send(f"""
+            bend_dict = {{}}
+            bend_lengths = {{}}
+            for i, e in loaded_sequence:siter(magnet_range) do
+                if (e.kind == "sbend" or e.kind == "rbend") and e.k0 ~= 0 then
+                    bend_dict[e.name .. ".k0"] = e.k0
+                    bend_lengths[e.name .. ".k0"] = e.l
+                end
+            end
+            {mad_iface.py_name}:send(bend_dict, true)
+            {mad_iface.py_name}:send(bend_lengths, true)
+            bend_dict = {mad_iface.py_name}:recv()
+            """)
+            true_strengths_dict: dict[str, float] = mad_iface.mad.recv()
+            self.bend_lengths = mad_iface.mad.recv()
+            normalised_names = normalise_lhcbend_magnets(true_strengths_dict, self.bend_lengths)
+            mad_iface.mad.send(normalised_names)
 
-        LHC naming convention:
-        - No suffix: dual-plane BPM (e.g., "BPM.14L1.B1")
-        - .H suffix: horizontal plane only (e.g., "BPM.14L1.B1.H")
-        - .V suffix: vertical plane only (e.g., "BPM.14L1.B1.V")
+        if self.optimise_quad_dx:
+            mad_iface.mad.send(f"""
+            for i, e in loaded_sequence:siter(magnet_range) do
+                if e.kind == "quadrupole" and string.match(e.name, "{self.PATTERN_QUAD_DISPLACEMENT}") then
+                    e.dx = e.dx or 1e-6
+                    e.misalign = MAD.typeid.deferred{{dx =\\->e.dx}}
+                end
+            end
+            """)
 
-        Args:
-            bad_bpm_spec: Bad BPM specification
+    def get_mad_attr_specs(self) -> dict[str, dict[str, str]]:
+        """Return LHC-specific attr naming/value expressions."""
+        if not self.normalise_bends:
+            return {}
+        return {
+            "sbend": {
+                "name_expr": 'string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".k0"',
+                "mad_value": "bend_dict[k_str_name]",
+            },
+            "rbend": {
+                "name_expr": 'string.gsub(e.name, "(MB[RXWAL]%w*%.)([A-G]?)([0-9]+[LR][1-8].*)", "%1%3") .. (e.k0 >= 0 and "_p" or "_n") .. ".k0"',
+                "mad_value": "bend_dict[k_str_name]",
+            },
+        }
 
-        Returns:
-            Tuple of (bpm_base_name, plane) where plane is "H", "V", or None for both planes
-        """
-        if bad_bpm_spec.endswith(".H"):
-            return bad_bpm_spec[:-2], "H"
-        if bad_bpm_spec.endswith(".V"):
-            return bad_bpm_spec[:-2], "V"
-        return bad_bpm_spec, None
+    def get_perturbation_families(self) -> dict[str, dict[str, float | str | dict]]:
+        """Return perturbation-family metadata for LHC."""
+        return {
+            "d": {
+                "default_rel_std": 1e-4,
+                "pattern": "MB\\.",
+            },
+            "q": {
+                "relative_error_table": self.QUAD_ERROR_TABLE,
+            },
+            "s": {
+                "default_rel_std": 1e-4,
+                "pattern": "MS\\.",
+            },
+        }
 
-    def get_bpm_plane_mask(
-        self, bpm_list: list[str], bad_bpms: list[str]
-    ) -> tuple[list[bool], list[bool]]:
-        """Generate masks for LHC BPM planes considering single-plane and bad BPMs.
+    def get_tune_variables(self) -> tuple[str, str]:
+        """Return LHC operational tune knob names."""
+        return f"dqx_b{self.beam}_op", f"dqy_b{self.beam}_op"
 
-        LHC-specific implementation that handles:
-        1. Single-plane BPMs (those with .H or .V suffix)
-        2. Bad BPM filtering per plane
-        3. Dual-plane BPMs (standard naming without suffix)
+    def get_tune_integers(self) -> tuple[int, int]:
+        """Return LHC integer tunes."""
+        return 62, 60
 
-        Logic:
-        - For dual-plane BPMs:
-          - If "BPM.X.H" is in bad_bpms → mask horizontal plane
-          - If "BPM.X.V" is in bad_bpms → mask vertical plane
-          - If "BPM.X" is in bad_bpms → mask both planes
-        - For single-plane BPMs:
-          - "BPM.X.H" measures only horizontal → mask vertical
-          - "BPM.X.V" measures only vertical → mask horizontal
-          - If the BPM appears in bad_bpms, mask its measuring plane too
-
-        Args:
-            bpm_list: List of BPM names (can include .H or .V suffixes)
-            bad_bpms: List of bad BPM specifications (with optional plane suffixes)
-
-        Returns:
-            Tuple of (h_mask, v_mask) where True means the plane should be used
-        """
-        # Build a dict of bad planes per BPM: {base_name -> set of bad planes}
-        bad_bpm_dict: dict[str, set[str]] = {}
-        for bad_spec in bad_bpms:
-            base_name, plane = self.parse_bad_bpm_specification(bad_spec)
-            bad_planes = bad_bpm_dict.setdefault(base_name, set())
-            if plane is None:
-                bad_planes.update(["H", "V"])
-            else:
-                bad_planes.add(plane)
-
-        # Generate masks for each BPM
-        h_mask = []
-        v_mask = []
-        for bpm_name in bpm_list:
-            base_name, plane_suffix = self.parse_bad_bpm_specification(bpm_name)
-            bad_planes = bad_bpm_dict.get(base_name, set())
-
-            # A plane is measured if BPM doesn't exclude it, and not bad
-            h_mask.append(plane_suffix != "V" and "H" not in bad_planes)
-            v_mask.append(plane_suffix != "H" and "V" not in bad_planes)
-
-        return h_mask, v_mask
+    @staticmethod
+    def infer_monitor_plane(bpm_name: str) -> str:
+        """Infer measurement plane from LHC BPM family name."""
+        del bpm_name
+        return "HV"

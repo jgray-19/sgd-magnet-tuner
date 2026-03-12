@@ -1,14 +1,25 @@
+"""High-level MAD-NG interfaces used by optimisation and worker code.
+
+The classes in this module build on :mod:`aba_optimiser.mad.aba_mad_interface`
+to provide a fully configured MAD-NG session for optimisation workflows. They
+handle sequence loading, BPM observation setup, optional corrector/tune-knob
+application, and knob discovery for gradient-based tuning.
+"""
+
 from __future__ import annotations
 
 import logging
-from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 import numpy as np
 import tfs
 from pymadng_utils.io.utils import read_knobs
 
-from .aba_mad_interface import AbaMadInterface
+from .aba_mad_interface import (
+    _DKNL_INDEX_BY_ATTR_LUA,
+    _DKNL_STRENGTH_ATTRS,
+    AbaMadInterface,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -56,8 +67,7 @@ class GenericMadInterface(AbaMadInterface):
     - Applying corrector strengths and tune knobs
     - General MAD-NG operations
 
-    Knob creation (for gradient descent) is NOT handled here and should be
-    implemented by accelerator-specific subclasses.
+    Knob creation (for gradient descent) is handled by ``GradientDescentMadInterface``.
 
     This separation allows non-gradient-descent use cases to use this interface
     without unnecessary knob creation overhead.
@@ -68,11 +78,11 @@ class GenericMadInterface(AbaMadInterface):
         accelerator: Accelerator,
         magnet_range: str = "$start/$end",
         bpm_range: str | None = None,
-        bpm_pattern: str = BPM_PATTERN,
         bad_bpms: list[str] | None = None,
         corrector_strengths: Path | None = None,
         tune_knobs_file: Path | None = None,
         start_bpm: str | None = None,
+        replace_all_monitors_with_markers: bool = False,
         py_name: str = "py",
         debug: bool = False,
         mad_logfile: Path | None = None,
@@ -85,7 +95,7 @@ class GenericMadInterface(AbaMadInterface):
             accelerator: Accelerator instance providing configuration
             magnet_range: Range of magnets to include, e.g., "MARKER.1/MARKER.10"
             bpm_range: Range of BPMs to observe, e.g., "BPM.13R3.B1/BPM.12L4.B1"
-            bpm_pattern: Pattern for BPM matching
+            bpm_pattern: Pattern for BPM matching. Defaults to accelerator pattern.
             bad_bpms: List of bad BPMs to exclude from observation
             beam_energy: Beam energy in GeV
             corrector_strengths: Path to corrector strengths file, or None to skip
@@ -113,37 +123,59 @@ class GenericMadInterface(AbaMadInterface):
 
         # Initialise base class
         super().__init__(
-            stdout=stdout, redirect_stderr=redirect_stderr, py_name=py_name, debug=debug
+            accelerator=accelerator,
+            stdout=stdout,
+            redirect_stderr=redirect_stderr,
+            py_name=py_name,
+            debug=debug,
         )
         # Store setup attributes
         self.accelerator = accelerator
         self.magnet_range = magnet_range
         self.bpm_range = bpm_range if bpm_range is not None else magnet_range
 
-        # Type hints for attributes that may be set during initialization or by subclasses
+        # Type hints for attributes set during initialization
         self.nbpms: int
         self.all_bpms: list[str]
         self.knob_names: list[str] = []
+        self.knob_name_set: set[str] = set()
         self.elem_spos: list[float] = []
-
-        # Perform automatic setup using base class methods
-        self.load_sequence(accelerator.sequence_file, accelerator.get_seq_name())
-        self.setup_beam(accelerator.beam_energy)
-
-        if start_bpm is not None:
-            marker_name = self.install_marker(start_bpm, "marker_" + start_bpm)
-            self.cycle_sequence(marker_name=marker_name)
-            LOGGER.info(f"Cycled sequence to start at BPM: {start_bpm}")
-        else:
-            LOGGER.info("Skipping sequence cycling (no start BPM provided)")
 
         # Set MAD variables for ranges and patterns
         self.mad["magnet_range"] = self.magnet_range
         self.mad["bpm_range"] = self.bpm_range
 
+        nbpms = None
+        if replace_all_monitors_with_markers:
+            # Setup observation and ranges
+            self.observe_bpms(accelerator.bpm_pattern, bad_bpms)
+            bpms_in_range, nbpms, all_bpms = self.count_bpms(self.bpm_range)
+            # Unobserve all BPMs first to avoid duplicates
+            self.unobserve_elements([accelerator.bpm_pattern])
+            for bpm in bpms_in_range:
+                if "monitor" in self.mad.MADX[bpm].kind:
+                    self.replace_with_marker(bpm)
+            self.mad.send("loaded_sequence:update()")
+
+        if start_bpm is not None:
+            if self.mad.MADX[start_bpm].kind != "marker":
+                start_bpm = self.install_marker(start_bpm, "marker_" + start_bpm)
+            self.cycle_sequence(marker_name=start_bpm)
+            LOGGER.info(f"Cycled sequence to start at BPM: {start_bpm}")
+        else:
+            LOGGER.info("Skipping sequence cycling (no start BPM provided)")
+
         # Setup observation and ranges
-        self.observe_bpms(bpm_pattern, bad_bpms)
+        self.observe_bpms(accelerator.bpm_pattern, bad_bpms)
         self.bpms_in_range, self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
+        if nbpms is not None and nbpms != self.nbpms:
+            print(
+                f"I had {nbpms} in range {bpms_in_range} but counted {self.nbpms} BPMs in {self.bpms_in_range}"
+            )
+            print(f"First bpm: {start_bpm}, range: {self.bpm_range}")
+            raise ValueError(
+                f"Number of BPMs in range {self.bpm_range} does not match expected count: {nbpms} != {self.nbpms}"
+            )
 
         # Apply corrector strengths if provided
         if corrector_strengths is not None:
@@ -214,23 +246,16 @@ class GenericMadInterface(AbaMadInterface):
         LOGGER.debug(f"Previous tune knob values: {prev}")
         LOGGER.debug(f"Set tune knobs from {tune_knobs_file}: {len(tune_knobs)}")
 
-    def _check_mad_response(self, expected: str, error_msg: str) -> None:
-        """Check that the response from MAD-NG matches the expected value."""
-        try:
-            if (result := self.mad.recv()) != expected:
-                raise RuntimeError(f"Unexpected response from MAD-NG: {result}. {error_msg}")
-        except Exception as e:
-            raise RuntimeError(error_msg) from e
 
-
-class GradientDescentMadInterface(GenericMadInterface, ABC):
+class GradientDescentMadInterface(GenericMadInterface):
     """
-    Abstract MAD interface for gradient descent optimization.
+    Generic MAD interface for gradient descent optimization.
 
     Extends GenericMadInterface with knob creation capabilities specific to gradient descent
-    optimization. Subclasses define what knobs to create via get_knob_specs().
+    optimization.
 
-    This separates accelerator-specific knob definitions from the generic setup logic.
+    Accelerator-specific behavior is provided by accelerator hooks
+    (knob specs, attr specs, MAD preparation), keeping this interface generic.
     """
 
     def __init__(
@@ -243,6 +268,7 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
         corrector_strengths: Path | None = None,
         tune_knobs_file: Path | None = None,
         start_bpm: str | None = None,
+        replace_all_monitors_with_markers: bool = True,
         py_name: str = "py",
         debug: bool = False,
         mad_logfile: Path | None = None,
@@ -255,7 +281,7 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
             accelerator: Accelerator instance providing configuration
             magnet_range: Range of magnets to include
             bpm_range: Range of BPMs to observe
-            bpm_pattern: Pattern for BPM matching
+            bpm_pattern: Pattern for BPM matching. Defaults to accelerator pattern.
             bad_bpms: List of bad BPMs to exclude
             corrector_strengths: Path to corrector strengths file
             tune_knobs_file: Path to tune knobs file
@@ -268,11 +294,11 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
             accelerator,
             magnet_range,
             bpm_range,
-            bpm_pattern,
             bad_bpms,
             corrector_strengths,
             tune_knobs_file,
             start_bpm,
+            replace_all_monitors_with_markers,
             py_name,
             debug,
             mad_logfile,
@@ -280,7 +306,7 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
         )
 
         if accelerator.has_any_optimisation():
-            # Create gradient descent knobs using subclass-specific knob specs
+            # Create gradient descent knobs using accelerator-provided specs
             self._make_adj_knobs()
         else:
             LOGGER.warning(
@@ -288,12 +314,11 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
                 "\nUse GenericMadInterface if no optimisation is required."
             )
 
-    @abstractmethod
     def get_knob_specs(self) -> list[tuple[str, str, str, bool, bool]]:
         """
         Get the list of knob specifications for this accelerator.
 
-        Should be implemented by subclasses to define which knobs to create for optimization.
+        Returns the full list of supported knobs from the accelerator definition.
 
         Returns:
             List of (kind, attribute, pattern, zero_check) tuples:
@@ -302,6 +327,7 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
             - pattern: Regex pattern to match element names
             - zero_check: Whether to exclude elements with zero attribute values
         """
+        return self.accelerator.get_supported_knob_specs()
 
     def _filter_knob_specs(
         self, all_specs: list[tuple[str, str, str, bool, bool]]
@@ -309,9 +335,7 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
         """
         Filter knob specifications based on the accelerator's optimisation settings.
 
-        Default filtering is accelerator-agnostic and only includes generic
-        magnet types (quadrupoles, sextupoles). Accelerator-specific subclasses
-        should override this method to add bends, correctors, etc.
+        Default filtering keeps only specs enabled by accelerator optimise_* flags.
 
         Args:
             all_specs: All available knob specifications from get_knob_specs()
@@ -326,19 +350,12 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
         ]
 
     def _prepare_knob_data(self, selected_specs: list[tuple[str, str, str, bool]]) -> None:
-        """Prepare any accelerator-specific data required for knob creation.
-
-        Default implementation does nothing; subclasses can override.
-        """
-        return
+        """Prepare accelerator-specific MAD state required for knob creation."""
+        self.accelerator.prepare_mad_for_knob_creation(self, selected_specs)
 
     def _get_attr_specs(self) -> dict[str, dict[str, str]]:
-        """Return attribute name/value expressions for special element kinds.
-
-        Subclasses can override to provide accelerator-specific logic for
-        naming and value extraction (e.g., LHC bend k0 naming).
-        """
-        return {}
+        """Return accelerator-specific attribute name/value expressions."""
+        return self.accelerator.get_mad_attr_specs()
 
     def _build_attr_block(self, attr_conditions: list[tuple[str, str, str]]) -> str:
         """
@@ -358,12 +375,52 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
             spec = attr_specs.get(kind, {})
             name_expr = spec.get("name_expr", f'e.name .. ".{attr}"')
             mad_value = spec.get("mad_value", f"e.{attr}")
-            tmpl = [
-                f"{{prefix}} {condition} then",
-                f"    k_str_name = {name_expr}",
-                f"    MADX[k_str_name] = {mad_value}",
-                f"    e.{attr} = \\->MADX[k_str_name]",
-            ]
+            if attr in _DKNL_STRENGTH_ATTRS:
+                dknl_index = _DKNL_INDEX_BY_ATTR_LUA[attr]
+                preserved_lines = []
+                deferred_entries = []
+                for preserved_index in range(1, 5):
+                    if preserved_index == dknl_index:
+                        continue
+                    preserved_name = f"dknl_{preserved_index}"
+                    preserved_lines.append(
+                        f"    local {preserved_name} = current_dknl[{preserved_index}]"
+                    )
+                    deferred_entries.append(
+                        f"            [{preserved_index}] := {preserved_name},"
+                    )
+                deferred_entry_lines = "\n".join(deferred_entries)
+                tmpl = [
+                    f"{{prefix}} {condition} then",
+                    f"    k_str_name = {name_expr}",
+                    f"    local base_strength = {mad_value}",
+                    "    local current_strength = base_strength",
+                    "    local length = e.l",
+                    "    if length ~= 0 then",
+                    f"        current_strength = current_strength + e.dknl[{dknl_index}] / length",
+                    "    end",
+                    "    MADX[k_str_name] = current_strength",
+                    "    local current_dknl = e.dknl",
+                    *preserved_lines,
+                    "    if length ~= 0 then",
+                    "        e.dknl = MAD.typeid.deferred{{",
+                    deferred_entry_lines,
+                    f"            [{dknl_index}] := (MADX[k_str_name] - base_strength) * length,",
+                    "        }}",
+                    "    else",
+                    "        e.dknl = MAD.typeid.deferred{{",
+                    deferred_entry_lines,
+                    f"            [{dknl_index}] := 0.0,",
+                    "        }}",
+                    "    end",
+                ]
+            else:
+                tmpl = [
+                    f"{{prefix}} {condition} then",
+                    f"    k_str_name = {name_expr}",
+                    f"    MADX[k_str_name] = {mad_value}",
+                    f"    e.{attr} = \\->MADX[k_str_name]",
+                ]
             prefix = "if" if idx == 0 else "elseif"
             for line in tmpl:
                 lines.append(f"        {line.format(prefix=prefix)}")
@@ -377,7 +434,7 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
         """
         Create deferred-strength knobs for elements matching the knob specifications.
 
-        Uses get_knob_specs() from subclass to determine which knobs to create.
+        Uses accelerator-provided knob specs to determine which knobs to create.
         """
         knob_specs = self.get_knob_specs()
 
@@ -426,6 +483,9 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
             self.knob_names = knob_names_all
             self.elem_spos = elem_spos_all
 
+        self.knob_name_set = set(self.knob_names)
+        self.mad["knob_names"] = self.knob_names
+
         if self.elem_spos:
             LOGGER.info(
                 f"Created {len(self.knob_names)} knobs from {self.elem_spos[0]} to {self.elem_spos[-1]}"
@@ -455,9 +515,12 @@ class GradientDescentMadInterface(GenericMadInterface, ABC):
         Args:
             knob_values (dict[str, float]): Dictionary of knob names and their new values.
         """
+        update_commands: list[str] = []
         for name, value in knob_values.items():
-            if name in self.knob_names:
+            if name in self.knob_name_set:
                 LOGGER.info(f"Updating knob '{name}' to value {value}")
-                self.mad.send(f"MADX['{name}'] = {value}")
+                update_commands.append(f"MADX['{name}'] = {value}")
             else:
                 LOGGER.warning(f"Unknown knob '{name}' ignored")
+        if update_commands:
+            self.mad.send("\n".join(update_commands))

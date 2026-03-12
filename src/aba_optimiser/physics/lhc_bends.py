@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
+LOGGER = logging.getLogger(__name__)
 
 def normalise_lhcbend_magnets(
     true_strengths_dict: dict[str, float], magnet_lengths: dict[str, float]
@@ -47,7 +48,7 @@ def normalise_lhcbend_magnets(
         if not matched:
             normalised[key] = value
 
-    logging.info(f"Normalised {counts['sbend']} sbends and {counts['rbend']} rbends.")
+    LOGGER.info(f"Normalised {counts['sbend']} sbends and {counts['rbend']} rbends.")
 
     def length_weighted_average(k_list: list[tuple[float, float]]) -> float:
         """Compute length-weighted average of k0 values."""

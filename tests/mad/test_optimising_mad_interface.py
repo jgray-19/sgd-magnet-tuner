@@ -1,19 +1,22 @@
 """Tests for MAD interfaces.
 
 This module contains pytest tests for GenericMadInterface and
-LHCOptimisationMadInterface.
+GradientDescentMadInterface.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pytest
 from pymadng_utils.io.utils import read_knobs
 
 from aba_optimiser.accelerators import LHC
-from aba_optimiser.mad.lhc_optimising_interface import LHCOptimisationMadInterface
-from aba_optimiser.mad.optimising_mad_interface import GenericMadInterface
+from aba_optimiser.mad.optimising_mad_interface import (
+    GenericMadInterface,
+    GradientDescentMadInterface,
+)
 from tests.mad.helpers import (
     check_beam_setup,
     check_corrector_strengths,
@@ -73,14 +76,14 @@ def setup_and_check_interface(
 
 
 @pytest.fixture(scope="function")
-def optimising_interface(seq_b1: Path) -> Generator[LHCOptimisationMadInterface, None, None]:
-    """Create a fresh LHCOptimisationMadInterface for each test."""
+def optimising_interface(seq_b1: Path) -> Generator[GradientDescentMadInterface, None, None]:
+    """Create a fresh GradientDescentMadInterface for each test."""
     accelerator = LHC(
         beam=1,
         beam_energy=BEAM_ENERGY,
         sequence_file=str(seq_b1),
     )
-    iface = LHCOptimisationMadInterface(
+    iface = GradientDescentMadInterface(
         accelerator=accelerator,
     )
     yield iface
@@ -234,7 +237,7 @@ class TestOptimisationMadInterfaceInit:
             optimise_quadrupoles=optimise_quadrupoles,
             optimise_bends=optimise_bends,
         )
-        interface = LHCOptimisationMadInterface(
+        interface = GradientDescentMadInterface(
             accelerator=accelerator,
             discard_mad_output=True,
         )
@@ -385,7 +388,7 @@ class TestOptimisationMadInterfaceInit:
     ],
     ids=["full_range", "custom_range", "wider_custom_range"],
 )
-def test_count_bpms(optimising_interface: LHCOptimisationMadInterface, bpm_range: str) -> None:
+def test_count_bpms(optimising_interface: GradientDescentMadInterface, bpm_range: str) -> None:
     """Test counting BPMs in the sequence with different ranges."""
     full_bpms = optimising_interface.all_bpms
 
@@ -402,7 +405,7 @@ def test_count_bpms(optimising_interface: LHCOptimisationMadInterface, bpm_range
 
 
 def test_recv_update_knob_values(
-    optimising_interface: LHCOptimisationMadInterface,
+    optimising_interface: GradientDescentMadInterface,
 ) -> None:
     """Test receiving current knob values."""
     values = optimising_interface.receive_knob_values()
@@ -421,3 +424,36 @@ def test_recv_update_knob_values(
     values = optimising_interface.receive_knob_values()
     # Only the 3 existing knobs should be updated, "pt" is ignored with a warning
     assert all(values == [4.5, -6.7, 8.9]), f"Unexpected knob values after update: {values}"
+
+
+def test_quadrupole_knob_updates_use_dknl(seq_b1: Path) -> None:
+    """Quadrupole dknl should follow the live knob value without mutating base k1."""
+    accelerator = LHC(
+        beam=1,
+        beam_energy=BEAM_ENERGY,
+        sequence_file=str(seq_b1),
+        optimise_quadrupoles=True,
+    )
+    interface = GradientDescentMadInterface(
+        accelerator=accelerator,
+        discard_mad_output=True,
+    )
+
+    knob_name = next(knob for knob in interface.knob_names if knob.endswith(".k1"))
+    element_name = knob_name.removesuffix(".k1")
+    initial_strength = interface.get_magnet_strengths([knob_name])[knob_name]
+    initial_k1 = float(interface.mad.MADX[element_name].k1)
+
+    step = 1e-4
+    interface.mad.send(f"MADX['{knob_name}'] = {initial_strength + step}")
+
+    updated_strength = interface.get_magnet_strengths([knob_name])[knob_name]
+    updated_k1 = float(interface.mad.MADX[element_name].k1)
+    updated_dknl = float(interface.mad.MADX[element_name].dknl[1])
+    length = float(interface.mad.MADX[element_name].l)
+
+    assert np.isclose(updated_strength, initial_strength + step)
+    assert np.isclose(updated_k1, initial_k1)
+    assert np.isclose(updated_dknl, step * length)
+
+    cleanup_interface(interface)

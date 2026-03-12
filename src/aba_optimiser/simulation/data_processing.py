@@ -17,7 +17,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from tmom_recon import calculate_transverse_pz, inject_noise_xy_inplace
 from tmom_recon.svd import svd_clean_measurements
-from xtrack_tools.coordinates import get_kick_plane_category
 
 from aba_optimiser.config import MOMENTUM_STD_DEV, POSITION_STD_DEV
 
@@ -96,7 +95,6 @@ def process_track_with_queue(
         true_df["turn"] = true_df["turn"].astype(np.int32)
 
         # Add a new category column that indicates if it is a x or y kick
-        true_df["kick_plane"] = get_kick_plane_category(ntrk, kick_both_planes)
         true_df["var_x"] = POSITION_STD_DEV**2
         true_df["var_y"] = POSITION_STD_DEV**2
         true_df["var_px"] = MOMENTUM_STD_DEV**2
@@ -110,11 +108,9 @@ def process_track_with_queue(
 
         # Add noise and enqueue noisy data
         true_df["name"] = true_df["name"].astype("category")
-        true_df["kick_plane"] = true_df["kick_plane"].astype("category")
 
         # noisy_df = calculate_pz(true_df, tws=tws, info=True)
         # noisy_df["name"] = noisy_df["name"].astype(str)
-        # noisy_df["kick_plane"] = noisy_df["kick_plane"].astype(str)
         # noise_table = pa.Table.from_pandas(noisy_df, preserve_index=False)
         # noise_q.put(noise_table)
         # del noise_table
@@ -128,7 +124,6 @@ def process_track_with_queue(
         del noisy_df  # Clean up noisy_df after its last use
 
         cleaned_df["name"] = cleaned_df["name"].astype(str)
-        cleaned_df["kick_plane"] = cleaned_df["kick_plane"].astype(str)
 
         cleaned_table = pa.Table.from_pandas(cleaned_df, preserve_index=False)
         cleaned_q.put(cleaned_table)
@@ -195,7 +190,7 @@ def process_track(
 
 
 def prepare_track_dataframe(
-    true_df: pd.DataFrame, ntrk: int, flattop_turns: int, kick_both_planes: bool
+    true_df: pd.DataFrame, ntrk: int, flattop_turns: int
 ) -> pd.DataFrame:
     """
     Prepare tracking dataframe with metadata.
@@ -204,7 +199,6 @@ def prepare_track_dataframe(
         true_df: Raw tracking dataframe
         ntrk: Track number
         flattop_turns: Number of turns per track
-        kick_both_planes: Whether to kick both planes
 
     Returns:
         Prepared dataframe with metadata
@@ -214,7 +208,6 @@ def prepare_track_dataframe(
     true_df["turn"] = true_df["turn"].astype(np.int32)
 
     # Add kick plane category
-    true_df["kick_plane"] = get_kick_plane_category(ntrk, kick_both_planes)
     true_df["var_x"] = POSITION_STD_DEV**2
     true_df["var_y"] = POSITION_STD_DEV**2
     true_df["var_px"] = MOMENTUM_STD_DEV**2
@@ -238,12 +231,10 @@ def add_noise_and_clean(
     """
     # Prepare data types for noise injection
     true_df["name"] = true_df["name"].astype("category")
-    true_df["kick_plane"] = true_df["kick_plane"].astype("category")
 
     # Add noise
     noisy_df = calculate_transverse_pz(true_df, inject_noise=True, tws=tws, info=True)
     noisy_df["name"] = noisy_df["name"].astype(str)
-    noisy_df["kick_plane"] = noisy_df["kick_plane"].astype(str)
 
     # Apply SVD cleaning
     cleaned_df = svd_clean_measurements(noisy_df)

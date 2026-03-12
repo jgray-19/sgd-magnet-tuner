@@ -5,8 +5,13 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 LOGGER = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from aba_optimiser.mad.optimising_mad_interface import GradientDescentMadInterface
+
 
 class Accelerator(ABC):
     """Abstract base class for accelerator definitions.
@@ -20,7 +25,7 @@ class Accelerator(ABC):
         self,
         sequence_file: Path | str,
         beam_energy: float,
-        seq_name: str | None = None,
+        bpm_pattern: str,
         optimise_energy: bool = False,
         optimise_quadrupoles: bool = False,
         optimise_sextupoles: bool = False,
@@ -31,68 +36,69 @@ class Accelerator(ABC):
         Args:
             sequence_file: Path to the sequence file
             beam_energy: Beam energy in GeV
-            seq_name: Sequence name (auto-detected if None)
+            bpm_pattern: Pattern for identifying BPMs in the sequence
         """
         self.sequence_file = Path(sequence_file)
         self.beam_energy = beam_energy
-        self.seq_name = seq_name
+        self.bpm_pattern = bpm_pattern
         self.optimise_energy = optimise_energy
         self.optimise_quadrupoles = optimise_quadrupoles
         self.optimise_sextupoles = optimise_sextupoles
         self.custom_knobs_to_optimise = custom_knobs_to_optimise
+        # Accelerator-owned state populated during model setup (if applicable).
+        self.bend_lengths: dict[str, float] | None = None
 
     def has_any_optimisation(self) -> bool:
-        """Check if any optimisation is enabled.
-
-        Returns:
-            True if at least one optimisation type is enabled
-        """
-        return (
-            self.optimise_energy
-            or self.optimise_quadrupoles
-            or self.optimise_sextupoles
-            or self.custom_knobs_to_optimise is not None
+        """Check if any optimisation is enabled."""
+        return any(
+            (
+                self.optimise_quadrupoles,
+                self.optimise_sextupoles,
+                self.optimise_energy,
+                bool(self.custom_knobs_to_optimise),
+            )
         )
 
     def log_optimisation_targets(self) -> None:
         """Log the optimisation targets for this accelerator."""
-        targets = []
+        targets: list[str] = []
         if self.optimise_quadrupoles:
             targets.append("quadrupoles")
         if self.optimise_sextupoles:
             targets.append("sextupoles")
         if self.optimise_energy:
             targets.append("beam energy")
-        if self.custom_knobs_to_optimise is not None:
+        if self.custom_knobs_to_optimise:
             targets.append(f"custom knobs: {self.custom_knobs_to_optimise}")
         if targets:
             LOGGER.info(f"Optimisation targets: {', '.join(targets)}")
         else:
             LOGGER.info("No optimisation targets set.")
 
-    def get_bend_lengths(self, mad_iface) -> dict[str, float] | None:
+    def get_bend_lengths(self) -> dict[str, float] | None:
         """Return bend lengths required for accelerator-specific normalisation.
-
-        Args:
-            mad_iface: MAD interface instance used for model setup
 
         Returns:
             Dictionary of bend lengths or None if not applicable
         """
-        return None
+        return self.bend_lengths
 
     def normalise_true_strengths(
-        self, true_strengths: dict[str, float], bend_lengths: dict[str, float] | None
+        self,
+        true_strengths: dict[str, float],
+        bend_lengths: dict[str, float] | None = None,
     ) -> dict[str, float]:
         """Apply accelerator-specific normalisation to true strengths.
 
         Args:
             true_strengths: Dictionary of true magnet strengths
-            bend_lengths: Bend lengths for normalisation (if applicable)
+            bend_lengths: Bend lengths for normalisation (optional). If None, uses
+                accelerator-owned ``self.bend_lengths``.
 
         Returns:
             Normalised strengths dictionary (default: unchanged)
         """
+        _ = bend_lengths
         return true_strengths
 
     def format_result_knob_names(self, knob_names: list[str]) -> list[str]:
@@ -113,14 +119,15 @@ class Accelerator(ABC):
             formatted.append("deltap")
         return formatted
 
+    @property
     @abstractmethod
-    def get_seq_name(self) -> str:
+    def seq_name(self) -> str:
         """Return the sequence name for this accelerator.
 
         Returns:
             Sequence name to use in MAD
         """
-        pass
+        ...
 
     @abstractmethod
     def get_supported_knob_specs(self) -> list[tuple[str, str, str, bool, bool]]:
@@ -132,46 +139,34 @@ class Accelerator(ABC):
         """
         pass
 
-    def get_bpm_plane_mask(
-        self, bpm_list: list[str], bad_bpms: list[str]
-    ) -> tuple[list[bool], list[bool]]:
-        """Generate masks indicating which BPMs measure which planes.
+    def prepare_mad_for_knob_creation(
+        self,
+        mad_iface: GradientDescentMadInterface,
+        selected_specs: list[tuple[str, str, str, bool]],
+    ) -> None:
+        """Prepare accelerator-specific MAD state before knob creation."""
+        _ = mad_iface, selected_specs
 
-        This method identifies single-plane vs dual-plane BPMs and determines which
-        planes should be masked out based on bad BPM filtering. The masks are used
-        to set appropriate weights (0 or NaN) for planes that don't have measurements.
+    def get_mad_attr_specs(self) -> dict[str, dict[str, str]]:
+        """Return accelerator-specific attr name/value expressions for knob creation."""
+        return {}
 
-        Args:
-            bpm_list: List of BPM names to generate masks for
-            bad_bpms: List of bad BPM specifications (can include plane suffixes)
+    def get_perturbation_families(self) -> dict[str, dict[str, str | float | dict]]:
+        """Return per-family override metadata keyed by family code d/q/s."""
+        return {}
 
-        Returns:
-            Tuple of (h_mask, v_mask) where each mask is a list of booleans.
-            True indicates the plane should be used, False indicates it should be masked.
+    @staticmethod
+    @abstractmethod
+    def infer_monitor_plane(bpm_name: str) -> str:
+        """Infer measurement plane from BPM name."""
+        pass
 
-        Note:
-            Default implementation assumes all BPMs are dual-plane and returns all True.
-            Accelerator-specific subclasses should override this method to handle
-            single-plane BPMs and plane-specific bad BPM filtering.
-        """
-        # Default: all BPMs measure both planes
-        h_mask = [True] * len(bpm_list)
-        v_mask = [True] * len(bpm_list)
-        # Set all bad BPMs to False in both masks
-        return h_mask, v_mask
+    @abstractmethod
+    def get_tune_variables(self) -> tuple[str, str]:
+        """Return (qx_knob, qy_knob) MAD-X variable names for tune matching."""
+        pass
 
-    def parse_bad_bpm_specification(self, bad_bpm_spec: str) -> tuple[str, str | None]:
-        """Parse a bad BPM specification into BPM name and optional plane.
-
-        Args:
-            bad_bpm_spec: Bad BPM specification (e.g., "BPM.14L1.B1" or "BPM.14L1.B1.H")
-
-        Returns:
-            Tuple of (bpm_base_name, plane) where plane is "H", "V", or None for both planes
-
-        Note:
-            Default implementation assumes no plane suffixes (dual-plane only).
-            Override in accelerator-specific subclasses for different naming conventions.
-        """
-        # Default: no plane suffix, all BPMs are dual-plane
-        return bad_bpm_spec, None
+    @abstractmethod
+    def get_tune_integers(self) -> tuple[int, int]:
+        """Return (qx_integer, qy_integer) used for full tune targets."""
+        pass

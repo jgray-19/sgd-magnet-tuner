@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -11,123 +10,6 @@ from aba_optimiser.accelerators import LHC
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-class TestLHCBPMPlaneMasks:
-    """Tests for LHC BPM plane mask functionality."""
-
-    @pytest.fixture
-    def lhc(self, tmp_path: Path) -> LHC:
-        """Create an LHC accelerator instance for testing."""
-        seq_file = tmp_path / "test.seq"
-        seq_file.write_text("! Dummy sequence file\n")
-        return LHC(beam=1, beam_energy=6800.0, sequence_file=str(seq_file))
-
-    def test_parse_bad_bpm_dual_plane(self, lhc: LHC) -> None:
-        """Test parsing dual-plane BPM specification."""
-        base_name, plane = lhc.parse_bad_bpm_specification("BPM.14L1.B1")
-        assert base_name == "BPM.14L1.B1"
-        assert plane is None
-
-    def test_parse_bad_bpm_horizontal_only(self, lhc: LHC) -> None:
-        """Test parsing horizontal-only BPM specification."""
-        base_name, plane = lhc.parse_bad_bpm_specification("BPM.14L1.B1.H")
-        assert base_name == "BPM.14L1.B1"
-        assert plane == "H"
-
-    def test_parse_bad_bpm_vertical_only(self, lhc: LHC) -> None:
-        """Test parsing vertical-only BPM specification."""
-        base_name, plane = lhc.parse_bad_bpm_specification("BPM.14L1.B1.V")
-        assert base_name == "BPM.14L1.B1"
-        assert plane == "V"
-
-    def test_plane_mask_all_dual_plane_no_bad(self, lhc: LHC) -> None:
-        """Test plane mask with all dual-plane BPMs and no bad BPMs."""
-        bpm_list = ["BPM.10L1.B1", "BPM.11L1.B1", "BPM.12L1.B1"]
-        bad_bpms: list[str] = []
-        h_mask, v_mask = lhc.get_bpm_plane_mask(bpm_list, bad_bpms)
-
-        assert h_mask == [True, True, True]
-        assert v_mask == [True, True, True]
-
-    def test_plane_mask_single_plane_horizontal(self, lhc: LHC) -> None:
-        """Test plane mask with horizontal-only BPM."""
-        bpm_list = ["BPM.10L1.B1", "BPM.11L1.B1.H", "BPM.12L1.B1"]
-        bad_bpms: list[str] = []
-        h_mask, v_mask = lhc.get_bpm_plane_mask(bpm_list, bad_bpms)
-
-        # BPM.11L1.B1.H only measures horizontal
-        assert h_mask == [True, True, True]
-        assert v_mask == [True, False, True]
-
-    def test_plane_mask_single_plane_vertical(self, lhc: LHC) -> None:
-        """Test plane mask with vertical-only BPM."""
-        bpm_list = ["BPM.10L1.B1", "BPM.11L1.B1.V", "BPM.12L1.B1"]
-        bad_bpms: list[str] = []
-        h_mask, v_mask = lhc.get_bpm_plane_mask(bpm_list, bad_bpms)
-
-        # BPM.11L1.B1.V only measures vertical
-        assert h_mask == [True, False, True]
-        assert v_mask == [True, True, True]
-
-    def test_plane_mask_bad_both_planes(self, lhc: LHC) -> None:
-        """Test plane mask with dual-plane BPM marked as bad."""
-        bpm_list = ["BPM.10L1.B1", "BPM.11L1.B1", "BPM.12L1.B1"]
-        bad_bpms = ["BPM.11L1.B1"]  # Both planes bad
-        h_mask, v_mask = lhc.get_bpm_plane_mask(bpm_list, bad_bpms)
-
-        # BPM.11L1.B1 is completely bad
-        assert h_mask == [True, False, True]
-        assert v_mask == [True, False, True]
-
-    def test_plane_mask_bad_horizontal_only(self, lhc: LHC) -> None:
-        """Test plane mask with only horizontal plane bad."""
-        bpm_list = ["BPM.10L1.B1", "BPM.11L1.B1", "BPM.12L1.B1"]
-        bad_bpms = ["BPM.11L1.B1.H"]  # Only horizontal plane bad
-        h_mask, v_mask = lhc.get_bpm_plane_mask(bpm_list, bad_bpms)
-
-        # BPM.11L1.B1 horizontal is bad, vertical is good
-        assert h_mask == [True, False, True]
-        assert v_mask == [True, True, True]
-
-    def test_plane_mask_bad_vertical_only(self, lhc: LHC) -> None:
-        """Test plane mask with only vertical plane bad."""
-        bpm_list = ["BPM.10L1.B1", "BPM.11L1.B1", "BPM.12L1.B1"]
-        bad_bpms = ["BPM.11L1.B1.V"]  # Only vertical plane bad
-        h_mask, v_mask = lhc.get_bpm_plane_mask(bpm_list, bad_bpms)
-
-        # BPM.11L1.B1 vertical is bad, horizontal is good
-        assert h_mask == [True, True, True]
-        assert v_mask == [True, False, True]
-
-    def test_plane_mask_mixed_scenario(self, lhc: LHC) -> None:
-        """Test complex scenario with single-plane BPMs and bad BPMs."""
-        bpm_list = [
-            "BPM.10L1.B1",  # Dual-plane, good
-            "BPM.11L1.B1.H",  # Horizontal-only
-            "BPM.12L1.B1",  # Dual-plane, will be marked bad on H
-            "BPM.13L1.B1.V",  # Vertical-only
-            "BPM.14L1.B1",  # Dual-plane, completely bad
-        ]
-        bad_bpms = [
-            "BPM.12L1.B1.H",  # Only horizontal of 12L1 is bad
-            "BPM.14L1.B1",  # 14L1 is completely bad
-        ]
-        h_mask, v_mask = lhc.get_bpm_plane_mask(bpm_list, bad_bpms)
-
-        assert h_mask == [True, True, False, False, False]
-        assert v_mask == [True, False, True, True, False]
-
-    def test_plane_mask_single_plane_bpm_marked_bad(self, lhc: LHC) -> None:
-        """Test single-plane BPM that is also marked as bad."""
-        bpm_list = ["BPM.10L1.B1", "BPM.11L1.B1.H"]
-        bad_bpms = ["BPM.11L1.B1.H"]  # Single-plane BPM is bad
-        h_mask, v_mask = lhc.get_bpm_plane_mask(bpm_list, bad_bpms)
-
-        # BPM.11L1.B1.H is horizontal-only and bad
-        assert h_mask == [True, False]
-        assert v_mask == [True, False]  # Already False because it's H-only
-
 
 class TestLHCAccelerator:
     """Tests for LHC accelerator class."""
@@ -161,7 +43,7 @@ class TestLHCAccelerator:
             sequence_file=str(test_sequence_file),
         )
         assert lhc.beam == 2
-        assert lhc.get_seq_name() == "lhcb2"
+        assert lhc.seq_name == "lhcb2"
 
     def test_init_invalid_beam(self, test_sequence_file: Path) -> None:
         """Test that invalid beam numbers raise ValueError."""
@@ -254,22 +136,22 @@ class TestLHCAccelerator:
         assert lhc.optimise_correctors is True
 
     def test_get_seq_name_beam_1(self, test_sequence_file: Path) -> None:
-        """Test get_seq_name returns correct sequence name for beam 1."""
+        """Test seq_name returns correct sequence name for beam 1."""
         lhc = LHC(
             beam=1,
             beam_energy=6800.0,
             sequence_file=str(test_sequence_file),
         )
-        assert lhc.get_seq_name() == "lhcb1"
+        assert lhc.seq_name == "lhcb1"
 
-    def test_get_seq_name_beam_2(self, test_sequence_file: Path) -> None:
-        """Test get_seq_name returns correct sequence name for beam 2."""
+    def test_seq_name_beam_2(self, test_sequence_file: Path) -> None:
+        """Test seq_name returns correct sequence name for beam 2."""
         lhc = LHC(
             beam=2,
             beam_energy=6800.0,
             sequence_file=str(test_sequence_file),
         )
-        assert lhc.get_seq_name() == "lhcb2"
+        assert lhc.seq_name == "lhcb2"
 
     def test_has_any_optimisation_false(self, test_sequence_file: Path) -> None:
         """Test has_any_optimisation returns False with no optimizations."""
@@ -347,7 +229,7 @@ class TestLHCAccelerator:
             sequence_file=str(test_sequence_file),
             optimise_bends=False,
         )
-        result = lhc.get_bend_lengths(MagicMock())
+        result = lhc.get_bend_lengths()
         assert result is None
 
     def test_get_bend_lengths_returns_none_no_normalise(self, test_sequence_file: Path) -> None:
@@ -359,11 +241,11 @@ class TestLHCAccelerator:
             optimise_bends=True,
             normalise_bends=False,
         )
-        result = lhc.get_bend_lengths(MagicMock())
+        result = lhc.get_bend_lengths()
         assert result is None
 
-    def test_get_bend_lengths_returns_from_interface(self, test_sequence_file: Path) -> None:
-        """Test get_bend_lengths returns bend_lengths from interface."""
+    def test_get_bend_lengths_returns_from_accelerator(self, test_sequence_file: Path) -> None:
+        """Test get_bend_lengths returns bend_lengths from accelerator state."""
         lhc = LHC(
             beam=1,
             beam_energy=6800.0,
@@ -371,15 +253,12 @@ class TestLHCAccelerator:
             optimise_bends=True,
             normalise_bends=True,
         )
-        mock_interface = MagicMock()
-        mock_interface.bend_lengths = {"MB.A1.k0": 2.0, "MB.A2.k0": 2.0}
-        result = lhc.get_bend_lengths(mock_interface)
+        lhc.bend_lengths = {"MB.A1.k0": 2.0, "MB.A2.k0": 2.0}
+        result = lhc.get_bend_lengths()
         assert result == {"MB.A1.k0": 2.0, "MB.A2.k0": 2.0}
 
-    def test_get_bend_lengths_handles_missing_attribute(
-        self, test_sequence_file: Path
-    ) -> None:
-        """Test get_bend_lengths handles interface without bend_lengths attribute."""
+    def test_get_bend_lengths_handles_missing_state(self, test_sequence_file: Path) -> None:
+        """Test get_bend_lengths handles missing accelerator bend_lengths."""
         lhc = LHC(
             beam=1,
             beam_energy=6800.0,
@@ -387,8 +266,7 @@ class TestLHCAccelerator:
             optimise_bends=True,
             normalise_bends=True,
         )
-        mock_interface = MagicMock(spec=[])  # Empty spec means no attributes
-        result = lhc.get_bend_lengths(mock_interface)
+        result = lhc.get_bend_lengths()
         assert result is None
 
     def test_normalise_true_strengths_no_bends(self, test_sequence_file: Path) -> None:

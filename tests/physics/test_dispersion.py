@@ -27,8 +27,6 @@ from xtrack_tools.acd import run_ac_dipole_tracking_with_particles
 from xtrack_tools.env import initialise_env
 
 from aba_optimiser.dispersion.dispersion_estimation import estimate_corrector_dispersions
-from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
-from aba_optimiser.simulation.optics import perform_orbit_correction
 
 pytest.importorskip("xtrack_tools")
 
@@ -72,9 +70,8 @@ def _generate_nonoise_track(
     # Apply magnet perturbations
     magnet_strengths = {}
     if peturbed_magnets is not None:
-        magnet_strengths, _ = apply_magnet_perturbations(
-            mad.mad,
-            rel_k1_std_dev=1e-4,
+        magnet_strengths, _ = mad.apply_magnet_perturbations(
+            rel_error=1e-4,
             seed=42,
             magnet_type=peturbed_magnets,
         )
@@ -87,13 +84,11 @@ def _generate_nonoise_track(
         mad.mad.MADX["dQy.b2_op"] = -2.92699e-06  # For 12cm beam 2, speed up convergence
 
     # Perform orbit correction for off-momentum beam (delta = 2e-4)
-    matched_tunes = perform_orbit_correction(
-        mad=mad.mad,
+    matched_tunes = mad.perform_orbit_correction(
         machine_deltap=0,
         target_qx=0.28,
         target_qy=0.31,
         corrector_file=corrector_file,
-        beam=beam,
     )
     # Read corrector table
     corrector_table = tfs.read(corrector_file)
@@ -274,7 +269,7 @@ def test_dispersion_b1(
     tmp_path: Path,
     seq_b1: Path,
     model_dir_b1: Path,
-    loaded_interface_with_beam: AbaMadInterface,
+    loaded_interface: AbaMadInterface,
 ) -> None:
     """Test that dispersion estimation reproduces model values at correctors.
 
@@ -291,7 +286,7 @@ def test_dispersion_b1(
 
     # Generate tracking data and analyze optics
     optics_dir = _generate_nonoise_track(
-        loaded_interface_with_beam, tmp_path, model_dir_b1, seq_b1, 6600, beam, None
+        loaded_interface, tmp_path, model_dir_b1, seq_b1, 6600, beam, None
     )
 
     # Load model twiss for validation
