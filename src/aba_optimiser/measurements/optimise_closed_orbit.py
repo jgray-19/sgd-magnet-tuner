@@ -1,3 +1,5 @@
+"""Closed-orbit optimisation workflow for arc-based measurement sets."""
+
 from __future__ import annotations
 
 import argparse
@@ -29,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class RangeConfig:
+    """Grouped BPM ranges used for one closed-orbit optimisation sweep."""
+
     magnet_ranges: list[str]
     bpm_starts: list[list[str]]
     bpm_end_points: list[list[str]]
@@ -36,6 +40,8 @@ class RangeConfig:
 
 @dataclass
 class MeasurementSetupConfig:
+    """Input metadata for one closed-orbit measurement campaign."""
+
     beam: int
     model_dir: str
     arc_config: RangeConfig
@@ -507,7 +513,6 @@ def process_single_config(
                     "var_y": row["var_y"],
                     "var_px": row["var_px"],
                     "var_py": row["var_py"],
-                    "kick_plane": "xy",
                 }
             )
     new_df = pd.DataFrame(new_rows)

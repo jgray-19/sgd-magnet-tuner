@@ -1,3 +1,5 @@
+"""Batch driver for creating training data across multiple measurement settings."""
+
 from __future__ import annotations
 
 import argparse
@@ -23,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MeasurementSetupConfig:
+    """Description of one measurement setup processed by the batch loop."""
+
     beam: int
     model_dir: str
     magnet_ranges: list[str]

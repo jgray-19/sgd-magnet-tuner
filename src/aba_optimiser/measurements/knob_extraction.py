@@ -36,7 +36,6 @@ __all__ = [
     "get_mcb_vals",
 ]
 
-
 # Additional Magnet Type Extraction Functions ----------------------------------
 # These are not yet in OMC3, so we define them here
 

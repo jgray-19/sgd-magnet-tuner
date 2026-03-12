@@ -7,16 +7,14 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
-import pandas as pd
-
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
-from aba_optimiser.mad.optimising_mad_interface import GenericMadInterface
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.measurements.squeeze_helpers import (
     ANALYSIS_DIRS,
     BETABEAT_DIR,
     MODEL_DIRS,
+    extract_tunes_from_job_file,
     get_ir_bpm_ranges_from_model,
     get_measurement_date,
     get_or_make_sequence,
@@ -27,6 +25,8 @@ from aba_optimiser.training.controller_config import MeasurementConfig, Sequence
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,9 @@ MEAS_TIMES = {
             # MINUS_300HZ: ["18_16_36_372", "18_17_44_322", "18_18_52_182"],
             # MINUS_350HZ: ["18_20_38_431", "18_21_46_310", "18_22_51_320"],
         },
+        "inj_rdt": {
+            ZEROHZ: ["15_22_50_333"],  # , "15_23_58_444", "15_25_19_330"],
+        },
     },
     2: {
         "1.2m": {
@@ -189,20 +192,23 @@ MEAS_TIMES = {
         },
         "inj": {  # This has a special date in the squeeze_helpers.py
             ZEROHZ: ["16_50_23_408", "16_51_29_457", "16_52_34_444"],
-            PLUS_50HZ: ["16_58_39_378", "16_59_45_316", "17_00_51_406"],
-            PLUS_100HZ: ["17_03_42_327", "17_04_51_372", "17_06_00_423"],
-            PLUS_150HZ: ["17_09_53_327", "17_10_58_495", "17_12_09_324"],
-            PLUS_200HZ: ["17_23_20_460", "17_19_54_443", "17_21_03_313"],
-            PLUS_250HZ: ["17_28_11_396", "17_29_22_415", "17_30_40_479"],
-            PLUS_300HZ: ["17_34_11_504", "17_35_21_234", "17_36_28_939"],
-            PLUS_350HZ: ["17_40_14_958", "17_41_28_883", "17_42_46_833"],
-            MINUS_50HZ: ["17_51_17_922", "17_52_22_657", "17_53_28_125"],
-            MINUS_100HZ: ["17_57_57_917", "17_59_08_915", "18_00_26_732"],
-            MINUS_150HZ: ["18_03_31_335", "18_04_37_370", "18_05_49_463"],
-            MINUS_200HZ: ["18_07_24_413", "18_08_30_429", "18_09_36_407"],
-            MINUS_250HZ: ["18_11_42_328", "18_13_31_372", "18_14_45_489"],
-            MINUS_300HZ: ["18_16_48_300", "18_17_58_399", "18_19_04_402"],
-            MINUS_350HZ: ["18_20_15_411", "18_21_21_418", "18_22_26_431"],
+            # PLUS_50HZ: ["16_58_39_378", "16_59_45_316", "17_00_51_406"],
+            # PLUS_100HZ: ["17_03_42_327", "17_04_51_372", "17_06_00_423"],
+            # PLUS_150HZ: ["17_09_53_327", "17_10_58_495", "17_12_09_324"],
+            # PLUS_200HZ: ["17_23_20_460", "17_19_54_443", "17_21_03_313"],
+            # PLUS_250HZ: ["17_28_11_396", "17_29_22_415", "17_30_40_479"],
+            # PLUS_300HZ: ["17_34_11_504", "17_35_21_234", "17_36_28_939"],
+            # PLUS_350HZ: ["17_40_14_958", "17_41_28_883", "17_42_46_833"],
+            # MINUS_50HZ: ["17_51_17_922", "17_52_22_657", "17_53_28_125"],
+            # MINUS_100HZ: ["17_57_57_917", "17_59_08_915", "18_00_26_732"],
+            # MINUS_150HZ: ["18_03_31_335", "18_04_37_370", "18_05_49_463"],
+            # MINUS_200HZ: ["18_07_24_413", "18_08_30_429", "18_09_36_407"],
+            # MINUS_250HZ: ["18_11_42_328", "18_13_31_372", "18_14_45_489"],
+            # MINUS_300HZ: ["18_16_48_300", "18_17_58_399", "18_19_04_402"],
+            # MINUS_350HZ: ["18_20_15_411", "18_21_21_418", "18_22_26_431"],
+        },
+        "inj_rdt": {
+            ZEROHZ: ["15_16_32_449"],  # , "15_15_23_387", "15_17_43_444"],
         },
     },
 }
@@ -227,20 +233,31 @@ def get_bpm_points(arc_num: int, beam: int) -> tuple[str, list[str], list[str]]:
     """Get magnet range and BPM points for an arc."""
     next_arc = arc_num % 8 + 1
     suffix = f".B{beam}"
-    start_bpm = f"BPM.13R{arc_num}{suffix}"
+    start_bpm = f"BPM.14R{arc_num}{suffix}"
     # end_bpm = f"BPM.15R{arc_num}{suffix}" # Testing with BPM.15R
-    end_bpm = f"BPM.12L{next_arc}{suffix}"
+    end_bpm = f"BPM.13L{next_arc}{suffix}"
     magnet_range = f"{start_bpm}/{end_bpm}"
-    first_i = 13
+    first_i = 14
     last_i = 13
-    bpm_start_points = [f"BPM.{i}R{arc_num}{suffix}" for i in range(first_i, 15, 1)]
-    bpm_end_points = [f"BPM.{i}L{next_arc}{suffix}" for i in range(last_i, 15, 1)]
+    bpm_start_points = [f"BPM.{i}R{arc_num}{suffix}" for i in range(first_i, 17, 1)]
+    bpm_end_points = [f"BPM.{i}L{next_arc}{suffix}" for i in range(last_i, 16, 1)]
 
     # Testing these fixed points
     # bpm_start_points = [start_bpm]
     # bpm_end_points = [end_bpm]
 
     return magnet_range, bpm_start_points, bpm_end_points
+
+
+def get_full_ring_bpm_points(beam: int) -> tuple[str, list[str], list[str]]:
+    """Get full-ring BPM points for non-arc-by-arc (multi-turn) running."""
+    if beam == 1:
+        bpm_start_points = [f"BPM.9R{s}.B1" for s in range(1, 9)]
+        bpm_end_points = []
+    else:
+        bpm_start_points = [f"BPM.9L{s}.B2" for s in range(8, 0, -1)]
+        bpm_end_points = []
+    return "$start/$end", bpm_start_points, bpm_end_points
 
 
 def validate_processed_files(temp_analysis_dir: Path, freq: str, num_files: int) -> None:
@@ -364,10 +381,10 @@ def prepare_frequency_metadata(
     meas_base_dir: Path,
     results_dir: Path,
     squeeze_step: str,
-) -> tuple[list[Path], list[Path], Path | None, set[str], float | int]:
+) -> tuple[list[Path], list[Path], Path | None, Path | None, set[str], float | int]:
     """Prepare metadata for a frequency without processing measurements."""
     if not times:
-        return [], [], None, set(), 0.0
+        return [], [], None, None, set(), 0.0
 
     analysed_folders = get_analysis_folders(times, beam, meas_base_dir, squeeze_step)
     validate_folders_exist(analysed_folders, squeeze_step, freq)
@@ -378,10 +395,10 @@ def prepare_frequency_metadata(
 
     files = get_measurement_files(times, analysed_folders, beam, squeeze_step)
     tune_knobs_file = results_dir / f"tune_knobs_{squeeze_step}_{freq}.txt"
+    corrector_knobs_file = results_dir / f"corrector_strengths_{squeeze_step}_{freq}.txt"
 
     # Save knobs for the earliest measurement time
     meas_time = get_measurement_time(min(times), squeeze_step)
-    corrector_knobs_file = results_dir / "null.txt"
     energy = save_online_knobs(
         meas_time,
         beam=beam,
@@ -389,7 +406,7 @@ def prepare_frequency_metadata(
         corrector_knobs_file=corrector_knobs_file,
     )
 
-    return files, analysed_folders, tune_knobs_file, bad_bpms, energy
+    return files, analysed_folders, tune_knobs_file, corrector_knobs_file, bad_bpms, energy
 
 
 def process_frequency_results(
@@ -397,6 +414,7 @@ def process_frequency_results(
     file_keys: list[str],
     pzs_dict: dict[str, pd.DataFrame],
     tune_knobs_file: Path,
+    corrector_knobs_file: Path,
     temp_analysis_dir: Path,
     sequence_path: Path,
     beam: int,
@@ -408,33 +426,22 @@ def process_frequency_results(
     measurements = []
 
     # Calculate machine deltap from 0hz measurements
-    all_0hz_pzs = pd.concat(pzs_list, ignore_index=True)
-    means = all_0hz_pzs.groupby("name", observed=False, sort=False)[["x", "px", "y", "py"]].mean()
     if freq == ZEROHZ and machine_deltap is None:
         # Order is preserved: concat maintains order within each dataframe, ignore_index resets index but preserves row order
-        machine_deltap = sum(pz.attrs["DPP_EST"] for pz in pzs_list) / len(pzs_list)
+        machine_deltap = 5.496785e-04
         if machine_deltap == 0.0:
             logger.warning("No DPP_EST found in processed data headers, defaulting to 0.0")
+
+    update_metadata(temp_analysis_dir, machine_deltap=machine_deltap)
 
     dpp_values = []
     for i, pzs in enumerate(pzs_list):
         dpp_est = pzs.attrs["DPP_EST"]
         dpp_values.append(dpp_est)
-        deltap = 0.0 if freq == ZEROHZ else dpp_est - (machine_deltap or 0.0)
-        mad_iface = GenericMadInterface(
-            LHC(beam, beam_energy=energy, sequence_file=sequence_path),
-            bpm_pattern="BPM",
-        )
-        tws = mad_iface.run_twiss(deltap=deltap, observe=1)
-        closed_orbit_means = means - tws.loc[means.index, ["x", "px", "y", "py"]].values
+        # deltap = 0.0 if freq == ZEROHZ else dpp_est - (machine_deltap or 0.0)
 
-        # Subtract closed orbit to focus optimisation on betatron oscillations
-        # Order is preserved: merge with sort=False maintains order from left DataFrame (pzs)
-        pzs = pzs.merge(closed_orbit_means, on="name", suffixes=("", "_mean"), sort=False)
-        pzs[["x", "px", "y", "py"]] = pzs[["x", "px", "y", "py"]].sub(
-            pzs[["x_mean", "px_mean", "y_mean", "py_mean"]].values
-        )
-        pzs = pzs.drop(columns=["x_mean", "px_mean", "y_mean", "py_mean"])
+        # Keep full measured orbit content (do not remove closed orbit).
+        pzs = pzs.copy()
         pzs.attrs = pzs_list[i].attrs
 
         meas_save_path = temp_analysis_dir / f"pz_data_{freq}_{i}.parquet"
@@ -444,7 +451,8 @@ def process_frequency_results(
             {
                 "file": meas_save_path,
                 "tune_knobs_file": tune_knobs_file,
-                "machine_deltap": deltap,
+                "corrector_file": corrector_knobs_file,
+                "machine_deltap": machine_deltap,
             }
         )
 
@@ -462,6 +470,7 @@ def load_frequency_results(
     freq: str,
     num_files: int,
     tune_knobs_file: Path,
+    corrector_knobs_file: Path,
     temp_analysis_dir: Path,
     machine_deltap: float | None,
 ) -> tuple[list[dict], float | None]:
@@ -481,6 +490,7 @@ def load_frequency_results(
             {
                 "file": meas_save_path,
                 "tune_knobs_file": tune_knobs_file,
+                "corrector_file": corrector_knobs_file,
                 "machine_deltap": deltap,
             }
         )
@@ -498,27 +508,21 @@ def create_configs(
     measurements: list[dict],
     energy: float,
     run_in_irs: bool,
-) -> tuple[LHC, SequenceConfig, list[str], list[str], MeasurementConfig]:
+    run_arc_by_arc: bool,
+) -> tuple[SequenceConfig, list[str], list[str], MeasurementConfig]:
     """Create configuration objects for optimisation.
 
     Returns:
-        Tuple of (accelerator, sequence_config, bpm_start_points, bpm_end_points, measurement_config)
+        Tuple of (sequence_config, bpm_start_points, bpm_end_points, measurement_config)
     """
     if run_in_irs:
         magnet_range, bpm_start_points, bpm_end_points = get_ir_bpm_ranges_from_model(
             model_dir, beam, arc_num
         )
-    else:
+    elif run_arc_by_arc:
         magnet_range, bpm_start_points, bpm_end_points = get_bpm_points(arc_num, beam)
-
-    # Create LHC accelerator instance
-    accelerator = LHC(
-        beam=beam,
-        beam_energy=energy,
-        sequence_file=sequence_path,
-        optimise_quadrupoles=True,
-        optimise_other_quadrupoles=run_in_irs,
-    )
+    else:
+        magnet_range, bpm_start_points, bpm_end_points = get_full_ring_bpm_points(beam)
 
     sequence_config = SequenceConfig(
         magnet_range=magnet_range,
@@ -528,42 +532,45 @@ def create_configs(
 
     measurement_config = MeasurementConfig(
         measurement_files=[m["file"] for m in measurements],
-        corrector_files=None,
+        corrector_files=[m["corrector_file"] for m in measurements],
         tune_knobs_files=[m["tune_knobs_file"] for m in measurements],
         flattop_turns=6600,
         machine_deltaps=[m["machine_deltap"] for m in measurements],
         bunches_per_file=3,
     )
 
-    return accelerator, sequence_config, bpm_start_points, bpm_end_points, measurement_config
+    return sequence_config, bpm_start_points, bpm_end_points, measurement_config
 
 
 def get_default_optimiser_config() -> OptimiserConfig:
     """Get default optimiser configuration."""
     return OptimiserConfig(
-        max_epochs=30,
-        warmup_epochs=3,
-        warmup_lr_start=1e-7,
-        max_lr=1e-5,
-        min_lr=1e-5,
+        max_epochs=20,
+        warmup_epochs=10,
+        warmup_lr_start=1e-10,
+        max_lr=1e0,
+        min_lr=1e0,
         # max_lr=1,
         # min_lr=1,
-        gradient_converged_value=1e-8,
-        optimiser_type="adam",  # 'adam' or 'lbfgs'
-        expected_rel_error=1e-2,
+        gradient_converged_value=1e-7,
+        optimiser_type="lbfgs",  # 'adam' or 'lbfgs'
+        expected_rel_error=18e-4,
     )
 
 
-def get_default_simulation_config() -> SimulationConfig:
+def get_default_simulation_config(run_arc_by_arc: bool = True) -> SimulationConfig:
     """Get default simulation configuration."""
     return SimulationConfig(
-        tracks_per_worker=3299,
+        # tracks_per_worker=824,
+        tracks_per_worker=1000 if run_arc_by_arc else 400,
         # tracks_per_worker=9_890,
         # tracks_per_worker=int(19700.0 / 2),
-        num_batches=200,
+        num_batches=40,
         num_workers=60,
         use_fixed_bpm=True,
-        optimise_momenta=True,  # Enable momentum optimisation (x, px, y, py) not just (x, y)
+        run_arc_by_arc=run_arc_by_arc,
+        n_run_turns=1 if run_arc_by_arc else 3,
+        optimise_momenta=False,  # Enable momentum optimisation (x, px, y, py) not just (x, y)
     )
 
 
@@ -593,34 +600,95 @@ def optimise_arc(
     energy: float,
     rewrite_file: bool = False,
     run_in_irs: bool = False,
+    run_arc_by_arc: bool = True,
 ) -> None:
     """Optimise quadrupoles for a single arc."""
     logger.info(f"Optimising arc {arc_num} for {squeeze_step}")
 
-    accelerator, sequence_config, bpm_start_points, bpm_end_points, measurement_config = (
-        create_configs(
-            beam, sequence_path, model_dir, all_bad_bpms, arc_num, measurements, energy, run_in_irs
-        )
+    sequence_config, bpm_start_points, bpm_end_points, measurement_config = create_configs(
+        beam,
+        sequence_path,
+        model_dir,
+        all_bad_bpms,
+        arc_num,
+        measurements,
+        energy,
+        run_in_irs,
+        run_arc_by_arc,
     )
 
-    final_knobs_arc = None  # Start from sequence values or previous arc results
+    # Stage 1: optimise bends first on the same data
+    accelerator_bends = LHC(
+        beam=beam,
+        beam_energy=energy,
+        sequence_file=sequence_path,
+        optimise_quadrupoles=False,
+        optimise_energy=False,
+        optimise_bends=True,
+        optimise_correctors=False,
+        optimise_other_quadrupoles=run_in_irs,
+        optimise_quad_dx=False,
+    )
 
-    ctrl = Controller(
-        accelerator,
+    bend_ctrl = Controller(
+        accelerator_bends,
         get_default_optimiser_config(),
-        get_default_simulation_config(),
+        get_default_simulation_config(run_arc_by_arc=run_arc_by_arc),
         sequence_config,
         measurement_config,
         bpm_start_points,
         bpm_end_points,
         show_plots=False,
-        initial_knob_strengths=final_knobs_arc,
+        initial_knob_strengths=None,
         true_strengths=None,
         plots_dir=temp_analysis_dir,
         mad_logfile=temp_analysis_dir / "mad_log.txt",
     )
-    estimate, _ = ctrl.run()
-    save_arc_estimates(results_dir, squeeze_step, arc_num, estimate, rewrite_file=rewrite_file)
+    bend_estimates, _ = bend_ctrl.run()
+
+    # Increase the OptimiserConfig max_epochs for quadrupole optimisation
+    quadrupole_optimiser_config = OptimiserConfig(
+        max_epochs=500,
+        warmup_epochs=5,
+        warmup_lr_start=1e-6,
+        max_lr=1e-7,
+        min_lr=1e-8,
+        # max_lr=1,
+        # min_lr=1,
+        gradient_converged_value=1e-7,
+        optimiser_type="adam",  # 'adam' or 'lbfgs'
+        expected_rel_error=18e-4,
+    )
+
+    # Stage 2: optimise quadrupoles using same data, seeded by bend estimates
+    accelerator_corr = LHC(
+        beam=beam,
+        beam_energy=energy,
+        sequence_file=sequence_path,
+        optimise_energy=False,
+        optimise_quadrupoles=True,
+        optimise_bends=True,
+        optimise_correctors=False,
+        optimise_other_quadrupoles=True,
+        optimise_quad_dx=False,
+    )
+
+    ctrl = Controller(
+        accelerator_corr,
+        quadrupole_optimiser_config,
+        get_default_simulation_config(run_arc_by_arc=run_arc_by_arc),
+        sequence_config,
+        measurement_config,
+        bpm_start_points,
+        bpm_end_points,
+        show_plots=False,
+        initial_knob_strengths=bend_estimates,
+        true_strengths=None,
+        plots_dir=temp_analysis_dir,
+        mad_logfile=temp_analysis_dir / "mad_log.txt",
+    )
+    estimates, _ = ctrl.run()
+    save_arc_estimates(results_dir, squeeze_step, arc_num, estimates, rewrite_file=rewrite_file)
 
 
 def process_squeeze_step(
@@ -633,6 +701,7 @@ def process_squeeze_step(
     skip_reload: bool = False,
     cleanup_temp: bool = False,
     run_in_irs: bool = False,
+    run_arc_by_arc: bool = True,
 ) -> None:
     """Process a single squeeze step for quadrupole optimisation."""
     logger.info(f"Processing squeeze step {squeeze_step} for beam {beam}")
@@ -646,12 +715,21 @@ def process_squeeze_step(
     setup_temp_directory(temp_analysis_dir, skip_reload)
     sequence_path = get_or_make_sequence(beam, model_dir)
 
+    # Extract tunes from model job file
+    job_file = model_dir / "job.create_model_nominal.madx"
+    nat_x, nat_y, drv_x, drv_y = extract_tunes_from_job_file(job_file)
+    nattunes = [nat_x, nat_y, 0.0]
+    tunes = [drv_x, drv_y, 0.0]
+    logger.info(f"Extracted tunes for {squeeze_step}: nattunes={nattunes}, tunes={tunes}")
+
     # Process all frequencies
     all_measurements = []
     all_bad_bpms = set()
     machine_deltap = None
     if ZEROHZ not in meas_times[squeeze_step]:
-        raise NotImplementedError("Please process 0Hz frequency first for closed orbit and machine deltap.")
+        raise NotImplementedError(
+            "Please process 0Hz frequency first for closed orbit and machine deltap."
+        )
 
     if skip_reload:
         # Load previously processed data
@@ -662,8 +740,14 @@ def process_squeeze_step(
                 continue
             logger.info(f"  Frequency {freq}: {len(times)} measurements (loading)")
             tune_knobs_file = results_dir / f"tune_knobs_{squeeze_step}_{freq}.txt"
+            corrector_knobs_file = results_dir / f"corrector_strengths_{squeeze_step}_{freq}.txt"
             freq_measurements, machine_deltap = load_frequency_results(
-                freq, len(times), tune_knobs_file, temp_analysis_dir, machine_deltap
+                freq,
+                len(times),
+                tune_knobs_file,
+                corrector_knobs_file,
+                temp_analysis_dir,
+                machine_deltap,
             )
             all_measurements.extend(freq_measurements)
     else:
@@ -676,12 +760,14 @@ def process_squeeze_step(
             if not times:
                 raise ValueError(f"No measurement times found for frequency {freq}")
             logger.info(f"  Frequency {freq}: {len(times)} measurements")
-            files, folders, tune_knobs_file, bad_bpms, freq_energy = prepare_frequency_metadata(
-                freq, times, beam, meas_base_dir, results_dir, squeeze_step
+            files, folders, tune_knobs_file, corrector_knobs_file, bad_bpms, freq_energy = (
+                prepare_frequency_metadata(
+                    freq, times, beam, meas_base_dir, results_dir, squeeze_step
+                )
             )
             if freq == ZEROHZ:
                 energy = freq_energy
-            freq_metadata[freq] = (files, tune_knobs_file)
+            freq_metadata[freq] = (files, tune_knobs_file, corrector_knobs_file)
             all_files.extend(files)
             for f in files:
                 file_to_freq[str(f)] = freq
@@ -705,6 +791,8 @@ def process_squeeze_step(
             use_uniform_vars=True,
             num_workers=8,
             combine_files=False,
+            nattunes=nattunes,
+            tunes=tunes,
         )
         all_bad_bpms.update(bad_bpms_out)
 
@@ -713,13 +801,14 @@ def process_squeeze_step(
 
         # Process 0hz first to get closed orbit and machine deltap
         if ZEROHZ in freq_metadata:
-            files_0hz, tune_knobs_0hz = freq_metadata[ZEROHZ]
+            files_0hz, tune_knobs_0hz, corrector_knobs_0hz = freq_metadata[ZEROHZ]
             file_keys_0hz = [str(f) for f in files_0hz]
             freq_measurements, machine_deltap = process_frequency_results(
                 ZEROHZ,
                 file_keys_0hz,
                 pzs_dict,
                 tune_knobs_0hz,
+                corrector_knobs_0hz,
                 temp_analysis_dir,
                 sequence_path,
                 beam,
@@ -732,13 +821,14 @@ def process_squeeze_step(
         for freq in freq_metadata:
             if freq == ZEROHZ:
                 continue
-            files_freq, tune_knobs_freq = freq_metadata[freq]
+            files_freq, tune_knobs_freq, corrector_knobs_freq = freq_metadata[freq]
             file_keys_freq = [str(f) for f in files_freq]
             freq_measurements, _ = process_frequency_results(
                 freq,
                 file_keys_freq,
                 pzs_dict,
                 tune_knobs_freq,
+                corrector_knobs_freq,
                 temp_analysis_dir,
                 sequence_path,
                 beam,
@@ -758,7 +848,8 @@ def process_squeeze_step(
 
     # Optimise each arc
     rewrite_file = True
-    for arc_num in [3, 6]:  # Just try arc34 for now as there are no orbit bumps and arc 67
+    arc_numbers = [3, 6] if run_arc_by_arc else [3]
+    for arc_num in arc_numbers:  # Use a single pass in non-arc-by-arc mode
         optimise_arc(
             arc_num,
             beam,
@@ -772,6 +863,7 @@ def process_squeeze_step(
             energy,
             rewrite_file=rewrite_file,
             run_in_irs=run_in_irs,
+            run_arc_by_arc=run_arc_by_arc,
         )
         rewrite_file = False  # Only rewrite for the first arc
 
@@ -801,6 +893,11 @@ def main():
         "--irs", action="store_true", help="Optimise within the IRs instead of arcs"
     )
     parser.add_argument(
+        "--fullring",
+        action="store_true",
+        help="Disable arc-by-arc worker mode and use multi-turn running",
+    )
+    parser.add_argument(
         "--cleanup-temp",
         action="store_true",
         help="Delete temporary analysis directory after completion",
@@ -828,6 +925,7 @@ def main():
         args.skip_reload,
         args.cleanup_temp,
         args.irs,
+        not args.fullring,
     )
 
 

@@ -1,3 +1,5 @@
+"""Beam-2 specific wrapper for creating optimisation input data files."""
+
 from __future__ import annotations
 
 import logging

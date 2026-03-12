@@ -1,3 +1,5 @@
+"""Static squeeze measurement paths and timestamps used by helper scripts."""
+
 # MEASUREMENT_DATE = "2025_04_27"
 # FILL_NUMBER = 10533
 
