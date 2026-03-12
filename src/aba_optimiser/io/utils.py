@@ -1,3 +1,5 @@
+"""Small file-system helpers for packaged sequence files and result tables."""
+
 from __future__ import annotations
 
 import logging
@@ -10,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import numpy as np
+
 
 def get_lhc_file_path(beam: int) -> Path:
     """

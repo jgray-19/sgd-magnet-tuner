@@ -1,3 +1,5 @@
+"""Convenience helpers for filtering BPM and marker rows in tabular data."""
+
 from __future__ import annotations
 
 import logging
