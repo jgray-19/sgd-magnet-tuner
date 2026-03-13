@@ -659,7 +659,7 @@ def plot_fullring_comparison(
     beam: int,
     deltap: float = 0.0,
 ) -> None:
-    """Plot full-ring mu and beta comparisons for measurement and the three model cases."""
+    """Plot full-ring optics differences relative to the measurement."""
     meas_twiss, _ = build_twiss_from_measurements(
         analysis_dir, include_errors=True, reverse_bpm_order=beam == 2
     )
@@ -702,43 +702,53 @@ def plot_fullring_comparison(
     fig, axes = plt.subplots(2, 2, figsize=(16, 10), sharex=True)
     xvals = meas_full["s"]
 
+    def _diff(model: pd.Series, measurement: pd.Series) -> pd.Series:
+        return model - measurement
+
+    def _rel_diff(model: pd.Series, measurement: pd.Series) -> pd.Series:
+        return (model - measurement) / measurement * 100.0
+
     series_to_plot = [
-        ("Measurement", meas_full, "k-", 1.4),
-        ("Base model", base_full, "s-", 1.0),
-        ("Model+tunes", online_full, "^-", 1.0),
-        ("Model+tunes+ests", est_full, "d-", 1.0),
+        ("Base model - meas", base_full, "s-", 1.0),
+        ("Model+tunes - meas", online_full, "^-", 1.0),
+        ("Model+tunes+ests - meas", est_full, "d-", 1.0),
     ]
     plot_specs = [
-        (axes[0, 0], "mux", "mu1 (2π)"),
-        (axes[0, 1], "muy", "mu2 (2π)"),
-        (axes[1, 0], "betx", "betax (m)"),
-        (axes[1, 1], "bety", "betay (m)"),
+        (axes[0, 0], "mux", "phase", "Delta mu1 (2pi)"),
+        (axes[0, 1], "muy", "phase", "Delta mu2 (2pi)"),
+        (axes[1, 0], "betx", "beta", "Delta beta_x / beta_x vs meas (%)"),
+        (axes[1, 1], "bety", "beta", "Delta beta_y / beta_y vs meas (%)"),
     ]
 
-    for ax, column, ylabel in plot_specs:
+    for ax, column, plot_type, ylabel in plot_specs:
         for label, df, fmt, linewidth in series_to_plot:
+            if plot_type == "phase":
+                yvals = _diff(df[column], meas_full[column])
+            else:
+                yvals = _rel_diff(df[column], meas_full[column])
             ax.plot(
                 xvals,
-                df[column],
+                yvals,
                 fmt,
                 markersize=2.5,
                 linewidth=linewidth,
                 label=label,
                 alpha=0.9,
             )
+        ax.axhline(0.0, color="k", linewidth=0.8, alpha=0.5)
         ax.set_ylabel(ylabel)
         ax.grid(visible=True, alpha=0.3)
         ax.legend(fontsize=8)
 
-    axes[0, 0].set_title("Full Ring - mu1")
-    axes[0, 1].set_title("Full Ring - mu2")
-    axes[1, 0].set_title("Full Ring - betax")
-    axes[1, 1].set_title("Full Ring - betay")
+    axes[0, 0].set_title("Full Ring - Horizontal Phase Delta")
+    axes[0, 1].set_title("Full Ring - Vertical Phase Delta")
+    axes[1, 0].set_title("Full Ring - Horizontal Beta Delta")
+    axes[1, 1].set_title("Full Ring - Vertical Beta Delta")
     axes[1, 0].set_xlabel("S (m)")
     axes[1, 1].set_xlabel("S (m)")
 
     fig.suptitle(
-        f"Full-ring optics comparison - {squeeze_step} (phase origin: {start_bpm})",
+        f"Full-ring optics deltas vs measurement - {squeeze_step} (phase origin: {start_bpm})",
         fontsize=12,
     )
     plt.tight_layout()

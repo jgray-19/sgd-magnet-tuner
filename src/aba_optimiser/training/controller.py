@@ -286,13 +286,13 @@ class Controller(BaseController):
         self.data_manager.load_track_data()
         self.data_manager.prepare_turn_batches(self.config_manager)
 
-        # Adjust num_batches to not exceed tracks_per_worker
+        # Adjust num_batches to not exceed the smallest worker allocation.
+        min_tracks_per_worker = min(len(batch) for batch in self.data_manager.turn_batches)
         self.simulation_config = dataclasses.replace(
             self.simulation_config,
-            num_batches=min(
-                self.simulation_config.num_batches, self.data_manager.tracks_per_worker
-            ),
+            num_batches=min(self.simulation_config.num_batches, min_tracks_per_worker),
         )
+        self.data_manager.simulation_config = self.simulation_config
 
     def _init_worker_manager(
         self,

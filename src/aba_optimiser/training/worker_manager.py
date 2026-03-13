@@ -17,8 +17,6 @@ import numpy as np
 from aba_optimiser.training.worker_payloads import WorkerPayloadBuilder
 from aba_optimiser.training.worker_setup import WorkerRuntimeMetadata, WorkerSetupHelper
 from aba_optimiser.workers import (
-    SinglePlanePositionOnlyTrackingWorker,
-    SinglePlaneTrackingWorker,
     TrackingData,
     TrackingWorker,
     WorkerConfig,
@@ -126,11 +124,7 @@ class WorkerManager:
         if kick_plane == "xy":
             return TrackingWorker if optimise_momenta else PositionOnlyTrackingWorker
         if kick_plane in {"x", "y"}:
-            return (
-                SinglePlaneTrackingWorker
-                if optimise_momenta
-                else SinglePlanePositionOnlyTrackingWorker
-            )
+            return TrackingWorker if optimise_momenta else PositionOnlyTrackingWorker
         raise ValueError(f"Unsupported kick plane {kick_plane!r}")
 
     @staticmethod

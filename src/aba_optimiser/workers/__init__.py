@@ -7,8 +7,6 @@ the main process via pipes and compute gradients and loss functions.
 Available Workers:
     - TrackingWorker: Particle tracking (supports 'multi-turn' and 'arc-by-arc' modes)
     - PositionOnlyTrackingWorker: Position-only tracking (no momentum)
-    - SinglePlaneTrackingWorker: Compatibility alias for single-plane momentum tracking
-    - SinglePlanePositionOnlyTrackingWorker: Compatibility alias for single-plane position-only tracking
     - OpticsWorker: Optics function (beta, dispersion) computations
 
 Data Structures:
@@ -28,10 +26,6 @@ from aba_optimiser.workers.common import (
 from aba_optimiser.workers.optics import OpticsWorker
 from aba_optimiser.workers.tracking import TrackingWorker
 from aba_optimiser.workers.tracking_position_only import PositionOnlyTrackingWorker
-from aba_optimiser.workers.tracking_single_plane import (
-    SinglePlanePositionOnlyTrackingWorker,
-    SinglePlaneTrackingWorker,
-)
 
 __all__ = [
     # Abstract base
@@ -39,8 +33,6 @@ __all__ = [
     # Worker implementations
     "TrackingWorker",
     "PositionOnlyTrackingWorker",
-    "SinglePlaneTrackingWorker",
-    "SinglePlanePositionOnlyTrackingWorker",
     "OpticsWorker",
     # Data structures
     "TrackingData",

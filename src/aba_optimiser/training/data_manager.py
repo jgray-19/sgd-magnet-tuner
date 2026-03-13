@@ -42,7 +42,7 @@ class DataManager:
         self.available_turns: list[int]
 
         self.turn_batches: list[list[int]]
-        self.tracks_per_worker: int  # set in prepare_turn_batches
+        self.tracks_per_worker: int  # maximum tracks per worker, set in prepare_turn_batches
         self.num_workers: int  # set in prepare_turn_batches
 
         # Track data per measurement file (indexed by file index)
@@ -300,15 +300,11 @@ class DataManager:
             )
             tracks_per_worker = len(self.available_turns)
 
-        # Start with requested number, but ensure we use all files (for different deltaps)
+        # Start with the requested worker budget, but ensure we can sample every file.
         num_starts = len(config_manager.start_bpms)
         num_ends = len(config_manager.end_bpms)
         max_workers = num_workers // num_starts // 2
         num_batches = max(max_workers, num_files)
-
-        # Cap by available turns
-        max_batches = len(self.available_turns) // tracks_per_worker
-        num_batches = min(num_batches, max(1, max_batches))
 
         # Use configured or adjusted tracks_per_worker
         self.tracks_per_worker = tracks_per_worker
@@ -339,7 +335,8 @@ class DataManager:
         for turns in turns_by_file.values():
             random.shuffle(turns)
 
-        # Create batches by round-robin from files
+        # Create batches by round-robin from files. `tracks_per_worker` is a maximum,
+        # so the last batch drawn from a file may be smaller.
         self.turn_batches = []
         file_indices = sorted(turns_by_file.keys())
         file_idx_pos = 0  # Track which file to take from next
@@ -352,13 +349,10 @@ class DataManager:
                     file_idx_pos = 0
 
                 file_idx = file_indices[file_idx_pos]
-                if (
-                    file_idx in turns_by_file
-                    and len(turns_by_file[file_idx]) >= self.tracks_per_worker
-                ):
-                    # Take batch from this file
-                    batch = turns_by_file[file_idx][: self.tracks_per_worker]
-                    turns_by_file[file_idx] = turns_by_file[file_idx][self.tracks_per_worker :]
+                if file_idx in turns_by_file and turns_by_file[file_idx]:
+                    batch_size = min(self.tracks_per_worker, len(turns_by_file[file_idx]))
+                    batch = turns_by_file[file_idx][:batch_size]
+                    turns_by_file[file_idx] = turns_by_file[file_idx][batch_size:]
                     if not turns_by_file[file_idx]:
                         del turns_by_file[file_idx]
                         file_indices.remove(file_idx)
@@ -394,5 +388,9 @@ class DataManager:
         )
 
     def get_total_turns(self) -> int:
-        """Calculate total number of turns to process."""
-        return self.num_workers * self.tracks_per_worker
+        """Calculate the number of turns that will actually be processed."""
+        if not self.turn_batches:
+            return 0
+
+        num_batches = max(1, self.simulation_config.num_batches)
+        return sum(len(batch) - (len(batch) % num_batches) for batch in self.turn_batches)
