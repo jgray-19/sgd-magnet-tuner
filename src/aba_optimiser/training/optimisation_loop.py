@@ -619,14 +619,16 @@ class OptimisationLoop:
         """Log statistics for the current epoch."""
         # Log scalars to TensorBoard
         if writer is not None:
+            loss_scalars = {"train": loss}
+            if validation_loss is not None:
+                loss_scalars["validation"] = validation_loss
+            writer.add_scalars("loss", loss_scalars, epoch)
+
             scalars = {
-                "loss": loss,
                 "grad_norm": grad_norm,
                 "learning_rate": lr,
                 "sum_true_diff": sum_true_diff,
             }
-            if validation_loss is not None:
-                scalars["validation_loss"] = validation_loss
             if self.rel_sigma_step > 0:
                 scalars.update(
                     {
