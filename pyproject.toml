@@ -74,8 +74,11 @@ xtrack-tools = { git = "https://github.com/jgray-19/xtrack_tools.git" }
 
 
 [tool.setuptools]
-packages = ["aba_optimiser"]
 package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["aba_optimiser*"]
 
 [tool.coverage.run]
 source = ["src/aba_optimiser"]
