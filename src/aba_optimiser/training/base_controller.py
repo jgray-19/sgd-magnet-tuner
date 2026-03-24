@@ -13,7 +13,7 @@ from aba_optimiser.training.configuration_manager import ConfigurationManager
 from aba_optimiser.training.controller_config import OutputConfig
 from aba_optimiser.training.optimisation_loop import OptimisationLoop
 from aba_optimiser.training.result_manager import ResultManager
-from aba_optimiser.training.utils import filter_bad_bpms, normalize_true_strengths
+from aba_optimiser.training.utils import filter_bad_bpms, normalise_true_strengths
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -33,6 +33,11 @@ class BaseController(ABC):
     - Result management
     - Logging setup
     - Common initialization patterns
+
+    Design: Delta-space only internally. All user inputs are expected in absolute-space
+    and are converted to delta-space during initialization. All internal algorithms work
+    exclusively in delta-space. Results in subclasses are converted back to absolute-space
+    at the user-facing boundary.
     """
 
     def __init__(
@@ -53,6 +58,9 @@ class BaseController(ABC):
     ):
         """Initialize base controller.
 
+        User inputs (initial_knob_strengths, true_strengths) are expected in absolute-space
+        and are automatically converted to delta-space for internal use.
+
         Args:
             accelerator: Accelerator instance defining machine configuration
             optimiser_config: Gradient descent optimiser configuration
@@ -60,8 +68,9 @@ class BaseController(ABC):
             magnet_range: Magnet range specification
             bpm_start_points: Start BPMs for each range
             bpm_end_points: End BPMs for each range
-            initial_knob_strengths: Initial knob strengths
-            true_strengths: True strengths (Path, dict, or None)
+            initial_knob_strengths: Initial knob strengths (absolute-space). Missing keys
+                default to 1e-7 in delta-space after conversion.
+            true_strengths: True strengths (Path, dict, or None) in absolute-space
             bad_bpms: List of bad BPMs to exclude
             first_bpm: First BPM in the sequence
             debug: Enable debug mode
@@ -102,34 +111,70 @@ class BaseController(ABC):
             self.mad_logfile,
         )
 
-        # Normalize and initialize knob strengths
-        true_strengths_dict = normalize_true_strengths(true_strengths)
+        # Convert user-space (absolute) inputs to internal delta-space
+        true_strengths_dict = normalise_true_strengths(true_strengths)
+        true_strengths_delta = self._convert_true_strengths_to_delta(true_strengths_dict)
+        initial_knobs_delta = self._convert_initial_knobs_to_delta(initial_knob_strengths)
+
+        # Initialize knob strengths in delta-space
         self.initial_knobs, self.filtered_true_strengths = (
-            self.config_manager.initialise_knob_strengths(
-                true_strengths_dict, initial_knob_strengths
-            )
+            self.config_manager.initialise_knob_strengths(true_strengths_delta, initial_knobs_delta)
         )
         self._validate_knob_initialisation()
 
         # Use initial knobs as true strengths if none provided
-        if not true_strengths_dict:
+        if not true_strengths_delta:
             self.filtered_true_strengths = self.initial_knobs.copy()
 
         # Initialize managers
         self._init_managers()
 
+    def _convert_true_strengths_to_delta(
+        self, true_strengths: dict[str, float]
+    ) -> dict[str, float]:
+        """Convert user-provided true strengths (absolute) to delta-space for internal use.
+
+        Subclasses can override to add special handling (e.g., energy parameter conversions).
+        """
+        if not true_strengths:
+            return {}
+        # Convert from absolute to delta-space
+        return self.config_manager.mad_iface.absolute_to_optimisation_knobs(true_strengths)
+
+    def _convert_initial_knobs_to_delta(
+        self, initial_knob_strengths: dict[str, float] | None
+    ) -> dict[str, float] | None:
+        """Convert user-provided initial knob strengths (absolute) to delta-space for internal use.
+
+        Subclasses can override to add special handling (e.g., energy parameter conversions).
+        """
+        if initial_knob_strengths is None:
+            return None
+        # Convert from absolute to delta-space
+        return self.config_manager.mad_iface.absolute_to_optimisation_knobs(initial_knob_strengths)
+
     def _init_managers(self) -> None:
         """Initialize optimisation loop and result manager."""
+        abs_offsets, dabs_dopt = self.config_manager.mad_iface.optimisation_to_absolute_affine(
+            self.config_manager.knob_names
+        )
         self.optimisation_loop = OptimisationLoop(
             self.config_manager.initial_strengths,
             self.config_manager.knob_names,
             self.filtered_true_strengths,
             self.optimiser_config,
             self.simulation_config,
+            abs_offsets=abs_offsets,
+            dabs_dopt=dabs_dopt,
         )
 
+        output_knob_names = self.config_manager.mad_iface.format_knob_names_for_output(
+            self.config_manager.knob_names
+        )
+        output_knob_names = self.accelerator.format_result_knob_names(output_knob_names)
+
         self.result_manager = ResultManager(
-            self.config_manager.knob_names,
+            output_knob_names,
             self.config_manager.elem_spos,
             show_plots=self.show_plots,
             accelerator=self.accelerator,

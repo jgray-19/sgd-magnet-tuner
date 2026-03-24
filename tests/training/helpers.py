@@ -103,6 +103,7 @@ def generate_model_with_errors(
                 target_qy=target_qy,
                 corrector_file=corrector_file,
             )
+            interface.set_corrector_strengths(corrector_file)
 
         # Read corrector table
         corrector_table = tfs.read(corrector_file)

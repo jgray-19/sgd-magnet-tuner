@@ -132,15 +132,22 @@ class ConfigurationManager:
         true_strengths: dict[str, float],
         provided_initial_knobs: dict[str, float] | None = None,
     ) -> tuple[dict[str, float], dict[str, float]]:
-        """Initialise knob strengths from MAD and filter true strengths."""
+        """Initialise knob strengths from MAD and filter true strengths.
+
+        All inputs must be in delta-space (internal optimisation space).
+        Missing keys in provided_initial_knobs default to 1e-7 to avoid flat starts.
+        """
         if self.mad_iface is None:
             raise ValueError("MAD interface must be setup first")
 
         if provided_initial_knobs is not None:
-            # Use provided initial knobs where available, fill missing ones from MAD
+            # Use provided initial knobs (in delta-space) where available.
             LOGGER.info("Using provided initial knob strengths from previous optimisation")
-            # First get the default MAD values for all knobs
-            self.mad_iface.update_knob_values(provided_initial_knobs)
+            full_initial_knobs = {
+                knob_name: provided_initial_knobs.get(knob_name, 0) for knob_name in self.knob_names
+            }
+
+            self.mad_iface.update_knob_values(full_initial_knobs)
         initial_strengths = self.mad_iface.receive_knob_values()
 
         self.initial_strengths = initial_strengths

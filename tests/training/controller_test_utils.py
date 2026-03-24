@@ -12,8 +12,8 @@ import pytest
 
 pytest.importorskip("tmom_recon")
 pytest.importorskip("xtrack_tools")
-
 from pymadng_utils.io.utils import save_knobs
+from xtrack_tools.coordinates import create_initial_conditions
 from xtrack_tools.monitors import line_to_dataframes
 from xtrack_tools.tracking import run_tracking_without_ac_dipole
 
@@ -172,6 +172,16 @@ def _generate_nonoise_track(
             angle_list = (np.linspace(0.0, 2 * np.pi, num=num_particles, endpoint=False)).tolist()
         action_list = [action] * num_particles
 
+    # run_madng_tracking(
+    #     interface=interface_with_beam,
+    #     flattop_turns=flattop_turns,
+    #     action_list=action_list,
+    #     angle_list=angle_list,
+    #     use_diagonal_kicks=use_diagonal_kicks,
+    #     start_marker=start_marker,
+    #     destination=destination,
+    # )
+
     _run_track_with_model(
         env=env,
         flattop_turns=flattop_turns,
@@ -259,11 +269,11 @@ def _run_energy_optimisation_case(
 
 def _make_optimiser_config_quad() -> OptimiserConfig:
     return OptimiserConfig(
-        max_epochs=500,
-        warmup_epochs=100,
-        warmup_lr_start=1e-6,
-        max_lr=1e-5,
-        min_lr=1e-5,
+        max_epochs=300,
+        warmup_epochs=200,
+        warmup_lr_start=1e-4,
+        max_lr=1e-6,
+        min_lr=1e-6,
         gradient_converged_value=5e-14,
         expected_rel_error=18e-4,
     )
@@ -276,3 +286,46 @@ def _make_simulation_config_quad() -> SimulationConfig:
         num_batches=2,
         bpm_loss_outlier_sigma=4,
     )
+
+
+def run_madng_tracking(
+    interface: AbaMadInterface,
+    flattop_turns: int,
+    action_list: list[float],
+    angle_list: list[float],
+    use_diagonal_kicks: bool,
+    start_marker: str | None,
+    destination: Path,
+):
+    if isinstance(start_marker, str):
+        interface.cycle_sequence(start_marker)
+        interface.observe_elements(start_marker)
+
+    tws = interface.run_twiss(observe=0)
+    tws = tws[tws["s"] == 0]
+    if isinstance(start_marker, str):
+        interface.unobserve_elements([start_marker])
+    else:
+        start_marker = tws.index[0]
+    if len(action_list) > 1:
+        raise ValueError("Currently only supports single particle tracking for MAD-NG")
+    coords = create_initial_conditions(
+        action=action_list[0],
+        angle=angle_list[0],
+        twiss_data=tws,
+        kick_plane="xy",
+        starting_bpm=start_marker,
+    )
+    print(f"Initial coordinates for tracking: {coords}")
+    coords = {k: float(v) for k, v in coords.items()}
+    interface.observe_bpms()
+    interface.mad["trk", "flw"] = interface.mad.track(
+        sequence="loaded_sequence", X0=coords, nturn=flattop_turns
+    )
+    df = pd.DataFrame(interface.mad.trk.to_df())
+    # add variance columns
+    df["var_x"] = (1e-4) ** 2
+    df["var_y"] = (1e-4) ** 2
+    df["var_px"] = (1e-6) ** 2
+    df["var_py"] = (1e-6) ** 2
+    df.to_parquet(destination, index=False)

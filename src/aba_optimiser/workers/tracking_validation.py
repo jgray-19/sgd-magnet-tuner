@@ -21,8 +21,9 @@ from aba_optimiser.workers.tracking import OBSERVABLE_SPECS, TrackingWorker
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
-    from aba_optimiser.config import SimulationConfig
     from pymadng import MAD
+
+    from aba_optimiser.config import SimulationConfig
 
 
 LOGGER = logging.getLogger(__name__)

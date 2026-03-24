@@ -46,10 +46,10 @@ def filter_bad_bpms(
     return filtered_start, filtered_end
 
 
-def normalize_true_strengths(
+def normalise_true_strengths(
     true_strengths: Path | dict[str, float] | None,
 ) -> dict[str, float]:
-    """Normalize true strengths to a dictionary format.
+    """Normalise true strengths to a dictionary format.
 
     Args:
         true_strengths: Can be None, a Path to a file, or a dict

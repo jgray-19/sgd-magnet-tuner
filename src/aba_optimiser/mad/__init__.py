@@ -8,10 +8,12 @@ This package provides different interfaces for working with MAD-NG:
 """
 
 from .aba_mad_interface import AbaMadInterface
+from .knob_transform import KnobSpaceTransform
 from .optimising_mad_interface import GenericMadInterface, GradientDescentMadInterface
 
 __all__ = [
     "AbaMadInterface",
+    "KnobSpaceTransform",
     "GenericMadInterface",
     "GradientDescentMadInterface",
 ]

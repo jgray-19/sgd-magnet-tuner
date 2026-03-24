@@ -46,6 +46,8 @@ class OptimisationLoop:
         optimiser_config: OptimiserConfig,
         simulation_config: SimulationConfig,
         optimiser_type: str | None = None,
+        abs_offsets: np.ndarray | None = None,
+        dabs_dopt: np.ndarray | None = None,
     ):
         self.knob_names = knob_names
         self.true_strengths = true_strengths
@@ -53,7 +55,7 @@ class OptimisationLoop:
         self.smoothed_grad_norm: float = 0.0
         self.smoothed_loss_change: float = 0.0
         self.grad_norm_alpha = optimiser_config.grad_norm_alpha
-        self.expected_rel_error = optimiser_config.expected_rel_error
+        self.expected_rel_error_abs = optimiser_config.expected_rel_error
         self.max_clipping_ratio: float = 0.0  # Track max clipping ratio per epoch
 
         # Track best knobs and loss for rejection logic
@@ -81,7 +83,43 @@ class OptimisationLoop:
 
         # Convert total expected relative error into a per-step trust-region bound
         self.trust_region_safety = 3.0  # allow errors a few times worse than typical
-        self.param_floor = 1e-6  # same floor used in trust region
+        self.absolute_param_floor = 1e-6
+
+        if abs_offsets is None:
+            self.abs_offsets = np.zeros_like(initial_strengths, dtype=np.float64)
+        else:
+            self.abs_offsets = np.asarray(abs_offsets, dtype=np.float64)
+
+        if dabs_dopt is None:
+            self.dabs_dopt = np.ones_like(initial_strengths, dtype=np.float64)
+        else:
+            self.dabs_dopt = np.asarray(dabs_dopt, dtype=np.float64)
+
+        if self.abs_offsets.shape != initial_strengths.shape:
+            raise ValueError("abs_offsets must have same shape as initial_strengths")
+        if self.dabs_dopt.shape != initial_strengths.shape:
+            raise ValueError("dabs_dopt must have same shape as initial_strengths")
+        if np.any(self.dabs_dopt == 0.0):
+            raise ValueError("dabs_dopt contains zero entries, cannot map trust region")
+
+        self.dopt_dabs = 1.0 / self.dabs_dopt
+
+        # Convert user-space relative tolerance (absolute space) into an internal
+        # optimisation-space relative tolerance scalar.
+        self.expected_rel_error = self._transform_expected_rel_error_to_optimisation_space(
+            initial_strengths
+        )
+
+        # Per-parameter floor in optimisation space to avoid vanishing limits near zero.
+        # Use a stable baseline mapped from absolute-space, not only current delta values.
+        baseline_opt_scale = np.maximum(
+            np.abs(self.abs_offsets * self.dopt_dabs),
+            np.abs(self.dopt_dabs) * self.absolute_param_floor,
+        )
+        self.optimisation_floor_vec = np.maximum(
+            np.abs(initial_strengths),
+            baseline_opt_scale,
+        )
 
         self.total_steps = max(1, self.max_epochs * self.num_batches)
         if self.expected_rel_error > 0:
@@ -90,13 +128,45 @@ class OptimisationLoop:
             )
             LOGGER.info(
                 "Per-parameter trust region enabled: "
-                f"rel_sigma_total={self.expected_rel_error:.3e}, "
+                f"rel_sigma_total_abs={self.expected_rel_error_abs:.3e}, "
+                f"rel_sigma_total_opt={self.expected_rel_error:.3e}, "
                 f"rel_sigma_step={self.rel_sigma_step:.3e}, "
                 f"steps={self.total_steps}, safety={self.trust_region_safety:g}"
             )
         else:
             LOGGER.info("Per-parameter trust region disabled")
             self.rel_sigma_step = 0.0
+
+    def _transform_expected_rel_error_to_optimisation_space(
+        self,
+        initial_strengths: np.ndarray,
+    ) -> float:
+        """Map user absolute-space relative tolerance to optimisation-space scalar.
+
+        The user config is defined in absolute strength space. Internally we optimise
+        in optimisation space (e.g. dknl), so we convert to an equivalent scalar by
+        evaluating per-parameter local scale factors at the initial point and taking
+        a robust median across knobs.
+        """
+        if self.expected_rel_error_abs <= 0:
+            return 0.0
+
+        # Reference scales are defined around the absolute baseline (offset), not
+        # the current delta values, to avoid exploding conversions near dk~=0.
+        abs_scale = np.maximum(np.abs(self.abs_offsets), self.absolute_param_floor)
+        opt_scale = np.maximum(
+            np.abs(self.abs_offsets * self.dopt_dabs),
+            np.abs(self.dopt_dabs) * self.absolute_param_floor,
+        )
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            conversion = abs_scale * np.abs(self.dopt_dabs) / opt_scale
+        conversion = np.nan_to_num(conversion, nan=1.0, posinf=1.0, neginf=1.0)
+
+        # Keep conversion robust to outlier knobs with unusual local scaling.
+        conversion = np.clip(conversion, 1e-2, 1e2)
+
+        return float(self.expected_rel_error_abs * np.median(conversion))
 
     def _init_optimiser(self, shape: tuple[int, ...], optimiser_type: str) -> None:
         """Initialise the optimiser based on type."""
@@ -162,7 +232,7 @@ class OptimisationLoop:
         self,
         epoch_loss: float,
         prev_loss: float | None,
-        sum_rel_diff: float,
+        sum_diff: float,
     ) -> bool:
         """Decide whether the current epoch should replace the best known state."""
         should_save_as_best = True
@@ -171,12 +241,12 @@ class OptimisationLoop:
                 (self.best_loss - epoch_loss) / abs(prev_loss) if prev_loss != 0 else 0
             )
             if loss_improvement < self.loss_improvement_threshold:
-                _, best_sum_rel_diff = self._calculate_rel_diff(self.best_knobs)
-                if sum_rel_diff > best_sum_rel_diff:
+                best_sum_diff = self._calculate_diff(self.best_knobs)
+                if sum_diff > best_sum_diff:
                     should_save_as_best = False
                     LOGGER.debug(
                         f"Not saving as best: loss improvement {loss_improvement:.3e} < {self.loss_improvement_threshold:.3e} "
-                        f"and rel_diff {sum_rel_diff:.3e} > {best_sum_rel_diff:.3e}."
+                        f"and rel_diff {sum_diff:.3e} > {best_sum_diff:.3e}."
                     )
         return should_save_as_best and epoch_loss < self.best_loss
 
@@ -261,7 +331,7 @@ class OptimisationLoop:
             self._update_smoothed_grad_norm(grad_norm)
 
             # Calculate relative differences for rejection logic
-            sum_true_diff, sum_rel_diff = self._calculate_rel_diff(current_knobs)
+            sum_true_diff = self._calculate_diff(current_knobs)
 
             validation_loss = (
                 validation_loss_fn(current_knobs) if validation_loss_fn is not None else None
@@ -269,7 +339,7 @@ class OptimisationLoop:
             stop_loss = validation_loss if validation_loss is not None else epoch_loss
 
             new_best = False
-            if self._is_new_best(stop_loss, prev_loss, sum_rel_diff):
+            if self._is_new_best(stop_loss, prev_loss, sum_true_diff):
                 self.best_loss = stop_loss
                 self.best_knobs = current_knobs.copy()
                 new_best = True
@@ -308,7 +378,6 @@ class OptimisationLoop:
                 current_knobs,
                 self.max_clipping_ratio,
                 sum_true_diff,
-                sum_rel_diff,
                 new_best,
                 saved_checkpoint,
                 validation_loss,
@@ -445,13 +514,17 @@ class OptimisationLoop:
         # Let the optimizer propose the step (no gradient scaling)
         new_vec = self.optimiser.step(param_vec, agg_grad, lr)
 
-        # Apply per-parameter trust region to constrain the update
+        # Apply per-parameter trust region in optimisation space using the
+        # transformed internal tolerance.
         if self.rel_sigma_step > 0:
+            sigma_abs_opt = self.rel_sigma_step * np.maximum(
+                np.abs(param_vec),
+                self.optimisation_floor_vec,
+            )
             new_vec = self._apply_trust_region_box(
                 params=param_vec,
                 proposed=new_vec,
-                rel_sigma=self.rel_sigma_step,
-                param_floor=self.param_floor,
+                sigma_abs=sigma_abs_opt,
                 k=1.0,
             )
 
@@ -513,22 +586,19 @@ class OptimisationLoop:
                 self.grad_norm_alpha * self.smoothed_grad_norm
                 + (1.0 - self.grad_norm_alpha) * grad_norm
             )
-    def _calculate_rel_diff(self, current_knobs: dict[str, float]) -> tuple[float, float]:
+
+    def _calculate_diff(self, current_knobs: dict[str, float]) -> float:
         """Calculate sum of absolute and relative differences from true strengths.
 
         Returns:
             Tuple of (sum_true_diff, sum_rel_diff)
         """
         if not self.use_true_strengths:
-            return sum(current_knobs.values()), sum(current_knobs.values())
+            return sum(current_knobs.values())
 
         true_diff = [abs(current_knobs[k] - self.true_strengths[k]) for k in self.knob_names]
-        rel_diff = [
-            diff / abs(self.true_strengths[k]) if self.true_strengths[k] != 0 else 0
-            for k, diff in zip(self.knob_names, true_diff)
-        ]
 
-        return np.sum(true_diff), np.sum(rel_diff)
+        return np.sum(true_diff)
 
     def _log_epoch_stats(
         self,
@@ -542,7 +612,6 @@ class OptimisationLoop:
         current_knobs: dict[str, float],
         clipping_ratio: float = 0.0,
         sum_true_diff: float = 0.0,
-        sum_rel_diff: float = 0.0,
         new_best: bool = False,
         saved_checkpoint: bool = False,
         validation_loss: float | None = None,
@@ -554,6 +623,7 @@ class OptimisationLoop:
                 "loss": loss,
                 "grad_norm": grad_norm,
                 "learning_rate": lr,
+                "sum_true_diff": sum_true_diff,
             }
             if validation_loss is not None:
                 scalars["validation_loss"] = validation_loss
@@ -564,15 +634,6 @@ class OptimisationLoop:
                         "trust_region_rel_sigma_step": self.rel_sigma_step,
                     }
                 )
-            if self.use_true_strengths:
-                scalars.update(
-                    {
-                        "true_diff": sum_true_diff,
-                        "rel_diff": sum_rel_diff,
-                    }
-                )
-            else:
-                scalars["total_knob_value"] = np.sum(list(current_knobs.values()))
 
             for key, value in scalars.items():
                 writer.add_scalar(key, value, epoch)
@@ -589,8 +650,7 @@ class OptimisationLoop:
         parts.append(f"g={grad_norm:.3e}")
         if self.rel_sigma_step > 0:
             parts.append(f"clip={clipping_ratio:.2e}")
-        if self.use_true_strengths:
-            parts.append(f"td={sum_true_diff:.3e}, rd={sum_rel_diff:.3e}")
+        parts.append(f"td={sum_true_diff:.3e}")
         parts.append(f"lr={lr:.2e}, et={epoch_time:.1f}s, tt={total_time:.1f}s")
         message = ", ".join(parts)
 

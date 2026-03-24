@@ -20,6 +20,7 @@ from .aba_mad_interface import (
     _DKNL_STRENGTH_ATTRS,
     AbaMadInterface,
 )
+from .knob_transform import KnobSpaceTransform
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -368,6 +369,8 @@ class GradientDescentMadInterface(GenericMadInterface):
             discard_mad_output,
         )
 
+        self.knob_transform = KnobSpaceTransform.empty()
+
         if accelerator.has_any_optimisation():
             # Create gradient descent knobs using accelerator-provided specs
             self._make_adj_knobs()
@@ -436,17 +439,21 @@ class GradientDescentMadInterface(GenericMadInterface):
 
         for idx, (kind, attr, condition) in enumerate(attr_conditions):
             spec = attr_specs.get(kind, {})
-            name_expr = spec.get("name_expr", f'e.name .. ".{attr}"')
+            default_name_expr = (
+                f'e.name .. ".d{attr}"' if attr in _DKNL_STRENGTH_ATTRS else f'e.name .. ".{attr}"'
+            )
+            name_expr = spec.get("name_expr", default_name_expr)
             mad_value = spec.get("mad_value", f"e.{attr}")
             if attr in _DKNL_STRENGTH_ATTRS:
                 dknl_index = _DKNL_INDEX_BY_ATTR_LUA[attr]
                 tmpl = [
                     f"if {condition} then",
                     f"    k_str_name = {name_expr}",
-                    f"    local base_strength = {mad_value}",
-                    "    loaded_sequence[k_str_name] = base_strength",
-                    "    assert(MAD.typeid.is_deferred(loaded_sequence[e.name].dknl), 'Element does not have deferred strength components')",
-                    f"   loaded_sequence[e.name].dknl[{dknl_index}] = \\-> ((loaded_sequence[k_str_name] - base_strength) * e.l)",
+                    "    loaded_sequence[k_str_name] = loaded_sequence[k_str_name] or 0.0",
+                    "    if not MAD.typeid.is_deferred(loaded_sequence[e.name].dknl) then",
+                    "        loaded_sequence[e.name].dknl = MAD.typeid.deferred {0.0, 0.0, 0.0, 0.0}",
+                    "    end",
+                    f"   loaded_sequence[e.name].dknl[{dknl_index}] = \\->loaded_sequence[k_str_name]",
                     "end",
                 ]
             else:
@@ -463,6 +470,66 @@ class GradientDescentMadInterface(GenericMadInterface):
         if not lines:
             lines.append("        -- no attributes selected")
         return "\n".join(lines)
+
+    def _cache_dknl_knob_metadata(self) -> None:
+        """Cache base-strength and length metadata for dknl-native knobs."""
+        dknl_knob_to_absolute: dict[str, str] = {}
+        absolute_to_dknl_knob: dict[str, str] = {}
+        dknl_knob_base_strength: dict[str, float] = {}
+        dknl_knob_length: dict[str, float] = {}
+
+        for knob_name in self.knob_names:
+            absolute_name = KnobSpaceTransform.absolute_name_from_dknl_knob(knob_name)
+            if absolute_name is None:
+                continue
+
+            element_name, attr = absolute_name.rsplit(".", 1)
+            length = float(self.mad[f"loaded_sequence['{element_name}'].l"])
+            if length == 0.0:
+                raise ValueError(
+                    f"Cannot optimise dknl knob '{knob_name}' for zero-length element {element_name}"
+                )
+
+            base_strength = float(self.mad[f"loaded_sequence['{element_name}'].{attr}"])
+            dknl_knob_to_absolute[knob_name] = absolute_name
+            absolute_to_dknl_knob[absolute_name] = knob_name
+            dknl_knob_base_strength[knob_name] = base_strength
+            dknl_knob_length[knob_name] = length
+
+        self.knob_transform = KnobSpaceTransform(
+            dknl_knob_to_absolute=dknl_knob_to_absolute,
+            absolute_to_dknl_knob=absolute_to_dknl_knob,
+            dknl_knob_base_strength=dknl_knob_base_strength,
+            dknl_knob_length=dknl_knob_length,
+        )
+
+    def absolute_to_optimisation_knobs(self, knob_values: dict[str, float]) -> dict[str, float]:
+        """Convert absolute strengths (k0/k1/k2) to optimisation knobs (dk* where applicable)."""
+        converted = self.knob_transform.absolute_to_optimisation_knobs(knob_values)
+        return {name: value for name, value in converted.items() if name in self.knob_name_set}
+
+    def optimisation_to_absolute_knobs(self, knob_values: dict[str, float]) -> dict[str, float]:
+        """Convert optimisation knobs (dk*) back to absolute strengths for reporting/output."""
+        return self.knob_transform.optimisation_to_absolute_knobs(knob_values)
+
+    def format_knob_names_for_output(self, knob_names: list[str]) -> list[str]:
+        """Return output-friendly knob names (dk0/dk1/dk2 mapped to k0/k1/k2)."""
+        return self.knob_transform.format_knob_names_for_output(knob_names)
+
+    def convert_uncertainties_to_absolute(
+        self,
+        knob_names: list[str],
+        uncertainties: np.ndarray,
+    ) -> np.ndarray:
+        """Convert optimisation-space uncertainties to absolute-strength uncertainties."""
+        return self.knob_transform.convert_uncertainties_to_absolute(knob_names, uncertainties)
+
+    def optimisation_to_absolute_affine(
+        self,
+        knob_names: list[str],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return affine map arrays for optimisation -> absolute conversion."""
+        return self.knob_transform.optimisation_to_absolute_affine(knob_names)
 
     def _make_adj_knobs(self) -> None:
         """
@@ -520,6 +587,7 @@ class GradientDescentMadInterface(GenericMadInterface):
 
         self.knob_name_set = set(self.knob_names)
         self.mad["knob_names"] = self.knob_names
+        self._cache_dknl_knob_metadata()
 
         if self.elem_spos:
             LOGGER.info(
@@ -552,13 +620,21 @@ class GradientDescentMadInterface(GenericMadInterface):
         """
         update_commands: list[str] = []
         num_updated = 0
+        unknown_knobs: list[str] = []
         for name, value in knob_values.items():
             if name in self.knob_name_set:
                 LOGGER.debug(f"Updating knob '{name}' to value {value}")
                 update_commands.append(f"loaded_sequence['{name}'] = {value}")
                 num_updated += 1
             else:
-                LOGGER.warning(f"Unknown knob '{name}' ignored")
+                unknown_knobs.append(name)
+
+        if unknown_knobs:
+            raise ValueError(
+                "Unknown knob names supplied to update_knob_values: "
+                + ", ".join(unknown_knobs[:10])
+                + ("..." if len(unknown_knobs) > 10 else "")
+            )
 
         if update_commands:
             self.mad.send("\n".join(update_commands))

@@ -7,7 +7,6 @@ import gc
 import logging
 import random
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -15,10 +14,11 @@ import numpy as np
 from aba_optimiser.training.base_controller import BaseController
 from aba_optimiser.training.controller_config import OutputConfig
 from aba_optimiser.training.data_manager import DataManager
-from aba_optimiser.training.utils import normalize_true_strengths
 from aba_optimiser.training.worker_manager import WorkerManager
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from tensorboardX import SummaryWriter
 
     from aba_optimiser.accelerators import Accelerator
@@ -39,6 +39,15 @@ class Controller(BaseController):
 
     Extends BaseController with tracking-specific functionality including
     data management and worker coordination for multi-turn tracking.
+
+    Design: Delta-space only internally. All user inputs (initial_knob_strengths, true_strengths)
+    are converted from absolute-space to delta-space at entry. All internal algorithms operate
+    exclusively in delta-space. Results are converted back to absolute-space only at exit
+    (in _save_results). This ensures the optimization logic never branches on absolute vs delta
+    assumptions and remains simple and unified.
+
+    Default behavior: Any knobs not explicitly provided by the user default to 1e-7 in delta-space
+    to avoid flat optimization starts.
     """
 
     def __init__(
@@ -60,6 +69,9 @@ class Controller(BaseController):
         """
         Initialise the controller with all required managers.
 
+        User inputs are in absolute-space; they are automatically converted to delta-space
+        for internal optimization and converted back to absolute-space when returning results.
+
         Args:
             accelerator (Accelerator): Accelerator instance defining machine configuration.
             optimiser_config (OptimiserConfig): Gradient descent optimiser configuration.
@@ -69,8 +81,9 @@ class Controller(BaseController):
             output_config (OutputConfig): Output/logging behaviour.
             bpm_start_points (list[str]): Starting BPM names for each range.
             bpm_end_points (list[str]): Ending BPM names for each range.
-            initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths.
-            true_strengths (Path | dict[str, float], optional): True strengths file or dict.
+            initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths (absolute-space).
+                Missing keys default to 1e-7 in delta-space after conversion.
+            true_strengths (Path | dict[str, float], optional): True strengths file or dict (absolute-space).
             debug (bool, optional): Enable debug mode. Defaults to False.
             optimise_knobs (list[str] | None, optional): List of global knob names to optimise.
         """
@@ -99,7 +112,9 @@ class Controller(BaseController):
         self.output_config = output_config if output_config is not None else OutputConfig()
         self.checkpoint_config = checkpoint_config
 
-        # Initialize base controller (handles config manager, optimisation loop, result manager)
+        # Initialise base controller with actual values.
+        # BaseController will call _convert_true_strengths_to_delta and _convert_initial_knobs_to_delta
+        # (which this class overrides) to handle tracking-specific energy parameter conversions.
         super().__init__(
             accelerator,
             optimiser_config,
@@ -107,8 +122,8 @@ class Controller(BaseController):
             sequence_config.magnet_range,
             bpm_start_points,
             bpm_end_points,
-            initial_knob_strengths=None,  # Will be set later after true_strengths processing
-            true_strengths=None,  # Will be processed separately for tracking-specific logic
+            initial_knob_strengths=initial_knob_strengths,  # Pass actual values
+            true_strengths=true_strengths,  # Pass actual values
             bad_bpms=sequence_config.bad_bpms,
             first_bpm=sequence_config.first_bpm,
             debug=debug,
@@ -127,25 +142,15 @@ class Controller(BaseController):
             measurement_config.flattop_turns,
             measurement_config.bunches_per_file,
         )
-        # Process true strengths with tracking-specific transformations
-        true_strengths_dict = self._process_true_strengths(true_strengths)
-        initial_knob_strengths = self._process_initial_knobs(initial_knob_strengths)
-
-        # Initialize knobs using processed strengths
-        self.initial_knobs, self.filtered_true_strengths = (
-            self.config_manager.initialise_knob_strengths(
-                true_strengths_dict, initial_knob_strengths
-            )
-        )
-
-        if not true_strengths_dict:
-            self.filtered_true_strengths = self.initial_knobs.copy()
-
         # Re-initialize managers with tracking-specific configurations
         self._init_managers_with_tracking_config()
 
     def run(self) -> tuple[dict[str, float], dict[str, float]]:
-        """Execute the optimisation process."""
+        """Execute the optimisation process.
+
+        Returns:
+            Tuple of (final_knobs, uncertainties) in absolute-space (user-facing format).
+        """
         run_start = time.time()
         writer = self.setup_logging("tracking_opt")
         total_turns = self.data_manager.get_total_turns()
@@ -209,21 +214,12 @@ class Controller(BaseController):
         del self.data_manager
         gc.collect()
 
-    def _convert_pt2dp(self, uncertainties: np.ndarray) -> None:
-        self.final_knobs["deltap"] = self.config_manager.mad_iface.pt2dp(self.final_knobs.pop("pt"))
-        if "pt" in self.config_manager.initial_strengths:
-            self.filtered_true_strengths["deltap"] = self.config_manager.mad_iface.pt2dp(
-                self.filtered_true_strengths.pop("pt")
-            )
-
-        uncertainties[-1] = self.config_manager.mad_iface.pt2dp(uncertainties[-1])
-
     def _save_results(
         self,
         total_hessian: np.ndarray | None,
         writer: SummaryWriter | None,
     ) -> np.ndarray:
-        """Clean up resources and save final results."""
+        """Save final results and convert from delta-space to user-facing absolute-space."""
         # Calculate uncertainties only when explicitly requested.
         if self.output_config.include_uncertainty and total_hessian is not None:
             cov = np.linalg.inv(total_hessian + 1e-8 * np.eye(total_hessian.shape[0]))
@@ -231,27 +227,60 @@ class Controller(BaseController):
         else:
             uncertainties = np.zeros(len(self.final_knobs), dtype=np.float64)
 
-        # Close logging and save results
+        # Close logging
         if writer is not None:
             writer.close()
 
-        # Convert the knobs back from pt to dp if we had optimised energy
-        if "pt" in self.final_knobs:
-            self._convert_pt2dp(uncertainties)
-
-        # Save and plot using the final knobs (not the initial ones)
-        self.result_manager.save_results(
-            self.final_knobs, uncertainties, self.filtered_true_strengths
+        # All results are currently in delta-space; convert to absolute for output.
+        # Create initial knobs dict in delta-space for conversion.
+        initial_knobs_delta = dict(
+            zip(self.config_manager.knob_names, self.config_manager.initial_strengths, strict=False)
         )
-        self.result_manager.generate_plots(
-            self.final_knobs,
-            self.config_manager.initial_strengths,
-            self.filtered_true_strengths,
+
+        # Convert all results from delta-space to absolute-space
+        initial_knobs_abs = self.config_manager.mad_iface.optimisation_to_absolute_knobs(
+            initial_knobs_delta
+        )
+        final_knobs_abs = self.config_manager.mad_iface.optimisation_to_absolute_knobs(
+            self.final_knobs
+        )
+        true_strengths_abs = self.config_manager.mad_iface.optimisation_to_absolute_knobs(
+            self.filtered_true_strengths
+        )
+        uncertainties_abs = self.config_manager.mad_iface.convert_uncertainties_to_absolute(
+            self.config_manager.knob_names,
             uncertainties,
         )
 
+        # Replace "pt" with "deltap" if needed for output
+        output_knob_names = self.result_manager.knob_names
+        if "deltap" in output_knob_names and "pt" in initial_knobs_abs:
+            initial_knobs_abs["deltap"] = self.config_manager.mad_iface.pt2dp(
+                initial_knobs_abs.pop("pt")
+            )
+        initial_strengths_abs = np.array(
+            [initial_knobs_abs[name] for name in output_knob_names], dtype=np.float64
+        )
+
+        # Save and plot using the final knobs
+        self.result_manager.save_results(
+            final_knobs_abs,
+            uncertainties_abs,
+            true_strengths_abs,
+        )
+        self.result_manager.generate_plots(
+            final_knobs_abs,
+            initial_strengths_abs,
+            true_strengths_abs,
+            uncertainties_abs,
+        )
+
+        # Keep controller outputs user-facing (absolute-space) after save.
+        self.final_knobs = final_knobs_abs
+        self.filtered_true_strengths = true_strengths_abs
+
         logger.info("Optimisation complete.")
-        return uncertainties
+        return uncertainties_abs
 
     @staticmethod
     def _validate_config_inputs(
@@ -332,52 +361,66 @@ class Controller(BaseController):
             python_logfile=self.python_logfile,
         )
 
-    def _process_true_strengths(self, true_strengths) -> dict[str, float]:
-        """Process true strengths with tracking-specific transformations."""
-        true_strengths_dict = normalize_true_strengths(true_strengths)
+    def _convert_true_strengths_to_delta(
+        self, true_strengths: dict[str, float]
+    ) -> dict[str, float]:
+        """Override parent to handle tracking-specific energy parameter conversion."""
+        if not true_strengths:
+            return {}
 
-        # Handle deltap to pt conversion
-        if isinstance(true_strengths, Path):
-            true_strengths_dict["pt"] = 0.0
-
-        if "deltap" in true_strengths_dict:
+        true_strengths = true_strengths.copy()
+        if "deltap" in true_strengths:
             if len(self.measurement_files) > 1:
                 logger.warning(
-                    "Ignoring provided 'deltap' in true strengths, can differ per measurement file, setting to 0.0"
+                    "Ignoring provided 'deltap' in true strengths (differs per measurement file), setting to 0.0"
                 )
-                true_strengths_dict["pt"] = 0.0
+                true_strengths["pt"] = 0.0
             else:
-                true_strengths_dict["pt"] = self.config_manager.mad_iface.dp2pt(
-                    true_strengths_dict.pop("deltap")
+                true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(
+                    true_strengths.pop("deltap")
                 )
-        return self.accelerator.normalise_true_strengths(true_strengths_dict)
 
-    def _process_initial_knobs(self, initial_knob_strengths) -> dict[str, float] | None:
-        """Process initial knob strengths, converting deltap to pt if present."""
-        if initial_knob_strengths is not None and "deltap" in initial_knob_strengths:
-            initial_knob_strengths = initial_knob_strengths.copy()
+        true_strengths = self.accelerator.normalise_true_strengths(true_strengths)
+        return self.config_manager.mad_iface.absolute_to_optimisation_knobs(true_strengths)
+
+    def _convert_initial_knobs_to_delta(
+        self, initial_knob_strengths: dict[str, float] | None
+    ) -> dict[str, float] | None:
+        """Override parent to handle tracking-specific energy parameter conversion."""
+        if initial_knob_strengths is None:
+            return None
+
+        initial_knob_strengths = initial_knob_strengths.copy()
+        if "deltap" in initial_knob_strengths:
             initial_knob_strengths["pt"] = self.config_manager.mad_iface.dp2pt(
                 initial_knob_strengths.pop("deltap")
             )
-        return initial_knob_strengths
+
+        return self.config_manager.mad_iface.absolute_to_optimisation_knobs(initial_knob_strengths)
 
     def _init_managers_with_tracking_config(self) -> None:
         """Re-initialize optimisation and result managers with tracking-specific config."""
         from aba_optimiser.training.optimisation_loop import OptimisationLoop
         from aba_optimiser.training.result_manager import ResultManager
 
+        abs_offsets, dabs_dopt = self.config_manager.mad_iface.optimisation_to_absolute_affine(
+            self.config_manager.knob_names
+        )
         self.optimisation_loop = OptimisationLoop(
             self.config_manager.initial_strengths,
             self.config_manager.knob_names,
             self.filtered_true_strengths,
             self.optimiser_config,
             self.simulation_config,
+            abs_offsets=abs_offsets,
+            dabs_dopt=dabs_dopt,
         )
 
         # Replace "pt" with "deltap" in result manager if optimizing energy
-        deltap_knob_names = self.accelerator.format_result_knob_names(
+        output_knob_names = self.config_manager.mad_iface.format_knob_names_for_output(
             self.config_manager.knob_names
         )
+        deltap_knob_names = self.accelerator.format_result_knob_names(output_knob_names)
 
         self.result_manager = ResultManager(
             deltap_knob_names,

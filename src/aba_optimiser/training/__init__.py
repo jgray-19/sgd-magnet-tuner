@@ -24,7 +24,7 @@ from aba_optimiser.training.utils import (
     filter_bad_bpms,
     find_common_bpms,
     load_tfs_files,
-    normalize_true_strengths,
+    normalise_true_strengths,
 )
 from aba_optimiser.training.worker_lifecycle import WorkerLifecycleManager
 from aba_optimiser.training.worker_manager import WorkerManager
@@ -44,7 +44,7 @@ __all__ = [
     "WorkerLifecycleManager",
     "WorkerManager",
     "filter_bad_bpms",
-    "normalize_true_strengths",
+    "normalise_true_strengths",
     "extract_bpm_range_names",
     "find_common_bpms",
     "load_tfs_files",

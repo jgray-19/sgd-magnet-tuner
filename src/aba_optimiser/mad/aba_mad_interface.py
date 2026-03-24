@@ -42,21 +42,22 @@ class AbaMadInterface(KnobMadInterface):
         self.accelerator = accelerator
         self.load_sequence(self.accelerator.sequence_file, self.accelerator.seq_name)
         self.setup_beam(beam_energy=self.accelerator.beam_energy)
-        self._add_dknl_attributes()
 
-    def _add_dknl_attributes(self) -> None:
-        """Add dknl attributes to all elements in the sequence for storing perturbations."""
-        self.mad.send("""
-        n_added = 0
-        for _, elm in loaded_sequence:iter() do
-            if elm.dknl then
-                loaded_sequence[elm.name].dknl = MAD.typeid.deferred {0.0, 0.0, 0.0, 0.0}
-                n_added = n_added + 1
-            end
-        end
-        """)
-        logger.debug(f"Added dknl attributes to {self.mad.n_added} elements in the sequence")
-        self.mad["n_added"] = None  # Clear the variable to avoid confusion later
+    #     self._add_dknl_attributes()
+
+    # def _add_dknl_attributes(self) -> None:
+    #     """Add dknl attributes to all elements in the sequence for storing perturbations."""
+    #     self.mad.send("""
+    #     n_added = 0
+    #     for _, elm in loaded_sequence:iter() do
+    #         if elm.dknl then
+    #             loaded_sequence[elm.name].dknl = MAD.typeid.deferred {0.0, 0.0, 0.0, 0.0}
+    #             n_added = n_added + 1
+    #         end
+    #     end
+    #     """)
+    #     logger.debug(f"Added dknl attributes to {self.mad.n_added} elements in the sequence")
+    #     self.mad["n_added"] = None  # Clear the variable to avoid confusion later
 
     def _set_dknl_delta(self, element_name: str, attr: str, delta_strength: float) -> None:
         """Store a magnet strength delta in the matching dknl component."""
@@ -66,11 +67,21 @@ class AbaMadInterface(KnobMadInterface):
             delta_strength,
         )
 
+    def _add_deferred_dknl(self, element_name: str) -> None:
+        """If the dknl attribute for an element is empty and not deferred, add a deferred table to allow storing perturbations."""
+        self.mad.send(f"""
+if not MAD.typeid.is_deferred(loaded_sequence['{element_name}'].dknl) then
+    loaded_sequence['{element_name}'].dknl = MAD.typeid.deferred {{0.0, 0.0, 0.0, 0.0}}
+end
+        """)
+
     def _set_dknl_component(self, element_name: str, attr: str, delta_strength: float) -> None:
         """Store a strength delta in one dknl component."""
         dknl_index = _DKNL_INDEX_BY_ATTR_LUA[attr]
         if float(self.mad[f"loaded_sequence['{element_name}'].l"]) == 0.0:
             raise ValueError(f"Cannot set dknl delta for element {element_name} with zero length")
+
+        self._add_deferred_dknl(element_name)
 
         self.mad.send(f"""
 loaded_sequence['{element_name}'].dknl[{dknl_index}] = {self.py_name}:recv() * loaded_sequence['{element_name}'].l
