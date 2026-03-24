@@ -35,7 +35,11 @@ from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.noise import apply_bpm_noise
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
+from aba_optimiser.training.controller_config import (
+    MeasurementConfig,
+    OutputConfig,
+    SequenceConfig,
+)
 from tests.training.helpers import (
     TRACK_COLUMNS,
     generate_xsuite_env_with_errors,
@@ -358,11 +362,32 @@ def test_controller_bend_opt_simple(
             measurement_config=measurement_config,
             bpm_start_points=start_points,
             bpm_end_points=end_points,
-            show_plots=False,
+            output_config=OutputConfig(
+                show_plots=False,
+                plots_dir=plots_dir,
+            ),
             true_strengths=magnet_strengths,
-            plots_dir=plots_dir,
         )
         return ctrl.run()
+
+    # for ip_num in range(1, 9):
+    #     optimise_quadrupoles = ip_num in [3, 7]
+    #     magnet_range = f"BPM.13L{ip_num}.B1/BPM.13R{ip_num}.B1"
+    #     bpm_start_points = [f"BPM.{s}L{ip_num}.B1" for s in range(13, 8, -1)]
+    #     bpm_end_points = [f"BPM.{s}R{ip_num}.B1" for s in range(13, 8, -1)]
+    #     print(f"\nOptimising IP {ip_num} with magnets in range {magnet_range}")
+    #     print(f"  BPM start points: {bpm_start_points}")
+    #     print(f"  BPM end points: {bpm_end_points}")
+    #     estimate, unc = _run_optimisation_for_range(
+    #         magnet_range=magnet_range,
+    #         start_points=bpm_start_points,
+    #         end_points=bpm_end_points,
+    #         optimise_quadrupoles=optimise_quadrupoles,
+    #         optimise_other_quadrupoles=True,
+    #     )
+
+    #     all_estimates.update(estimate)
+    # plt.close("all")
 
     for arc_num in range(1, 9):
         a1, a2 = int(arc_num), int(arc_num) % 8 + 1
@@ -387,14 +412,14 @@ def test_controller_bend_opt_simple(
         all_estimates.update(estimate)
     plt.close("all")
 
-    for magnet, value in all_estimates.items():
-        true_value = magnet_strengths[magnet]
-        rel_diff = abs(value - true_value) / abs(true_value) if true_value != 0 else abs(value)
-        fail_or_pass = "PASS" if rel_diff < 1e-4 else "FAIL"
-        print(
-            f"Magnet {magnet}: {fail_or_pass}, estimated {value}, "
-            f"true {true_value}, rel diff {rel_diff}"
-        )
+    # for magnet, value in all_estimates.items():
+    #     true_value = magnet_strengths[magnet]
+    #     rel_diff = abs(value - true_value) / abs(true_value) if true_value != 0 else abs(value)
+    #     fail_or_pass = "PASS" if rel_diff < 1e-4 else "FAIL"
+    #     print(
+    #         f"Magnet {magnet}: {fail_or_pass}, estimated {value}, "
+    #         f"true {true_value}, rel diff {rel_diff}"
+    #     )
 
     # Save estimates to file
     with estimated_strengths_file.open("w") as f:
