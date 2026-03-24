@@ -105,3 +105,22 @@ class TestAMSGradOptimiser:
 
         # With zero gradients, little change
         assert np.allclose(new_params, params, atol=1e-6)
+
+    def test_state_roundtrip_restores_update_trajectory(self):
+        shape = (3,)
+        params = np.array([0.4, -1.2, 2.0])
+        grads1 = np.array([0.3, -0.1, 0.7])
+        grads2 = np.array([-0.2, 0.6, -0.5])
+        lr = 0.02
+
+        optim = AMSGradOptimiser(shape=shape, beta1=0.8, beta2=0.9, eps=1e-12, weight_decay=0.01)
+        params_after_first = optim.step(params, grads1, lr)
+
+        state = optim.state_to_dict()
+        restored = AMSGradOptimiser(shape=shape)
+        restored.load_state_dict(state)
+
+        expected_next = optim.step(params_after_first, grads2, lr)
+        restored_next = restored.step(params_after_first, grads2, lr)
+
+        assert np.allclose(restored_next, expected_next)

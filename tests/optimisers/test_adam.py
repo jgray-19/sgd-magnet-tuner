@@ -98,3 +98,22 @@ class TestAdamOptimiser:
         # With large eps, denominator is sqrt(v_hat) + 1 ≈ 1 + 1 = 2
         # update = 0.1 * 1 / 2 = 0.05
         assert np.isclose(new_params[0], 1.0 - 0.05, atol=1e-3)
+
+    def test_state_roundtrip_restores_update_trajectory(self):
+        shape = (3,)
+        params = np.array([1.0, -2.0, 0.5])
+        grads1 = np.array([0.2, -0.4, 0.1])
+        grads2 = np.array([-0.3, 0.2, 0.05])
+        lr = 0.01
+
+        optim = AdamOptimiser(shape=shape, beta1=0.85, beta2=0.95, eps=1e-8, weight_decay=0.02)
+        params_after_first = optim.step(params, grads1, lr)
+
+        state = optim.state_to_dict()
+        restored = AdamOptimiser(shape=shape)
+        restored.load_state_dict(state)
+
+        expected_next = optim.step(params_after_first, grads2, lr)
+        restored_next = restored.step(params_after_first, grads2, lr)
+
+        assert np.allclose(restored_next, expected_next)

@@ -26,6 +26,10 @@ from aba_optimiser.workers.common import (
 from aba_optimiser.workers.optics import OpticsWorker
 from aba_optimiser.workers.tracking import TrackingWorker
 from aba_optimiser.workers.tracking_position_only import PositionOnlyTrackingWorker
+from aba_optimiser.workers.tracking_validation import (
+    PositionOnlyValidationTrackingWorker,
+    ValidationTrackingWorker,
+)
 
 __all__ = [
     # Abstract base
@@ -33,6 +37,8 @@ __all__ = [
     # Worker implementations
     "TrackingWorker",
     "PositionOnlyTrackingWorker",
+    "ValidationTrackingWorker",
+    "PositionOnlyValidationTrackingWorker",
     "OpticsWorker",
     # Data structures
     "TrackingData",

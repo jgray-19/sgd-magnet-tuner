@@ -228,6 +228,74 @@ local _, mflw= track{{
 {_send_block(observables)}
 """
 
+def build_validation_init_script(observables: tuple[str, ...]) -> str:
+    """Build the validation initialisation script without derivative storage."""
+    observables = _validate_observables(observables)
+
+    table_lines = [f"{observable} = table.new(batch_size, 0)" for observable in observables]
+    alloc_lines = [
+        _indent(1, f"{observable}[i] = vector(nbpms * n_run_turns)")
+        for observable in observables
+    ]
+    scalar_lines = [
+        _indent(3, f"{observable}[i]:seti(observe_count, mflw[i].{observable}:get0())")
+        for observable in observables
+    ]
+    reset_lines = [
+        _indent(2, f"{observable}[i]:zeros()")
+        for observable in observables
+    ]
+
+    return f"""! Generated validation init script
+assert(
+    batch_size and nbpms and n_run_turns and sdir and vector and python,
+    "Missing required variables for validation initialising"
+)
+
+{_join_lines(table_lines)}
+
+for i=1,batch_size do
+{_join_lines(alloc_lines)}
+end
+
+observe_count = nbpms + 1
+function save_val_data(elm, mflw, _, slc)
+    if slc == -2 and elm:is_observed() then
+        for i=1,batch_size do
+{_join_lines(scalar_lines)}
+        end
+        observe_count = observe_count + 1
+    end
+end
+
+function reset_before_validation()
+    observe_count = 1
+    for i=1,batch_size do
+{_join_lines(reset_lines)}
+    end
+end
+"""
+
+
+def build_validation_script(observables: tuple[str, ...]) -> str:
+    """Build the validation tracking script without derivative returns."""
+    observables = _validate_observables(observables)
+    send_lines = "\n".join(f"python:send({observable}, true)" for observable in observables)
+    return f"""! Generated validation script
+reset_before_validation()
+local _, mflw= track{{
+    sequence=loaded_sequence,
+    X0=da_x0_c[batch],
+    nturn=n_run_turns,
+    save=false,
+    atexit=save_val_data,
+    range=tracking_range,
+    dir=sdir,
+}}
+
+{send_lines}
+"""
+
 
 def build_tracking_hessian_script(observables: tuple[str, ...]) -> str:
     """Build the Hessian script for the requested observables."""

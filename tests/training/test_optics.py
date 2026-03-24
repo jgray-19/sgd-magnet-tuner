@@ -18,7 +18,7 @@ from pymadng_utils.io.utils import save_knobs
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig
-from aba_optimiser.training.controller_config import SequenceConfig
+from aba_optimiser.training.controller_config import OutputConfig, SequenceConfig
 from aba_optimiser.training_optics import OpticsController
 
 if TYPE_CHECKING:
@@ -161,7 +161,7 @@ def test_controller_opt(
         analysis_dir,
         bpm_start_points,
         bpm_end_points,
-        show_plots=False,
+        output_config=OutputConfig(show_plots=False),
         corrector_file=corrector_file,
         tune_knobs_file=tune_knobs_file,
         true_strengths=magnet_strengths,

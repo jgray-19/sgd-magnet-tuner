@@ -16,6 +16,7 @@ This script:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from pathlib import Path
 
@@ -25,7 +26,7 @@ import pandas as pd
 import tfs
 
 from aba_optimiser.accelerators import LHC
-from aba_optimiser.mad import GenericMadInterface
+from aba_optimiser.mad import GenericMadInterface, GradientDescentMadInterface
 from aba_optimiser.measurements.squeeze_helpers import (
     ANALYSIS_DIRS,
     PROJECT_ROOT,
@@ -38,15 +39,23 @@ from aba_optimiser.measurements.squeeze_helpers import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BEAM_ENERGY = 6800
+DEFAULT_BEAM_ENERGY = 450.0
 # Arc 1 BPM boundaries (Beam 1)
 ARC1_START_BPM = "BPM.13R3.B1"
+# ARC1_START_BPM = "BPM.7L3.B1"
+# ARC1_START_BPM = "BPM.13R6.B1"
 # ARC1_START_BPM = "BPM.20R1.B1"
-ARC1_END_BPM = "BPM.12L4.B1"
+# ARC1_END_BPM = "BPM_A.7R3.B1"
+# ARC1_END_BPM = "BPM.12L4.B1"
+ARC1_END_BPM = "BPM.30R3.B1"
+# ARC1_END_BPM = "BPM.15R3.B1"
+# ARC1_END_BPM = "BPM.12L7.B1"
 # ARC1_END_BPM = "BPM.27R1.B1"
 
 
-def resolve_file_paths(squeeze_step: str, frequency: str, beam: int) -> dict[str, Path | None]:
+def resolve_file_paths(
+    squeeze_step: str, frequency: str, beam: int
+) -> tuple[dict[str, Path | None], float, float]:
     """Resolve all file paths from squeeze_step and frequency.
 
     Args:
@@ -73,6 +82,22 @@ def resolve_file_paths(squeeze_step: str, frequency: str, beam: int) -> dict[str
         raise ValueError(f"Analysis directory not found: {analysis_dir}")
     logger.info(f"Using analysis directory: {analysis_dir}")
 
+    # Beam energy from optimisation metadata (same source used during processing)
+    metadata_file = analysis_dir / "metadata.json"
+    if metadata_file.exists():
+        with metadata_file.open("r") as f:
+            metadata = json.load(f)
+        beam_energy = float(metadata.get("energy", DEFAULT_BEAM_ENERGY))
+        deltap = float(metadata.get("machine_deltap", 0.0))
+    else:
+        logger.warning(
+            "Metadata file not found at %s, falling back to %.1f GeV",
+            metadata_file,
+            DEFAULT_BEAM_ENERGY,
+        )
+        beam_energy = DEFAULT_BEAM_ENERGY
+        deltap = 0.0
+
     # Parquet file - find the first matching file with the given frequency
     parquet_file = None
     for pz_file in sorted(analysis_dir.glob(f"pz_data_{frequency}_*.parquet")):
@@ -98,15 +123,19 @@ def resolve_file_paths(squeeze_step: str, frequency: str, beam: int) -> dict[str
     # Corrector file (optional)
     correctors_file = results_dir / f"corrector_strengths_{squeeze_step}_{frequency}.txt"
 
-    return {
-        "parquet_file": parquet_file,
-        "sequence_file": sequence_file,
-        "estimates_file": estimates_file,
-        "tune_knobs_file": tune_knobs_file,
-        "correctors_file": correctors_file if correctors_file.exists() else None,
-        "analysis_dir": analysis_dir,
-        "model_dir": model_dir,
-    }
+    return (
+        {
+            "parquet_file": parquet_file,
+            "sequence_file": sequence_file,
+            "estimates_file": estimates_file,
+            "tune_knobs_file": tune_knobs_file,
+            "correctors_file": correctors_file if correctors_file.exists() else None,
+            "analysis_dir": analysis_dir,
+            "model_dir": model_dir,
+        },
+        beam_energy,
+        deltap,
+    )
 
 
 def read_parquet_data(parquet_file: Path) -> pd.DataFrame:
@@ -178,19 +207,18 @@ def load_twiss_data(parquet_file: Path) -> pd.DataFrame:
     logger.info(f"Loaded twiss data for {len(twiss_df)} elements")
     return twiss_df
 
-def generate_twiss_data(sequence_file: Path, beam: int, deltap: float) -> pd.DataFrame:
+def generate_twiss_data(accelerator: LHC, sequence_file: Path, deltap: float) -> pd.DataFrame:
     """Generate twiss data using MAD-NG for the given sequence file.
 
     Args:
         sequence_file: Path to sequence file
-        beam: Beam number (1 or 2)
+        accelerator: Shared accelerator instance
     Returns:
         DataFrame with twiss data (columns: name, s, x, y)
     """
 
     logger.info(f"Generating twiss data using MAD-NG for sequence: {sequence_file}")
 
-    accelerator = LHC(beam=beam, beam_energy=BEAM_ENERGY, sequence_file=sequence_file)
     mad_iface = GenericMadInterface(accelerator)
 
 
@@ -297,10 +325,9 @@ def plot_closed_orbit(
 
 
 def track_particles_through_arc1(
-    sequence_file: Path,
+    accelerator: LHC,
     initial_coords: pd.DataFrame,
     magnet_strengths: dict[str, float] | None = None,
-    beam: int = 1,
     tune_knobs_file: Path | None = None,
     corrector_file: Path | None = None,
     deltap: float = 0.0,
@@ -308,10 +335,9 @@ def track_particles_through_arc1(
     """Track particles through Arc1 using MAD-NG.
 
     Args:
-        sequence_file: Path to sequence file
+        accelerator: Shared accelerator instance
         initial_coords: DataFrame with initial particle coordinates (x, px, y, py)
         magnet_strengths: Optional dictionary of magnet strengths to apply
-        beam: Beam number (1 or 2)
         tune_knobs_file: Optional path to tune knobs file
         corrector_file: Optional path to corrector strengths file
         deltap: Relative momentum deviation (delta p/p)
@@ -322,8 +348,7 @@ def track_particles_through_arc1(
     print("tune knobs file:", tune_knobs_file)
 
     # Setup MAD interface for Arc1
-    accelerator = LHC(beam=beam, beam_energy=BEAM_ENERGY, sequence_file=sequence_file)
-    mad_iface = GenericMadInterface(
+    mad_iface = GradientDescentMadInterface(
         accelerator,
         magnet_range=f"{ARC1_START_BPM}/{ARC1_END_BPM}",
         bpm_range=f"{ARC1_START_BPM}/{ARC1_END_BPM}",
@@ -331,11 +356,14 @@ def track_particles_through_arc1(
         tune_knobs_file=tune_knobs_file,
         start_bpm=ARC1_START_BPM,
         py_name="py",
+        # debug=True,
+        # mad_logfile=Path("mad_arc1_tracking.log"),
     )
 
     # Apply optimized magnet strengths if provided
     if magnet_strengths is not None:
-        mad_iface.set_magnet_strengths(magnet_strengths)
+        # mad_iface.set_magnet_strengths(magnet_strengths)
+        mad_iface.set_madx_variables(**magnet_strengths)
     mad = mad_iface.mad
 
     # Track each particle and collect results
@@ -347,7 +375,7 @@ def track_particles_through_arc1(
     for idx, row in initial_coords.iterrows():
         # Run tracking
         mad.send(f"""
-mtbl, _ = track {{ sequence = loaded_sequence, X0 = {{py:recv(), py:recv(), py:recv(), py:recv()}}, deltap=py:recv(), nturn=1, range = "{ARC1_START_BPM}/{ARC1_END_BPM}", observe=0 }};
+mtbl, _ = track {{ sequence = loaded_sequence, X0 = {{py:recv(), py:recv(), py:recv(), py:recv()}}, deltap=py:recv(), nturn=1, range = "{ARC1_START_BPM}/{ARC1_END_BPM}", observe=1 }};
 """)
         mad.send(row['x'])
         mad.send(row['px'])
@@ -495,18 +523,7 @@ def main():
         help="Squeeze step (e.g., '1.2m', '0.6m')"
     )
     parser.add_argument(
-        "--frequency",
-        type=str,
-        required=True,
-        choices=["0Hz", "+50Hz", "-50Hz"],
-        help="Frequency for measurement"
-    )
-    parser.add_argument(
-        "--beam",
-        type=int,
-        default=1,
-        choices=[1, 2],
-        help="Beam number (default: 1)"
+        "--beam", type=int, default=1, choices=[1, 2], help="Beam number (default: 1)"
     )
     parser.add_argument(
         "--output-dir",
@@ -523,27 +540,28 @@ def main():
         "--max-particles",
         type=int,
         default=100,
-        help="Maximum number of particles to track (default: 100)"
-    )
-    parser.add_argument(
-        "--deltap",
-        type=float,
-        default=0.0,
-        help="Relative momentum deviation (delta p/p) for tracking (default: 0.0)"
+        help="Maximum number of particles to track (default: 100)",
     )
 
     args = parser.parse_args()
 
+    # Always use 0Hz frequency
+    frequency = "0Hz"
+
     # Resolve file paths from squeeze_step and frequency
     try:
-        file_paths = resolve_file_paths(args.squeeze_step, args.frequency, args.beam)
+        file_paths, beam_energy, deltap = resolve_file_paths(
+            args.squeeze_step, frequency, args.beam
+        )
     except ValueError as e:
         logger.error(f"Error resolving file paths: {e}")
         raise
 
     # Set output directory if not specified
     if args.output_dir is None:
-        args.output_dir = Path("arc1_optimisation_plots") / f"b{args.beam}_{args.squeeze_step}_{args.frequency}"
+        args.output_dir = (
+            Path("arc1_optimisation_plots") / f"b{args.beam}_{args.squeeze_step}_{frequency}"
+        )
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # Type assertions for required paths (resolve_file_paths ensures these are not None)
@@ -556,6 +574,17 @@ def main():
     sequence_file = file_paths["sequence_file"]
     estimates_file = file_paths["estimates_file"]
     tune_knobs_file = file_paths["tune_knobs_file"]
+
+    accelerator = LHC(
+        beam=args.beam,
+        beam_energy=beam_energy,
+        sequence_file=sequence_file,
+        optimise_quadrupoles=True,
+        optimise_bends=True,
+        optimise_other_quadrupoles=True,
+        optimise_correctors=True,
+        optimise_quad_dx=False,
+    )
 
     # Load data
     df = read_parquet_data(parquet_file)
@@ -583,18 +612,22 @@ def main():
 
     # Determine if correctors should be used
     correctors_file = file_paths["correctors_file"] if args.include_correctors else None
+    if args.include_correctors and correctors_file is None:
+        raise FileNotFoundError(
+            f"Requested --include-correctors but no corrector file was found for {args.squeeze_step} {args.frequency}."
+        )
 
     # Track with base model (no optimized strengths)
     logger.info("=" * 60)
     logger.info("Tracking with BASE MODEL (no optimisations)")
     logger.info("=" * 60)
     estimated_simple = track_particles_through_arc1(
-        sequence_file,
+        accelerator,
         initial_coords,
         magnet_strengths=None,
-        beam=args.beam,
         tune_knobs_file=tune_knobs_file,
-        deltap=args.deltap,
+        corrector_file=correctors_file,
+        deltap=deltap,
     )
 
     # Track with optimized magnets
@@ -602,19 +635,18 @@ def main():
     logger.info("Tracking with OPTIMIZED MODEL")
     logger.info("=" * 60)
     estimated_opt = track_particles_through_arc1(
-        sequence_file,
+        accelerator,
         initial_coords,
         magnet_strengths=estimates if estimates else None,
-        beam=args.beam,
         tune_knobs_file=tune_knobs_file,
         corrector_file=correctors_file,
-        deltap=args.deltap,
+        deltap=deltap,
     )
 
     # Create closed orbit plot first
     try:
         # twiss_df = load_twiss_data(parquet_file)
-        ng_twiss = generate_twiss_data(sequence_file, args.beam, deltap=args.deltap)
+        ng_twiss = generate_twiss_data(accelerator, sequence_file, deltap=0)
         print(ng_twiss.columns, ng_twiss.index)
 
         parquet_co = calculate_closed_orbit_from_parquet(df)

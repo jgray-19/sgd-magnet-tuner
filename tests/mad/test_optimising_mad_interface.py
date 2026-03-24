@@ -40,7 +40,6 @@ def setup_and_check_interface(
     accelerator: LHC,
     magnet_range: str = "$start/$end",
     bpm_range: str = "$start/$end",
-    bpm_pattern: str = r"^BPM",
 ) -> tuple[GenericMadInterface, pd.DataFrame]:
     """Set up interface with given parameters and perform common validation checks.
 
@@ -57,17 +56,15 @@ def setup_and_check_interface(
         accelerator=accelerator,
         magnet_range=magnet_range,
         bpm_range=bpm_range,
-        bpm_pattern=bpm_pattern,
     )
 
     # Verify that MAD variables are set correctly
     assert interface.mad["magnet_range"] == magnet_range
     assert interface.mad["bpm_range"] == bpm_range
-    assert interface.mad["bpm_pattern"] == bpm_pattern
     assert len(interface.bpms_in_range) == interface.nbpms
 
     # Check that BPMs matching the pattern are observed
-    check_element_observations(interface, condition=f"elm.name:match('{bpm_pattern}')")
+    check_element_observations(interface, condition=f"elm.name:match('{accelerator.bpm_pattern}')")
 
     # Run twiss calculation to get BPM data
     twiss_df = interface.run_twiss()
@@ -108,7 +105,6 @@ class TestOptimisationMadInterfaceInit:
         interface = GenericMadInterface(
             accelerator=accelerator,
         )
-        bpm_pattern = r"^BPM"
         check_interface_basic_init(interface, "py")
 
         # Default discard_mad_output=False, so no stdout_file attributes
@@ -118,7 +114,6 @@ class TestOptimisationMadInterfaceInit:
 
         assert interface.magnet_range == "$start/$end"
         assert interface.bpm_range == "$start/$end"
-        assert interface.bpm_pattern == bpm_pattern
         assert interface.nbpms == 563, f"Expected 563 BPMs, got {interface.nbpms}"
 
         assert isinstance(interface.bpms_in_range, list)
@@ -152,11 +147,12 @@ class TestOptimisationMadInterfaceInit:
         # Verify that MAD variables are set correctly
         assert interface.mad["magnet_range"] == "$start/$end"
         assert interface.mad["bpm_range"] == "$start/$end"
-        assert interface.mad["bpm_pattern"] == "^BPM"
         assert len(interface.bpms_in_range) == interface.nbpms
 
         # Check that BPMs matching the pattern are observed
-        check_element_observations(interface, condition=f"elm.name:match('{interface.bpm_pattern}')")
+        check_element_observations(
+            interface, condition=f"elm.name:match('{accelerator.bpm_pattern}')"
+        )
 
         # Run twiss calculation to get BPM data
         twiss_df = interface.run_twiss()
@@ -172,9 +168,12 @@ class TestOptimisationMadInterfaceInit:
             beam=1,
             beam_energy=BEAM_ENERGY,
             sequence_file=str(seq_b1),
+            bpm_pattern=r"^BPM%.10.*",  # Custom pattern to match BPMs starting with "BPM.10"
         )
         interface, twiss_df = setup_and_check_interface(
-            accelerator, "BPM.10L1.B1/BPM.20L1.B1", "$start/$end", r"^BPM%.10.*"
+            accelerator,
+            "BPM.10L1.B1/BPM.20L1.B1",
+            "$start/$end",
         )
 
         # Filter BPMs to match the custom pattern (BPMs starting with "BPM.10")
@@ -193,9 +192,12 @@ class TestOptimisationMadInterfaceInit:
             beam=1,
             beam_energy=BEAM_ENERGY,
             sequence_file=str(seq_b1),
+            bpm_pattern=r"^BPM",
         )
         interface, twiss_df = setup_and_check_interface(
-            accelerator, "$start/$end", "BPM.10L1.B1/BPM.10R1.B1", r"^BPM"
+            accelerator,
+            "$start/$end",
+            "BPM.10L1.B1/BPM.10R1.B1",
         )
 
         # Extract the BPM range boundaries
@@ -266,25 +268,32 @@ class TestOptimisationMadInterfaceInit:
         cleanup_interface(interface)
 
     @pytest.mark.parametrize("apply_correctors", [True, False])
+    @pytest.mark.parametrize(
+        "interface_cls, optimise_energy",
+        [(GenericMadInterface, False), (GradientDescentMadInterface, True)],
+        ids=["generic", "gradient_descent"],
+    )
     def test_with_corrector_settings(
         self,
         seq_b1: Path,
         corrector_file: Path,
         corrector_table,
         apply_correctors: bool,
+        interface_cls,
+        optimise_energy: bool,
     ) -> None:
-        """Test initialization with different corrector strength settings."""
+        """Test corrector application on the tracked sequence for both MAD interfaces."""
         accelerator = LHC(
             beam=1,
             beam_energy=BEAM_ENERGY,
             sequence_file=str(seq_b1),
+            optimise_energy=optimise_energy,
         )
-        interface = GenericMadInterface(
+        interface = interface_cls(
             accelerator=accelerator,
             corrector_strengths=corrector_file if apply_correctors else None,
             tune_knobs_file=None,
         )
-        # Check that strengths match expectations
         if apply_correctors:
             check_corrector_strengths(interface, corrector_table)
         else:
@@ -309,7 +318,7 @@ class TestOptimisationMadInterfaceInit:
             corrector_strengths=None,
             tune_knobs_file=None,
         )
-        original_mqt_strength = no_knob_interface.mad["MADX['MQT.14R3.B1'].k1"]
+        original_mqt_strength = no_knob_interface.mad["loaded_sequence['MQT.14R3.B1'].k1"]
 
         knob_interface = GenericMadInterface(
             accelerator=accelerator,
@@ -323,7 +332,7 @@ class TestOptimisationMadInterfaceInit:
             assert knob_interface.mad[f"MADX['{name}']"] == all_knobs[name]
             assert knob_interface.mad[f"MADX['{name}']"] != no_knob_interface.mad[f"MADX['{name}']"]
         # Check that the mqt strength has changed, not just that the knobs exists in the MAD interface
-        new_mqt_strength = knob_interface.mad["MADX['MQT.14R3.B1'].k1"]
+        new_mqt_strength = knob_interface.mad["loaded_sequence['MQT.14R3.B1'].k1"]
         assert new_mqt_strength != original_mqt_strength
         print(f"Original MQT.14R3.B1 strength: {original_mqt_strength}, New strength: {new_mqt_strength}")
 
@@ -414,7 +423,10 @@ def test_recv_update_knob_values(
 
     # Now add some knobs and verify they can be received
     optimising_interface.knob_names.extend(["a", "b", "c"])
-    optimising_interface.mad.send("MADX.a = 1.0; MADX.b = 2.1; MADX.c = -3.2")
+    optimising_interface.knob_name_set = set(optimising_interface.knob_names)
+    optimising_interface.mad.send(
+        "loaded_sequence.a = 1.0; loaded_sequence.b = 2.1; loaded_sequence.c = -3.2"
+    )
     values = optimising_interface.receive_knob_values()
     assert all(values == [1.0, 2.1, -3.2]), f"Unexpected knob values: {values}"
 
@@ -442,15 +454,15 @@ def test_quadrupole_knob_updates_use_dknl(seq_b1: Path) -> None:
     knob_name = next(knob for knob in interface.knob_names if knob.endswith(".k1"))
     element_name = knob_name.removesuffix(".k1")
     initial_strength = interface.get_magnet_strengths([knob_name])[knob_name]
-    initial_k1 = float(interface.mad.MADX[element_name].k1)
+    initial_k1 = float(interface.mad.loaded_sequence[element_name].k1)
 
     step = 1e-4
-    interface.mad.send(f"MADX['{knob_name}'] = {initial_strength + step}")
+    interface.mad.send(f"loaded_sequence['{knob_name}'] = {initial_strength + step}")
 
     updated_strength = interface.get_magnet_strengths([knob_name])[knob_name]
-    updated_k1 = float(interface.mad.MADX[element_name].k1)
-    updated_dknl = float(interface.mad.MADX[element_name].dknl[1])
-    length = float(interface.mad.MADX[element_name].l)
+    updated_k1 = float(interface.mad.loaded_sequence[element_name].k1)
+    updated_dknl = float(interface.mad.loaded_sequence[element_name].dknl[1])
+    length = float(interface.mad.loaded_sequence[element_name].l)
 
     assert np.isclose(updated_strength, initial_strength + step)
     assert np.isclose(updated_k1, initial_k1)

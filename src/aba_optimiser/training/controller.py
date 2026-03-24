@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from aba_optimiser.training.base_controller import BaseController
+from aba_optimiser.training.controller_config import OutputConfig
 from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.utils import normalize_true_strengths
 from aba_optimiser.training.worker_manager import WorkerManager
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
     from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.config import OptimiserConfig, SimulationConfig
     from aba_optimiser.training.controller_config import (
+        CheckpointConfig,
         MeasurementConfig,
         SequenceConfig,
     )
@@ -48,14 +50,12 @@ class Controller(BaseController):
         measurement_config: MeasurementConfig,
         bpm_start_points: list[str],
         bpm_end_points: list[str],
-        show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
         true_strengths: Path | dict[str, float] | None = None,
-        plots_dir: Path | None = None,
         debug: bool = False,
-        mad_logfile: Path | None = None,
         optimise_knobs: list[str] | None = None,
-        write_tensorboard_logs: bool = True,
+        output_config: OutputConfig | None = None,
+        checkpoint_config: CheckpointConfig | None = None,
     ):
         """
         Initialise the controller with all required managers.
@@ -66,17 +66,13 @@ class Controller(BaseController):
             simulation_config (SimulationConfig): Simulation and worker configuration.
             sequence_config (SequenceConfig): Sequence and beam configuration.
             measurement_config (MeasurementConfig): Measurement data file configuration.
+            output_config (OutputConfig): Output/logging behaviour.
             bpm_start_points (list[str]): Starting BPM names for each range.
             bpm_end_points (list[str]): Ending BPM names for each range.
-            show_plots (bool, optional): Whether to show plots. Defaults to True.
             initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths.
             true_strengths (Path | dict[str, float], optional): True strengths file or dict.
-            plots_dir (Path | None, optional): Directory to save plots. Defaults to plots/.
             debug (bool, optional): Enable debug mode. Defaults to False.
-            mad_logfile (Path | None, optional): Path to MAD log file. Defaults to None.
             optimise_knobs (list[str] | None, optional): List of global knob names to optimise.
-            write_tensorboard_logs (bool, optional): Whether to write TensorBoard logs.
-                Defaults to True.
         """
 
         # Log optimisation targets
@@ -100,7 +96,8 @@ class Controller(BaseController):
         self.tune_knobs_files = tune_knobs_files
         self.machine_deltaps = machine_deltaps
         self.num_configs = len(measurement_files)
-        self.plots_dir = plots_dir
+        self.output_config = output_config if output_config is not None else OutputConfig()
+        self.checkpoint_config = checkpoint_config
 
         # Initialize base controller (handles config manager, optimisation loop, result manager)
         super().__init__(
@@ -110,15 +107,13 @@ class Controller(BaseController):
             sequence_config.magnet_range,
             bpm_start_points,
             bpm_end_points,
-            show_plots,
             initial_knob_strengths=None,  # Will be set later after true_strengths processing
             true_strengths=None,  # Will be processed separately for tracking-specific logic
             bad_bpms=sequence_config.bad_bpms,
             first_bpm=sequence_config.first_bpm,
             debug=debug,
-            mad_logfile=mad_logfile,
             optimise_knobs=optimise_knobs,
-            write_tensorboard_logs=write_tensorboard_logs,
+            output_config=self.output_config,
         )
 
         # Initialize tracking-specific managers
@@ -187,9 +182,14 @@ class Controller(BaseController):
                 writer,
                 run_start,
                 total_turns,
+                checkpoint_config=self.checkpoint_config,
+                validation_loss_fn=self.worker_manager.compute_validation_loss,
             )
 
-            total_hessian = self.worker_manager.termination_and_hessian(len(self.final_knobs))
+            total_hessian = self.worker_manager.termination_and_hessian(
+                len(self.final_knobs),
+                estimate_hessian=self.output_config.include_uncertainty,
+            )
         except RuntimeError as e:
             logger.error(f"optimisation failed: {e}")
             self.worker_manager.terminate_workers()
@@ -198,7 +198,7 @@ class Controller(BaseController):
             logger.warning("\nKeyboardInterrupt detected. Terminating early and writing results.")
             self.worker_manager.terminate_workers()
             self.final_knobs = self.optimisation_loop.best_knobs
-            total_hessian = np.zeros((len(self.final_knobs), len(self.final_knobs)))
+            total_hessian = None
         uncertainties = self._save_results(total_hessian, writer)
         uncertainties = dict(zip(self.final_knobs.keys(), uncertainties))
 
@@ -220,13 +220,16 @@ class Controller(BaseController):
 
     def _save_results(
         self,
-        total_hessian: np.ndarray,
+        total_hessian: np.ndarray | None,
         writer: SummaryWriter | None,
     ) -> np.ndarray:
         """Clean up resources and save final results."""
-        # Calculate uncertainties
-        cov = np.linalg.inv(total_hessian + 1e-8 * np.eye(total_hessian.shape[0]))
-        uncertainties = np.sqrt(np.diag(cov))
+        # Calculate uncertainties only when explicitly requested.
+        if self.output_config.include_uncertainty and total_hessian is not None:
+            cov = np.linalg.inv(total_hessian + 1e-8 * np.eye(total_hessian.shape[0]))
+            uncertainties = np.sqrt(np.diag(cov))
+        else:
+            uncertainties = np.zeros(len(self.final_knobs), dtype=np.float64)
 
         # Close logging and save results
         if writer is not None:
@@ -326,6 +329,7 @@ class Controller(BaseController):
             use_fixed_bpm=self.simulation_config.use_fixed_bpm,
             debug=self.debug,
             mad_logfile=self.mad_logfile,
+            python_logfile=self.python_logfile,
         )
 
     def _process_true_strengths(self, true_strengths) -> dict[str, float]:
@@ -380,5 +384,8 @@ class Controller(BaseController):
             self.config_manager.elem_spos,
             show_plots=self.show_plots,
             accelerator=self.accelerator,
-            plots_dir=self.plots_dir,
+            include_uncertainty=self.output_config.include_uncertainty,
+            plot_real_values=self.output_config.plot_real_values,
+            save_prefix=self.output_config.save_prefix,
+            plots_dir=self.output_config.plots_dir,
         )

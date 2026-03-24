@@ -29,7 +29,7 @@ def load_single_file(file_path: str | Path) -> pd.DataFrame:
         file_path: Path to the SDDS file
 
     Returns:
-        DataFrame with columns: name, turn, x, y, kick_plane
+        DataFrame with columns: name, turn, x, y
     """
     logger.info(f"Loading data from {file_path}")
     meas_tbt = read_tbt(file_path, datatype="lhc")
@@ -54,7 +54,6 @@ def load_single_file(file_path: str | Path) -> pd.DataFrame:
         # Convert from mm to m
         df_combined["x"] = df_combined["x"] / 1000
         df_combined["y"] = df_combined["y"] / 1000
-        df_combined["kick_plane"] = "xy"
 
         # Reorder rows based on BPM names
         original_order = df_x.index.tolist()

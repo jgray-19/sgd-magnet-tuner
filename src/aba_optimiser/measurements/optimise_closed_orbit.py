@@ -18,12 +18,18 @@ from pymadng_utils.io.utils import save_knobs
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
 from aba_optimiser.measurements.create_datafile import (
+    ACDipoleReconstructionConfig,
     process_measurements,
     save_online_knobs,
 )
-from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
+from aba_optimiser.measurements.squeeze_helpers import (
+    get_or_make_sequence,
+    make_machine_settings_knobs_file,
+)
+from aba_optimiser.model_creator.config import AC_MARKER_PATTERN
+from aba_optimiser.model_creator.madx_utils import make_madx_sequence
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import SequenceConfig
+from aba_optimiser.training.controller_config import OutputConfig, SequenceConfig
 from aba_optimiser.training.controller_helpers import create_arc_measurement_config
 
 logger = logging.getLogger(__name__)
@@ -49,6 +55,45 @@ class MeasurementSetupConfig:
     name_prefix: str
     times: list[str]
     title: str
+
+
+@dataclass(frozen=True)
+class ACDipoleOptimisationWindow:
+    """Window definition for full-ring AC-dipole optimisation."""
+
+    bpm_upstream: str
+    bpm_downstream: str
+
+
+def window_from_attrs(attrs: dict) -> ACDipoleOptimisationWindow | None:
+    """Build AC-dipole optimisation window from dataframe attrs."""
+    upstream = attrs.get("ac_dipole_bpm_upstream")
+    downstream = attrs.get("ac_dipole_bpm_downstream")
+    if upstream and downstream:
+        return ACDipoleOptimisationWindow(
+            bpm_upstream=str(upstream),
+            bpm_downstream=str(downstream),
+        )
+    return None
+
+
+def create_ac_dipole_full_ring_config(beam: int, window: ACDipoleOptimisationWindow) -> RangeConfig:
+    """Create a single full-ring range anchored around the AC dipole BPM window."""
+    suffix = f".B{beam}"
+    if not window.bpm_upstream.endswith(suffix):
+        raise ValueError(
+            f"Upstream BPM {window.bpm_upstream} does not match expected beam suffix {suffix}"
+        )
+    if not window.bpm_downstream.endswith(suffix):
+        raise ValueError(
+            f"Downstream BPM {window.bpm_downstream} does not match expected beam suffix {suffix}"
+        )
+
+    return RangeConfig(
+        magnet_ranges=[f"{window.bpm_downstream}/{window.bpm_upstream}"],
+        bpm_starts=[[window.bpm_downstream]],
+        bpm_end_points=[[window.bpm_upstream]],
+    )
 
 
 def weighted_mean(values: list[float], uncertainties: list[float]) -> float:
@@ -101,6 +146,39 @@ def compute_weighted_mean_and_variance(
     return mu, var_mean
 
 
+def prepare_sequence_file(
+    beam: int,
+    model_dir: Path,
+    output_dir: Path,
+    time: str | None = None,
+) -> Path:
+    """Prepare the sequence file used throughout one closed-orbit run.
+
+    Beam 2 must use the beam-4 MAD-X convention consistently. Generate that
+    sequence explicitly in the per-run analysis directory so preprocessing and
+    optimisation both reuse the same file.
+    """
+    if beam != 2:
+        return get_or_make_sequence(beam, model_dir, time=time)
+
+    sequence_file = output_dir / "lhcb2_saved.seq"
+    logger.info("Generating beam-4-adapted LHCB2 sequence in %s", sequence_file)
+
+    post_optics_madx_files = None
+    if time is not None:
+        post_optics_madx_files = [
+            make_machine_settings_knobs_file(output_dir / "machine_settings_knobs.madx", time)
+        ]
+
+    make_madx_sequence(
+        model_dir,
+        seq_outdir=output_dir,
+        beam4=True,
+        post_optics_madx_files=post_optics_madx_files,
+    )
+    return sequence_file
+
+
 def optimise_ranges(
     range_config: RangeConfig,
     range_type: str,
@@ -151,7 +229,9 @@ def optimise_ranges(
             tune_knobs_files=tune_knobs_file,
         )
 
-        logger.info(f"Found the start and end BPMs for this range: {range_config.bpm_starts[i]} to {range_config.bpm_end_points[i]}")
+        logger.info(
+            f"Found the start and end BPMs for this range: {range_config.bpm_starts[i]} to {range_config.bpm_end_points[i]}"
+        )
 
         controller = Controller(
             accelerator,
@@ -161,10 +241,12 @@ def optimise_ranges(
             measurement_config,
             range_config.bpm_starts[i],
             range_config.bpm_end_points[i],
-            show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,
-            write_tensorboard_logs=write_tensorboard_logs,
+            output_config=OutputConfig(
+                write_tensorboard_logs=write_tensorboard_logs,
+                show_plots=False,
+            ),
         )
         final_knobs, uncs = controller.run()
         fitted_deltap = final_knobs["deltap"]
@@ -235,9 +317,9 @@ def optimise_corrector_ranges(
             meas_config,
             range_config.bpm_starts[i],
             range_config.bpm_end_points[i],
-            show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,
+            output_config=OutputConfig(show_plots=False),
         )
         final_knobs, _ = controller.run()
         results.append(final_knobs)
@@ -322,7 +404,7 @@ def create_beam2_configs(
         "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB2/Models/2025-11-07_B2_12cm"
     )
     # Arc settings
-    skip_step = 2 if use_fixed_bpm else 4
+    skip_step = 3 if use_fixed_bpm else 5
     arc_magnet_ranges_b2 = [f"BPM.9L{s}.B2/BPM.9R{(s - 2) % 8 + 1}.B2" for s in range(8, 0, -1)]
     arc_bpm_starts_b2 = [
         [f"BPM.{i}L{s}.B2" for i in range(9, 34, skip_step)] for s in range(8, 0, -1)
@@ -394,6 +476,8 @@ def process_single_config(
     skip_reload: bool,
     optimise_correctors: bool,
     use_fixed_bpm: bool = True,
+    acdipole_n_bpms_each_side: int = 1,
+    sequence_time: str | None = None,
 ) -> None:
     """Process a single measurement configuration.
 
@@ -417,6 +501,12 @@ def process_single_config(
     bad_bpms_file = results_dir / f"bad_bpms_{config.title}.txt"
     measurement_filename = "pz_data.parquet"
     measurement_file = temp_analysis_dir / measurement_filename
+    sequence_file = prepare_sequence_file(
+        config.beam,
+        Path(config.model_dir),
+        temp_analysis_dir,
+        time=sequence_time,
+    )
 
     # Compute meas_time always
     if not config.times:
@@ -453,19 +543,37 @@ def process_single_config(
     # Generate files from times
     files = [Path(f"{config.folder}/{config.name_prefix}{time}.sdds") for time in config.times]
 
+    ac_dipole_reconstruction_config = ACDipoleReconstructionConfig(
+        ac_dipole_marker=AC_MARKER_PATTERN.format(beam=config.beam),
+        beam_energy=float(energy),
+        n_bpms_each_side=acdipole_n_bpms_each_side,
+    )
+    accelerator = LHC(
+        beam=config.beam,
+        beam_energy=float(energy),
+        sequence_file=sequence_file,
+    )
+
     pzs_dict, bad_bpms, output_paths, _ = process_measurements(
         files,
         temp_analysis_dir,
         config.model_dir,
-        beam=config.beam,
+        accelerator=accelerator,
         filename=None,
         bad_bpms=bad_bpms,
+        ac_dipole_reconstruction_config=ac_dipole_reconstruction_config,
     )
     pzs = pzs_dict["combined"]
+    ac_dipole_window = window_from_attrs(pzs.attrs)
+    if ac_dipole_window is None:
+        raise ValueError(
+            "AC-dipole reconstruction did not return an optimisation window. "
+            "Expected attrs 'ac_dipole_bpm_upstream' and 'ac_dipole_bpm_downstream'."
+        )
+
     ana_dir = output_paths["combined"]
 
     file_path = ana_dir / measurement_filename
-    sequence_file = get_or_make_sequence(config.beam, Path(config.model_dir))
 
     # Compute weighted averages per BPM with proper variance of the mean
     rows = []
@@ -490,12 +598,12 @@ def process_single_config(
         )
 
     averaged = pd.DataFrame(rows)
-    print(
-        averaged["var_x"].describe(),
-        averaged["var_y"].describe(),
-        averaged["var_px"].describe(),
-        averaged["var_py"].describe(),
-    )
+    # print(
+    #     averaged["var_x"].describe(),
+    #     averaged["var_y"].describe(),
+    #     averaged["var_px"].describe(),
+    #     averaged["var_py"].describe(),
+    # )
 
     # Create new DataFrame with 3 turns, each with averaged values
     new_rows = []
@@ -544,7 +652,8 @@ def process_single_config(
         num_batches=1,
         num_workers=1,
         use_fixed_bpm=use_fixed_bpm,
-        optimise_momenta=True,
+        optimise_momenta=False,
+        bpm_loss_outlier_sigma=5,
     )
 
     results_arcs, uncs_arcs, fitted_deltaps, _ = optimise_ranges(
@@ -561,6 +670,28 @@ def process_single_config(
         config.title,
         energy,
     )
+
+    # ac_dipole_full_ring_config = create_ac_dipole_full_ring_config(config.beam, ac_dipole_window)
+    # ac_results, ac_uncertainties, _, _ = optimise_ranges(
+    #     ac_dipole_full_ring_config,
+    #     "acdipole-fullring",
+    #     config.beam,
+    #     optimiser_config,
+    #     simulation_config,
+    #     sequence_file,
+    #     corrector_knobs_file,
+    #     tune_knobs_file,
+    #     measurement_file,
+    #     bad_bpms,
+    #     config.title,
+    #     energy,
+    #     write_tensorboard_logs=False,
+    # )
+    # if not ac_results:
+    #     raise RuntimeError("AC-dipole full-ring optimisation did not produce a result.")
+    # ac_dipole_deltap = ac_results[0]
+    # ac_dipole_unc = ac_uncertainties[0]
+    # logger.info("AC-dipole full-ring deltap: %s +/- %s", ac_dipole_deltap, ac_dipole_unc)
 
     logger.info(f"All arc optimisations complete for {config.title}.")
     logger.info("Final deltaps for each arc:")
@@ -597,6 +728,8 @@ def process_single_config(
     with results_file.open("a") as f:
         for i, dp in enumerate(results_arcs):
             f.write(f"arc{i + 1}\t{dp}\n")
+        # f.write(f"acdipole_fullring\t{ac_dipole_deltap}\n")
+        # f.write(f"acdipole_fullring_unc\t{ac_dipole_unc}\n")
         f.write(f"MeanArcs\t{mean_arcs}\n")
         std_arcs = float(np.std(results_arcs))
         f.write(f"StdDevArcs\t{std_arcs}\n")
@@ -613,17 +746,12 @@ def process_single_config(
         min_lr=1e-1,
         warmup_lr_start=1e-4,
     )
-    corrector_simulation_config = replace(
-        simulation_config,
-        optimise_energy=False,
-        optimise_correctors=True,
-    )
     corrector_results = optimise_corrector_ranges(
         config.arc_config,
         "arc",
         config.beam,
         corrector_optimiser_config,
-        corrector_simulation_config,
+        simulation_config,
         sequence_file,
         corrector_knobs_file,
         tune_knobs_file,
@@ -667,6 +795,21 @@ def main():
         action="store_true",
         help="Optimise correctors after energy optimisation",
     )
+    parser.add_argument(
+        "--acdipole-n-bpms-each-side",
+        type=int,
+        default=1,
+        help="Number of BPMs per side for AC-dipole momentum reconstruction",
+    )
+    parser.add_argument(
+        "--time",
+        type=str,
+        default=None,
+        help=(
+            "Optional machine-settings extraction time for sequence generation. "
+            "Uses the omc3 knob_extractor time format; ISO strings must include timezone."
+        ),
+    )
     args = parser.parse_args()
 
     # Define date
@@ -683,6 +826,7 @@ def main():
         configs = create_beam1_configs(folder, name_prefix, use_fixed_bpm)
     else:
         configs = create_beam2_configs(folder, name_prefix, use_fixed_bpm)
+    print(configs)
 
     # Temporary analysis directory
     temp_analysis_dir = PROJECT_ROOT / f"temp_analysis_co_{args.beam}"
@@ -696,6 +840,8 @@ def main():
             args.skip_reload,
             args.optimise_correctors,
             use_fixed_bpm,
+            args.acdipole_n_bpms_each_side,
+            args.time,
         )
 
 

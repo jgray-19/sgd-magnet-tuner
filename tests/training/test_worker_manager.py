@@ -4,11 +4,18 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from aba_optimiser.accelerators import SPS
 from aba_optimiser.config import SimulationConfig
+from aba_optimiser.training.validation_selection import (
+    payload_track_count,
+    split_validation_payloads,
+)
 from aba_optimiser.training.worker_manager import WorkerManager
 from aba_optimiser.training.worker_setup import WorkerRuntimeMetadata
+from aba_optimiser.workers import TrackingData, WorkerConfig
+from aba_optimiser.workers.common import KickPlane
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -24,6 +31,18 @@ class _FakeConn:
 
     def recv(self) -> dict[str, object]:
         return self._responses.pop(0)
+
+
+class _FakeChannels:
+    def __init__(self, responses: list[dict[str, object]]) -> None:
+        self._responses = responses
+        self.sent: list[dict[str, object]] = []
+
+    def send_all(self, payload: dict[str, object]) -> None:
+        self.sent.append(payload)
+
+    def recv_all(self) -> list[dict[str, object]]:
+        return self._responses
 
 
 def _make_sps(tmp_path: Path) -> SPS:
@@ -71,6 +90,39 @@ def _make_track_df(all_bpms: list[str], turns: list[int]) -> pd.DataFrame:
                 }
             )
     return pd.DataFrame(rows).set_index(["turn", "name"])
+
+
+def _make_payload(
+    accelerator: SPS,
+    *,
+    start_bpm: str,
+    end_bpm: str,
+    sdir: int,
+    kick_plane: str,
+    file_idx: int,
+    n_tracks: int,
+    n_points: int,
+) -> tuple[TrackingData, WorkerConfig, int]:
+    data = TrackingData(
+        position_comparisons=np.zeros((n_tracks, n_points, 2), dtype=np.float64),
+        momentum_comparisons=np.zeros((n_tracks, n_points, 2), dtype=np.float64),
+        position_variances=np.ones((n_tracks, n_points, 2), dtype=np.float64),
+        momentum_variances=np.ones((n_tracks, n_points, 2), dtype=np.float64),
+        init_coords=np.zeros((n_tracks, 6), dtype=np.float64),
+        init_pts=np.zeros((n_tracks,), dtype=np.float64),
+        precomputed_weights=None,
+    )
+    config = WorkerConfig(
+        accelerator=accelerator,
+        start_bpm=start_bpm,
+        end_bpm=end_bpm,
+        magnet_range="$start/$end",
+        corrector_strengths=None,
+        tune_knobs_file=None,
+        sdir=sdir,
+        kick_plane=kick_plane,
+    )
+    return data, config, file_idx
 
 
 def test_create_worker_payloads_multi_turn_creates_forward_and_backward_workers(
@@ -295,7 +347,7 @@ def test_build_bpm_masks_from_diagnostics_aggregates_multi_turn_losses(tmp_path:
             start_bpm="BPH.13208",
             end_bpm="BPV.20108",
             sdir=1,
-            kick_plane="xy",
+            kick_plane=KickPlane.XY,
             n_run_turns=2,
             bpm_names=["BPH.13208", "BPH.13608"],
         )
@@ -326,7 +378,7 @@ def test_apply_screening_actions_expands_masks_across_turns(tmp_path: Path) -> N
             start_bpm="BPH.13208",
             end_bpm="BPV.20108",
             sdir=1,
-            kick_plane="xy",
+            kick_plane=KickPlane.XY,
             n_run_turns=2,
             bpm_names=["BPH.13208", "BPH.13608"],
         ),
@@ -335,7 +387,7 @@ def test_apply_screening_actions_expands_masks_across_turns(tmp_path: Path) -> N
             start_bpm="BPV.13308",
             end_bpm="BPV.20108",
             sdir=1,
-            kick_plane="xy",
+            kick_plane=KickPlane.XY,
             n_run_turns=1,
             bpm_names=["BPV.13308", "BPV.20108"],
         ),
@@ -360,3 +412,186 @@ def test_apply_screening_actions_expands_masks_across_turns(tmp_path: Path) -> N
             "disable_worker": True,
         }
     ]
+
+
+def test_summarise_screening_losses_logs_pre_and_projected_loss(tmp_path: Path, caplog) -> None:
+    manager = _make_manager(tmp_path)
+    manager.worker_metadata = [
+        WorkerRuntimeMetadata(
+            worker_id=0,
+            start_bpm="BPH.13208",
+            end_bpm="BPV.20108",
+            sdir=1,
+            kick_plane=KickPlane.XY,
+            n_run_turns=2,
+            bpm_names=["BPH.13208", "BPH.13608"],
+        )
+    ]
+
+    with caplog.at_level("INFO"):
+        manager._summarise_screening_losses(
+            diagnostics=[{"worker_id": 0, "loss_per_bpm": [1.0, 9.0, 1.0, 9.0]}],
+            bpm_masks=[np.array([True, False])],
+            worker_disabled=[False],
+        )
+
+    assert "Pre-screening loss summary" in caplog.text
+    assert "Projected post-screening loss summary" in caplog.text
+    assert "total=2.000000e+01" in caplog.text
+    assert "total=2.000000e+00" in caplog.text
+
+
+def test_split_validation_payloads_covers_multiple_ranges_when_available(
+    tmp_path: Path,
+) -> None:
+    accelerator = _make_sps(tmp_path)
+    payloads = [
+        _make_payload(
+            accelerator,
+            start_bpm="BPH.13008",
+            end_bpm="BPH.13408",
+            sdir=1,
+            kick_plane="x",
+            file_idx=0,
+            n_tracks=5,
+            n_points=120,
+        ),
+        _make_payload(
+            accelerator,
+            start_bpm="BPH.13008",
+            end_bpm="BPH.13408",
+            sdir=-1,
+            kick_plane="x",
+            file_idx=0,
+            n_tracks=5,
+            n_points=120,
+        ),
+        _make_payload(
+            accelerator,
+            start_bpm="BPH.14008",
+            end_bpm="BPH.14408",
+            sdir=1,
+            kick_plane="x",
+            file_idx=0,
+            n_tracks=30,
+            n_points=60,
+        ),
+        _make_payload(
+            accelerator,
+            start_bpm="BPH.14008",
+            end_bpm="BPH.14408",
+            sdir=-1,
+            kick_plane="x",
+            file_idx=0,
+            n_tracks=30,
+            n_points=60,
+        ),
+    ]
+
+    split = split_validation_payloads(payloads)
+    training_payloads = split.training_payloads
+    validation_payloads = split.validation_payloads
+    duplicated = split.duplicated_validation_payload
+
+    assert duplicated is False
+    assert {(p[1].start_bpm, p[1].end_bpm) for p in validation_payloads} == {
+        ("BPH.13008", "BPH.13408"),
+        ("BPH.14008", "BPH.14408"),
+    }
+    assert {p[1].sdir for p in validation_payloads} == {1, -1}
+    assert len(training_payloads) > 0
+
+    validation_tracks = sum(payload_track_count(payload) for payload in validation_payloads)
+    training_tracks = sum(payload_track_count(payload) for payload in training_payloads)
+    assert validation_tracks * 10 >= training_tracks
+
+
+def test_compute_validation_loss_uses_single_looping_validation_worker(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    manager.validation_channels = _FakeChannels(
+        responses=[
+            {"worker_id": 10, "loss": 2.5, "payloads": 4, "tracks": 40},
+        ]
+    )  # ty:ignore[assignment]
+    manager.validation_loss_weights = [40.0]
+
+    loss = manager.compute_validation_loss({"kq": 0.0})
+
+    assert loss == pytest.approx(2.5)
+
+
+def test_split_validation_payloads_pairs_opposite_directions_with_mixed_planes(
+    tmp_path: Path,
+) -> None:
+    accelerator = _make_sps(tmp_path)
+    payloads = [
+        _make_payload(
+            accelerator,
+            start_bpm="BPH.13208",
+            end_bpm="BPV.13108",
+            sdir=1,
+            kick_plane="x",
+            file_idx=0,
+            n_tracks=5,
+            n_points=100,
+        ),
+        _make_payload(
+            accelerator,
+            start_bpm="BPH.13208",
+            end_bpm="BPV.13108",
+            sdir=-1,
+            kick_plane="y",
+            file_idx=0,
+            n_tracks=5,
+            n_points=100,
+        ),
+        _make_payload(
+            accelerator,
+            start_bpm="BPH.14008",
+            end_bpm="BPV.13908",
+            sdir=1,
+            kick_plane="x",
+            file_idx=0,
+            n_tracks=5,
+            n_points=50,
+        ),
+    ]
+
+    split = split_validation_payloads(payloads)
+
+    assert len(split.validation_payloads) == 3
+    assert {(p[1].sdir, p[1].kick_plane) for p in split.validation_payloads} == {
+        (1, "x"),
+        (-1, "y"),
+    }
+    assert {(p[1].start_bpm, p[1].end_bpm) for p in split.validation_payloads} == {
+        ("BPH.13208", "BPV.13108"),
+        ("BPH.14008", "BPV.13908"),
+    }
+
+
+def test_split_validation_payloads_spreads_across_sorted_range_groups(
+    tmp_path: Path,
+) -> None:
+    accelerator = _make_sps(tmp_path)
+    payloads = [
+        _make_payload(accelerator, start_bpm="BPH.10008", end_bpm="BPH.10408", sdir=1, kick_plane="x", file_idx=0, n_tracks=5, n_points=150),
+        _make_payload(accelerator, start_bpm="BPH.10008", end_bpm="BPH.10408", sdir=-1, kick_plane="x", file_idx=0, n_tracks=5, n_points=150),
+        _make_payload(accelerator, start_bpm="BPH.11008", end_bpm="BPH.11408", sdir=1, kick_plane="x", file_idx=0, n_tracks=5, n_points=130),
+        _make_payload(accelerator, start_bpm="BPH.11008", end_bpm="BPH.11408", sdir=-1, kick_plane="x", file_idx=0, n_tracks=5, n_points=130),
+        _make_payload(accelerator, start_bpm="BPH.12008", end_bpm="BPH.12408", sdir=1, kick_plane="x", file_idx=0, n_tracks=5, n_points=110),
+        _make_payload(accelerator, start_bpm="BPH.12008", end_bpm="BPH.12408", sdir=-1, kick_plane="x", file_idx=0, n_tracks=5, n_points=110),
+        _make_payload(accelerator, start_bpm="BPH.13008", end_bpm="BPH.13408", sdir=1, kick_plane="x", file_idx=0, n_tracks=5, n_points=90),
+        _make_payload(accelerator, start_bpm="BPH.13008", end_bpm="BPH.13408", sdir=-1, kick_plane="x", file_idx=0, n_tracks=5, n_points=90),
+        _make_payload(accelerator, start_bpm="BPH.14008", end_bpm="BPH.14408", sdir=1, kick_plane="x", file_idx=0, n_tracks=5, n_points=70),
+        _make_payload(accelerator, start_bpm="BPH.14008", end_bpm="BPH.14408", sdir=-1, kick_plane="x", file_idx=0, n_tracks=5, n_points=70),
+    ]
+
+    split = split_validation_payloads(payloads)
+
+    assert {(p[1].start_bpm, p[1].end_bpm) for p in split.validation_payloads} == {
+        ("BPH.10008", "BPH.10408"),
+        ("BPH.12008", "BPH.12408"),
+        ("BPH.14008", "BPH.14408"),
+    }
+    assert {p[1].sdir for p in split.validation_payloads} == {1, -1}

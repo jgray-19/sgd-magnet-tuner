@@ -7,10 +7,6 @@ from aba_optimiser.accelerators import SPS
 from aba_optimiser.config import SimulationConfig
 from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.worker_manager import WorkerManager
-from aba_optimiser.workers.tracking_single_plane import (
-    SinglePlanePositionOnlyTrackingWorker,
-    SinglePlaneTrackingWorker,
-)
 from aba_optimiser.workers.tracking import TrackingWorker
 from aba_optimiser.workers.tracking_position_only import PositionOnlyTrackingWorker
 
@@ -192,5 +188,5 @@ def test_select_worker_class_reuses_generic_tracking_workers(tmp_path) -> None:
 
     assert manager._select_worker_class("xy", True) is TrackingWorker
     assert manager._select_worker_class("xy", False) is PositionOnlyTrackingWorker
-    assert manager._select_worker_class("x", True) is SinglePlaneTrackingWorker
-    assert manager._select_worker_class("y", False) is SinglePlanePositionOnlyTrackingWorker
+    assert manager._select_worker_class("x", True) is TrackingWorker
+    assert manager._select_worker_class("y", False) is PositionOnlyTrackingWorker

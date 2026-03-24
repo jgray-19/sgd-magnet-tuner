@@ -9,7 +9,9 @@ processed tracking data.
 from __future__ import annotations
 
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,9 +21,9 @@ import numpy as np
 import pandas as pd
 import tfs
 from omc3.hole_in_one import hole_in_one_entrypoint
-from pymadng import MAD
 from pymadng_utils.io.utils import save_knobs
-from tmom_recon import calculate_pz_measurement
+from tmom_recon import ACDipoleConfig, calculate_pz_measurement
+from tmom_recon.acd.madng_driver import ACDipoleMadDriver
 from tmom_recon.svd import svd_clean_measurements
 from turn_by_turn import TbtData, read_tbt
 
@@ -33,22 +35,39 @@ from aba_optimiser.config import (
     PROJECT_ROOT,
     TUNE_KNOBS_FILE,
 )
-from aba_optimiser.io.utils import get_lhc_file_path
-from aba_optimiser.mad import GradientDescentMadInterface
-from aba_optimiser.measurements.squeeze_helpers import extract_tunes_from_job_file
-from aba_optimiser.model_creator.madng_utils import (
-    compute_and_export_twiss_tables,
-    initialise_madng_model,
+from aba_optimiser.mad import GenericMadInterface
+from aba_optimiser.measurements.squeeze_helpers import (
+    extract_tunes_from_job_file,
+    get_or_make_sequence,
 )
-from aba_optimiser.model_creator.madx_utils import make_madx_sequence
+from aba_optimiser.model_creator.madng_utils import ModelCreatorMadngInterface
 from aba_optimiser.noise import assign_bpm_variances
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
+from aba_optimiser.training.controller_config import MeasurementConfig, OutputConfig, SequenceConfig
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from aba_optimiser.measurements.knob_extraction import NXCALSResult
 
 LOGGER = logging.getLogger(__name__)
+
+AC_DIPOLE_ATTR_KEYS = (
+    "ac_dipole_marker",
+    "ac_dipole_bpm_upstream",
+    "ac_dipole_bpm_downstream",
+    "ac_dipole_n_bpms_each_side",
+    "ac_dipole_smooth_lambda",
+)
+
+
+@dataclass(frozen=True)
+class ACDipoleReconstructionConfig:
+    """Configuration for AC-dipole assisted px/py reconstruction."""
+
+    ac_dipole_marker: str
+    beam_energy: float
+    n_bpms_each_side: int = 1
 
 
 def load_files(files: list[Path]) -> list[TbtData]:
@@ -232,6 +251,13 @@ def build_dict_from_nxcal_result(result: list[NXCALSResult]) -> dict[str, float]
     return {res.name: res.value for res in result}
 
 
+def copy_ac_dipole_attrs(source: pd.DataFrame, target: pd.DataFrame) -> None:
+    """Copy AC-dipole metadata attrs from source dataframe to target."""
+    for key in AC_DIPOLE_ATTR_KEYS:
+        if key in source.attrs:
+            target.attrs[key] = source.attrs[key]
+
+
 # def write_datafile(data: pd.DataFrame, output_file: str | Path) -> None:
 #     """Write the combined DataFrame to a Parquet file."""
 #     data.to_parquet(output_file)
@@ -244,6 +270,7 @@ def process_single_dataframe(
     analysis_dir: Path,
     use_uniform_vars: bool,
     beam: int,
+    ac_dipole_config_factory: Callable[[], ACDipoleConfig | None] | None = None,
 ) -> tuple[int, pd.DataFrame]:
     """Process a single DataFrame: clean, compute vars, and calculate pz.
 
@@ -257,6 +284,7 @@ def process_single_dataframe(
         Tuple of (original_index, processed_dataframe)
     """
     i, df = df_with_index
+    ac_dipole_config = ac_dipole_config_factory() if ac_dipole_config_factory is not None else None
 
     # SVD clean
     df = svd_clean_measurements(df)
@@ -282,6 +310,7 @@ def process_single_dataframe(
         include_optics_errors=True,
         reverse_meas_tws=beam == 2,
         dpp_override=0.0,
+        ac_dipole_config=ac_dipole_config,
     )
 
     # Divide the variances by 10 because of the svd cleaning reducing noise
@@ -398,13 +427,17 @@ def detect_bad_bpms(
 
 
 def build_madng_twiss_table(
-    model_dir: Path, beam: int, output_dir: Path, nattunes: list[float], tunes: list[float]
+    model_dir: Path,
+    accelerator: LHC,
+    output_dir: Path,
+    nattunes: list[float],
+    tunes: list[float],
 ) -> pd.DataFrame:
-    """Create MAD-NG Twiss DataFrame for the given model directory and beam.
+    """Create a MAD-NG Twiss DataFrame for the given model directory and accelerator.
 
     Args:
         model_dir: Directory containing the MAD-NG model files
-        beam: Beam number (1 or 2)
+        accelerator: LHC accelerator carrying beam, energy and sequence metadata
         output_dir: Directory to save the generated Twiss table
     Returns:
         Twiss DataFrame with optics parameters
@@ -416,17 +449,9 @@ def build_madng_twiss_table(
         )
         natural_tunes = nattunes[:2]
         driven_tunes = tunes[:2]
-        seq_path = output_dir / f"lhcb{beam}_saved.seq"
-        if not seq_path.exists():
-            make_madx_sequence(model_dir, seq_outdir=output_dir)
-        with MAD() as mad:
-            # Initialize and match tunes
-            initialise_madng_model(mad, beam, output_dir, tunes=natural_tunes)
-
-            # Compute and export twiss tables
-            compute_and_export_twiss_tables(
-                mad,
-                beam,
+        with ModelCreatorMadngInterface(accelerator) as madng_interface:
+            madng_interface.initialise_model(tunes=natural_tunes)
+            madng_interface.compute_and_export_twiss_tables(
                 output_dir,
                 tunes=natural_tunes,
                 drv_tunes=driven_tunes,
@@ -438,16 +463,16 @@ def process_measurements(
     files: list[Path],
     output_dir: Path,
     model_dir: str | Path,
-    beam: int,
+    accelerator: LHC,
     filename: str | None = "pz_data.parquet",
     bad_bpms: list[str] | None = None,
     previous_analysis_dir: str | Path | None = None,
     use_uniform_vars: bool = False,
     num_workers: int | None = None,
-    sequence_path: Path | None = None,
     combine_files: bool = True,
     nattunes: list[float] | None = None,
     tunes: list[float] | None = None,
+    ac_dipole_reconstruction_config: ACDipoleReconstructionConfig | None = None,
 ) -> tuple[dict[str, pd.DataFrame], list[str], dict[str, Path], pd.DataFrame]:
     """Process measurement files to compute pz data and identify bad BPMs.
 
@@ -455,12 +480,11 @@ def process_measurements(
         files: List of measurement file paths
         output_dir: Directory for analysis outputs
         model_dir: Directory containing model files
-        beam: Beam number (1 or 2)
+        accelerator: LHC accelerator carrying beam, sequence_file and beam_energy
         filename: Output filename for parquet file (None to skip saving)
         bad_bpms: List of bad BPM names (None to run analysis)
         use_uniform_vars: If True, use uniform variances instead of noise-based
         num_workers: Number of parallel workers (None for auto)
-        sequence_path: Path to the MAD-X sequence file
         combine_files: If True, combine all processed dataframes into one dict entry with key 'combined';
                       if False, return dict with file paths as keys
         nattunes: Natural tunes [Qx, Qy, Qz] (None to extract from model)
@@ -469,6 +493,8 @@ def process_measurements(
     Returns:
         Tuple of (dict mapping file paths to dataframes, bad_bpms_list, dict mapping keys to output paths, twiss_df)
     """
+    beam = accelerator.beam
+
     if nattunes is None or tunes is None:
         job_file = Path(model_dir) / "job.create_model_nominal.madx"
         nat_x, nat_y, drv_x, drv_y = extract_tunes_from_job_file(job_file)
@@ -480,6 +506,37 @@ def process_measurements(
 
     if nattunes is None or tunes is None:
         raise ValueError("Could not determine natural and driven tunes for measurement processing.")
+
+    # Build one isolated AC-dipole reconstruction model per worker thread.
+    sequence_for_acd = accelerator.sequence_file
+    acd_model_lock = threading.Lock()
+    acd_models: list[ACDipoleMadDriver] = []
+    acd_thread_local = threading.local()
+
+    def get_thread_local_ac_dipole_config() -> ACDipoleConfig | None:
+        if ac_dipole_reconstruction_config is None:
+            return None
+        cfg = getattr(acd_thread_local, "config", None)
+        if cfg is not None:
+            return cfg
+
+        model = ACDipoleMadDriver(
+            sequence_file=sequence_for_acd,
+            beam=beam,
+            beam_energy=ac_dipole_reconstruction_config.beam_energy,
+            deltap=0.0,
+            observed_elements=ac_dipole_reconstruction_config.ac_dipole_marker,
+            discard_mad_output=True,
+        )
+        cfg = ACDipoleConfig(
+            ac_dipole_marker=ac_dipole_reconstruction_config.ac_dipole_marker,
+            model=model,
+            n_bpms_each_side=ac_dipole_reconstruction_config.n_bpms_each_side,
+        )
+        acd_thread_local.config = cfg
+        with acd_model_lock:
+            acd_models.append(model)
+        return cfg
 
     if bad_bpms is None or previous_analysis_dir is None:
         bad_bpms = run_analysis(output_dir, model_dir, files, beam, nattunes, tunes)
@@ -501,7 +558,7 @@ def process_measurements(
     data = load_files(files)
     combined = convert_measurements(data, bad_bpms, combine_measurements=combine_files)
     LOGGER.info(f"Combined data has {len(combined)} DataFrames from different files/bunches.")
-    tws = build_madng_twiss_table(Path(model_dir), beam, output_dir, nattunes, tunes)
+    tws = build_madng_twiss_table(Path(model_dir), accelerator, output_dir, nattunes, tunes)
     tws.columns = [col.lower() for col in tws.columns]
     tws = tws.rename(
         columns={
@@ -521,50 +578,59 @@ def process_measurements(
     LOGGER.info(f"Processing {len(combined)} DataFrames in parallel with threads...")
     processed_results: list[pd.DataFrame | None] = [None] * len(combined)
 
-    # Use ThreadPoolExecutor instead of ProcessPoolExecutor to avoid Spark context conflicts
-    # Limit to max 9 threads to avoid overloading the system
-    effective_workers = min(num_workers or len(combined), 9)
-    if effective_workers > 0:
-        try:
-            with ThreadPoolExecutor(max_workers=effective_workers) as executor:
-                futures = {
-                    executor.submit(
-                        process_single_dataframe,
-                        (i, df),
-                        tws,
-                        bad_bpms,
-                        analysis_dir,
-                        use_uniform_vars,
-                        beam,
-                    ): i
-                    for i, df in enumerate(combined)
-                }
+    try:
+        # Use ThreadPoolExecutor instead of ProcessPoolExecutor to avoid Spark context conflicts
+        # Limit to max 9 threads to avoid overloading the system
+        effective_workers = min(num_workers or len(combined), 9)
+        if effective_workers > 0:
+            try:
+                with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+                    futures = {
+                        executor.submit(
+                            process_single_dataframe,
+                            (i, df),
+                            tws,
+                            bad_bpms,
+                            analysis_dir,
+                            use_uniform_vars,
+                            beam,
+                            get_thread_local_ac_dipole_config,
+                        ): i
+                        for i, df in enumerate(combined)
+                    }
 
-                for future in as_completed(futures):
-                    try:
-                        idx, processed_df = future.result(timeout=600)  # 10 minute timeout per task
-                        processed_results[idx] = processed_df
-                        LOGGER.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
-                    except Exception as e:
-                        idx = futures[future]
-                        LOGGER.error(f"Error processing dataframe {idx}: {e}")
-                        raise
-        except KeyboardInterrupt:
-            LOGGER.warning("Keyboard interrupt received, shutting down gracefully...")
-            # The ThreadPoolExecutor context manager will handle cleanup
-            raise
-    else:
-        for i, df in enumerate(combined):
-            idx, processed_df = process_single_dataframe(
-                df_with_index=(i, df),
-                tws=tws,
-                bad_bpms=bad_bpms,
-                analysis_dir=analysis_dir,
-                use_uniform_vars=use_uniform_vars,
-                beam=beam,
-            )
-            processed_results[idx] = processed_df
-            LOGGER.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
+                    for future in as_completed(futures):
+                        try:
+                            idx, processed_df = future.result(
+                                timeout=600
+                            )  # 10 minute timeout per task
+                            processed_results[idx] = processed_df
+                            LOGGER.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
+                        except Exception as e:
+                            idx = futures[future]
+                            LOGGER.error(f"Error processing dataframe {idx}: {e}")
+                            raise
+            except KeyboardInterrupt:
+                LOGGER.warning("Keyboard interrupt received, shutting down gracefully...")
+                # The ThreadPoolExecutor context manager will handle cleanup
+                raise
+        else:
+            for i, df in enumerate(combined):
+                idx, processed_df = process_single_dataframe(
+                    df_with_index=(i, df),
+                    tws=tws,
+                    bad_bpms=bad_bpms,
+                    analysis_dir=analysis_dir,
+                    use_uniform_vars=use_uniform_vars,
+                    beam=beam,
+                    ac_dipole_config_factory=get_thread_local_ac_dipole_config,
+                )
+                processed_results[idx] = processed_df
+                LOGGER.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
+    finally:
+        for model in acd_models:
+            if hasattr(model, "close"):
+                model.close()
 
     if any(res is None for res in processed_results):
         raise RuntimeError("Some dataframes failed to process.")
@@ -577,6 +643,7 @@ def process_measurements(
         # Add the average dpp estimate to the headers
         dpp_est = sum(proc_res.attrs["DPP_EST"] for proc_res in combined) / len(combined)
         pzs_combined.attrs["DPP_EST"] = dpp_est
+        copy_ac_dipole_attrs(combined[0], pzs_combined)
         pzs_dict: dict[str, pd.DataFrame] = {"combined": pzs_combined}
     else:
         # Group by file: each file has multiple bunches combined
@@ -591,12 +658,10 @@ def process_measurements(
             file_pzs["name"] = file_pzs["name"].astype("category")
             file_pzs["turn"] = file_pzs["turn"].astype("int32")
             file_pzs.attrs["DPP_EST"] = sum(df.attrs["DPP_EST"] for df in file_dfs) / len(file_dfs)
+            copy_ac_dipole_attrs(file_dfs[0], file_pzs)
             pzs_dict[str(files[i])] = file_pzs
 
-    sequence_path = sequence_path or get_lhc_file_path(beam)
-
-    accelerator = LHC(beam=beam, beam_energy=6800, sequence_file=sequence_path)
-    mad_iface = GradientDescentMadInterface(accelerator)
+    mad_iface = GenericMadInterface(accelerator)
     all_bpms = set(mad_iface.all_bpms)
     del mad_iface
 
@@ -667,8 +732,17 @@ if __name__ == "__main__":
     measurement_file = analysis_dir / measurement_filename
     bad_bpms_file = analysis_dir / "bad_bpms.txt"
 
+    accelerator = LHC(
+        beam=1,
+        beam_energy=6800,
+        sequence_file=get_or_make_sequence(1, Path(model_dir)),
+    )
     pzs_dict, bad_bpms, _, _ = process_measurements(
-        files, analysis_dir, model_dir, beam=1, filename=measurement_filename
+        files,
+        analysis_dir,
+        model_dir,
+        accelerator=accelerator,
+        filename=measurement_filename,
     )
     pzs = pzs_dict["combined"]
 
@@ -687,7 +761,6 @@ if __name__ == "__main__":
         f.write("Arc\tDeltap\n")
 
     results = []
-    accelerator = LHC(beam=1, beam_energy=6800, sequence_file=get_lhc_file_path(1))
     measurement_config = MeasurementConfig(measurement_files=[measurement_file])
 
     for arc in range(8):
@@ -705,9 +778,9 @@ if __name__ == "__main__":
             measurement_config=measurement_config,
             bpm_start_points=BPM_STARTS[arc],
             bpm_end_points=BPM_END_POINTS[arc],
-            show_plots=False,
             initial_knob_strengths=None,
             true_strengths=None,
+            output_config=OutputConfig(show_plots=False),
         )
         final_knobs, uncs = controller.run()
         results.append(final_knobs["deltap"])

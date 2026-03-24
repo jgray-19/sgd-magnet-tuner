@@ -7,7 +7,8 @@ used across different worker implementations (tracking and optics modes).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from enum import Enum
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -16,7 +17,12 @@ if TYPE_CHECKING:
 
     from aba_optimiser.accelerators import Accelerator
 
-KickPlane = Literal["x", "y", "xy"]
+class KickPlane(str, Enum):
+    """Kick-plane options for worker routing and payload selection."""
+
+    X = "x"
+    Y = "y"
+    XY = "xy"
 
 
 @dataclass
@@ -35,10 +41,11 @@ class WorkerConfig:
     corrector_strengths: Path | None
     tune_knobs_file: Path | None
     sdir: int = 1
-    kick_plane: KickPlane = "xy"
+    kick_plane: KickPlane = KickPlane.XY
     bad_bpms: list[str] | None = None
     debug: bool = False
     mad_logfile: Path | None = None
+    python_logfile: Path | None = None
 
 
 @dataclass

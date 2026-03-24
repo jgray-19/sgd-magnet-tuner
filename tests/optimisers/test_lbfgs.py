@@ -160,3 +160,24 @@ class TestLBFGSOptimiser:
 
         # With zero grads, no change
         assert np.allclose(new_params, params)
+
+    def test_state_roundtrip_restores_update_trajectory(self):
+        params = np.array([1.5, -0.5, 2.0])
+        lr = 0.05
+
+        optim = LBFGSOptimiser(history_size=4, eps=1e-12, weight_decay=0.03)
+        grads1 = np.array([0.2, -0.4, 0.1])
+        params_after_first = optim.step(params, grads1, lr)
+
+        grads2 = np.array([-0.1, 0.3, -0.2])
+        params_after_second = optim.step(params_after_first, grads2, lr)
+
+        state = optim.state_to_dict()
+        restored = LBFGSOptimiser()
+        restored.load_state_dict(state)
+
+        grads3 = np.array([0.15, -0.2, 0.05])
+        expected_next = optim.step(params_after_second, grads3, lr)
+        restored_next = restored.step(params_after_second, grads3, lr)
+
+        assert np.allclose(restored_next, expected_next)

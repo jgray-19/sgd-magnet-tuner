@@ -56,6 +56,12 @@ coord_names = {{"x", "px", "y", "py", "t", "pt"}}
 {py_name}:send(spos_list, true)
 """
 
+_CORRECTOR_ATTRS_BY_KIND: dict[str, tuple[tuple[str, str], ...]] = {
+    "hkicker": (("kick", "hkick"),),
+    "vkicker": (("kick", "vkick"),),
+    "tkicker": (("hkick", "hkick"), ("vkick", "vkick")),
+}
+
 
 class GenericMadInterface(AbaMadInterface):
     """
@@ -196,13 +202,42 @@ class GenericMadInterface(AbaMadInterface):
         LOGGER.info(f"Counted {nbpms} BPMs in range: {bpm_range}")
         return bpms_in_range, nbpms, all_bpms
 
+    def _sync_corrector_table_to_loaded_sequence(self, corrector_table: tfs.TfsDataFrame) -> None:
+        """Mirror applied corrector strengths onto the tracked sequence copy."""
+        synced = 0
+        for row in corrector_table.itertuples():
+            ename = getattr(row, "ename", None)
+            if ename is None:
+                raise ValueError("Corrector table is missing required column 'ename'")
+
+            kind = getattr(row, "kind", None)
+            targets = _CORRECTOR_ATTRS_BY_KIND.get(kind)
+            if targets is None:
+                continue
+
+            for attr, col in targets:
+                self.mad[f"loaded_sequence['{ename}'].{attr}"] = float(getattr(row, col))
+            synced += 1
+
+        if synced:
+            LOGGER.info("Mirrored %d corrector strengths onto loaded_sequence", synced)
+
     def _set_correctors(self, corrector_strengths: Path) -> None:
         """Load corrector strengths from file and apply them to the sequence."""
         if not corrector_strengths.exists():
             LOGGER.warning(f"Corrector strengths file not found: {corrector_strengths}")
             return
-        try:
+
+        def _apply_from_tfs() -> None:
             corrector_table = tfs.read(corrector_strengths)
+
+            required_cols = {"kind", "hkick", "hkick_old", "vkick", "vkick_old"}
+            missing_cols = required_cols.difference(corrector_table.columns)
+            if missing_cols:
+                raise ValueError(
+                    "TFS corrector table is missing required columns: "
+                    + ", ".join(sorted(missing_cols))
+                )
 
             # Filter out monitor elements from the corrector table
             non_monitors = corrector_table["kind"] != "monitor"
@@ -217,14 +252,44 @@ class GenericMadInterface(AbaMadInterface):
             )
 
             # Apply corrector strengths for non-zero correctors only
-            self.apply_corrector_strengths(corrector_table[changed])  # ty:ignore[invalid-argument-type]
-        except (tfs.TfsFormatError, UnboundLocalError) as e:
-            LOGGER.warning(f"Error reading or applying corrector strengths: {e}, assuming knobs")
+            changed_table = corrector_table[changed]
+            self.apply_corrector_strengths(changed_table)  # ty:ignore[invalid-argument-type]
+            self._sync_corrector_table_to_loaded_sequence(changed_table)
+
+        def _apply_from_knobs() -> None:
             knobs = read_knobs(corrector_strengths)
             for name, val in knobs.items():
                 self.mad.send(f"MADX['{name}'] = {val}")
 
             LOGGER.info(f"Set {len(knobs)} corrector knobs from {corrector_strengths}")
+
+        suffix = corrector_strengths.suffix.lower()
+        parser_order = {
+            ".tfs": [("tfs", _apply_from_tfs)],
+            ".txt": [("knobs", _apply_from_knobs)],
+        }.get(suffix, [("tfs", _apply_from_tfs), ("knobs", _apply_from_knobs)])
+
+        parser_errors: list[tuple[str, Exception]] = []
+        applied_with: str | None = None
+
+        for parser_name, parser in parser_order:
+            try:
+                parser()
+                applied_with = parser_name
+                break
+            except (tfs.TfsFormatError, ValueError, KeyError, TypeError, OSError) as exc:
+                parser_errors.append((parser_name, exc))
+
+        if applied_with is None:
+            details = "; ".join(
+                f"{name}: {type(exc).__name__}: {exc}" for name, exc in parser_errors
+            )
+            raise ValueError(
+                f"Failed to apply corrector strengths from {corrector_strengths}. "
+                f"Parsers attempted: {details}"
+            ) from (parser_errors[-1][1] if parser_errors else None)
+
+        LOGGER.debug(f"Applied corrector strengths using parser: {applied_with}")
 
         self.mad.send(f"{self.py_name}:send('done')")
         self._check_mad_response(
@@ -263,7 +328,6 @@ class GradientDescentMadInterface(GenericMadInterface):
         accelerator: Accelerator,
         magnet_range: str = "$start/$end",
         bpm_range: str | None = None,
-        bpm_pattern: str = BPM_PATTERN,
         bad_bpms: list[str] | None = None,
         corrector_strengths: Path | None = None,
         tune_knobs_file: Path | None = None,
@@ -281,7 +345,6 @@ class GradientDescentMadInterface(GenericMadInterface):
             accelerator: Accelerator instance providing configuration
             magnet_range: Range of magnets to include
             bpm_range: Range of BPMs to observe
-            bpm_pattern: Pattern for BPM matching. Defaults to accelerator pattern.
             bad_bpms: List of bad BPMs to exclude
             corrector_strengths: Path to corrector strengths file
             tune_knobs_file: Path to tune knobs file
@@ -377,57 +440,28 @@ class GradientDescentMadInterface(GenericMadInterface):
             mad_value = spec.get("mad_value", f"e.{attr}")
             if attr in _DKNL_STRENGTH_ATTRS:
                 dknl_index = _DKNL_INDEX_BY_ATTR_LUA[attr]
-                preserved_lines = []
-                deferred_entries = []
-                for preserved_index in range(1, 5):
-                    if preserved_index == dknl_index:
-                        continue
-                    preserved_name = f"dknl_{preserved_index}"
-                    preserved_lines.append(
-                        f"    local {preserved_name} = current_dknl[{preserved_index}]"
-                    )
-                    deferred_entries.append(
-                        f"            [{preserved_index}] := {preserved_name},"
-                    )
-                deferred_entry_lines = "\n".join(deferred_entries)
                 tmpl = [
-                    f"{{prefix}} {condition} then",
+                    f"if {condition} then",
                     f"    k_str_name = {name_expr}",
                     f"    local base_strength = {mad_value}",
-                    "    local current_strength = base_strength",
-                    "    local length = e.l",
-                    "    if length ~= 0 then",
-                    f"        current_strength = current_strength + e.dknl[{dknl_index}] / length",
-                    "    end",
-                    "    MADX[k_str_name] = current_strength",
-                    "    local current_dknl = e.dknl",
-                    *preserved_lines,
-                    "    if length ~= 0 then",
-                    "        e.dknl = MAD.typeid.deferred{{",
-                    deferred_entry_lines,
-                    f"            [{dknl_index}] := (MADX[k_str_name] - base_strength) * length,",
-                    "        }}",
-                    "    else",
-                    "        e.dknl = MAD.typeid.deferred{{",
-                    deferred_entry_lines,
-                    f"            [{dknl_index}] := 0.0,",
-                    "        }}",
-                    "    end",
+                    "    loaded_sequence[k_str_name] = base_strength",
+                    "    assert(MAD.typeid.is_deferred(loaded_sequence[e.name].dknl), 'Element does not have deferred strength components')",
+                    f"   loaded_sequence[e.name].dknl[{dknl_index}] = \\-> ((loaded_sequence[k_str_name] - base_strength) * e.l)",
+                    "end",
                 ]
             else:
                 tmpl = [
-                    f"{{prefix}} {condition} then",
+                    f"if {condition} then",
                     f"    k_str_name = {name_expr}",
-                    f"    MADX[k_str_name] = {mad_value}",
-                    f"    e.{attr} = \\->MADX[k_str_name]",
+                    f"    loaded_sequence[k_str_name] = {mad_value}",
+                    f"    loaded_sequence[e.name].{attr} = \\->loaded_sequence[k_str_name]",
+                    "end",
                 ]
-            prefix = "if" if idx == 0 else "elseif"
             for line in tmpl:
-                lines.append(f"        {line.format(prefix=prefix)}")
+                lines.append(f"        {line}")
 
         if not lines:
             lines.append("        -- no attributes selected")
-        lines.append("        end")
         return "\n".join(lines)
 
     def _make_adj_knobs(self) -> None:
@@ -458,6 +492,7 @@ class GradientDescentMadInterface(GenericMadInterface):
 
         # Add energy knob if needed
         if self.accelerator.optimise_energy:
+            mad_code += "loaded_sequence['pt'] = loaded_sequence['pt'] or 1e-6\n"
             mad_code += 'table.insert(knob_names, "pt")\n'
 
         mad_code += MAKE_KNOBS_END_MAD.format(py_name=self.py_name)
@@ -501,7 +536,7 @@ class GradientDescentMadInterface(GenericMadInterface):
         Returns:
             np.ndarray: Array of knob values in the same order as knob_names.
         """
-        var_names = [f"MADX['{k}']" for k in self.knob_names]
+        var_names = [f"loaded_sequence['{k}']" for k in self.knob_names]
         values = self.mad.recv_vars(*var_names)
         # Handle case where recv_vars returns a scalar for single knob
         if len(self.knob_names) == 1:
@@ -516,11 +551,15 @@ class GradientDescentMadInterface(GenericMadInterface):
             knob_values (dict[str, float]): Dictionary of knob names and their new values.
         """
         update_commands: list[str] = []
+        num_updated = 0
         for name, value in knob_values.items():
             if name in self.knob_name_set:
-                LOGGER.info(f"Updating knob '{name}' to value {value}")
-                update_commands.append(f"MADX['{name}'] = {value}")
+                LOGGER.debug(f"Updating knob '{name}' to value {value}")
+                update_commands.append(f"loaded_sequence['{name}'] = {value}")
+                num_updated += 1
             else:
                 LOGGER.warning(f"Unknown knob '{name}' ignored")
+
         if update_commands:
             self.mad.send("\n".join(update_commands))
+        LOGGER.info(f"Updated {num_updated} knobs from {len(knob_values)} provided")

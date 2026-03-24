@@ -71,6 +71,24 @@ MEASUREMENT_DATES = {
 
 
 # ==================== HELPER FUNCTIONS ====================
+_MACHINE_SETTINGS_KNOBS_FILENAME = "machine_settings_knobs.madx"
+
+
+def make_machine_settings_knobs_file(output_file: Path, time: str) -> Path:
+    """Extract a single MAD-X knobs file for the requested machine-settings time."""
+    from omc3.knob_extractor import main as extract_knobs
+
+    output_file = Path(output_file)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    extract_knobs({"time": time, "output": output_file})
+    if not output_file.exists():
+        raise FileNotFoundError(
+            f"Expected machine-settings knobs file was not created: {output_file}"
+        )
+    logger.info("Saved machine-settings knobs for %s to %s", time, output_file)
+    return output_file
+
+
 def get_measurement_date(squeeze_step: str) -> str:
     """Get measurement date for a given squeeze step.
 
@@ -82,30 +100,46 @@ def get_measurement_date(squeeze_step: str) -> str:
     """
     return MEASUREMENT_DATES.get(squeeze_step, DEFAULT_MEASUREMENT_DATE)
 
-def get_or_make_sequence(beam: int, model_dir: Path) -> Path:
-    """Get cached sequence or generate new one.
+
+def get_or_make_sequence(beam: int, model_dir: Path, time: str | None = None) -> Path:
+    """Get cached sequence or generate a new one.
 
     Args:
         beam: Beam number (1 or 2)
         model_dir: Path to model directory
+        time: Optional machine-settings extraction time. When provided, a
+            machine-settings knobs file is generated and applied after the
+            optics modifiers during sequence creation.
 
     Returns:
         Path to sequence file
     """
     sequences_dir = PROJECT_ROOT / "sequences_from_models"
     sequences_dir.mkdir(exist_ok=True)
-    seq_name = f"{model_dir.name}.seq"
-    seq_path = sequences_dir / seq_name
-    if seq_path.exists():
+
+    knobs_dir = sequences_dir / "knobs_files"
+    knobs_dir.mkdir(exist_ok=True)
+
+    regenerate = False
+    if time is None:
+        knobs_file = None
+    else:
+        knobs_file = knobs_dir / f"{model_dir.name}_{time}.madx"
+        if not knobs_file.exists():
+            make_machine_settings_knobs_file(knobs_dir / f"{model_dir.name}_{time}.madx", time)
+            regenerate = True
+        knobs_file = [Path(knobs_file)]
+
+    seq_path = sequences_dir / f"{model_dir.name}.seq"
+    if seq_path.exists() and not regenerate:
         logger.info(f"Using cached sequence: {seq_path}")
         return seq_path
 
     logger.info(f"Generating new sequence: {seq_path}")
-    make_madx_sequence(model_dir, seq_outdir=sequences_dir)
+    make_madx_sequence(model_dir, seq_outdir=sequences_dir, post_optics_madx_files=knobs_file)
     generated = sequences_dir / f"lhcb{beam}_saved.seq"
     generated.rename(seq_path)
     return seq_path
-
 
 def load_estimates(estimates_file: Path) -> dict[str, dict[str, float]]:
     """Load quadrupole estimates from file.
@@ -137,7 +171,9 @@ def load_estimates(estimates_file: Path) -> dict[str, dict[str, float]]:
                     estimates[current_arc][magnet] = float(value)
 
     if estimates:
-        logger.info(f"Loaded {sum(len(v) for v in estimates.values())} magnet estimates from {estimates_file.name}")
+        logger.info(
+            f"Loaded {sum(len(v) for v in estimates.values())} magnet estimates from {estimates_file.name}"
+        )
     return estimates
 
 
@@ -155,7 +191,9 @@ def get_model_dir(beam: int, squeeze_step: str) -> Path:
         ValueError: If squeeze_step is not found for the beam
     """
     if squeeze_step not in MODEL_DIRS.get(beam, {}):
-        raise ValueError(f"Model directory not defined for beam {beam}, squeeze_step {squeeze_step}")
+        raise ValueError(
+            f"Model directory not defined for beam {beam}, squeeze_step {squeeze_step}"
+        )
 
     meas_date = get_measurement_date(squeeze_step)
     model_dir = BETABEAT_DIR / meas_date / f"LHCB{beam}/Models/" / MODEL_DIRS[beam][squeeze_step]
@@ -180,10 +218,14 @@ def get_analysis_dir(beam: int, squeeze_step: str) -> Path:
         ValueError: If squeeze_step is not found for the beam
     """
     if squeeze_step not in ANALYSIS_DIRS.get(beam, {}):
-        raise ValueError(f"Analysis directory not defined for beam {beam}, squeeze_step {squeeze_step}")
+        raise ValueError(
+            f"Analysis directory not defined for beam {beam}, squeeze_step {squeeze_step}"
+        )
 
     meas_date = get_measurement_date(squeeze_step)
-    analysis_dir = BETABEAT_DIR / meas_date / f"LHCB{beam}/Results/" / ANALYSIS_DIRS[beam][squeeze_step]
+    analysis_dir = (
+        BETABEAT_DIR / meas_date / f"LHCB{beam}/Results/" / ANALYSIS_DIRS[beam][squeeze_step]
+    )
     if not analysis_dir.exists():
         raise ValueError(f"Analysis directory not found: {analysis_dir}")
 

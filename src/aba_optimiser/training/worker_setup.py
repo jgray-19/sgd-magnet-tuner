@@ -7,16 +7,22 @@ payload construction and multiprocessing lifecycle code.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aba_optimiser.training.utils import create_bpm_range_specs, extract_bpm_range_names
 from aba_optimiser.workers import WorkerConfig
+from aba_optimiser.workers.common import KickPlane
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.config import SimulationConfig
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -39,7 +45,7 @@ class WorkerObservationPlan:
 
     range_spec: WorkerRangeSpec
     file_idx: int
-    kick_plane: str
+    kick_plane: KickPlane
     bpm_names: list[str]
     bad_bpms: list[str] | None
 
@@ -57,7 +63,7 @@ class WorkerRuntimeMetadata:
     start_bpm: str
     end_bpm: str
     sdir: int
-    kick_plane: str
+    kick_plane: KickPlane
     n_run_turns: int
     bpm_names: list[str]
 
@@ -80,12 +86,13 @@ class WorkerSetupHelper:
         fixed_end: str,
         use_fixed_bpm: bool,
         bad_bpms: list[str] | None,
-        file_kick_planes: dict[int, str],
+        file_kick_planes: dict[int, str | KickPlane],
         magnet_range: str,
         corrector_strengths_files: list[Path],
         tune_knobs_files: list[Path],
         debug: bool,
         mad_logfile: Path | None,
+        python_logfile: Path | None,
     ) -> None:
         self.accelerator = accelerator
         self.all_bpms = all_bpms
@@ -99,6 +106,7 @@ class WorkerSetupHelper:
         self.tune_knobs_files = tune_knobs_files
         self.debug = debug
         self.mad_logfile = mad_logfile
+        self.python_logfile = python_logfile
 
     @staticmethod
     def merge_bad_bpms(*bad_bpm_lists: list[str] | None) -> list[str] | None:
@@ -112,20 +120,22 @@ class WorkerSetupHelper:
                     merged.append(bpm)
         return merged or None
 
-    def bpm_supports_plane(self, bpm: str, kick_plane: str) -> bool:
+    def bpm_supports_plane(self, bpm: str, kick_plane: KickPlane) -> bool:
         """Return whether `bpm` can measure the requested kick plane."""
         plane = self.accelerator.infer_monitor_plane(bpm)
-        if kick_plane == "x":
+        if kick_plane == KickPlane.X:
             return "H" in plane
-        if kick_plane == "y":
+        if kick_plane == KickPlane.Y:
             return "V" in plane
-        if kick_plane == "xy":
+        if kick_plane == KickPlane.XY:
             return ("H" in plane) or ("V" in plane)
         raise ValueError(f"Unsupported kick plane {kick_plane!r}")
 
     def bpm_supports_both_planes(self, bpm: str) -> bool:
         """Return whether `bpm` can measure both transverse planes."""
-        return self.bpm_supports_plane(bpm, "x") and self.bpm_supports_plane(bpm, "y")
+        return self.bpm_supports_plane(bpm, KickPlane.X) and self.bpm_supports_plane(
+            bpm, KickPlane.Y
+        )
 
     def get_range_bpm_names(
         self,
@@ -144,12 +154,12 @@ class WorkerSetupHelper:
         start_bpm: str,
         end_bpm: str,
         sdir: int,
-        kick_plane: str,
+        kick_plane: KickPlane,
         bad_bpms: list[str] | None = None,
     ) -> list[str]:
         """Return the BPMs a worker should observe, in tracking order."""
         bpm_names = self.get_range_bpm_names(start_bpm, end_bpm, sdir, bad_bpms)
-        if kick_plane == "xy":
+        if kick_plane == KickPlane.XY:
             return bpm_names
         return [bpm for bpm in bpm_names if self.bpm_supports_plane(bpm, kick_plane)]
 
@@ -158,10 +168,10 @@ class WorkerSetupHelper:
         start_bpm: str,
         end_bpm: str,
         sdir: int,
-        kick_plane: str,
+        kick_plane: KickPlane,
     ) -> list[str] | None:
         """Return per-worker BPM exclusions needed by the MAD interface."""
-        if kick_plane == "xy":
+        if kick_plane == KickPlane.XY:
             return self.bad_bpms
 
         range_bpms = self.get_range_bpm_names(start_bpm, end_bpm, sdir)
@@ -207,19 +217,24 @@ class WorkerSetupHelper:
             raise ValueError("Worker batch contains turns from multiple measurement files")
         return primary_file_idx
 
-    def get_worker_planes(self, data_plane: str, range_bpms: list[str]) -> tuple[str, ...]:
+    def get_worker_planes(
+        self, data_plane: KickPlane, range_bpms: list[str]
+    ) -> tuple[KickPlane, ...]:
         """Return the worker plane(s) required for one file/range combination."""
-        if data_plane == "xy" and all(self.bpm_supports_both_planes(bpm) for bpm in range_bpms):
-            return ("xy",)
-        if data_plane == "xy":
-            return ("x", "y")
+        if data_plane == KickPlane.XY and all(
+            self.bpm_supports_both_planes(bpm) for bpm in range_bpms
+        ):
+            return (KickPlane.XY,)
+        if data_plane == KickPlane.XY:
+            return (KickPlane.X, KickPlane.Y)
         return (data_plane,)
 
     def make_observation_plan(
         self,
         range_spec: WorkerRangeSpec,
         file_idx: int,
-        worker_plane: str,
+        worker_plane: KickPlane,
+        available_bpms: set[str] | None = None,
     ) -> WorkerObservationPlan | None:
         """Build one worker plan, or return `None` when the range is incompatible."""
         bad_bpms = self.get_worker_bad_bpms(
@@ -235,6 +250,19 @@ class WorkerSetupHelper:
             worker_plane,
             bad_bpms,
         )
+        if available_bpms is not None:
+            missing_bpms = [bpm for bpm in bpm_names if bpm not in available_bpms]
+            if missing_bpms:
+                LOGGER.warning(
+                    "File %d range %s/%s sdir=%d: %d BPMs missing from measurement data; adding to bad BPMs",
+                    file_idx,
+                    range_spec.start_bpm,
+                    range_spec.end_bpm,
+                    range_spec.sdir,
+                    len(missing_bpms),
+                )
+                bad_bpms = self.merge_bad_bpms(bad_bpms, missing_bpms)
+                bpm_names = [bpm for bpm in bpm_names if bpm in available_bpms]
         if not bpm_names or range_spec.init_bpm not in bpm_names:
             return None
         return WorkerObservationPlan(
@@ -249,6 +277,7 @@ class WorkerSetupHelper:
         self,
         range_spec: WorkerRangeSpec,
         file_idx: int,
+        available_bpms: set[str] | None = None,
     ) -> list[WorkerObservationPlan]:
         """Return the per-file worker plan(s) for a range and measurement file.
 
@@ -257,7 +286,8 @@ class WorkerSetupHelper:
         and y workers, and each worker only keeps BPMs that can observe its
         plane and initialise from its direction-specific start BPM.
         """
-        data_plane = self.file_kick_planes.get(file_idx, "xy")
+        data_plane_raw = self.file_kick_planes.get(file_idx, KickPlane.XY)
+        data_plane = KickPlane(data_plane_raw)
         range_bpms = self.get_range_bpm_names(
             range_spec.start_bpm,
             range_spec.end_bpm,
@@ -269,7 +299,12 @@ class WorkerSetupHelper:
 
         plans: list[WorkerObservationPlan] = []
         for worker_plane in self.get_worker_planes(data_plane, range_bpms):
-            plan = self.make_observation_plan(range_spec, file_idx, worker_plane)
+            plan = self.make_observation_plan(
+                range_spec,
+                file_idx,
+                worker_plane,
+                available_bpms=available_bpms,
+            )
             if plan is not None:
                 plans.append(plan)
 
@@ -289,6 +324,7 @@ class WorkerSetupHelper:
             bad_bpms=plan.bad_bpms,
             debug=self.debug,
             mad_logfile=self.mad_logfile,
+            python_logfile=self.python_logfile,
         )
 
     @staticmethod

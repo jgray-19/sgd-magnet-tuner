@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from tensorboardX import SummaryWriter
 
 from aba_optimiser.training.configuration_manager import ConfigurationManager
+from aba_optimiser.training.controller_config import OutputConfig
 from aba_optimiser.training.optimisation_loop import OptimisationLoop
 from aba_optimiser.training.result_manager import ResultManager
 from aba_optimiser.training.utils import filter_bad_bpms, normalize_true_strengths
@@ -42,15 +43,13 @@ class BaseController(ABC):
         magnet_range: str,
         bpm_start_points: list[str],
         bpm_end_points: list[str],
-        show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
         true_strengths: Path | dict[str, float] | None = None,
         bad_bpms: list[str] | None = None,
         first_bpm: str | None = None,
         debug: bool = False,
-        mad_logfile: Path | None = None,
         optimise_knobs: list[str] | None = None,
-        write_tensorboard_logs: bool = True,
+        output_config: OutputConfig | None = None,
     ):
         """Initialize base controller.
 
@@ -61,21 +60,22 @@ class BaseController(ABC):
             magnet_range: Magnet range specification
             bpm_start_points: Start BPMs for each range
             bpm_end_points: End BPMs for each range
-            show_plots: Whether to show plots
             initial_knob_strengths: Initial knob strengths
             true_strengths: True strengths (Path, dict, or None)
             bad_bpms: List of bad BPMs to exclude
             first_bpm: First BPM in the sequence
+            debug: Enable debug mode
             optimise_knobs: List of global knob names to optimise, or None
-            write_tensorboard_logs: Whether to write TensorBoard event logs
+            output_config: Output and logging configuration. Defaults to OutputConfig().
         """
         self.optimiser_config = optimiser_config
         self.simulation_config = simulation_config
         self.accelerator = accelerator
-        self.show_plots = show_plots
         self.debug = debug
-        self.mad_logfile = mad_logfile
-        self.write_tensorboard_logs = write_tensorboard_logs
+        self.output_config = output_config if output_config is not None else OutputConfig()
+        self.show_plots = self.output_config.show_plots
+        self.mad_logfile: Path | None = self.output_config.mad_logfile
+        self.python_logfile: Path | None = self.output_config.python_logfile
 
         if not accelerator.has_any_optimisation():
             raise ValueError("No optimisation types enabled in the accelerator configuration.")
@@ -99,7 +99,7 @@ class BaseController(ABC):
             first_bpm,
             bad_bpms,
             debug,
-            mad_logfile,
+            self.mad_logfile,
         )
 
         # Normalize and initialize knob strengths
@@ -162,7 +162,7 @@ class BaseController(ABC):
         Returns:
             TensorBoard SummaryWriter instance or None when disabled
         """
-        if not self.write_tensorboard_logs:
+        if not self.output_config.write_tensorboard_logs:
             LOGGER.info("TensorBoard logging disabled")
             return None
 

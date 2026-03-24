@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
+from aba_optimiser.optimisers.base import BaseOptimiser
 
-class LBFGSOptimiser:
+
+class LBFGSOptimiser(BaseOptimiser):
+    OPTIMISER_NAME = "lbfgs"
+
     """
     Limited-memory BFGS with an adaptive, line-search-free step length.
 
@@ -149,3 +155,49 @@ class LBFGSOptimiser:
         self.prev_grads = g.copy()
 
         return new_params
+
+    def state_to_dict(self) -> dict[str, Any]:
+        """Return optimiser internal state as a serialisable dictionary."""
+        return {
+            "type": self.OPTIMISER_NAME,
+            "history_size": int(self.history_size),
+            "eps": float(self.eps),
+            "weight_decay": float(self.weight_decay),
+            "t": int(self.t),
+            "S": [arr.tolist() for arr in self.S],
+            "Y": [arr.tolist() for arr in self.Y],
+            "RHO": [float(v) for v in self.RHO],
+            "prev_params": None if self.prev_params is None else self.prev_params.tolist(),
+            "prev_grads": None if self.prev_grads is None else self.prev_grads.tolist(),
+            "use_adaptive_lr": bool(self.use_adaptive_lr),
+            "bb_min": float(self.bb_min),
+            "bb_max": float(self.bb_max),
+            "ema_beta": float(self.ema_beta),
+            "eta_ema": float(self.eta_ema),
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore optimiser internal state from a dictionary."""
+        if state.get("type") != self.OPTIMISER_NAME:
+            raise ValueError(
+                f"State type {state.get('type')} does not match {self.OPTIMISER_NAME}"
+            )
+
+        self.history_size = int(state["history_size"])
+        self.eps = float(state["eps"])
+        self.weight_decay = float(state["weight_decay"])
+        self.t = int(state["t"])
+
+        self.S = [np.array(arr, dtype=float) for arr in state["S"]]
+        self.Y = [np.array(arr, dtype=float) for arr in state["Y"]]
+        self.RHO = [float(v) for v in state["RHO"]]
+        prev_params = state.get("prev_params")
+        prev_grads = state.get("prev_grads")
+        self.prev_params = None if prev_params is None else np.array(prev_params, dtype=float)
+        self.prev_grads = None if prev_grads is None else np.array(prev_grads, dtype=float)
+
+        self.use_adaptive_lr = bool(state["use_adaptive_lr"])
+        self.bb_min = float(state["bb_min"])
+        self.bb_max = float(state["bb_max"])
+        self.ema_beta = float(state["ema_beta"])
+        self.eta_ema = float(state["eta_ema"])

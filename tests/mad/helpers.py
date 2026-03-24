@@ -103,30 +103,45 @@ py:send(elm_idx)""")
     return _recv_n(interface.mad, 4)
 
 
+def _corrector_targets(row) -> list[tuple[str, float]]:
+    """Return the tracked attributes and expected values for one corrector row."""
+    if row.kind == "hkicker":
+        return [("kick", float(row.hkick))]
+    if row.kind == "vkicker":
+        return [("kick", float(row.vkick))]
+    if row.kind == "tkicker":
+        return [("hkick", float(row.hkick)), ("vkick", float(row.vkick))]
+    raise ValueError(f"Unsupported corrector kind {row.kind!r}")
+
+
+def _assert_corrector_strength(
+    interface: AbaMadInterface, row_name: str, attr: str, expected: float
+) -> None:
+    """Assert one corrector strength in both MADX and loaded_sequence."""
+    madx_strength = interface.mad[f"MADX['{row_name}'].{attr}"]
+    seq_strength = interface.mad[f"loaded_sequence['{row_name}'].{attr}"]
+    assert madx_strength == expected, (
+        f"{row_name} MADX {attr} mismatch: {madx_strength} != {expected}"
+    )
+    assert seq_strength == expected, (
+        f"{row_name} loaded_sequence {attr} mismatch: {seq_strength} != {expected}"
+    )
+
+
 def check_corrector_strengths_zero(
     interface: AbaMadInterface, corrector_table: tfs.TfsDataFrame
 ) -> None:
-    """Check that all corrector strengths are initially zero."""
+    """Check that all corrector strengths are initially zero in both MADX and loaded_sequence."""
     for row in corrector_table.itertuples():
-        strength = interface.mad[f"MADX['{row.name}'].kick"]
-        assert strength == 0.0, f"Initial strength for {row.name} not zero: {strength}"
+        for attr, _ in _corrector_targets(row):
+            _assert_corrector_strength(interface, row.name, attr, 0.0)
 
 
 def check_corrector_strengths(
     interface: AbaMadInterface,
     corrector_table: tfs.TfsDataFrame,
 ) -> None:
-    """Check that corrector strengths match expected values.
-
-    Args:
-        interface: The MAD interface to check
-        corrector_table: The corrector table containing expected values
-        use_real_strengths: If True, expect values from table; if False, expect zeros
-    """
+    """Check that corrector strengths match expected values in both MADX and loaded_sequence."""
     for row in corrector_table.itertuples():
-        h_or_v = row.kind[0].lower()
-        expected = getattr(row, f"{h_or_v}kick")
-        actual = interface.mad[f"MADX['{row.name}'].kick"]
-        assert actual == expected, (
-            f"{row.name} strength mismatch: {actual} != {expected}"
-        )
+        for attr, expected in _corrector_targets(row):
+            _assert_corrector_strength(interface, row.name, attr, expected)

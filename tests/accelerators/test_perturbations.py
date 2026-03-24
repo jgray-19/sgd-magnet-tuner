@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 def _get_element_attr(interface: AbaMadInterface, element_name: str, attr: str) -> float:
     """Read one element attribute from the currently loaded MAD sequence."""
-    return float(interface.mad.MADX[element_name][attr])
+    return float(interface.mad.loaded_sequence[element_name][attr])
 
 
 def _get_effective_strength(interface: AbaMadInterface, element_name: str, attr: str) -> float:
@@ -26,7 +26,7 @@ def _get_effective_strength(interface: AbaMadInterface, element_name: str, attr:
 def _get_element_dknl(interface: AbaMadInterface, element_name: str, index: int) -> float:
     """Read one dknl component (0-based, Python indexing)."""
     try:
-        return float(interface.mad.MADX[element_name].dknl[index])
+        return float(interface.mad.loaded_sequence[element_name].dknl[index])
     except IndexError:
         # If the dknl array is empty or shorter than expected, treat missing components as zero
         return 0

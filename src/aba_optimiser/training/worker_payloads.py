@@ -301,10 +301,10 @@ class WorkerPayloadBuilder:
 
         payload_data: list[tuple[TrackingData, int, list[np.ndarray]]] = []
         for data, _config, file_idx in payloads:
-            n_init = len(data.init_coords) - (len(data.init_coords) % num_batches)
+            n_init = len(data.init_coords)
             if n_init <= 0:
                 raise ValueError(
-                    f"Worker payload for file {file_idx} has no usable particles after batching"
+                    f"Worker payload for file {file_idx} has no initial coordinates"
                 )
             var_slices = [
                 data.position_variances[:n_init, :, 0],

@@ -2,24 +2,37 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import numpy as np
 
-from aba_optimiser.optimisers.adam import AdamOptimiser
-from aba_optimiser.optimisers.amsgrad import AMSGradOptimiser
-from aba_optimiser.optimisers.lbfgs import LBFGSOptimiser
+from aba_optimiser.optimisers import adam as _adam  # noqa: F401
+from aba_optimiser.optimisers import amsgrad as _amsgrad  # noqa: F401
+from aba_optimiser.optimisers import lbfgs as _lbfgs  # noqa: F401
+from aba_optimiser.optimisers.base import BaseOptimiser
 from aba_optimiser.training.scheduler import LRScheduler
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
     from tensorboardX import SummaryWriter
 
     from aba_optimiser.config import OptimiserConfig, SimulationConfig
+    from aba_optimiser.training.controller_config import CheckpointConfig
     from aba_optimiser.workers.protocol import WorkerChannels
 
 LOGGER = logging.getLogger(__name__)
+
+
+class _CheckpointState(TypedDict):
+    saved_epoch: int
+    next_epoch: int
+    current_knobs: dict[str, float]
+    prev_loss: float | None
 
 
 class OptimisationLoop:
@@ -50,6 +63,7 @@ class OptimisationLoop:
 
         self.max_epochs = optimiser_config.max_epochs
         self.gradient_converged_value = optimiser_config.gradient_converged_value
+        self.optimiser: BaseOptimiser
 
         # Initialise optimiser
         opt_type = optimiser_type if optimiser_type is not None else optimiser_config.optimiser_type
@@ -86,25 +100,105 @@ class OptimisationLoop:
 
     def _init_optimiser(self, shape: tuple[int, ...], optimiser_type: str) -> None:
         """Initialise the optimiser based on type."""
-        optimiser_kwargs = {
-            "shape": shape,
-            "beta1": 0.9,
-            "beta2": 0.999,
-            "weight_decay": 0,
-        }
-        if optimiser_type == "amsgrad":
-            self.optimiser = AMSGradOptimiser(**optimiser_kwargs)  # ty:ignore[invalid-argument-type]
-        elif optimiser_type == "adam":
-            self.optimiser = AdamOptimiser(**optimiser_kwargs)  # ty:ignore[invalid-argument-type]
+        if optimiser_type in {"adam", "amsgrad"}:
+            self.optimiser = BaseOptimiser.create(
+                optimiser_type,
+                shape=shape,
+                beta1=0.9,
+                beta2=0.999,
+                weight_decay=0,
+            )
         elif optimiser_type == "lbfgs":
-            self.optimiser = LBFGSOptimiser(
+            self.optimiser = BaseOptimiser.create(
+                optimiser_type,
                 history_size=20,
                 eps=1e-12,
-                weight_decay=optimiser_kwargs["weight_decay"],  # ty:ignore[invalid-argument-type]
+                weight_decay=0,
             )
         else:
             raise ValueError(f"Unknown optimiser type: {optimiser_type}")
         LOGGER.info(f"Using optimiser: {self.optimiser.__class__.__name__}")
+
+    @staticmethod
+    def _checkpoint_options(
+        checkpoint_config: CheckpointConfig | None,
+    ) -> tuple[Path | None, int, bool]:
+        """Unpack checkpoint options with sensible defaults when disabled."""
+        if checkpoint_config is None:
+            return None, 0, False
+        return (
+            checkpoint_config.checkpoint_path,
+            checkpoint_config.checkpoint_every_n_epochs,
+            checkpoint_config.restore_from_checkpoint,
+        )
+
+    @staticmethod
+    def _should_save_periodic_checkpoint(
+        checkpoint_path: Path | None,
+        checkpoint_every_n_epochs: int,
+        epoch: int,
+    ) -> bool:
+        """Return True when this epoch should trigger periodic checkpointing."""
+        return (
+            checkpoint_path is not None
+            and checkpoint_every_n_epochs > 0
+            and (epoch + 1) % checkpoint_every_n_epochs == 0
+        )
+
+    @staticmethod
+    def _should_save_final_checkpoint(
+        checkpoint_path: Path | None,
+        checkpoint_every_n_epochs: int,
+        last_completed_epoch: int,
+    ) -> bool:
+        """Return True when a final checkpoint should be written on loop exit."""
+        return (
+            checkpoint_path is not None
+            and checkpoint_every_n_epochs > 0
+            and last_completed_epoch >= 0
+        )
+
+    def _is_new_best(
+        self,
+        epoch_loss: float,
+        prev_loss: float | None,
+        sum_rel_diff: float,
+    ) -> bool:
+        """Decide whether the current epoch should replace the best known state."""
+        should_save_as_best = True
+        if self.best_loss != float("inf") and prev_loss is not None:
+            loss_improvement = (
+                (self.best_loss - epoch_loss) / abs(prev_loss) if prev_loss != 0 else 0
+            )
+            if loss_improvement < self.loss_improvement_threshold:
+                _, best_sum_rel_diff = self._calculate_rel_diff(self.best_knobs)
+                if sum_rel_diff > best_sum_rel_diff:
+                    should_save_as_best = False
+                    LOGGER.debug(
+                        f"Not saving as best: loss improvement {loss_improvement:.3e} < {self.loss_improvement_threshold:.3e} "
+                        f"and rel_diff {sum_rel_diff:.3e} > {best_sum_rel_diff:.3e}."
+                    )
+        return should_save_as_best and epoch_loss < self.best_loss
+
+    def _should_stop_for_loss_change(
+        self,
+        epoch: int,
+        epoch_loss: float,
+        prev_loss: float | None,
+    ) -> bool:
+        """Update smoothed loss-change metric and decide if loss-based early stop triggers."""
+        if prev_loss is None:
+            return False
+
+        rel_loss_change = abs(epoch_loss - prev_loss) / abs(prev_loss) if prev_loss != 0 else 0
+        if self.smoothed_loss_change == 0.0:  # Exact 0 case for first update
+            self.smoothed_loss_change = rel_loss_change
+        else:
+            self.smoothed_loss_change = (
+                self.grad_norm_alpha * self.smoothed_loss_change
+                + (1.0 - self.grad_norm_alpha) * rel_loss_change
+            )
+        return self.smoothed_loss_change < 1e-6 and epoch > 0.2 * self.max_epochs
 
     def run_optimisation(
         self,
@@ -113,14 +207,35 @@ class OptimisationLoop:
         writer: SummaryWriter | None,
         run_start: float,
         total_turns: int,
+        checkpoint_config: CheckpointConfig | None = None,
+        validation_loss_fn: Callable[[dict[str, float]], float | None] | None = None,
     ) -> dict[str, float]:
         """Run the main optimisation loop."""
+        checkpoint_path, checkpoint_every_n_epochs, restore_from_checkpoint = (
+            self._checkpoint_options(checkpoint_config)
+        )
+
         if "pt" in current_knobs and current_knobs["pt"] == 0.0:
             current_knobs["pt"] = 1e-6  # Initialise pt to non-zero
 
         prev_loss = None
+        start_epoch = 0
 
-        for epoch in range(self.max_epochs):
+        if restore_from_checkpoint:
+            if checkpoint_path is None:
+                raise ValueError("restore_from_checkpoint=True requires checkpoint_path to be set")
+            checkpoint_state = self._load_checkpoint(checkpoint_path)
+            current_knobs = checkpoint_state["current_knobs"]
+            prev_loss = checkpoint_state["prev_loss"]
+            start_epoch = checkpoint_state["next_epoch"]
+            LOGGER.info(
+                "Restored optimisation checkpoint from %s at epoch %d",
+                checkpoint_path,
+                checkpoint_state["saved_epoch"],
+            )
+
+        last_completed_epoch = start_epoch - 1
+        for epoch in range(start_epoch, self.max_epochs):
             self.max_clipping_ratio = 0.0  # Reset once per epoch
             epoch_start = time.time()
 
@@ -138,8 +253,8 @@ class OptimisationLoop:
                 # Update knobs after each batch
                 current_knobs = self._update_knobs(current_knobs, batch_grad, lr)
 
-            # Average over batches for logging
-            epoch_loss /= total_turns
+            # Keep training loss on a single-worker scale by averaging over batches.
+            epoch_loss /= max(1, self.num_batches)
             epoch_grad /= total_turns
 
             grad_norm = float(np.linalg.norm(epoch_grad[epoch_grad != 0.0]))
@@ -148,27 +263,39 @@ class OptimisationLoop:
             # Calculate relative differences for rejection logic
             sum_true_diff, sum_rel_diff = self._calculate_rel_diff(current_knobs)
 
-            # Update best loss and knobs, but skip if improvement is too small and rel_diff increases
-            should_save_as_best = True
-            if self.best_loss != float("inf") and prev_loss is not None:
-                loss_improvement = (
-                    (self.best_loss - epoch_loss) / abs(prev_loss) if prev_loss != 0 else 0
-                )
-                if loss_improvement < self.loss_improvement_threshold:
-                    best_sum_true_diff, best_sum_rel_diff = self._calculate_rel_diff(
-                        self.best_knobs
-                    )
-                    if sum_rel_diff > best_sum_rel_diff:
-                        should_save_as_best = False
-                        LOGGER.debug(
-                            f"Not saving as best: loss improvement {loss_improvement:.3e} < {self.loss_improvement_threshold:.3e} "
-                            f"and rel_diff {sum_rel_diff:.3e} > {best_sum_rel_diff:.3e}."
-                        )
+            validation_loss = (
+                validation_loss_fn(current_knobs) if validation_loss_fn is not None else None
+            )
+            stop_loss = validation_loss if validation_loss is not None else epoch_loss
+
             new_best = False
-            if should_save_as_best and epoch_loss < self.best_loss:
-                self.best_loss = epoch_loss
+            if self._is_new_best(stop_loss, prev_loss, sum_rel_diff):
+                self.best_loss = stop_loss
                 self.best_knobs = current_knobs.copy()
                 new_best = True
+
+            stop_for_loss_change = self._should_stop_for_loss_change(epoch, stop_loss, prev_loss)
+            if not stop_for_loss_change:
+                prev_loss = stop_loss
+                last_completed_epoch = epoch
+
+            stop_for_grad_norm = self.smoothed_grad_norm < self.gradient_converged_value
+            saved_checkpoint = False
+            if (
+                not stop_for_loss_change
+                and not stop_for_grad_norm
+                and self._should_save_periodic_checkpoint(
+                    checkpoint_path, checkpoint_every_n_epochs, epoch
+                )
+            ):
+                assert checkpoint_path is not None
+                self._save_checkpoint(
+                    checkpoint_path=checkpoint_path,
+                    epoch=epoch,
+                    current_knobs=current_knobs,
+                    prev_loss=prev_loss,
+                )
+                saved_checkpoint = True
 
             self._log_epoch_stats(
                 writer,
@@ -183,25 +310,95 @@ class OptimisationLoop:
                 sum_true_diff,
                 sum_rel_diff,
                 new_best,
+                saved_checkpoint,
+                validation_loss,
             )
 
-            if prev_loss is not None:
-                rel_loss_change = (
-                    abs(epoch_loss - prev_loss) / abs(prev_loss) if prev_loss != 0 else 0
-                )
-                self._update_smoothed_loss_change(rel_loss_change)
-                if self.smoothed_loss_change < 1e-6 and epoch > 0.2 * self.max_epochs:
-                    LOGGER.info(f"\nLoss change below threshold. Stopping early at epoch {epoch}.")
-                    break
-            prev_loss: int | float = epoch_loss
+            if stop_for_loss_change:
+                LOGGER.info(f"\nLoss change below threshold. Stopping early at epoch {epoch}.")
+                break
 
-            if self.smoothed_grad_norm < self.gradient_converged_value:
+            if stop_for_grad_norm:
                 LOGGER.info(
                     f"\nGradient norm below threshold: {self.smoothed_grad_norm:.3e}. Stopping early at epoch {epoch}."
                 )
                 break
+        if self._should_save_final_checkpoint(
+            checkpoint_path, checkpoint_every_n_epochs, last_completed_epoch
+        ):
+            assert checkpoint_path is not None
+            self._save_checkpoint(
+                checkpoint_path=checkpoint_path,
+                epoch=last_completed_epoch,
+                current_knobs=current_knobs,
+                prev_loss=prev_loss,
+            )
 
         return self.best_knobs
+
+    def _save_checkpoint(
+        self,
+        checkpoint_path: Path,
+        epoch: int,
+        current_knobs: dict[str, float],
+        prev_loss: float | None,
+    ) -> None:
+        """Save optimisation state so the run can be resumed later."""
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "saved_epoch": int(epoch),
+            "next_epoch": int(epoch + 1),
+            "knob_names": self.knob_names,
+            "current_knobs": {k: float(v) for k, v in current_knobs.items()},
+            "best_knobs": {k: float(v) for k, v in self.best_knobs.items()},
+            "best_loss": float(self.best_loss),
+            "prev_loss": None if prev_loss is None else float(prev_loss),
+            "smoothed_grad_norm": float(self.smoothed_grad_norm),
+            "smoothed_loss_change": float(self.smoothed_loss_change),
+            "max_clipping_ratio": float(self.max_clipping_ratio),
+            "optimiser_class": self.optimiser.__class__.__name__,
+            "optimiser_state": self.optimiser.state_to_dict(),
+        }
+        checkpoint_path.write_text(json.dumps(payload, indent=2))
+
+    def _load_checkpoint(self, checkpoint_path: Path) -> _CheckpointState:
+        """Load optimisation state from checkpoint and apply it to this loop."""
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+
+        payload = cast("dict[str, Any]", json.loads(checkpoint_path.read_text()))
+
+        saved_knob_names = payload.get("knob_names", [])
+        if saved_knob_names != self.knob_names:
+            raise ValueError(
+                "Checkpoint knob names do not match current optimisation setup. "
+                "Ensure you are resuming the same optimisation problem."
+            )
+
+        self.best_knobs = {str(k): float(v) for k, v in payload.get("best_knobs", {}).items()}
+        self.best_loss = float(payload.get("best_loss", float("inf")))
+        self.smoothed_grad_norm = float(payload.get("smoothed_grad_norm", 0.0))
+        self.smoothed_loss_change = float(payload.get("smoothed_loss_change", 0.0))
+        self.max_clipping_ratio = float(payload.get("max_clipping_ratio", 0.0))
+
+        optimiser_state = payload.get("optimiser_state", {})
+        if optimiser_state:
+            self.optimiser.load_state_dict(cast("dict[str, Any]", optimiser_state))
+
+        current_knobs = {str(k): float(v) for k, v in payload.get("current_knobs", {}).items()}
+        if set(current_knobs.keys()) != set(self.knob_names):
+            raise ValueError(
+                "Checkpoint current knobs do not match expected knob set for this optimisation."
+            )
+
+        return {
+            "saved_epoch": int(payload.get("saved_epoch", 0)),
+            "next_epoch": int(payload.get("next_epoch", 0)),
+            "current_knobs": current_knobs,
+            "prev_loss": (
+                float(payload["prev_loss"]) if payload.get("prev_loss") is not None else None
+            ),
+        }
 
     def _collect_batch_results(self, channels: WorkerChannels) -> tuple[float, np.ndarray]:
         """Collect results from all workers for a batch.
@@ -214,11 +411,16 @@ class OptimisationLoop:
         """
         total_loss = 0.0
         agg_grad = np.zeros(len(self.knob_names), dtype=float)
-        for result in channels.recv_all():
+        results = channels.recv_all()
+        n_workers = len(results)
+        if n_workers == 0:
+            raise RuntimeError("No training workers returned batch results")
+
+        for result in results:
             if not isinstance(result, tuple) or len(result) != 3:
                 raise RuntimeError(f"Unexpected worker result payload: {result!r}")
 
-            _, grad, loss = result
+            _, grad, loss = cast("tuple[object, np.ndarray, float]", result)
             if loss == float("inf"):
                 LOGGER.error("Worker error detected, stopping optimisation immediately.")
                 raise RuntimeError("Worker error detected during optimisation")
@@ -226,9 +428,9 @@ class OptimisationLoop:
             grad_flat = grad.flatten()
 
             agg_grad += grad_flat
-            total_loss += loss
+            total_loss += float(loss)
 
-        return total_loss, agg_grad
+        return total_loss / n_workers, agg_grad
 
     def _update_knobs(
         self, current_knobs: dict[str, float], agg_grad: np.ndarray, lr: float
@@ -311,17 +513,6 @@ class OptimisationLoop:
                 self.grad_norm_alpha * self.smoothed_grad_norm
                 + (1.0 - self.grad_norm_alpha) * grad_norm
             )
-
-    def _update_smoothed_loss_change(self, loss_change: float) -> None:
-        """Update the exponential moving average of the loss change."""
-        if self.smoothed_loss_change == 0.0:  # Exact 0 case for first update
-            self.smoothed_loss_change = loss_change
-        else:
-            self.smoothed_loss_change = (
-                self.grad_norm_alpha * self.smoothed_loss_change
-                + (1.0 - self.grad_norm_alpha) * loss_change
-            )
-
     def _calculate_rel_diff(self, current_knobs: dict[str, float]) -> tuple[float, float]:
         """Calculate sum of absolute and relative differences from true strengths.
 
@@ -353,6 +544,8 @@ class OptimisationLoop:
         sum_true_diff: float = 0.0,
         sum_rel_diff: float = 0.0,
         new_best: bool = False,
+        saved_checkpoint: bool = False,
+        validation_loss: float | None = None,
     ) -> None:
         """Log statistics for the current epoch."""
         # Log scalars to TensorBoard
@@ -362,6 +555,8 @@ class OptimisationLoop:
                 "grad_norm": grad_norm,
                 "learning_rate": lr,
             }
+            if validation_loss is not None:
+                scalars["validation_loss"] = validation_loss
             if self.rel_sigma_step > 0:
                 scalars.update(
                     {
@@ -388,16 +583,19 @@ class OptimisationLoop:
         total_time = time.time() - run_start
 
         # Build log message
-        parts = [
-            f"Epoch {epoch}: loss={loss:.3e}, grad_norm={grad_norm:.3e}",
-        ]
+        parts = [f"Ep {epoch}: loss={loss:.3e}"]
+        if validation_loss is not None:
+            parts.append(f"val={validation_loss:.3e}")
+        parts.append(f"g={grad_norm:.3e}")
         if self.rel_sigma_step > 0:
-            parts.append(f"clipping_ratio={clipping_ratio:.3e}")
+            parts.append(f"clip={clipping_ratio:.2e}")
         if self.use_true_strengths:
-            parts.append(f"true_diff={sum_true_diff:.3e}, rel_diff={sum_rel_diff:.3e}")
-        parts.append(f"lr={lr:.3e}, epoch_time={epoch_time:.3f}s, total_time={total_time:.3f}s")
+            parts.append(f"td={sum_true_diff:.3e}, rd={sum_rel_diff:.3e}")
+        parts.append(f"lr={lr:.2e}, et={epoch_time:.1f}s, tt={total_time:.1f}s")
         message = ", ".join(parts)
 
         if new_best:
-            message += " [new best]"
+            message += " [b]"
+        if saved_checkpoint:
+            message += " [s]"
         LOGGER.info(f"\r{message}")

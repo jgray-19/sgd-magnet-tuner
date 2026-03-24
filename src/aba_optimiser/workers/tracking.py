@@ -101,11 +101,12 @@ class TrackingWorker(AbstractWorker[TrackingData]):
         """
         self.observables = self._resolve_observables()
         self.hessian_weight_order = self.observables
-        num_batches = self.simulation_config.num_batches
+        num_batches = min(self.simulation_config.num_batches, len(data.init_coords))
+        if num_batches <= 0:
+            raise ValueError(f"Worker {self.worker_id}: No initial coordinates available")
 
-        # Ensure data is divisible by number of batches
-        n_init = len(data.init_coords) - (len(data.init_coords) % num_batches)
-        init_coords = data.init_coords[:n_init]
+        n_init = len(data.init_coords)
+        init_coords = data.init_coords
 
         LOGGER.debug(
             f"Worker {self.worker_id}: Processing {n_init} particles in {num_batches} batches"
@@ -125,8 +126,9 @@ class TrackingWorker(AbstractWorker[TrackingData]):
         self._prepare_batches(init_coords, data.init_pts, num_batches)
 
         self.worker_disabled = False
-        n_points = self.comparisons[self.observables[0]][0].shape[1]
-        self.keep_bpm_mask = np.ones(n_points, dtype=bool)
+        self.compute_hessian_on_exit = True
+        self.normalisation_points = self.comparisons[self.observables[0]][0].shape[1]
+        self.keep_bpm_mask = np.ones(self.normalisation_points, dtype=bool)
 
         self.run_track_init_text = build_tracking_init_script(self.observables)
         self.run_track_script = build_tracking_script(self.observables)
@@ -262,7 +264,7 @@ class TrackingWorker(AbstractWorker[TrackingData]):
         mad.send("""
 knob_monomials = {}
 for i,param in ipairs(knob_names) do
-    MADX[param] = MADX[param] + da_x0_base[param]
+    loaded_sequence[param] = loaded_sequence[param] + da_x0_base[param]
     knob_monomials[param] = string.rep("0", 6 + i - 1) .. "1"
 end
 """)
@@ -346,7 +348,7 @@ end
         machine_pt = knob_updates.get("pt", 0.0)
 
         update_commands = [
-            f"MADX['{name}']:set0({val:.15e})" for name, val in knob_updates.items() if name != "pt"
+            f"loaded_sequence['{name}']:set0({val:.15e})" for name, val in knob_updates.items() if name != "pt"
         ]
         if update_commands:
             mad.send("\n".join(update_commands))
@@ -416,8 +418,9 @@ end
                 f"expected {self.keep_bpm_mask.size}, got {keep_bpm_mask.size}"
             )
         self.keep_bpm_mask = keep_bpm_mask.astype(bool, copy=True)
+        self.normalisation_points = int(np.count_nonzero(self.keep_bpm_mask))
 
-    def _handle_control_command(self, mad: MAD, command: dict[str, object], nbpms: int) -> None:
+    def _handle_control_command(self, mad: MAD, command: dict[str, object]) -> None:
         """Handle control-plane commands from parent process."""
         cmd = command.get("cmd")
         if cmd == "diagnostics":
@@ -441,8 +444,8 @@ end
             self.conn.send(
                 {
                     "worker_id": self.worker_id,
-                    "total_loss": total_loss / nbpms,
-                    "loss_per_bpm": (loss_per_bpm / nbpms).tolist(),
+                    "total_loss": total_loss / self.normalisation_points,
+                    "loss_per_bpm": (loss_per_bpm / self.normalisation_points).tolist(),
                 }
             )
             return
@@ -453,6 +456,11 @@ end
             if keep_bpm_mask.size:
                 self._apply_runtime_mask(keep_bpm_mask)
             self.worker_disabled = disable_worker
+            self.conn.send({"worker_id": self.worker_id, "status": "ok"})
+            return
+
+        if cmd == "set_hessian_mode":
+            self.compute_hessian_on_exit = bool(command.get("enabled", True))
             self.conn.send({"worker_id": self.worker_id, "status": "ok"})
             return
 
@@ -516,6 +524,7 @@ end
         computation_success = True
 
         try:
+            self.configure_python_worker_logging()
             knob_values, batch = self.conn.recv()
             if knob_values is None:
                 return
@@ -530,11 +539,13 @@ end
             message: tuple[dict[str, float] | None, int | None] | dict[str, object] = (
                 self.conn.recv()
             )
-            while isinstance(message, dict):
-                self._handle_control_command(mad, message, nbpms)
-                message = self.conn.recv()
+            normalisation_points = self.normalisation_points
 
             while True:
+                while isinstance(message, dict):
+                    self._handle_control_command(mad, message)
+                    message = self.conn.recv()
+
                 knob_values, batch = message
                 if knob_values is None or batch is None:
                     LOGGER.debug(f"Worker {self.worker_id}: Received termination signal")
@@ -544,7 +555,13 @@ end
                         self.conn.send((self.worker_id, np.zeros(n_knobs), 0.0))
                     else:
                         grad, loss = self.compute_gradients_and_loss(mad, knob_values, int(batch))
-                        self.conn.send((self.worker_id, grad / nbpms, loss / nbpms))
+                        self.conn.send(
+                            (
+                                self.worker_id,
+                                grad / normalisation_points,
+                                loss / normalisation_points,
+                            )
+                        )
                 except Exception as exc:  # noqa: BLE001
                     self.send_error_payload(exc, phase="computation")
                     computation_success = False
@@ -552,7 +569,7 @@ end
 
                 message = self.conn.recv()
 
-            if computation_success and not self.worker_disabled:
+            if computation_success and not self.worker_disabled and self.compute_hessian_on_exit:
                 LOGGER.debug(f"Worker {self.worker_id}: Computing Hessian approximation")
                 try:
                     self.conn.send(self._compute_hessian_part(mad, n_knobs))

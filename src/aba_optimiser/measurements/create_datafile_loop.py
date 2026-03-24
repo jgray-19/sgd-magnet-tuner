@@ -12,13 +12,12 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import DPP_OPTIMISER_CONFIG, DPP_SIMULATION_CONFIG, PROJECT_ROOT
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
-from aba_optimiser.training.controller import LHCController as Controller
-from aba_optimiser.training.controller_helpers import (
-    create_arc_bpm_config,
-    create_arc_measurement_config,
-)
+from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
+from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.controller_config import MeasurementConfig, OutputConfig, SequenceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +217,11 @@ def process_single_config(
     measurement_filename = "pz_data.parquet"
     measurement_file = temp_analysis_dir / measurement_filename
     bad_bpms_file = temp_analysis_dir / "bad_bpms.txt"
+    accelerator = LHC(
+        beam=config.beam,
+        beam_energy=6800,
+        sequence_file=get_or_make_sequence(config.beam, Path(config.model_dir)),
+    )
 
     # Generate files from times
     files = [Path(f"{config.folder}/{config.name_prefix}{time}.sdds") for time in config.times]
@@ -226,7 +230,7 @@ def process_single_config(
         files,
         temp_analysis_dir,
         config.model_dir,
-        beam=config.beam,
+        accelerator=accelerator,
         filename=measurement_filename,
     )
     # Save the bad bpms to a file
@@ -243,25 +247,32 @@ def process_single_config(
     with results_file.open("w") as f:
         f.write("Arc\tDeltap\n")
 
+    measurement_config = MeasurementConfig(
+        measurement_files=[measurement_file],
+        bunches_per_file=len(config.times),
+        flattop_turns=6600,
+    )
     results = []
     for arc in range(8):
         logger.info(f"Starting optimisation for arc {arc + 1}/8 for {config.title}")
 
-        controller = Controller(
-            beam=config.beam,
-            measurement_config=create_arc_measurement_config(
-                measurement_file,
-                num_tracks=len(config.times),
-                flattop_turns=6600,
-            ),
-            bpm_config=create_arc_bpm_config(config.bpm_starts[arc], config.bpm_end_points[arc]),
+        sequence_config = SequenceConfig(
             magnet_range=config.magnet_ranges[arc],
+            bad_bpms=bad_bpms,
+            first_bpm="BPM.33L2.B1" if config.beam == 1 else "BPM.34R8.B2",
+        )
+
+        controller = Controller(
+            accelerator=accelerator,
             optimiser_config=DPP_OPTIMISER_CONFIG,
             simulation_config=DPP_SIMULATION_CONFIG,
-            show_plots=False,
+            sequence_config=sequence_config,
+            measurement_config=measurement_config,
+            bpm_start_points=config.bpm_starts[arc],
+            bpm_end_points=config.bpm_end_points[arc],
             initial_knob_strengths=None,
             true_strengths=None,
-            bad_bpms=bad_bpms,
+            output_config=OutputConfig(show_plots=False),
         )
         final_knobs, uncs = controller.run()
         results.append(final_knobs["deltap"])

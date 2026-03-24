@@ -14,8 +14,10 @@ import pathlib
 
 from omc3.model_creator import create_instance_and_model
 
+from aba_optimiser.accelerators import LHC
+
 from .config import DRV_TUNES, ENERGY, NAT_TUNES, YEAR
-from .madng_utils import update_model_with_madng
+from .madng_utils import ModelCreatorMadngInterface
 from .madx_utils import make_madx_sequence
 
 
@@ -53,10 +55,6 @@ def create_lhc_model(
         Beam energy in GeV. Defaults to config value.
     modifier : str, optional
         Optics modifier file name. Defaults to config value.
-    matching_knob : str, optional
-        Suffix for the tune matching knobs (e.g., "_op" for dQx.b1_op,
-        "" for dQx.b1, "_sq" for dQx.b1_sq). Default is "_op".
-
     Raises
     ------
     ValueError
@@ -106,17 +104,18 @@ def create_lhc_model(
 
     # Step 2: Generate MAD-X sequences
     print("Step 2: Generating MAD-X sequences...")
-    make_madx_sequence(output_dir)
+    sequence_file = make_madx_sequence(output_dir)
     print("✓ MAD-X sequences generated\n")
 
     # Step 3: Update with MAD-NG
     print("Step 3: Updating model with MAD-NG...")
-    update_model_with_madng(
-        beam,
-        output_dir,
-        tunes=nat_tunes,
-        drv_tunes=drv_tunes,
-    )
+    accelerator = LHC(beam=beam, sequence_file=sequence_file, beam_energy=energy)
+    with ModelCreatorMadngInterface(accelerator) as madng_interface:
+        madng_interface.update_model(
+            output_dir,
+            tunes=nat_tunes,
+            drv_tunes=drv_tunes,
+        )
     print("✓ Model update complete\n")
 
     print(f"{'=' * 70}")

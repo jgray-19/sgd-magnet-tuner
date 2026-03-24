@@ -7,13 +7,12 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import DPP_OPTIMISER_CONFIG, DPP_SIMULATION_CONFIG, PROJECT_ROOT
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
-from aba_optimiser.training.controller import LHCController as Controller
-from aba_optimiser.training.controller_helpers import (
-    create_arc_bpm_config,
-    create_arc_measurement_config,
-)
+from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
+from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.controller_config import MeasurementConfig, OutputConfig, SequenceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +52,17 @@ if __name__ == "__main__":
     measurement_filename = "pz_data.parquet"
     measurement_file = analysis_dir / measurement_filename
     bad_bpms_file = analysis_dir / "bad_bpms.txt"
+    accelerator = LHC(
+        beam=2,
+        beam_energy=6800,
+        sequence_file=get_or_make_sequence(2, Path(model_dir)),
+    )
 
     pzs_dict, bad_bpms, _, _ = process_measurements(
         files,
         analysis_dir,
         model_dir,
-        beam=2,
+        accelerator=accelerator,
         filename=measurement_filename,
     )
     pzs = pzs_dict["combined"]
@@ -77,21 +81,26 @@ if __name__ == "__main__":
     with results_file.open("w") as f:
         f.write("Arc\tDeltap\n")
 
+    measurement_config = MeasurementConfig(measurement_files=[measurement_file])
     results = []
     for arc in range(8):
         logger.info(f"Starting optimisation for arc {arc + 1}/8")
 
+        sequence_config = SequenceConfig(
+            magnet_range=MAGNET_RANGES[arc], bad_bpms=bad_bpms, first_bpm="BPM.34R8.B2"
+        )
+
         controller = Controller(
-            beam=2,
-            measurement_config=create_arc_measurement_config(measurement_file),
-            bpm_config=create_arc_bpm_config(BPM_STARTS[arc], BPM_END_POINTS[arc]),
-            magnet_range=MAGNET_RANGES[arc],
+            accelerator=accelerator,
             optimiser_config=DPP_OPTIMISER_CONFIG,
             simulation_config=DPP_SIMULATION_CONFIG,
-            show_plots=False,
+            sequence_config=sequence_config,
+            measurement_config=measurement_config,
+            bpm_start_points=BPM_STARTS[arc],
+            bpm_end_points=BPM_END_POINTS[arc],
             initial_knob_strengths=None,
             true_strengths=None,
-            bad_bpms=bad_bpms,
+            output_config=OutputConfig(show_plots=False),
         )
         final_knobs, uncs = controller.run()
         results.append(final_knobs["deltap"])

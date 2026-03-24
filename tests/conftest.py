@@ -113,7 +113,7 @@ def corrector_table(corrector_file: Path) -> tfs.TfsDataFrame:
 @pytest.fixture(scope="function")
 def loaded_interface(seq_b1: Path) -> Generator[AbaMadInterface, None, None]:
     """Create a fresh AbaMadInterface for each test."""
-    iface = AbaMadInterface(accelerator=LHC(beam=1, sequence_file=seq_b1))
+    iface = AbaMadInterface(accelerator=LHC(beam=1, sequence_file=seq_b1, beam_energy=6800.0))
     yield iface
     with contextlib.suppress(Exception):
         del iface

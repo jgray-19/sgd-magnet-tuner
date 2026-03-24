@@ -50,3 +50,39 @@ class MeasurementConfig:
             self.tune_knobs_files = [self.tune_knobs_files]
         if isinstance(self.machine_deltaps, float | int):
             self.machine_deltaps = [self.machine_deltaps]
+
+
+@dataclass
+class OutputConfig:
+    """Output, logging and plotting behaviour for optimisation runs.
+
+    Attributes:
+        write_tensorboard_logs: Whether to write TensorBoard event files.
+        include_uncertainty: Whether to compute and plot uncertainties. Disabling this
+            skips worker-side Hessian estimation for faster execution.
+        plot_real_values: Whether plots show absolute values (True) or relative values
+            (False). Defaults to relative values.
+        save_prefix: Prefix prepended to generated plot filenames.
+        show_plots: Whether to display plots interactively.
+        plots_dir: Directory where plots are saved.
+        mad_logfile: Optional MAD log file path.
+        python_logfile: Optional Python worker log file path.
+    """
+
+    write_tensorboard_logs: bool = True
+    include_uncertainty: bool = True
+    plot_real_values: bool = False
+    save_prefix: str = ""
+    show_plots: bool = True
+    plots_dir: Path | None = None
+    mad_logfile: Path | None = None
+    python_logfile: Path | None = None
+
+
+@dataclass
+class CheckpointConfig:
+    """Checkpoint save/restore behaviour for optimisation runs."""
+
+    checkpoint_path: Path
+    checkpoint_every_n_epochs: int = 0
+    restore_from_checkpoint: bool = False

@@ -9,6 +9,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
+from matplotlib.lines import Line2D
 
 SAVE_DPI = 150
 
@@ -302,11 +303,14 @@ def plot_all_deltap_vs_range(beam_data_list):
         ax.tick_params(axis="both", labelsize=16)
         ax.grid(True, alpha=0.25)
 
-    axes[0].set_ylabel(r"$\Delta p/p$ ($\times 10^{-4}$)", fontsize=17)
+    axes[0].set_ylabel(r"Measured $\Delta p/p$ ($\times 10^{-4}$)", fontsize=17)
     axes[0].yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: f"{x * 1e5:.1f}"))
 
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=5, frameon=False, fontsize=16)
+    labels = ["0" if label == "No shift" else label for label in labels]
+    handles = [Line2D([], [], linestyle="none", color="none")] + handles
+    labels = [r"Applied $\Delta p/p$:"] + labels
+    fig.legend(handles, labels, loc="upper center", ncol=6, frameon=False, fontsize=15)
     fig.tight_layout(rect=(0, 0, 1, 0.9))
     if len(beam_data_list) == 1:
         plt.savefig(
@@ -509,7 +513,7 @@ def plot_expected_vs_measured_mean_common(
             max_exp = max(all_expecteds)
             plt.plot([min_exp, max_exp], [min_exp, max_exp], "k--", label="Ideal: y = x")
 
-    plt.xlabel(r"Expected $\Delta p/p$ ($\times 10^{-5}$)", fontsize=16)
+    plt.xlabel(r"Applied $\Delta p/p$ ($\times 10^{-5}$)", fontsize=16)
     plt.ylabel(r"Measured Mean $\Delta p/p$ ($\times 10^{-5}$)", fontsize=16)
     fit_suffix = "" if include_fits else ", No Fit"
 

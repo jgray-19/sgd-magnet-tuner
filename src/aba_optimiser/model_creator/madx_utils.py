@@ -15,6 +15,8 @@ from omc3.model.constants import JOB_MODEL_MADX_NOMINAL
 from omc3.model.model_creators.manager import CreatorType, get_model_creator_class
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from omc3.model.model_creators.abstract_model_creator import ModelCreator
 
 LOGGER = logging.getLogger(__name__)
@@ -23,6 +25,10 @@ _DEFINE_NOMINAL_BEAMS_RE = re.compile(r"exec,\s*define_nominal_beams\([^;]*\)\s*
 _LHC_USE_SEQUENCE_RE = re.compile(r"use\s*,\s*sequence\s*=\s*lhcb([12])", re.IGNORECASE)
 _LHC_SEQUENCE_TOKEN_RE = re.compile(r"\blhcb([12])\b", re.IGNORECASE)
 _LHC_YEAR_RE = re.compile(r"^\s*!\s*LHC year\s+(?P<year>\S+)\s*$", re.IGNORECASE | re.MULTILINE)
+_POST_OPTICS_INSERT_MARKERS = (
+    "\n! ----- Remove IR symmetry definitions -----\n",
+    "\n! ----- Finalize Sequence -----\n",
+)
 
 
 def _adapt_script_to_beam4(base_script: str, beam: int, energy: float) -> str:
@@ -30,7 +36,7 @@ def _adapt_script_to_beam4(base_script: str, beam: int, energy: float) -> str:
     if beam != 2:
         raise ValueError("beam4 script adaptation is only valid for beam 2.")
 
-    script = base_script.replace("acc-models-lhc/lhc.seq", "acc-models-lhc/lhcb4.seq")
+    script = base_script.replace("lhc.seq", "lhcb4.seq")
     beam4_cmd = f"beam, sequence=LHCB2, particle=proton, energy={energy}, bv=1;"
 
     if not _DEFINE_NOMINAL_BEAMS_RE.search(script):
@@ -67,18 +73,32 @@ def _detect_lhc_beam_from_model_dir(model_dir: Path) -> int:
         text = job_file.read_text(errors="ignore")
         use_matches = {int(match.group(1)) for match in _LHC_USE_SEQUENCE_RE.finditer(text)}
         if len(use_matches) == 1:
-            return use_matches.pop()
+            beam = use_matches.pop()
+            LOGGER.info(
+                "Inferred LHC beam %d from use statement in MAD-X nominal job file: %s",
+                beam,
+                job_file,
+            )
+            return beam
 
         token_matches = {int(match.group(1)) for match in _LHC_SEQUENCE_TOKEN_RE.finditer(text)}
         if len(token_matches) == 1:
-            return token_matches.pop()
+            beam = token_matches.pop()
+            LOGGER.info(
+                "Inferred LHC beam %d from sequence tokens in MAD-X nominal job file: %s",
+                beam,
+                job_file,
+            )
+            return beam
 
     name = model_dir.name.lower()
     has_b1 = "b1" in name
     has_b2 = "b2" in name
     if has_b1 and not has_b2:
+        LOGGER.info("Inferred LHC beam 1 from model directory name: %s", model_dir)
         return 1
     if has_b2 and not has_b1:
+        LOGGER.info("Inferred LHC beam 2 from model directory name: %s", model_dir)
         return 2
 
     raise ValueError(
@@ -99,6 +119,23 @@ def _detect_lhc_year_from_model_dir(model_dir: Path) -> str:
         f"Could not infer LHC year from model directory: {model_dir}. "
         "Expected the omc3 nominal header comment '! LHC year ...'."
     )
+
+
+def _inject_post_optics_calls(madx_script: str, madx_files: Sequence[str]) -> str:
+    """Insert additional MAD-X files after the optics modifiers section."""
+    if not madx_files:
+        return madx_script
+
+    extra_calls = "\n! ----- Additional post-optics modifiers -----\n" + "".join(
+        f"call, file = '{madx_file}';\n" for madx_file in madx_files
+    )
+
+    for marker in _POST_OPTICS_INSERT_MARKERS:
+        marker_index = madx_script.find(marker)
+        if marker_index != -1:
+            return madx_script[:marker_index] + extra_calls + madx_script[marker_index:]
+
+    return madx_script + extra_calls
 
 
 def _load_nominal_creator_from_model_dir(model_dir: Path) -> tuple[ModelCreator, str, int | None]:
@@ -123,6 +160,7 @@ def make_madx_sequence(
     *,
     seq_outdir: Path | None = None,
     beam4: bool = False,
+    post_optics_madx_files: Sequence[Path | str] | None = None,
 ) -> Path:
     """Generate and save MAD-X sequence file from LHC or SPS model folder.
 
@@ -149,6 +187,15 @@ def make_madx_sequence(
             raise ValueError("Could not determine beam energy from model creator accelerator.")
 
         madx_script = _adapt_script_to_beam4(madx_script, beam, float(creator_energy))
+
+    if post_optics_madx_files:
+        madx_script = _inject_post_optics_calls(
+            madx_script,
+            [
+                f"{creator.resolve_path_for_madx(Path(madx_file).resolve())}"
+                for madx_file in post_optics_madx_files
+            ],
+        )
 
     outdir = Path(seq_outdir) if seq_outdir is not None else model_dir
     outdir.mkdir(parents=True, exist_ok=True)

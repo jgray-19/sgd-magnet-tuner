@@ -36,6 +36,9 @@ class ResultManager:
         output_knobs_path: Path | None = None,
         knob_table_path: Path | None = None,
         plots_dir: Path | None = None,
+        include_uncertainty: bool = True,
+        plot_real_values: bool = False,
+        save_prefix: str = "",
     ):
         """Initialise result manager.
 
@@ -47,6 +50,9 @@ class ResultManager:
             output_knobs_path: Path to save final knobs (defaults to PROJECT_ROOT/data/final_knobs.txt)
             knob_table_path: Path to save knob table (defaults to PROJECT_ROOT/data/knob_strengths_table.txt)
             plots_dir: Directory to save plots (defaults to plots/)
+            include_uncertainty: Whether to show uncertainty error bars on plots
+            plot_real_values: Whether to plot absolute values instead of relative values
+            save_prefix: Prefix prepended to generated plot filenames
         """
         self.knob_names = knob_names
         self.elem_spos = elem_spos
@@ -62,6 +68,9 @@ class ResultManager:
         # else:
         self.output_knobs_path = output_knobs_path
         self.knob_table_path = knob_table_path
+        self.include_uncertainty = include_uncertainty
+        self.plot_real_values = plot_real_values
+        self.save_prefix = save_prefix
 
         # Set plots directory with default
         from pathlib import Path
@@ -140,8 +149,9 @@ class ResultManager:
 
         # Ensure plots directory exists
         self.plots_dir.mkdir(parents=True, exist_ok=True)
-        save_prefix = f"{self.plots_dir}/"
-        show_errorbars = False
+        save_dir = f"{self.plots_dir}/"
+        mode_label = "real_values" if self.plot_real_values else "relative_difference"
+        show_errorbars = self.include_uncertainty
 
         if len(knob_names) > 0:
             plot_strengths_comparison(
@@ -151,8 +161,8 @@ class ResultManager:
                 quad_unc,
                 initial_vals=initial_vals,
                 show_errorbars=show_errorbars,
-                plot_real=False,
-                save_path=f"{save_prefix}relative_difference_comparison.png",
+                plot_real=self.plot_real_values,
+                save_path=f"{save_dir}{self.save_prefix}{mode_label}_comparison.png",
                 accelerator=self.accelerator,
                 unit="$m^{-1}$",
             )
@@ -164,8 +174,8 @@ class ResultManager:
                 quad_unc,
                 initial_vals=initial_vals,
                 show_errorbars=show_errorbars,
-                plot_real=False,
-                save_path=f"{save_prefix}relative_difference_vs_position_comparison.png",
+                plot_real=self.plot_real_values,
+                save_path=f"{save_dir}{self.save_prefix}{mode_label}_vs_position_comparison.png",
                 accelerator=self.accelerator,
                 magnet_names=magnet_names,
             )
@@ -174,7 +184,8 @@ class ResultManager:
             plot_deltap_comparison(
                 true_strengths.get("deltap", 0),
                 current_knobs["deltap"],
-                uncertainties[-1],
+                uncertainties[-1] if self.include_uncertainty else 0.0,
+                save_path=f"{save_dir}{self.save_prefix}deltap_comparison.png",
             )
         LOGGER.info(f"Plots saved to {self.plots_dir.resolve()}")
 

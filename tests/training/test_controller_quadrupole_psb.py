@@ -10,7 +10,11 @@ import pytest
 from aba_optimiser.accelerators import PSB
 from aba_optimiser.config import OptimiserConfig
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
+from aba_optimiser.training.controller_config import (
+    MeasurementConfig,
+    OutputConfig,
+    SequenceConfig,
+)
 from tests.training.controller_test_utils import (
     _generate_nonoise_track,
     _make_simulation_config_quad,
@@ -100,12 +104,14 @@ def test_controller_quad_opt_psb_ring1(
         measurement_config,
         bpm_start_points=PSB_BPM_START_POINTS,
         bpm_end_points=[],
-        show_plots=False,
+        output_config=OutputConfig(
+            show_plots=False,
+            plots_dir=tmp_path / "plots",
+            mad_logfile=tmp_path / "controller_quad_opt_psb.log",
+            write_tensorboard_logs=False,
+        ),
         true_strengths=magnet_strengths,
         debug=False,
-        mad_logfile=tmp_path / "controller_quad_opt_psb.log",
-        write_tensorboard_logs=False,
-        plots_dir=tmp_path / "plots",
     )
     estimate, unc = ctrl.run()
 

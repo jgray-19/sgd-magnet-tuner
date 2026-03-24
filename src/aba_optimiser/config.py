@@ -104,6 +104,7 @@ class SimulationConfig:
     worker_loss_outlier_sigma: float = field(default=3.0)
 
     # Computed fields
+    # `total_tracks` is the configured worker-capacity upper bound.
     total_tracks: int = field(init=False)
 
     def __post_init__(self):

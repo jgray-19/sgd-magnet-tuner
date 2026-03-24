@@ -7,7 +7,11 @@ and checkpointing for the optimisation workflow.
 from aba_optimiser.training.base_controller import BaseController
 from aba_optimiser.training.configuration_manager import ConfigurationManager
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
+from aba_optimiser.training.controller_config import (
+    MeasurementConfig,
+    OutputConfig,
+    SequenceConfig,
+)
 from aba_optimiser.training.controller_helpers import (
     create_arc_measurement_config,
 )
@@ -30,6 +34,7 @@ __all__ = [
     "ConfigurationManager",
     "Controller",
     "MeasurementConfig",
+    "OutputConfig",
     "SequenceConfig",
     "create_arc_measurement_config",
     "DataManager",

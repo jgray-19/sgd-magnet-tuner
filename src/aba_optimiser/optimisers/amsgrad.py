@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import numpy as np
 
@@ -12,6 +13,8 @@ LOGGER = logging.getLogger(__name__)
 
 
 class AMSGradOptimiser(AdamOptimiser):
+    OPTIMISER_NAME = "amsgrad"
+
     """
     AMSGrad optimiser: like Adam but keeps the max of all past v̂,
     ensuring the denominator never decreases.
@@ -78,3 +81,26 @@ class AMSGradOptimiser(AdamOptimiser):
         LOGGER.debug(f"AMSGrad update norm: {update_norm:.6e}")
 
         return new_params
+
+    def state_to_dict(self) -> dict[str, Any]:
+        """Return optimiser internal state as a serialisable dictionary."""
+        state = super().state_to_dict()
+        state["type"] = self.OPTIMISER_NAME
+        state["v_hat_max"] = self.v_hat_max.tolist()
+        return state
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore optimiser internal state from a dictionary."""
+        if state.get("type") != self.OPTIMISER_NAME:
+            raise ValueError(
+                f"State type {state.get('type')} does not match {self.OPTIMISER_NAME}"
+            )
+
+        self.beta1 = float(state["beta1"])
+        self.beta2 = float(state["beta2"])
+        self.eps = float(state["eps"])
+        self.weight_decay = float(state["weight_decay"])
+        self.m = np.array(state["m"], dtype=float)
+        self.v = np.array(state["v"], dtype=float)
+        self.v_hat_max = np.array(state["v_hat_max"], dtype=float)
+        self.t = int(state["t"])

@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import numpy as np
+
+from aba_optimiser.optimisers.base import BaseOptimiser
 
 LOGGER = logging.getLogger(__name__)
 
 
-class AdamOptimiser:
+class AdamOptimiser(BaseOptimiser):
+    OPTIMISER_NAME = "adam"
+
     """Stateful Adam optimiser for dense NumPy parameter vectors.
 
     Instantiate once for a given parameter shape and call :meth:`step` for
@@ -93,3 +98,31 @@ class AdamOptimiser:
         LOGGER.debug(f"Update norm: {update_norm:.6e}")
 
         return new_params
+
+    def state_to_dict(self) -> dict[str, Any]:
+        """Return optimiser internal state as a serialisable dictionary."""
+        return {
+            "type": self.OPTIMISER_NAME,
+            "beta1": float(self.beta1),
+            "beta2": float(self.beta2),
+            "eps": float(self.eps),
+            "weight_decay": float(self.weight_decay),
+            "m": self.m.tolist(),
+            "v": self.v.tolist(),
+            "t": int(self.t),
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore optimiser internal state from a dictionary."""
+        if state.get("type") != self.OPTIMISER_NAME:
+            raise ValueError(
+                f"State type {state.get('type')} does not match {self.OPTIMISER_NAME}"
+            )
+
+        self.beta1 = float(state["beta1"])
+        self.beta2 = float(state["beta2"])
+        self.eps = float(state["eps"])
+        self.weight_decay = float(state["weight_decay"])
+        self.m = np.array(state["m"], dtype=float)
+        self.v = np.array(state["v"], dtype=float)
+        self.t = int(state["t"])

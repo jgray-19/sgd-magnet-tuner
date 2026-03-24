@@ -21,7 +21,11 @@ from aba_optimiser.accelerators import instantiate_accelerator_from
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
+from aba_optimiser.training.controller_config import (
+    MeasurementConfig,
+    OutputConfig,
+    SequenceConfig,
+)
 from tests.training.helpers import TRACK_COLUMNS, generate_xsuite_env_with_errors
 
 if TYPE_CHECKING:
@@ -241,11 +245,14 @@ def _run_energy_optimisation_case(
         measurement_config,
         bpm_start_points,
         bpm_end_points,
-        show_plots=False,
+        output_config=OutputConfig(
+            show_plots=False,
+            mad_logfile=tmp_path / mad_log_name,
+            write_tensorboard_logs=False,
+        ),
         true_strengths=None,
-        mad_logfile=tmp_path / mad_log_name,
-        write_tensorboard_logs=False,
         optimise_knobs=None,
+        debug=True,
     )
     return ctrl.run()
 
@@ -258,7 +265,7 @@ def _make_optimiser_config_quad() -> OptimiserConfig:
         max_lr=1e-5,
         min_lr=1e-5,
         gradient_converged_value=5e-14,
-        expected_rel_error=0,
+        expected_rel_error=18e-4,
     )
 
 

@@ -28,8 +28,8 @@ class LHC(Accelerator):
     PATTERN_RBEND = "MB[RXWAL]%w*%."
     PATTERN_MAIN_QUAD = "MQ%."
     PATTERN_CORRECTOR = "MCB"
-    PATTERN_QUAD_NON_TUNE = "MQ[^T.]"  # Explicitly not MQT or MQ.
-    PATTERN_QUAD_DISPLACEMENT = "MQ%."  # "MQX.*[LR][15]"
+    PATTERN_QUAD_NON_TUNE = "MQ[^T.]"  # Explicitly not MQT or MQ., but still quadrupoles
+    PATTERN_QUAD_DISPLACEMENT = "MQX*%."  # "MQX.*[LR][15]"
     QUAD_ERROR_TABLE = {
         "MQ.": 18e-4,
         "MQM": 12e-4,
@@ -37,7 +37,7 @@ class LHC(Accelerator):
         "MQX": 10e-4,
         "MQW": 15e-4,
     }
-    BPM_PATTERN = "^BPM%."
+    BPM_PATTERN = "^BPM.*$"
 
     def __init__(
         self,
@@ -54,6 +54,7 @@ class LHC(Accelerator):
         normalise_bends: bool | None = None,
         optimise_other_quadrupoles: bool = False,
         optimise_quad_dx: bool = False,
+        optimise_quad_dy: bool = False,
     ):
         """Initialise LHC accelerator for a specific beam.
 
@@ -85,6 +86,7 @@ class LHC(Accelerator):
         self.optimise_correctors = optimise_correctors
         self.optimise_other_quadrupoles = optimise_other_quadrupoles
         self.optimise_quad_dx = optimise_quad_dx
+        self.optimise_quad_dy = optimise_quad_dy
 
 
         # Initialise base Accelerator
@@ -116,6 +118,7 @@ class LHC(Accelerator):
             or self.optimise_correctors
             or self.optimise_energy
             or self.optimise_quad_dx
+            or self.optimise_quad_dy
         )
 
     def log_optimisation_targets(self) -> None:
@@ -135,6 +138,8 @@ class LHC(Accelerator):
             targets.append("beam energy")
         if self.optimise_quad_dx:
             targets.append("quadrupole horizontal offsets")
+        if self.optimise_quad_dy:
+            targets.append("quadrupole vertical offsets")
         if targets:
             LOGGER.info(f"Optimisation targets: {', '.join(targets)}")
         else:
@@ -167,12 +172,13 @@ class LHC(Accelerator):
         """
         return [
             ("sbend", "k0", self.PATTERN_MAIN_BEND, True, self.optimise_bends),
-            ("rbend", "k0", self.PATTERN_RBEND, True, self.optimise_bends),
+            # ("rbend", "k0", self.PATTERN_RBEND, True, self.optimise_bends),
             ("quadrupole", "k1", self.PATTERN_MAIN_QUAD, True, self.optimise_quadrupoles),
             ("quadrupole", "k1", self.PATTERN_QUAD_NON_TUNE, True, self.optimise_other_quadrupoles),
             ("hkicker", "kick", self.PATTERN_CORRECTOR, False, self.optimise_correctors),
             ("vkicker", "kick", self.PATTERN_CORRECTOR, False, self.optimise_correctors),
             ("quadrupole", "dx", self.PATTERN_QUAD_DISPLACEMENT, False, self.optimise_quad_dx),
+            ("quadrupole", "dy", self.PATTERN_QUAD_DISPLACEMENT, False, self.optimise_quad_dy),
         ]
 
     def prepare_mad_for_knob_creation(
@@ -201,12 +207,17 @@ class LHC(Accelerator):
             normalised_names = normalise_lhcbend_magnets(true_strengths_dict, self.bend_lengths)
             mad_iface.mad.send(normalised_names)
 
-        if self.optimise_quad_dx:
+        if self.optimise_quad_dx or self.optimise_quad_dy:
+            insert_qx_qy_str = ""
+            if self.optimise_quad_dx:
+                insert_qx_qy_str += "e.dx = e.dx or 1e-6\n"
+            if self.optimise_quad_dy:
+                insert_qx_qy_str += "e.dy = e.dy or 1e-6\n"
             mad_iface.mad.send(f"""
             for i, e in loaded_sequence:siter(magnet_range) do
                 if e.kind == "quadrupole" and string.match(e.name, "{self.PATTERN_QUAD_DISPLACEMENT}") then
-                    e.dx = e.dx or 1e-6
-                    e.misalign = MAD.typeid.deferred{{dx =\\->e.dx}}
+                    {insert_qx_qy_str}
+                    e.misalign = MAD.typeid.deferred{{dx =\\->e.dx, dy =\\->e.dy}}
                 end
             end
             """)

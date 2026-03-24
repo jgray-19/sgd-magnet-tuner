@@ -24,9 +24,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _MAGNET_STRENGTH_SUFFIXES = {".k0", ".k1", ".k2", ".kick"}
-_DKNL_INDEX_BY_ATTR_PY = {"k0": 0, "k1": 1, "k2": 2}
 _DKNL_INDEX_BY_ATTR_LUA = {"k0": 1, "k1": 2, "k2": 3}
-_DKNL_STRENGTH_ATTRS = frozenset(_DKNL_INDEX_BY_ATTR_PY)
+_DKNL_STRENGTH_ATTRS = frozenset(_DKNL_INDEX_BY_ATTR_LUA)
 
 _PERTURBATION_BASE_SPECS: dict[str, dict[str, Any]] = {
     "d": {"kind": ("sbend", "rbend"), "attr": "k0", "dknl_index": 0},
@@ -51,7 +50,7 @@ class AbaMadInterface(KnobMadInterface):
         n_added = 0
         for _, elm in loaded_sequence:iter() do
             if elm.dknl then
-                elm.dknl = {0.0, 0.0, 0.0, 0.0}
+                loaded_sequence[elm.name].dknl = MAD.typeid.deferred {0.0, 0.0, 0.0, 0.0}
                 n_added = n_added + 1
             end
         end
@@ -59,45 +58,52 @@ class AbaMadInterface(KnobMadInterface):
         logger.debug(f"Added dknl attributes to {self.mad.n_added} elements in the sequence")
         self.mad["n_added"] = None  # Clear the variable to avoid confusion later
 
-    def _set_dknl_delta(self, element, attr: str, delta_strength: float) -> None:
+    def _set_dknl_delta(self, element_name: str, attr: str, delta_strength: float) -> None:
         """Store a magnet strength delta in the matching dknl component."""
         self._set_dknl_component(
-            element,
-            _DKNL_INDEX_BY_ATTR_PY[attr],
+            element_name,
+            attr,
             delta_strength,
         )
 
-    def _set_dknl_component(self, element, dknl_index: int, delta_strength: float) -> None:
+    def _set_dknl_component(self, element_name: str, attr: str, delta_strength: float) -> None:
         """Store a strength delta in one dknl component."""
-        current_dknl = list(element.dknl.eval())
-        length = float(element.l)
-        current_dknl[dknl_index] = (
-            0.0 if np.isclose(length, 0.0) else float(delta_strength * length)
-        )
-        element.dknl = current_dknl
+        dknl_index = _DKNL_INDEX_BY_ATTR_LUA[attr]
+        if float(self.mad[f"loaded_sequence['{element_name}'].l"]) == 0.0:
+            raise ValueError(f"Cannot set dknl delta for element {element_name} with zero length")
 
-    def _get_effective_element_strength(self, element, attr: str) -> float:
+        self.mad.send(f"""
+loaded_sequence['{element_name}'].dknl[{dknl_index}] = {self.py_name}:recv() * loaded_sequence['{element_name}'].l
+        """)
+        self.mad.send(delta_strength)
+
+    def _get_effective_element_strength(self, element_name: str, attr: str) -> float:
         """Return the effective element strength, including dknl perturbations."""
-        base_strength = float(element[attr])
         if attr not in _DKNL_STRENGTH_ATTRS:
-            return base_strength
+            return self.mad[f"loaded_sequence['{element_name}'].{attr}"]
 
-        length = float(element.l)
-        if np.isclose(length, 0.0):
-            return base_strength
+        if self.mad[f"loaded_sequence['{element_name}'].l"] == 0.0:
+            raise ValueError(
+                f"Cannot get effective strength for element {element_name} with zero length"
+            )
 
-        dknl_index = _DKNL_INDEX_BY_ATTR_PY[attr]
-        current_dknl = list(element.dknl.eval())
-        return base_strength + float(current_dknl[dknl_index]) / length
+        dknl_index = _DKNL_INDEX_BY_ATTR_LUA[attr]
+        self.mad.send(f"""
+local l, dknl, {attr} in loaded_sequence['{element_name}']
+{self.py_name}:send({attr} + dknl[{dknl_index}] / l)
+        """)
+        return self.mad.recv()
 
-    def _set_effective_element_strength(self, element, attr: str, target_strength: float) -> None:
+    def _set_effective_element_strength(
+        self, element_name: str, attr: str, target_strength: float
+    ) -> None:
         """Set an element strength, routing k0/k1/k2 through dknl."""
         if attr not in _DKNL_STRENGTH_ATTRS:
-            element[attr] = target_strength
+            self.mad[f"loaded_sequence['{element_name}'].{attr}"] = target_strength
             return
 
-        base_strength = float(element[attr])
-        self._set_dknl_delta(element, attr, float(target_strength) - base_strength)
+        base_strength = float(self.mad[f"loaded_sequence['{element_name}'].{attr}"])
+        self._set_dknl_delta(element_name, attr, float(target_strength) - base_strength)
 
     def set_magnet_strengths(self, strengths: dict[str, float]) -> None:
         """Set magnet strengths, storing quadrupole updates in dknl."""
@@ -111,11 +117,10 @@ class AbaMadInterface(KnobMadInterface):
                 )
 
             magnet_name, attr = name.rsplit(".", 1)
-            logger.info(f"Setting strength for {magnet_name} ({attr}) to {strength}")
             if attr in _DKNL_STRENGTH_ATTRS:
-                self._set_effective_element_strength(self.mad.MADX[magnet_name], attr, strength)
+                self._set_effective_element_strength(magnet_name, attr, strength)
             else:
-                direct_variables[f"MADX['{magnet_name}'].{attr}"] = strength
+                direct_variables[f"loaded_sequence['{magnet_name}'].{attr}"] = strength
 
         if direct_variables:
             self.set_variables(**direct_variables)
@@ -125,7 +130,7 @@ class AbaMadInterface(KnobMadInterface):
         strengths: dict[str, float] = {}
         for name in names:
             magnet_name, attr = name.rsplit(".", 1)
-            strengths[name] = self._get_effective_element_strength(self.mad.MADX[magnet_name], attr)
+            strengths[name] = self._get_effective_element_strength(magnet_name, attr)
         return strengths
 
     def observe_bpms(
@@ -234,7 +239,7 @@ class AbaMadInterface(KnobMadInterface):
                 strength_after = strength_before + delta
 
                 if attr in _DKNL_STRENGTH_ATTRS:
-                    self._set_dknl_delta(elm, attr, delta)
+                    self._set_dknl_delta(elm.name, attr, delta)
                 else:
                     elm[attr] = strength_after
 
@@ -281,7 +286,7 @@ class AbaMadInterface(KnobMadInterface):
         qx_knob, qy_knob = self.accelerator.get_tune_variables()
         qx_int, qy_int = self.accelerator.get_tune_integers()
         self.mad["result"] = self.mad.match(
-            command=rf"\ -> twiss{{sequence=MADX[SEQ_NAME], deltap={deltap:.16e}}}",
+            command=rf"\ -> twiss{{sequence=loaded_sequence, deltap={deltap:.16e}}}",
             variables=[
                 {"var": f"'MADX.{qx_knob}'", "name": f"'{qx_knob}'"},
                 {"var": f"'MADX.{qy_knob}'", "name": f"'{qy_knob}'"},
@@ -309,7 +314,6 @@ class AbaMadInterface(KnobMadInterface):
         """Perform orbit correction and tune rematching with a shared MAD flow."""
         qx_knob, qy_knob = self.accelerator.get_tune_variables()
         qx_int, qy_int = self.accelerator.get_tune_integers()
-        print(qx_knob, qy_knob, qx_int, qy_int)
         self.mad["machine_deltap"] = machine_deltap
         self.mad["correct_file"] = str(corrector_file.absolute()) if corrector_file else None
 

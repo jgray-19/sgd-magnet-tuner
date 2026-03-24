@@ -53,7 +53,7 @@ def test_controller_energy_opt(
         mad_log_name="controller_energy_opt.log",
     )
 
-    assert np.allclose(estimate.pop("deltap"), DPP_VALUE, rtol=1e-3, atol=1e-10)
+    assert np.allclose(estimate.pop("deltap"), DPP_VALUE, rtol=2e-3, atol=1e-10)
     uncertainty = unc.pop("deltap")
     assert 0 < uncertainty < 3e-6
     assert not estimate

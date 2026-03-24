@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from aba_optimiser.accelerators import Accelerator
-    from aba_optimiser.training.controller_config import SequenceConfig
+    from aba_optimiser.training.controller_config import OutputConfig, SequenceConfig
 
 X = "x"
 Y = "y"
@@ -48,14 +48,13 @@ class OpticsController(BaseController):
         optics_folder: str | Path,
         bpm_start_points: list[str],
         bpm_end_points: list[str],
-        show_plots: bool = True,
         initial_knob_strengths: dict[str, float] | None = None,
         corrector_file: Path | None = None,
         tune_knobs_file: Path | None = None,
         true_strengths: Path | dict[str, float] | None = None,
         use_errors: bool = True,
         use_amplitude_beta: bool = True,
-        write_tensorboard_logs: bool = True,
+        output_config: OutputConfig | None = None,
     ):
         """
         Initialise the optics controller.
@@ -67,14 +66,13 @@ class OpticsController(BaseController):
             optics_folder (str | Path): Path to directory containing TFS optics measurement files.
             bpm_start_points (list[str]): Start BPMs for each range.
             bpm_end_points (list[str]): End BPMs for each range.
-            show_plots (bool): Whether to show plots.
             initial_knob_strengths (dict[str, float] | None): Initial knob strengths.
             corrector_file (Path | None): Path to corrector strengths file.
             tune_knobs_file (Path | None): Path to tune knobs file.
             true_strengths (Path | dict[str, float] | None): True strengths (Path, dict, or None).
             use_errors (bool): Whether to use measurement errors in optimisation.
             use_amplitude_beta (bool): Use beta from amplitude (True) or phase (False
-            write_tensorboard_logs (bool): Whether to write TensorBoard logs.
+            output_config (OutputConfig | None): Output and logging configuration.
         """
         logger.info("Optimising quadrupoles for beta functions")
 
@@ -94,12 +92,11 @@ class OpticsController(BaseController):
             magnet_range=sequence_config.magnet_range,
             bpm_start_points=bpm_start_points,
             bpm_end_points=bpm_end_points,
-            show_plots=show_plots,
             initial_knob_strengths=initial_knob_strengths,
             true_strengths=true_strengths,
             bad_bpms=sequence_config.bad_bpms,
             first_bpm=sequence_config.first_bpm,
-            write_tensorboard_logs=write_tensorboard_logs,
+            output_config=output_config,
         )
 
         # Store optics-specific attributes

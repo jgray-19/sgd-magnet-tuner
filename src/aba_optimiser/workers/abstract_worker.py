@@ -14,7 +14,6 @@ from multiprocessing import Process
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 from aba_optimiser.mad import GradientDescentMadInterface
-from aba_optimiser.workers.protocol import WorkerErrorPayload
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -24,6 +23,7 @@ if TYPE_CHECKING:
 
     from aba_optimiser.config import SimulationConfig
     from aba_optimiser.workers.common import WorkerConfig
+    from aba_optimiser.workers.protocol import WorkerErrorPayload
 
 LOGGER = logging.getLogger(__name__)
 
@@ -183,6 +183,53 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
                 phase,
             )
 
+    def _resolve_per_worker_logfile(self, logfile_path):
+        """Return a per-worker logfile path derived from a base logfile path."""
+        if logfile_path is None:
+            return None
+
+        if logfile_path.suffix:
+            return logfile_path.with_name(
+                f"{logfile_path.stem}_worker_{self.worker_id}{logfile_path.suffix}"
+            )
+        return logfile_path.with_name(f"{logfile_path.name}_worker_{self.worker_id}")
+
+    def configure_python_worker_logging(self) -> None:
+        """Attach a file handler so worker Python logs land in the worker logfile."""
+        worker_logfile = self._resolve_per_worker_logfile(
+            self.config.python_logfile or self.config.mad_logfile
+        )
+        if worker_logfile is None:
+            return
+
+        worker_logfile.parent.mkdir(parents=True, exist_ok=True)
+        root_logger = logging.getLogger()
+        level = self.simulation_config.worker_logging_level
+        root_logger.setLevel(level)
+
+        if any(
+            isinstance(handler, logging.FileHandler)
+            and getattr(handler, "baseFilename", None) == str(worker_logfile)
+            for handler in root_logger.handlers
+        ):
+            return
+
+        file_handler = logging.FileHandler(worker_logfile, mode="a")
+        file_handler.setLevel(level)
+        file_handler.setFormatter(
+            logging.Formatter(
+                "PYTHON: %(asctime)s %(levelname)s %(name)s: %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        root_logger.addHandler(file_handler)
+
+        LOGGER.warning(
+            "Worker %s Python logging attached to %s",
+            self.worker_id,
+            worker_logfile,
+        )
+
     def setup_mad_interface(self, init_knobs: dict[str, float]) -> tuple[MAD, int]:
         """Initialize and configure the MAD-NG interface.
 
@@ -202,17 +249,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         LOGGER.debug(f"Worker {self.worker_id}: Setting up MAD interface")
         LOGGER.debug(f"Worker {self.worker_id}: Using BPM range {self.bpm_range}")
 
-        # Adapt logfile path to include worker ID if provided
-        worker_logfile = None
-        if self.config.mad_logfile is not None:
-            logfile_path = self.config.mad_logfile
-            # Insert worker ID before the extension
-            if logfile_path.suffix:
-                worker_logfile = logfile_path.with_name(
-                    f"{logfile_path.stem}_worker_{self.worker_id}{logfile_path.suffix}"
-                )
-            else:
-                worker_logfile = logfile_path.with_name(f"{logfile_path.name}_worker_{self.worker_id}")
+        worker_logfile = self._resolve_per_worker_logfile(self.config.mad_logfile)
 
         # Use accelerator factory to create MAD interface
         init_bpm = self.config.start_bpm if self.config.sdir > 0 else self.config.end_bpm
@@ -220,13 +257,13 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             accelerator=self.config.accelerator,
             magnet_range=self.config.magnet_range,
             bpm_range=self.bpm_range,
-            start_bpm=init_bpm,
             corrector_strengths=self.config.corrector_strengths,
             tune_knobs_file=self.config.tune_knobs_file,
             bad_bpms=self.config.bad_bpms,
             debug=self.config.debug,
             mad_logfile=worker_logfile,
-            py_name="python",  # Workers use hardcoded "python" in their MAD scripts
+            py_name="python",
+            start_bpm=init_bpm,  # Workers use hardcoded "python" in their MAD scripts
         )
 
         knob_names = mad_iface.knob_names

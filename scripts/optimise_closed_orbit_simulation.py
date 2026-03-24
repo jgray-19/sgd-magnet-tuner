@@ -19,8 +19,6 @@ from xtrack_tools.monitors import process_tracking_data
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
 from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
-from aba_optimiser.simulation.magnet_perturbations import apply_magnet_perturbations
-from aba_optimiser.simulation.optics import perform_orbit_correction
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import SequenceConfig
 from aba_optimiser.training.controller_helpers import (
@@ -46,7 +44,6 @@ TRACK_COLUMNS = (
     "var_y",
     "var_px",
     "var_py",
-    "kick_plane",
 )
 DEFAULT_DPP_VALUES = [-1e-4, 0.0, 1e-4, 2e-4, -2e-4]
 
@@ -120,7 +117,6 @@ def average_tracking_dataframe(tracking_df: pd.DataFrame, turns: int = 3) -> pd.
                     "var_y": row["var_y"],
                     "var_px": row["var_px"],
                     "var_py": row["var_py"],
-                    "kick_plane": "xy",
                 }
             )
 
@@ -189,34 +185,28 @@ def generate_track_with_errors(
     destination_dir.mkdir(parents=True, exist_ok=True)
     measurement_file = destination_dir / "pz_data.parquet"
 
-    iface = AbaMadInterface()
-    seq_name = f"lhcb{beam}"
-    iface.load_sequence(sequence_path, seq_name)
-    iface.setup_beam(particle="proton", beam_energy=BEAM_ENERGY_GEV)
+    iface = AbaMadInterface(
+        accelerator=LHC(beam=beam, sequence_file=sequence_path, beam_energy=BEAM_ENERGY_GEV)
+    )
     iface.mad["zero_twiss", "_"] = iface.mad.twiss(sequence="loaded_sequence")
     # tws = iface.mad.zero_twiss.to_df().set_index("name")
 
-    magnet_strengths, _ = apply_magnet_perturbations(
-        iface.mad,
-        rel_k1_std_dev=1e-4,
+    magnet_strengths, _ = iface.apply_magnet_perturbations(
+        rel_error=1e-4,
         seed=42,
         magnet_type="qsd",
     )
-    matched_tunes = perform_orbit_correction(
-        mad=iface.mad,
+    matched_tunes = iface.perform_orbit_correction(
         machine_deltap=0,
         target_qx=0.28,
         target_qy=0.31,
         corrector_file=corrector_path,
-        beam=beam,
     )
-    matched_tunes = perform_orbit_correction(
-        mad=iface.mad,
+    matched_tunes = iface.perform_orbit_correction(
         machine_deltap=dpp_value,
         target_qx=0.28,
         target_qy=0.31,
         corrector_file=corrector_path,
-        beam=beam,
     )
     corrector_table = tfs.read(corrector_path)
     corrector_table = corrector_table.loc[corrector_table.loc[:, "kind"] != "monitor"]
@@ -238,14 +228,13 @@ def generate_track_with_errors(
         corrector_table=corrector_table,
         beam=beam,
         sequence_file=sequence_path,
-        seq_name=seq_name,
         beam_energy=BEAM_ENERGY_GEV,
         strict_set=False,
     )
 
     save_knobs(matched_tunes, tune_knobs_path)
 
-    line: xt.Line = env[seq_name]
+    line: xt.Line = env[iface.accelerator.seq_name]
     ramp_turns=1000
     monitored_line, total_turns = prepare_acd_line_with_monitors(
         line=line,
