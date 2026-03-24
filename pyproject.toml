@@ -50,12 +50,27 @@ dev = [
     "xtrack-tools",
 ]
 all = [
-    "test",
-    "docs",
-    "tracking",
-    "cern",
-    "dev",
+    "pytest",
+    "pytest-cov",
+    "sphinx>=7.0",
+    "sphinx-autodoc-typehints>=2.0",
+    "myst-parser>=2.0",
+    "furo>=2023.9.10",
+    "omc3 > 0.26.0",
+    "cpymad",
+    "pyarrow",
+    "psutil",
+    "nxcals",
+    "pre-commit",
+    "ruff",
+    "tmom-recon",
+    "xtrack-tools",
 ]
+
+[tool.uv.sources]
+pymadng-utils = { git = "https://github.com/jgray-19/pymadng-utils.git" }
+tmom-recon = { git = "https://github.com/jgray-19/tmom-recon.git" }
+xtrack-tools = { git = "https://github.com/jgray-19/xtrack_tools.git" }
 
 
 [tool.setuptools]

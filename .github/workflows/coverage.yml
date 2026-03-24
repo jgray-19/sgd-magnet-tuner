@@ -42,9 +42,6 @@ jobs:
       - name: Ensure pip, setuptools and wheel
         run: uv pip install --upgrade pip setuptools wheel
 
-      - name: Install dependencies from GitHub
-        run: uv pip install git+https://github.com/jgray-19/xtrack_tools.git git+https://github.com/jgray-19/tmom-recon.git git+https://github.com/jgray-19/pymadng-utils.git
-
       # The uv pip should make & use an env from the Python install of the previous step
       - name: Install package
         run: uv pip install '.[test,tracking]'
