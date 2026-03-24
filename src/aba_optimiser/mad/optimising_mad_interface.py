@@ -212,7 +212,7 @@ class GenericMadInterface(AbaMadInterface):
                 raise ValueError("Corrector table is missing required column 'ename'")
 
             kind = getattr(row, "kind", None)
-            targets = _CORRECTOR_ATTRS_BY_KIND.get(kind)
+            targets = _CORRECTOR_ATTRS_BY_KIND.get(kind)  # ty:ignore[invalid-argument-type]
             if targets is None:
                 continue
 
@@ -255,7 +255,7 @@ class GenericMadInterface(AbaMadInterface):
             # Apply corrector strengths for non-zero correctors only
             changed_table = corrector_table[changed]
             self.apply_corrector_strengths(changed_table)  # ty:ignore[invalid-argument-type]
-            self._sync_corrector_table_to_loaded_sequence(changed_table)
+            self._sync_corrector_table_to_loaded_sequence(changed_table)  # ty:ignore[invalid-argument-type]
 
         def _apply_from_knobs() -> None:
             knobs = read_knobs(corrector_strengths)

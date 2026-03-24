@@ -36,6 +36,7 @@ class LHC(Accelerator):
         "MQY": 8e-4,
         "MQX": 10e-4,
         "MQW": 15e-4,
+        # "MQT": 75e-4,
     }
     BPM_PATTERN = "^BPM.*$"
 

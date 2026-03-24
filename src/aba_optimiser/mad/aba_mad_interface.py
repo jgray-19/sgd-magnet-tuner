@@ -43,22 +43,6 @@ class AbaMadInterface(KnobMadInterface):
         self.load_sequence(self.accelerator.sequence_file, self.accelerator.seq_name)
         self.setup_beam(beam_energy=self.accelerator.beam_energy)
 
-    #     self._add_dknl_attributes()
-
-    # def _add_dknl_attributes(self) -> None:
-    #     """Add dknl attributes to all elements in the sequence for storing perturbations."""
-    #     self.mad.send("""
-    #     n_added = 0
-    #     for _, elm in loaded_sequence:iter() do
-    #         if elm.dknl then
-    #             loaded_sequence[elm.name].dknl = MAD.typeid.deferred {0.0, 0.0, 0.0, 0.0}
-    #             n_added = n_added + 1
-    #         end
-    #     end
-    #     """)
-    #     logger.debug(f"Added dknl attributes to {self.mad.n_added} elements in the sequence")
-    #     self.mad["n_added"] = None  # Clear the variable to avoid confusion later
-
     def _set_dknl_delta(self, element_name: str, attr: str, delta_strength: float) -> None:
         """Store a magnet strength delta in the matching dknl component."""
         self._set_dknl_component(
