@@ -201,9 +201,9 @@ DPP_VALUE = 1.25e-4
 FLATTOP_TURNS = 256
 def _make_simulation_config_energy(optimise_momenta: bool = True) -> SimulationConfig:
     return SimulationConfig(
-        tracks_per_worker=1,
+        tracks_per_worker=2,
         num_workers=3,
-        num_batches=10,
+        num_batches=2,
         optimise_momenta=optimise_momenta,
     )
 
@@ -260,9 +260,6 @@ def _run_energy_optimisation_case(
             mad_logfile=tmp_path / mad_log_name,
             write_tensorboard_logs=False,
         ),
-        true_strengths=None,
-        optimise_knobs=None,
-        debug=True,
     )
     return ctrl.run()
 

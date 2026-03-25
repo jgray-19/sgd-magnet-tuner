@@ -79,6 +79,7 @@ def optimising_interface(seq_b1: Path) -> Generator[GradientDescentMadInterface,
         beam=1,
         beam_energy=BEAM_ENERGY,
         sequence_file=str(seq_b1),
+        optimise_energy=True,
     )
     iface = GradientDescentMadInterface(
         accelerator=accelerator,
