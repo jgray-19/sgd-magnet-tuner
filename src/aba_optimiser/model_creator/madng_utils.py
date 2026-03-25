@@ -148,11 +148,9 @@ MAD.gphys.melmcol({table_name}, strength_cols)
 
     def configure_bpm_observation(self) -> None:
         """Configure the loaded sequence to observe BPM elements only."""
-        self.mad.send("""
-local observed in MAD.element.flags
-loaded_sequence:deselect(observed)
-        """)
         self.mad.send(
+            "local observed in MAD.element.flags\n"
+            "loaded_sequence:deselect(observed)\n"
             f'loaded_sequence:select(observed, {{pattern="{self.accelerator.bpm_pattern}"}})'
         )
 
@@ -173,7 +171,7 @@ str_cols = PY_NAME:recv()
 cols = MAD.utility.tblcat(cols, str_cols)
 
 twiss_elements = twiss { sequence=loaded_sequence, coupling=true }
-twiss_elements:select(nil, \ -> true)
+twiss_elements:select(nil, \\ -> true)
 twiss_elements:deselect{pattern="drift"}
         """.replace("PY_NAME", self.py_name)
         )
