@@ -74,6 +74,10 @@ loaded_sequence['{element_name}'].dknl[{dknl_index}] = {self.py_name}:recv() * l
                 f"Cannot get effective strength for element {element_name} with zero length"
             )
 
+        # This will pass if the dknl table is empty (not created yet)
+        if len(self.mad.loaded_sequence[element_name].dknl) == 0:
+            return self.mad[f"loaded_sequence['{element_name}'].{attr}"]
+
         dknl_index = _DKNL_INDEX_BY_ATTR_LUA[attr]
         self.mad.send(f"""
 local l, dknl, {attr} in loaded_sequence['{element_name}']

@@ -31,6 +31,22 @@ def _get_element_dknl(interface: AbaMadInterface, element_name: str, index: int)
         # If the dknl array is empty or shorter than expected, treat missing components as zero
         return 0
 
+
+def test_effective_strength_matches_base_when_dknl_not_created(
+    loaded_interface: AbaMadInterface,
+    seq_b1: Path,
+) -> None:
+    """Effective strength lookup should fall back to the base strength before any perturbation."""
+    del seq_b1
+    quad_name = "MQY.B5L2.B1"
+
+    assert len(loaded_interface.mad.loaded_sequence[quad_name].dknl) == 0
+    assert np.isclose(
+        _get_effective_strength(loaded_interface, quad_name, "k1"),
+        _get_element_attr(loaded_interface, quad_name, "k1"),
+    )
+
+
 @pytest.mark.parametrize(
     ("rel_error", "expect_non_table_changed"),
     [(None, False), (1e-2, True)],
