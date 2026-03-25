@@ -25,6 +25,7 @@ def _make_helper(tmp_path: Path) -> WorkerSetupHelper:
         tune_knobs_files=[tmp_path / "knobs0.txt", tmp_path / "knobs1.txt"],
         debug=False,
         mad_logfile=None,
+        python_logfile=None,
     )
 
 
