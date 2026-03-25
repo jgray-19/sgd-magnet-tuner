@@ -8,6 +8,7 @@ from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.training.base_controller import BaseController
 from aba_optimiser.training.configuration_manager import ConfigurationManager
+from aba_optimiser.training.controller_config import OutputConfig
 
 
 class DummyController(BaseController):
@@ -81,6 +82,5 @@ def test_base_controller_raises_when_no_knobs_created(
             magnet_range="BPM.9R1.B1/BPM.9L2.B1",
             bpm_start_points=["BPM.9R1.B1"],
             bpm_end_points=["BPM.9L2.B1"],
-            show_plots=False,
-            write_tensorboard_logs=False,
+            output_config=OutputConfig(show_plots=False, write_tensorboard_logs=False),
         )

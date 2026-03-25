@@ -214,7 +214,7 @@ def test_get_total_turns_uses_real_batch_sizes() -> None:
     )
     data_manager.turn_batches = [[1, 2, 3, 4, 5], [6, 7]]
 
-    assert data_manager.get_total_turns() == 6
+    assert data_manager.get_total_turns() == 7
 
 
 def test_get_range_spec_plan_modes() -> None:

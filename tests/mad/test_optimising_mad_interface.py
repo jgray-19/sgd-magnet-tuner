@@ -451,21 +451,32 @@ def test_quadrupole_knob_updates_use_dknl(seq_b1: Path) -> None:
         discard_mad_output=True,
     )
 
-    knob_name = next(knob for knob in interface.knob_names if knob.endswith(".k1"))
-    element_name = knob_name.removesuffix(".k1")
-    initial_strength = interface.get_magnet_strengths([knob_name])[knob_name]
+    knob_name = next(knob for knob in interface.knob_names if knob.endswith(".dk1"))
+    element_name = knob_name.removesuffix(".dk1")
+    absolute_name = f"{element_name}.k1"
+    initial_strength_base = interface.get_base_magnet_strengths([absolute_name])[absolute_name]
+    initial_strength = interface.get_magnet_strengths([absolute_name])[absolute_name]
+    assert np.isclose(initial_strength, initial_strength_base)
     initial_k1 = float(interface.mad.loaded_sequence[element_name].k1)
 
+    element_length = float(interface.mad.loaded_sequence[element_name].l)
     step = 1e-4
-    interface.mad.send(f"loaded_sequence['{knob_name}'] = {initial_strength + step}")
+    interface.mad.send(f"loaded_sequence['{knob_name}'] = {step * element_length}")
 
-    updated_strength = interface.get_magnet_strengths([knob_name])[knob_name]
+    updated_strength = interface.get_magnet_strengths([absolute_name])[absolute_name]
     updated_k1 = float(interface.mad.loaded_sequence[element_name].k1)
     updated_dknl = float(interface.mad.loaded_sequence[element_name].dknl[1])
-    length = float(interface.mad.loaded_sequence[element_name].l)
 
     assert np.isclose(updated_strength, initial_strength + step)
     assert np.isclose(updated_k1, initial_k1)
-    assert np.isclose(updated_dknl, step * length)
+    assert np.isclose(updated_dknl, step * element_length)
+
+    interface.set_magnet_strengths({absolute_name: initial_strength_base})
+    final_strength = interface.get_magnet_strengths([absolute_name])[absolute_name]
+    final_k1 = float(interface.mad.loaded_sequence[element_name].k1)
+    final_dknl = float(interface.mad.loaded_sequence[element_name].dknl[1])
+    assert np.isclose(final_strength, initial_strength_base)
+    assert np.isclose(final_k1, initial_k1)
+    assert np.isclose(final_dknl, 0.0)
 
     cleanup_interface(interface)

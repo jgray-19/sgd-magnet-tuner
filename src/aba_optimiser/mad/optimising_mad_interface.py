@@ -35,20 +35,22 @@ LOGGER = logging.getLogger(__name__)
 MAKE_KNOBS_INIT_MAD = """
 local knob_names = {}
 local spos_list = {}
+local used = {}
 """
 
-MAKE_KNOBS_LOOP_MAD = """
-local used = {{}}
-for i, e, s, ds in loaded_sequence:siter(magnet_range) do
-    local k_str_name ! Define as nil for scope
-{attr_block}
-    if k_str_name and not used[k_str_name] then
-        ! If knob was redefined and not used yet, then add it
-        used[k_str_name] = true ! We assume that all the bends have the same k0 for [A-D].
-        table.insert(knob_names, k_str_name)
-        table.insert(spos_list, s)
-    end
-end
+MAKE_DKNL_DEFERRED = """
+\tif not MAD.typeid.is_deferred(loaded_sequence[e.name].dknl) then
+\t    loaded_sequence[e.name].dknl = MAD.typeid.deferred {0.0, 0.0, 0.0, 0.0}
+\tend
+"""
+
+STORE_KNOBS = """
+\tif not used[k_str_name] then
+\t    ! If knob was redefined and not used yet, then add it
+\t    used[k_str_name] = true ! We assume that all the bends have the same k0 for [A-Dx].
+\t    table.insert(knob_names, k_str_name)
+\t    table.insert(spos_list, s)
+\tend
 """
 
 MAKE_KNOBS_END_MAD = """
@@ -448,24 +450,25 @@ class GradientDescentMadInterface(GenericMadInterface):
                 dknl_index = _DKNL_INDEX_BY_ATTR_LUA[attr]
                 tmpl = [
                     f"if {condition} then",
-                    f"    k_str_name = {name_expr}",
+                    f"    local k_str_name = {name_expr}",
                     "    loaded_sequence[k_str_name] = loaded_sequence[k_str_name] or 0.0",
-                    "    if not MAD.typeid.is_deferred(loaded_sequence[e.name].dknl) then",
-                    "        loaded_sequence[e.name].dknl = MAD.typeid.deferred {0.0, 0.0, 0.0, 0.0}",
-                    "    end",
+                    MAKE_DKNL_DEFERRED,
                     f"   loaded_sequence[e.name].dknl[{dknl_index}] = \\->loaded_sequence[k_str_name]",
+                    STORE_KNOBS,
                     "end",
                 ]
             else:
                 tmpl = [
                     f"if {condition} then",
-                    f"    k_str_name = {name_expr}",
+                    f"    local k_str_name = {name_expr}",
+                    "    loaded_sequence[k_str_name] = loaded_sequence[k_str_name] or 0.0",
                     f"    loaded_sequence[k_str_name] = {mad_value}",
                     f"    loaded_sequence[e.name].{attr} = \\->loaded_sequence[k_str_name]",
+                    STORE_KNOBS,
                     "end",
                 ]
             for line in tmpl:
-                lines.append(f"        {line}")
+                lines.append(f"    {line}")
 
         if not lines:
             lines.append("        -- no attributes selected")
@@ -512,6 +515,16 @@ class GradientDescentMadInterface(GenericMadInterface):
         """Convert optimisation knobs (dk*) back to absolute strengths for reporting/output."""
         return self.knob_transform.optimisation_to_absolute_knobs(knob_values)
 
+    def get_absolute_knob_values(self, knob_names: list[str]) -> dict[str, float]:
+        """Return underlying absolute strengths for optimisation knob names.
+
+        For ``*.dk0/*.dk1/*.dk2`` knobs this returns the corresponding base
+        ``*.k0/*.k1/*.k2`` element strength before any dknl perturbation. For
+        direct knobs it returns the current absolute value from the sequence.
+        """
+        absolute_names = self.format_knob_names_for_output(knob_names)
+        return self.get_base_magnet_strengths(absolute_names)
+
     def format_knob_names_for_output(self, knob_names: list[str]) -> list[str]:
         """Return output-friendly knob names (dk0/dk1/dk2 mapped to k0/k1/k2)."""
         return self.knob_transform.format_knob_names_for_output(knob_names)
@@ -554,7 +567,11 @@ class GradientDescentMadInterface(GenericMadInterface):
                 attr_conditions.append((kind, attr, condition))
 
             attr_block = self._build_attr_block(attr_conditions)
-            loop_code = MAKE_KNOBS_LOOP_MAD.format(attr_block=attr_block)
+            loop_code = f"""
+for i, e, s, ds in loaded_sequence:siter(magnet_range) do
+{attr_block}
+end
+            """
             mad_code += loop_code
 
         # Add energy knob if needed
@@ -562,7 +579,11 @@ class GradientDescentMadInterface(GenericMadInterface):
             mad_code += "loaded_sequence['pt'] = loaded_sequence['pt'] or 1e-6\n"
             mad_code += 'table.insert(knob_names, "pt")\n'
 
-        mad_code += MAKE_KNOBS_END_MAD.format(py_name=self.py_name)
+        mad_code += f"""
+coord_names = {{"x", "px", "y", "py", "t", "pt"}}
+{self.py_name}:send(knob_names, true)
+{self.py_name}:send(spos_list, true)
+        """
 
         self.mad.send(mad_code)
         knob_names_all: list[str] = self.mad.recv()

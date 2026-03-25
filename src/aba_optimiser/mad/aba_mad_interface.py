@@ -43,14 +43,6 @@ class AbaMadInterface(KnobMadInterface):
         self.load_sequence(self.accelerator.sequence_file, self.accelerator.seq_name)
         self.setup_beam(beam_energy=self.accelerator.beam_energy)
 
-    def _set_dknl_delta(self, element_name: str, attr: str, delta_strength: float) -> None:
-        """Store a magnet strength delta in the matching dknl component."""
-        self._set_dknl_component(
-            element_name,
-            attr,
-            delta_strength,
-        )
-
     def _add_deferred_dknl(self, element_name: str) -> None:
         """If the dknl attribute for an element is empty and not deferred, add a deferred table to allow storing perturbations."""
         self.mad.send(f"""
@@ -89,6 +81,10 @@ local l, dknl, {attr} in loaded_sequence['{element_name}']
         """)
         return self.mad.recv()
 
+    def _get_base_element_strength(self, element_name: str, attr: str) -> float:
+        """Return the underlying element strength without any dknl perturbation applied."""
+        return float(self.mad[f"loaded_sequence['{element_name}'].{attr}"])
+
     def _set_effective_element_strength(
         self, element_name: str, attr: str, target_strength: float
     ) -> None:
@@ -98,7 +94,7 @@ local l, dknl, {attr} in loaded_sequence['{element_name}']
             return
 
         base_strength = float(self.mad[f"loaded_sequence['{element_name}'].{attr}"])
-        self._set_dknl_delta(element_name, attr, float(target_strength) - base_strength)
+        self._set_dknl_component(element_name, attr, float(target_strength) - base_strength)
 
     def set_magnet_strengths(self, strengths: dict[str, float]) -> None:
         """Set magnet strengths, storing quadrupole updates in dknl."""
@@ -126,6 +122,14 @@ local l, dknl, {attr} in loaded_sequence['{element_name}']
         for name in names:
             magnet_name, attr = name.rsplit(".", 1)
             strengths[name] = self._get_effective_element_strength(magnet_name, attr)
+        return strengths
+
+    def get_base_magnet_strengths(self, names: list[str]) -> dict[str, float]:
+        """Get underlying magnet strengths without any dknl perturbation applied."""
+        strengths: dict[str, float] = {}
+        for name in names:
+            magnet_name, attr = name.rsplit(".", 1)
+            strengths[name] = self._get_base_element_strength(magnet_name, attr)
         return strengths
 
     def observe_bpms(
@@ -234,7 +238,7 @@ local l, dknl, {attr} in loaded_sequence['{element_name}']
                 strength_after = strength_before + delta
 
                 if attr in _DKNL_STRENGTH_ATTRS:
-                    self._set_dknl_delta(elm.name, attr, delta)
+                    self._set_dknl_component(elm.name, attr, delta)
                 else:
                     elm[attr] = strength_after
 
