@@ -44,7 +44,7 @@ jobs:
 
       # The uv pip should make & use an env from the Python install of the previous step
       - name: Install package
-        run: uv pip install '.[test,tracking]'
+        run: uv pip install -e '.[test,tracking]'
 
       - name: Run tests
         run: pytest --cov=aba_optimiser --cov-branch --cov-report=xml
