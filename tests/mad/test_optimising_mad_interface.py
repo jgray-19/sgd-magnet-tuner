@@ -36,6 +36,130 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
+def _spec_key(spec: tuple[str, str, str, bool]) -> str:
+    """Build a stable comparable key for a single knob specification."""
+    kind, attr, pattern, zero_check = spec
+    return f"{kind}:{attr}:{pattern}:{int(zero_check)}"
+
+
+def _expected_lhc_knob_spec_keys(
+    *,
+    optimise_quadrupoles: bool,
+    optimise_correctors: bool,
+    optimise_bends: bool,
+    optimise_other_quadrupoles: bool,
+    optimise_quad_dx: bool,
+    optimise_quad_dy: bool,
+) -> list[str]:
+    """Return expected ordered knob-spec keys for LHC optimisation flags."""
+    expected: list[str] = []
+    if optimise_bends:
+        expected.append(_spec_key(("sbend", "k0", LHC.PATTERN_MAIN_BEND, True)))
+    if optimise_quadrupoles:
+        expected.append(_spec_key(("quadrupole", "k1", LHC.PATTERN_MAIN_QUAD, True)))
+    if optimise_other_quadrupoles:
+        expected.append(_spec_key(("quadrupole", "k1", LHC.PATTERN_QUAD_NON_TUNE, True)))
+    if optimise_correctors:
+        expected.append(_spec_key(("hkicker", "kick", LHC.PATTERN_CORRECTOR, False)))
+        expected.append(_spec_key(("vkicker", "kick", LHC.PATTERN_CORRECTOR, False)))
+    if optimise_quad_dx:
+        expected.append(_spec_key(("quadrupole", "dx", LHC.PATTERN_QUAD_DISPLACEMENT, False)))
+    if optimise_quad_dy:
+        expected.append(_spec_key(("quadrupole", "dy", LHC.PATTERN_QUAD_DISPLACEMENT, False)))
+    return expected
+
+
+@pytest.mark.parametrize(
+    (
+        "optimise_quadrupoles",
+        "optimise_sextupoles",
+        "optimise_energy",
+        "optimise_correctors",
+        "optimise_bends",
+        "normalise_bends",
+        "optimise_other_quadrupoles",
+        "optimise_quad_dx",
+        "optimise_quad_dy",
+    ),
+    [
+        (False, False, False, False, False, None, False, False, False),
+        (True, False, False, False, False, None, False, False, False),
+        (False, True, False, False, False, None, False, False, False),
+        (False, False, True, False, False, None, False, False, False),
+        (False, False, False, True, False, None, False, False, False),
+        (False, False, False, False, True, None, False, False, False),
+        (False, False, False, False, False, None, True, False, False),
+        (False, False, False, False, False, None, False, True, False),
+        (False, False, False, False, False, None, False, False, True),
+        (True, True, True, True, True, None, True, True, True),
+    ],
+    ids=[
+        "all-off",
+        "main-quads-only",
+        "sextupoles-only-no-lhc-knobs",
+        "energy-only",
+        "correctors-only",
+        "bends-only-normalise-default",
+        "other-quads-only",
+        "quad-dx-only",
+        "quad-dy-only",
+        "all-on",
+    ],
+)
+def test_lhc_all_optimisation_combinations_select_expected_knob_list(
+    seq_b1: Path,
+    optimise_quadrupoles: bool,
+    optimise_sextupoles: bool,
+    optimise_energy: bool,
+    optimise_correctors: bool,
+    optimise_bends: bool,
+    normalise_bends: bool | None,
+    optimise_other_quadrupoles: bool,
+    optimise_quad_dx: bool,
+    optimise_quad_dy: bool,
+) -> None:
+    """All LHC optimisation-flag combinations should map to the right knob list."""
+    accelerator = LHC(
+        beam=1,
+        beam_energy=BEAM_ENERGY,
+        sequence_file=str(seq_b1),
+        optimise_quadrupoles=optimise_quadrupoles,
+        optimise_sextupoles=optimise_sextupoles,
+        optimise_energy=optimise_energy,
+        optimise_correctors=optimise_correctors,
+        optimise_bends=optimise_bends,
+        normalise_bends=normalise_bends,
+        optimise_other_quadrupoles=optimise_other_quadrupoles,
+        optimise_quad_dx=optimise_quad_dx,
+        optimise_quad_dy=optimise_quad_dy,
+    )
+
+    # Exercise the knob-selection path from GradientDescentMadInterface without
+    # creating a full MAD session (faster exhaustive combinatorial test).
+    interface = GradientDescentMadInterface.__new__(GradientDescentMadInterface)
+    interface.accelerator = accelerator
+    all_specs = interface.get_knob_specs()
+    selected_specs = interface._filter_knob_specs(all_specs)
+
+    actual_knob_list = [_spec_key(spec) for spec in selected_specs]
+    if optimise_energy:
+        actual_knob_list.append("pt")
+
+    expected_knob_list = _expected_lhc_knob_spec_keys(
+        optimise_quadrupoles=optimise_quadrupoles,
+        optimise_correctors=optimise_correctors,
+        optimise_bends=optimise_bends,
+        optimise_other_quadrupoles=optimise_other_quadrupoles,
+        optimise_quad_dx=optimise_quad_dx,
+        optimise_quad_dy=optimise_quad_dy,
+    )
+    if optimise_energy:
+        expected_knob_list.append("pt")
+
+    # Sextupole optimisation currently has no LHC knob spec in get_supported_knob_specs.
+    assert actual_knob_list == expected_knob_list
+
+
 def setup_and_check_interface(
     accelerator: LHC,
     magnet_range: str = "$start/$end",
@@ -419,8 +543,8 @@ def test_recv_update_knob_values(
 ) -> None:
     """Test receiving current knob values."""
     values = optimising_interface.receive_knob_values()
-    # No knobs are created, so we expect empty array
-    assert len(values) == 0
+    # We are optimising energy by default, so "pt" knob should be present with a value
+    assert len(values) == 1
 
     # Now add some knobs and verify they can be received
     optimising_interface.knob_names.extend(["a", "b", "c"])
@@ -429,14 +553,15 @@ def test_recv_update_knob_values(
         "loaded_sequence.a = 1.0; loaded_sequence.b = 2.1; loaded_sequence.c = -3.2"
     )
     values = optimising_interface.receive_knob_values()
-    assert all(values == [1.0, 2.1, -3.2]), f"Unexpected knob values: {values}"
+    # The "pt" knob should have a default value of 1e-6 (as set in get_base_knob_values), and the new knobs should have the values we set
+    assert all(values == [1e-6, 1.0, 2.1, -3.2]), f"Unexpected knob values: {values}"
 
     # Update knobs (including a non-existent one "pt" that should be ignored)
     update_table = {"a": 4.5, "b": -6.7, "c": 8.9, "pt": 1.0}
     optimising_interface.update_knob_values(update_table)
     values = optimising_interface.receive_knob_values()
-    # Only the 3 existing knobs should be updated, "pt" is ignored with a warning
-    assert all(values == [4.5, -6.7, 8.9]), f"Unexpected knob values after update: {values}"
+    # Only the 3 existing knobs should be updated
+    assert all(values == [1.0, 4.5, -6.7, 8.9]), f"Unexpected knob values after update: {values}"
 
 
 def test_quadrupole_knob_updates_use_dknl(seq_b1: Path) -> None:
