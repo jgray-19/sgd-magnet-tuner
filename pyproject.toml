@@ -81,7 +81,9 @@ where = ["src"]
 include = ["aba_optimiser*"]
 
 [tool.coverage.run]
-source = ["src/aba_optimiser"]
+# Use the importable package name so coverage can map executed files correctly
+# in CI even when the project is installed into site-packages.
+source = ["aba_optimiser"]
 relative_files = true
 
 [tool.pytest.ini_options]
