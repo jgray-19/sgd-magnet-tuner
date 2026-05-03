@@ -45,10 +45,32 @@ class _FakeChannels:
         return self._responses
 
 
+class _FakeWorker:
+    def __init__(self) -> None:
+        self.join_calls = 0
+        self.exitcode = 0
+        self.pid = 1234
+
+    def join(self) -> None:
+        self.join_calls += 1
+
+
+class _SerialFakeConn:
+    def __init__(self, responses: list[object]) -> None:
+        self.sent: list[object] = []
+        self._responses = list(responses)
+
+    def send(self, payload: object) -> None:
+        self.sent.append(payload)
+
+    def recv(self) -> object:
+        return self._responses.pop(0)
+
+
 def _make_sps(tmp_path: Path) -> SPS:
     seq_file = tmp_path / "sps.seq"
     seq_file.write_text("! Dummy SPS sequence file\n")
-    return SPS(sequence_file=seq_file, beam_energy=450.0)
+    return SPS(sequence_file=seq_file, pc=450.0)
 
 
 def _make_manager(
@@ -595,3 +617,104 @@ def test_split_validation_payloads_spreads_across_sorted_range_groups(
         ("BPH.14008", "BPH.14408"),
     }
     assert {p[1].sdir for p in split.validation_payloads} == {1, -1}
+
+
+def test_termination_and_hessian_parallel_uses_broadcast_shutdown(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    manager.channels = _FakeChannels(
+        [
+            np.eye(2, dtype=np.float64),
+            2.0 * np.eye(2, dtype=np.float64),
+        ]
+    )
+    manager.workers = [_FakeWorker(), _FakeWorker()]  # type: ignore[assignment]
+    manager.validation_workers = []
+    manager.validation_parent_conns = []
+    manager.validation_channels = None
+
+    total = manager.termination_and_hessian(2, parallelism=True)
+
+    np.testing.assert_allclose(total, 3.0 * np.eye(2, dtype=np.float64))
+    assert manager.channels.sent == [(None, None)]
+    assert [worker.join_calls for worker in manager.workers] == [1, 1]
+
+
+def test_termination_and_hessian_serial_stops_workers_one_by_one(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    manager.parent_conns = [
+        _SerialFakeConn([np.eye(2, dtype=np.float64)]),  # type: ignore[list-item]
+        _SerialFakeConn([2.0 * np.eye(2, dtype=np.float64)]),  # type: ignore[list-item]
+    ]
+    manager.workers = [_FakeWorker(), _FakeWorker()]  # type: ignore[assignment]
+    manager.validation_workers = []
+    manager.validation_parent_conns = []
+    manager.validation_channels = None
+
+    total = manager.termination_and_hessian(2, parallelism=False)
+
+    np.testing.assert_allclose(total, 3.0 * np.eye(2, dtype=np.float64))
+    assert manager.parent_conns[0].sent == [(None, None)]
+    assert manager.parent_conns[1].sent == [(None, None)]
+    assert [worker.join_calls for worker in manager.workers] == [1, 1]
+
+
+def test_termination_and_hessian_serial_disables_hessian_before_shutdown(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    manager.parent_conns = [
+        _SerialFakeConn(
+            [
+                {"worker_id": 0, "status": "ok"},
+                np.zeros((2, 2), dtype=np.float64),
+            ]
+        ),  # type: ignore[list-item]
+    ]
+    manager.workers = [_FakeWorker()]  # type: ignore[assignment]
+    manager.validation_workers = []
+    manager.validation_parent_conns = []
+    manager.validation_channels = None
+
+    total = manager.termination_and_hessian(2, estimate_hessian=False, parallelism=False)
+
+    np.testing.assert_allclose(total, np.zeros((2, 2), dtype=np.float64))
+    assert manager.parent_conns[0].sent == [
+        {"cmd": "set_hessian_mode", "enabled": False},
+        (None, None),
+    ]
+
+
+def test_termination_and_hessian_batched_limits_concurrent_shutdowns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ChunkChannels:
+        def __init__(self, parent_conns, workers) -> None:
+            self.parent_conns = parent_conns
+            self.workers = workers
+
+        def send_all(self, payload: object) -> None:
+            for conn in self.parent_conns:
+                conn.send(payload)
+
+        def recv_all(self) -> list[object]:
+            return [conn.recv() for conn in self.parent_conns]
+
+    monkeypatch.setattr("aba_optimiser.training.worker_manager.WorkerChannels", _ChunkChannels)
+
+    manager = _make_manager(tmp_path)
+    manager.parent_conns = [
+        _SerialFakeConn([np.eye(2, dtype=np.float64)]),  # type: ignore[list-item]
+        _SerialFakeConn([2.0 * np.eye(2, dtype=np.float64)]),  # type: ignore[list-item]
+        _SerialFakeConn([3.0 * np.eye(2, dtype=np.float64)]),  # type: ignore[list-item]
+    ]
+    manager.workers = [_FakeWorker(), _FakeWorker(), _FakeWorker()]  # type: ignore[assignment]
+    manager.validation_workers = []
+    manager.validation_parent_conns = []
+    manager.validation_channels = None
+
+    total = manager.termination_and_hessian(2, parallelism=2)
+
+    np.testing.assert_allclose(total, 6.0 * np.eye(2, dtype=np.float64))
+    assert manager.parent_conns[0].sent == [(None, None)]
+    assert manager.parent_conns[1].sent == [(None, None)]
+    assert manager.parent_conns[2].sent == [(None, None)]
+    assert [worker.join_calls for worker in manager.workers] == [1, 1, 1]

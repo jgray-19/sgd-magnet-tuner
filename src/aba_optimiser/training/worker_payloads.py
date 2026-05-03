@@ -39,16 +39,16 @@ class WorkerPayloadBuilder:
         self,
         accelerator: Accelerator,
         all_bpms: list[str],
-        beam_energy: float,
+        pc: float,
     ) -> None:
         self.accelerator = accelerator
         self.all_bpms = all_bpms
-        self.beam_energy = beam_energy
+        self.pc = pc
         self._pos_cache: dict[int, dict[tuple[int, str], int]] = {}
 
     def compute_pt(self, file_idx: int, machine_deltaps: list[float]) -> float:
         """Compute transverse momentum based on file index."""
-        return dp2pt(machine_deltaps[file_idx], PROTON_MASS, self.beam_energy)
+        return dp2pt(machine_deltaps[file_idx], PROTON_MASS, self.pc)
 
     @staticmethod
     def freeze_payload_arrays(*arrays: np.ndarray) -> None:

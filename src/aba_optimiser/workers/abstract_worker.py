@@ -268,9 +268,13 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
 
         knob_names = mad_iface.knob_names
         if knob_names != list(init_knobs.keys()):
+            init_set = set(init_knobs.keys())
+            mad_set = set(knob_names)
+            diff_init_mad = init_set.symmetric_difference(mad_set)
             raise ValueError(
-                f"Worker {self.worker_id}: Knob names from MAD {knob_names} "
-                f"do not match initial knobs {list(init_knobs.keys())}"
+                f"Worker {self.worker_id}: Knob names from MAD {len(knob_names)} "
+                f"do not match initial knobs {len(list(init_knobs.keys()))}"
+                f"\nDifferent knobs: {diff_init_mad}"
             )
 
         mad = mad_iface.mad

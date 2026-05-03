@@ -27,7 +27,7 @@ from tests.mad.helpers import (
     cleanup_interface,
 )
 
-BEAM_ENERGY = 6800  # Beam energy in GeV
+PC = 6800  # Beam energy in GeV
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -121,7 +121,7 @@ def test_lhc_all_optimisation_combinations_select_expected_knob_list(
     """All LHC optimisation-flag combinations should map to the right knob list."""
     accelerator = LHC(
         beam=1,
-        beam_energy=BEAM_ENERGY,
+        pc=PC,
         sequence_file=str(seq_b1),
         optimise_quadrupoles=optimise_quadrupoles,
         optimise_sextupoles=optimise_sextupoles,
@@ -201,7 +201,7 @@ def optimising_interface(seq_b1: Path) -> Generator[GradientDescentMadInterface,
     """Create a fresh GradientDescentMadInterface for each test."""
     accelerator = LHC(
         beam=1,
-        beam_energy=BEAM_ENERGY,
+        pc=PC,
         sequence_file=str(seq_b1),
         optimise_energy=True,
     )
@@ -214,17 +214,17 @@ def optimising_interface(seq_b1: Path) -> Generator[GradientDescentMadInterface,
 
 class TestOptimisationMadInterfaceInit:
     @pytest.mark.parametrize(
-        "beam_energy, seq_name",
+        "pc, seq_name",
         [
             (None, None),
             (6500, "lhcb1"),
         ],
     )
-    def test_default(self, seq_b1: Path, beam_energy: float | None, seq_name: str | None) -> None:
+    def test_default(self, seq_b1: Path, pc: float | None, seq_name: str | None) -> None:
         """Test initialisation of GenericMadInterface with default parameters."""
         accelerator = LHC(
             beam=1,
-            beam_energy=beam_energy or BEAM_ENERGY,
+            pc=pc or PC,
             sequence_file=str(seq_b1),
         )
         interface = GenericMadInterface(
@@ -250,7 +250,7 @@ class TestOptimisationMadInterfaceInit:
         check_sequence_loaded(interface, "lhcb1")
 
         # Check beam setup
-        check_beam_setup(interface, particle="proton", energy=beam_energy or BEAM_ENERGY)
+        check_beam_setup(interface, particle="proton", pc=pc or PC)
 
         assert interface.knob_names == []
         assert interface.elem_spos == []
@@ -261,7 +261,7 @@ class TestOptimisationMadInterfaceInit:
         """Test that MAD variables are set correctly for default ranges and patterns."""
         accelerator = LHC(
             beam=1,
-            beam_energy=BEAM_ENERGY,
+            pc=PC,
             sequence_file=str(seq_b1),
         )
         interface = GenericMadInterface(
@@ -291,7 +291,7 @@ class TestOptimisationMadInterfaceInit:
         """Test that MAD variables are set correctly for custom patterns."""
         accelerator = LHC(
             beam=1,
-            beam_energy=BEAM_ENERGY,
+            pc=PC,
             sequence_file=str(seq_b1),
             bpm_pattern=r"^BPM%.10.*",  # Custom pattern to match BPMs starting with "BPM.10"
         )
@@ -315,7 +315,7 @@ class TestOptimisationMadInterfaceInit:
         """Test that MAD variables are set correctly for custom BPM ranges."""
         accelerator = LHC(
             beam=1,
-            beam_energy=BEAM_ENERGY,
+            pc=PC,
             sequence_file=str(seq_b1),
             bpm_pattern=r"^BPM",
         )
@@ -358,7 +358,7 @@ class TestOptimisationMadInterfaceInit:
         """Test initialisation with knob configuration."""
         accelerator = LHC(
             beam=1,
-            beam_energy=BEAM_ENERGY,
+            pc=PC,
             sequence_file=str(seq_b1),
             optimise_energy=optimise_energy,
             optimise_quadrupoles=optimise_quadrupoles,
@@ -410,7 +410,7 @@ class TestOptimisationMadInterfaceInit:
         """Test corrector application on the tracked sequence for both MAD interfaces."""
         accelerator = LHC(
             beam=1,
-            beam_energy=BEAM_ENERGY,
+            pc=PC,
             sequence_file=str(seq_b1),
             optimise_energy=optimise_energy,
         )
@@ -435,7 +435,7 @@ class TestOptimisationMadInterfaceInit:
 
         accelerator = LHC(
             beam=1,
-            beam_energy=BEAM_ENERGY,
+            pc=PC,
             sequence_file=str(seq_b1),
         )
         no_knob_interface = GenericMadInterface(
@@ -479,7 +479,7 @@ class TestOptimisationMadInterfaceInit:
         """Test that bad_bpms are properly unobserved."""
         accelerator = LHC(
             beam=1,
-            beam_energy=BEAM_ENERGY,
+            pc=PC,
             sequence_file=str(seq_b1),
         )
         interface = GenericMadInterface(
@@ -568,7 +568,7 @@ def test_quadrupole_knob_updates_use_dknl(seq_b1: Path) -> None:
     """Quadrupole dknl should follow the live knob value without mutating base k1."""
     accelerator = LHC(
         beam=1,
-        beam_energy=BEAM_ENERGY,
+        pc=PC,
         sequence_file=str(seq_b1),
         optimise_quadrupoles=True,
     )

@@ -44,7 +44,7 @@ DATA_DIR = Path(__file__).parent.parent
 SEQUENCE_FILE = DATA_DIR / "lhcb1.seq"
 NATURAL_TUNES = [0.28, 0.31]
 DRIVEN_TUNES = [0.27, 0.322]
-BEAM_ENERGY = 6800
+PC = 6800
 DELTA_P = 2e-4
 CORRECTOR_FILE_PATH = DATA_DIR / "corrector_table.tfs"
 RAMP_TURNS = 1000
@@ -353,7 +353,7 @@ def run_analysis(files, model_dir):
         accel="lhc",
         beam=1,
         year="2025",
-        energy=BEAM_ENERGY,
+        energy=PC,
         model_dir=model_dir,
         tunes=DRIVEN_TUNES + [0.0],
         nattunes=NATURAL_TUNES + [0.0],
@@ -367,7 +367,7 @@ def run_analysis(files, model_dir):
         optics=True,
         files=[DATA_DIR / "lin_files" / f.name for f in files],
         outputdir=DATA_DIR / "optics",
-        energy=BEAM_ENERGY,
+        energy=PC,
         model_dir=model_dir,
         compensation="model",
         accel="lhc",

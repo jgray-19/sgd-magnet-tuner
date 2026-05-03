@@ -53,7 +53,7 @@ class BetaMatcher:
                 - knobs_file: Path to JSON listing knobs to adjust
                 - sequence_file_path: Path to MAD-NG sequence file
                 - magnet_range: Range of magnets for matching
-                - beam_energy: Beam energy in GeV
+                - pc: Beam energy in GeV
                 - output_dir: Directory to save results
             show_plots: Whether to display plots during matching
         """
@@ -535,19 +535,19 @@ end
         """Build an accelerator instance from matcher configuration."""
         seq_name = str(getattr(self.config, "seq_name", "") or "").lower()
         seq_file = self.config.sequence_file_path
-        beam_energy = self.config.beam_energy
+        pc = self.config.pc
 
         if "sps" in seq_name or "sps" in seq_file.stem.lower():
             return SPS(
                 sequence_file=seq_file,
-                beam_energy=beam_energy,
+                pc=pc,
             )
 
         beam = 2 if "b2" in seq_name else 1
         return LHC(
             beam=beam,
             sequence_file=seq_file,
-            beam_energy=beam_energy,
+            pc=pc,
         )
 
     def _get_bpm_list(self) -> list[str]:

@@ -161,7 +161,7 @@ def _process_corrector_worker(
     sequence_file: Path,
     seq_name: str,
     beam: int,
-    beam_energy_gev: float,
+    pc_gev: float,
     particle: str,
     plane: str,
 ) -> tuple[str, list[float]]:
@@ -181,7 +181,7 @@ def _process_corrector_worker(
         disp_y: DataFrame with vertical dispersion at BPMs
         sequence_file: Path to the MAD-X sequence file
         seq_name: Name of the sequence
-        beam_energy_gev: Beam energy in GeV
+        pc_gev: Beam energy in GeV
         particle: Particle type
         plane: Dispersion plane ("x" or "y")
 
@@ -193,7 +193,7 @@ def _process_corrector_worker(
     mad_interface.mad.MADX[f"b{beam}_re_ip7_knob"] = 0.0  # To avoid warnings
     mad_interface.mad.MADX[f"b{beam}_im_ip7_knob"] = 0.0  # To avoid warnings
     mad_interface.load_sequence(sequence_file, seq_name)
-    mad_interface.setup_beam(beam_energy=beam_energy_gev, particle=particle)
+    mad_interface.setup_beam(pc=pc_gev, particle=particle)
 
     mad = mad_interface.mad
     mad.send("""
@@ -274,7 +274,7 @@ def estimate_corrector_dispersion(
     sequence_file: Path,
     seq_name: str = "lhcb1",
     beam: Literal[1, 2] = 1,
-    beam_energy_gev: float = 6800,
+    pc_gev: float = 6800,
     particle: str = "proton",
     plane: str = "x",
     n_processes: int | None = None,
@@ -299,7 +299,7 @@ def estimate_corrector_dispersion(
         disp_y: DataFrame with vertical dispersion at BPMs (must have 'DY', 'DPY' columns)
         sequence_file: Path to the MAD-X sequence file
         seq_name: Name of the sequence in the MAD-X file
-        beam_energy_gev: Beam energy in GeV
+        pc_gev: Beam energy in GeV
         particle: Particle type (e.g., "proton")
         plane: Dispersion plane to extract ("x" or "y")
         n_processes: Number of parallel processes to use (default: number of CPU cores)
@@ -329,7 +329,7 @@ def estimate_corrector_dispersion(
             sequence_file,
             seq_name,
             beam,
-            beam_energy_gev,
+            pc_gev,
             particle,
             plane,
         )
@@ -384,7 +384,7 @@ def estimate_corrector_dispersions(
     model_dir: Path,
     seq_name: str = "lhcb1",
     beam: Literal[1, 2] = 1,
-    beam_energy_gev: float = 6800,
+    pc_gev: float = 6800,
     particle: str = "proton",
     num_closest_bpms: int = 10,
     plane: str = "x",
@@ -403,7 +403,7 @@ def estimate_corrector_dispersions(
         model_dir: Directory containing the model twiss_elements.dat file
         seq_name: Name of the sequence in the MAD-X file
         beam: Beam number (1 or 2)
-        beam_energy_gev: Beam energy in GeV
+        pc_gev: Beam energy in GeV
         particle: Particle type (e.g., "proton")
         num_closest_bpms: Number of nearby BPMs to use for each corrector estimate
         plane: Dispersion plane to extract ("x" or "y")
@@ -487,7 +487,7 @@ def estimate_corrector_dispersions(
         sequence_file,
         seq_name=seq_name,
         beam=beam,
-        beam_energy_gev=beam_energy_gev,
+        pc_gev=pc_gev,
         particle=particle,
         plane=plane,
         n_processes=n_processes,

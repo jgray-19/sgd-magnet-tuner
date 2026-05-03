@@ -40,7 +40,7 @@ from aba_optimiser.measurements.squeeze_helpers import (
     extract_tunes_from_job_file,
     get_or_make_sequence,
 )
-from aba_optimiser.model_creator.madng_utils import ModelCreatorMadngInterface
+from pymadng_utils.model_creator.madng_utils import update_model_with_madng
 from aba_optimiser.noise import assign_bpm_variances
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import MeasurementConfig, OutputConfig, SequenceConfig
@@ -65,9 +65,17 @@ AC_DIPOLE_ATTR_KEYS = (
 class ACDipoleReconstructionConfig:
     """Configuration for AC-dipole assisted px/py reconstruction."""
 
-    ac_dipole_marker: str
-    beam_energy: float
     n_bpms_each_side: int = 1
+    tune_knobs_files: list[Path | None] | None = None
+    corrector_knobs_files: list[Path | None] | None = None
+
+
+def _build_dataframe_file_indices(measurements: list[TbtData]) -> list[int]:
+    """Map each converted dataframe back to the source measurement-file index."""
+    file_indices: list[int] = []
+    for file_idx, meas in enumerate(measurements):
+        file_indices.extend([file_idx] * len(meas.matrices))
+    return file_indices
 
 
 def load_files(files: list[Path]) -> list[TbtData]:
@@ -270,7 +278,8 @@ def process_single_dataframe(
     analysis_dir: Path,
     use_uniform_vars: bool,
     beam: int,
-    ac_dipole_config_factory: Callable[[], ACDipoleConfig | None] | None = None,
+    ac_dipole_config_factory: Callable[[int], ACDipoleConfig | None] | None = None,
+    machine_deltap: float | None = None,
 ) -> tuple[int, pd.DataFrame]:
     """Process a single DataFrame: clean, compute vars, and calculate pz.
 
@@ -284,7 +293,7 @@ def process_single_dataframe(
         Tuple of (original_index, processed_dataframe)
     """
     i, df = df_with_index
-    ac_dipole_config = ac_dipole_config_factory() if ac_dipole_config_factory is not None else None
+    ac_dipole_config = ac_dipole_config_factory(i) if ac_dipole_config_factory is not None else None
 
     # SVD clean
     df = svd_clean_measurements(df)
@@ -300,7 +309,6 @@ def process_single_dataframe(
         df = compute_vars_from_known_noise(df, bad_bpms)
         df.reset_index(inplace=True)
 
-
     # Calculate pz
     df = calculate_pz_measurement(
         df,
@@ -309,7 +317,7 @@ def process_single_dataframe(
         include_errors=True,
         include_optics_errors=True,
         reverse_meas_tws=beam == 2,
-        dpp_override=0.0,
+        dpp_override=machine_deltap,
         ac_dipole_config=ac_dipole_config,
     )
 
@@ -449,13 +457,13 @@ def build_madng_twiss_table(
         )
         natural_tunes = nattunes[:2]
         driven_tunes = tunes[:2]
-        with ModelCreatorMadngInterface(accelerator) as madng_interface:
-            madng_interface.initialise_model(tunes=natural_tunes)
-            madng_interface.compute_and_export_twiss_tables(
-                output_dir,
-                tunes=natural_tunes,
-                drv_tunes=driven_tunes,
-            )
+        update_model_with_madng(
+            accelerator,
+            output_dir,
+            tunes=natural_tunes,
+            drv_tunes=driven_tunes,
+            convert_to_madx=False,
+        )
     return tfs.read(tws_file)
 
 
@@ -472,6 +480,7 @@ def process_measurements(
     combine_files: bool = True,
     nattunes: list[float] | None = None,
     tunes: list[float] | None = None,
+    machine_deltaps: float | list[float] | None = None,
     ac_dipole_reconstruction_config: ACDipoleReconstructionConfig | None = None,
 ) -> tuple[dict[str, pd.DataFrame], list[str], dict[str, Path], pd.DataFrame]:
     """Process measurement files to compute pz data and identify bad BPMs.
@@ -480,7 +489,7 @@ def process_measurements(
         files: List of measurement file paths
         output_dir: Directory for analysis outputs
         model_dir: Directory containing model files
-        accelerator: LHC accelerator carrying beam, sequence_file and beam_energy
+        accelerator: LHC accelerator carrying beam, sequence_file and pc
         filename: Output filename for parquet file (None to skip saving)
         bad_bpms: List of bad BPM names (None to run analysis)
         use_uniform_vars: If True, use uniform variances instead of noise-based
@@ -489,6 +498,8 @@ def process_measurements(
                       if False, return dict with file paths as keys
         nattunes: Natural tunes [Qx, Qy, Qz] (None to extract from model)
         tunes: Driven tunes [Qx, Qy, Qz] (None to extract from model)
+        machine_deltaps: Optional machine momentum offsets used during px/py reconstruction.
+                If a list, must match files length and will be expanded per bunch.
 
     Returns:
         Tuple of (dict mapping file paths to dataframes, bad_bpms_list, dict mapping keys to output paths, twiss_df)
@@ -509,31 +520,71 @@ def process_measurements(
 
     # Build one isolated AC-dipole reconstruction model per worker thread.
     sequence_for_acd = accelerator.sequence_file
+    ac_dipole_marker = accelerator.get_ac_dipole_marker()
     acd_model_lock = threading.Lock()
     acd_models: list[ACDipoleMadDriver] = []
     acd_thread_local = threading.local()
 
-    def get_thread_local_ac_dipole_config() -> ACDipoleConfig | None:
+    if ac_dipole_reconstruction_config is not None:
+        tune_knobs_files = ac_dipole_reconstruction_config.tune_knobs_files
+        corrector_knobs_files = ac_dipole_reconstruction_config.corrector_knobs_files
+        if tune_knobs_files is not None and len(tune_knobs_files) != len(files):
+            raise ValueError(
+                "ac_dipole_reconstruction_config.tune_knobs_files must match files length: "
+                f"{len(tune_knobs_files)} != {len(files)}"
+            )
+        if corrector_knobs_files is not None and len(corrector_knobs_files) != len(files):
+            raise ValueError(
+                "ac_dipole_reconstruction_config.corrector_knobs_files must match files length: "
+                f"{len(corrector_knobs_files)} != {len(files)}"
+            )
+
+    def get_thread_local_ac_dipole_config(df_idx: int) -> ACDipoleConfig | None:
         if ac_dipole_reconstruction_config is None:
             return None
-        cfg = getattr(acd_thread_local, "config", None)
+        cfg_cache = getattr(acd_thread_local, "config_cache", None)
+        if cfg_cache is None:
+            cfg_cache = {}
+            acd_thread_local.config_cache = cfg_cache
+
+        file_idx = dataframe_file_indices[df_idx]
+        tune_knobs_file = (
+            ac_dipole_reconstruction_config.tune_knobs_files[file_idx]
+            if ac_dipole_reconstruction_config.tune_knobs_files is not None
+            else None
+        )
+        corrector_knobs_file = (
+            ac_dipole_reconstruction_config.corrector_knobs_files[file_idx]
+            if ac_dipole_reconstruction_config.corrector_knobs_files is not None
+            else None
+        )
+        machine_deltap = per_dataframe_machine_deltaps[df_idx]
+        cache_key = (
+            None if tune_knobs_file is None else str(Path(tune_knobs_file)),
+            None if corrector_knobs_file is None else str(Path(corrector_knobs_file)),
+            machine_deltap,
+        )
+        cfg = cfg_cache.get(cache_key)
         if cfg is not None:
             return cfg
 
         model = ACDipoleMadDriver(
             sequence_file=sequence_for_acd,
             beam=beam,
-            beam_energy=ac_dipole_reconstruction_config.beam_energy,
-            deltap=0.0,
-            observed_elements=ac_dipole_reconstruction_config.ac_dipole_marker,
+            pc=accelerator.pc,
+            deltap=machine_deltap if machine_deltap is not None else 0.0,
+            observed_elements=ac_dipole_marker,
+            tune_knobs_file=tune_knobs_file,
+            corrector_knobs_file=corrector_knobs_file,
             discard_mad_output=True,
         )
         cfg = ACDipoleConfig(
-            ac_dipole_marker=ac_dipole_reconstruction_config.ac_dipole_marker,
+            ac_dipole_marker=ac_dipole_marker,
             model=model,
-            n_bpms_each_side=ac_dipole_reconstruction_config.n_bpms_each_side,
+            tune_knobs_file=tune_knobs_file,
+            corrector_knobs_file=corrector_knobs_file,
         )
-        acd_thread_local.config = cfg
+        cfg_cache[cache_key] = cfg
         with acd_model_lock:
             acd_models.append(model)
         return cfg
@@ -557,7 +608,34 @@ def process_measurements(
 
     data = load_files(files)
     combined = convert_measurements(data, bad_bpms, combine_measurements=combine_files)
+    dataframe_file_indices = _build_dataframe_file_indices(data)
+
+    if machine_deltaps is None:
+        per_file_machine_deltaps = [None] * len(files)
+    elif isinstance(machine_deltaps, int | float):
+        per_file_machine_deltaps = [float(machine_deltaps)] * len(files)
+    else:
+        machine_deltaps_list = list(machine_deltaps)
+        if len(machine_deltaps_list) != len(files):
+            raise ValueError(
+                "machine_deltaps must match files length when provided as a list: "
+                f"{len(machine_deltaps_list)} != {len(files)}"
+            )
+        per_file_machine_deltaps = machine_deltaps_list
+
+    per_dataframe_machine_deltaps = [
+        per_file_machine_deltaps[file_idx] for file_idx in dataframe_file_indices
+    ]
+
+    if any(dpp is not None for dpp in per_file_machine_deltaps):
+        LOGGER.info("Using provided machine deltaps for measurement processing.")
+
     LOGGER.info(f"Combined data has {len(combined)} DataFrames from different files/bunches.")
+    if len(dataframe_file_indices) != len(combined):
+        raise ValueError(
+            "Converted dataframe count does not match source-file mapping: "
+            f"{len(combined)} != {len(dataframe_file_indices)}"
+        )
     tws = build_madng_twiss_table(Path(model_dir), accelerator, output_dir, nattunes, tunes)
     tws.columns = [col.lower() for col in tws.columns]
     tws = tws.rename(
@@ -595,6 +673,7 @@ def process_measurements(
                             use_uniform_vars,
                             beam,
                             get_thread_local_ac_dipole_config,
+                            per_dataframe_machine_deltaps[i],
                         ): i
                         for i, df in enumerate(combined)
                     }
@@ -624,6 +703,7 @@ def process_measurements(
                     use_uniform_vars=use_uniform_vars,
                     beam=beam,
                     ac_dipole_config_factory=get_thread_local_ac_dipole_config,
+                    machine_deltap=per_dataframe_machine_deltaps[i],
                 )
                 processed_results[idx] = processed_df
                 LOGGER.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")
@@ -734,7 +814,7 @@ if __name__ == "__main__":
 
     accelerator = LHC(
         beam=1,
-        beam_energy=6800,
+        pc=6800,
         sequence_file=get_or_make_sequence(1, Path(model_dir)),
     )
     pzs_dict, bad_bpms, _, _ = process_measurements(

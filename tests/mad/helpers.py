@@ -45,14 +45,14 @@ def check_sequence_loaded(interface: AbaMadInterface, seq_name: str = "lhcb1") -
 def check_beam_setup(
     interface: AbaMadInterface,
     particle: str = "proton",
-    energy: float | None = None,
+    pc: float | None = None,
     charge: int = 1,
     spin: float = 0.5,
 ) -> None:
     """Check beam setup properties."""
     assert particle == interface.mad.loaded_sequence.beam.particle
-    if energy is not None:
-        assert energy == interface.mad.loaded_sequence.beam.energy
+    if pc is not None:
+        assert pc == interface.mad.loaded_sequence.beam.pc
     assert charge == interface.mad.loaded_sequence.beam.charge
     assert spin == interface.mad.loaded_sequence.beam.spin
 

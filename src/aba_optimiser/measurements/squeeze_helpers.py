@@ -6,20 +6,21 @@ reducing duplication and ensuring consistency across the codebase.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
 import tfs
+from pymadng_utils.madx import make_madx_sequence
 
 from aba_optimiser.config import PROJECT_ROOT
-from aba_optimiser.model_creator.madx_utils import make_madx_sequence
 
 logger = logging.getLogger(__name__)
 
 # ==================== CONSTANTS ====================
 DEFAULT_MEASUREMENT_DATE = "2025-04-27"
 BETABEAT_DIR = Path("/user/slops/data/LHC_DATA/OP_DATA/Betabeat/")
-BEAM_ENERGY = 6800.0  # GeV
+PC = 6800.0  # GeV
 
 MODEL_DIRS = {
     1: {
@@ -141,20 +142,47 @@ def get_or_make_sequence(beam: int, model_dir: Path, time: str | None = None) ->
     generated.rename(seq_path)
     return seq_path
 
-def load_estimates(estimates_file: Path) -> dict[str, dict[str, float]]:
-    """Load quadrupole estimates from file.
+def load_estimates_and_uncertainties(
+    estimates_file: Path,
+) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
+    """Load quadrupole estimates and uncertainties from file.
 
     Handles both formats:
-    - Arc-based format (for plot_quad_diffs_and_phases): Arc X: <magnets>
-    - Flat format (for check_arc1_optimisation): Arc 1: <magnets>
+    - JSON format: ``{"Arc 1": {"knob": {"value": ..., "uncertainty": ...}}}``
+    - Legacy text format: ``Arc X:`` headers followed by ``<magnet> <value>`` rows
 
     Args:
         estimates_file: Path to file containing magnet estimates
 
     Returns:
-        Dictionary mapping magnet names to k1 values or arcs to magnet dicts
+        Tuple of:
+        - Dictionary mapping arcs to knob values
+        - Dictionary mapping arcs to knob uncertainties
     """
+    if estimates_file.suffix.lower() == ".json":
+        with estimates_file.open() as f:
+            payload = json.load(f)
+        estimates = {
+            str(arc): {
+                str(magnet): float(knob_payload["value"])
+                for magnet, knob_payload in arc_payload.items()
+            }
+            for arc, arc_payload in payload.items()
+        }
+        uncertainties = {
+            str(arc): {
+                str(magnet): float(knob_payload.get("uncertainty", 0.0))
+                for magnet, knob_payload in arc_payload.items()
+            }
+            for arc, arc_payload in payload.items()
+        }
+        logger.info(
+            f"Loaded {sum(len(v) for v in estimates.values())} magnet estimates from {estimates_file.name}"
+        )
+        return estimates, uncertainties
+
     estimates = {}
+    uncertainties = {}
     current_arc = None
 
     with estimates_file.open() as f:
@@ -164,16 +192,24 @@ def load_estimates(estimates_file: Path) -> dict[str, dict[str, float]]:
                 current_arc = line.rstrip(":")  # remove trailing :
                 if current_arc not in estimates:
                     estimates[current_arc] = {}
+                    uncertainties[current_arc] = {}
             elif line and current_arc:
                 parts = line.split()
                 if len(parts) == 2:
                     magnet, value = parts
                     estimates[current_arc][magnet] = float(value)
+                    uncertainties[current_arc][magnet] = 0.0
 
     if estimates:
         logger.info(
             f"Loaded {sum(len(v) for v in estimates.values())} magnet estimates from {estimates_file.name}"
         )
+    return estimates, uncertainties
+
+
+def load_estimates(estimates_file: Path) -> dict[str, dict[str, float]]:
+    """Load quadrupole estimates from file."""
+    estimates, _ = load_estimates_and_uncertainties(estimates_file)
     return estimates
 
 

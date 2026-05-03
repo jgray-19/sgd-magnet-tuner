@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 
 @dataclass
@@ -51,6 +52,21 @@ class MeasurementConfig:
         if isinstance(self.machine_deltaps, float | int):
             self.machine_deltaps = [self.machine_deltaps]
 
+    def expanded_for_measurements(self) -> Self:
+        """Return a validated config with file-scoped values expanded as needed."""
+        num_configs = len(self.measurement_files)
+        for name in ("corrector_files", "tune_knobs_files", "machine_deltaps"):
+            values = list(getattr(self, name))
+            if len(values) == 1:
+                setattr(self, name, values * num_configs)
+                continue
+            if len(values) != num_configs:
+                raise ValueError(
+                    f"Number of {name} ({len(values)}) must match number of "
+                    f"measurement files ({num_configs}) or be 1"
+                )
+        return self
+
 
 @dataclass
 class OutputConfig:
@@ -60,6 +76,10 @@ class OutputConfig:
         write_tensorboard_logs: Whether to write TensorBoard event files.
         include_uncertainty: Whether to compute and plot uncertainties. Disabling this
             skips worker-side Hessian estimation for faster execution.
+        parallel_hessian: Controls how many worker-side Hessians may be computed
+            concurrently during shutdown. ``True`` means use all workers, ``False``
+            means run one-by-one, and a positive integer sets an explicit concurrency
+            cap.
         plot_real_values: Whether plots show absolute values (True) or relative values
             (False). Defaults to relative values.
         save_prefix: Prefix prepended to generated plot filenames.
@@ -71,12 +91,20 @@ class OutputConfig:
 
     write_tensorboard_logs: bool = True
     include_uncertainty: bool = True
+    parallel_hessian: bool | int = True
     plot_real_values: bool = False
     save_prefix: str = ""
     show_plots: bool = True
     plots_dir: Path | None = None
     mad_logfile: Path | None = None
     python_logfile: Path | None = None
+
+    def __post_init__(self) -> None:
+        """Normalise Hessian parallelism settings."""
+        if isinstance(self.parallel_hessian, bool):
+            return
+        if self.parallel_hessian < 1:
+            raise ValueError("parallel_hessian must be a positive integer, True, or False")
 
 
 @dataclass

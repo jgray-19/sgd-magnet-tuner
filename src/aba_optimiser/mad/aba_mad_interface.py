@@ -10,11 +10,9 @@ This module builds on shared classes from ``pymadng-utils``:
 from __future__ import annotations
 
 import logging
-import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import numpy as np
-from pymadng_utils.mad import KnobMadInterface
+from pymadng_utils.mad.knob_mad_interface import KnobMadInterface
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -27,21 +25,14 @@ _MAGNET_STRENGTH_SUFFIXES = {".k0", ".k1", ".k2", ".kick"}
 _DKNL_INDEX_BY_ATTR_LUA = {"k0": 1, "k1": 2, "k2": 3}
 _DKNL_STRENGTH_ATTRS = frozenset(_DKNL_INDEX_BY_ATTR_LUA)
 
-_PERTURBATION_BASE_SPECS: dict[str, dict[str, Any]] = {
-    "d": {"kind": ("sbend", "rbend"), "attr": "k0", "dknl_index": 0},
-    "q": {"kind": ("quadrupole",), "attr": "k1", "dknl_index": 1},
-    "s": {"kind": ("sextupole",), "attr": "k2", "dknl_index": 2},
-}
-
 
 class AbaMadInterface(KnobMadInterface):
-    """Repository-local extension of ``CoreMadInterface`` with helper utilities."""
+    """Repository-local extension of ``KnobMadInterface`` with helper utilities."""
 
     def __init__(self, accelerator: Accelerator, **kwargs):
-        super().__init__(**kwargs)
+        super().__init__(accelerator=accelerator, **kwargs)
         self.accelerator = accelerator
-        self.load_sequence(self.accelerator.sequence_file, self.accelerator.seq_name)
-        self.setup_beam(beam_energy=self.accelerator.beam_energy)
+        self.accelerator.apply_accelerator_specific_errors(self)
 
     def _add_deferred_dknl(self, element_name: str) -> None:
         """If the dknl attribute for an element is empty and not deferred, add a deferred table to allow storing perturbations."""
@@ -191,178 +182,3 @@ local l, dknl, {attr} in loaded_sequence['{element_name}']
         )
         self.mad.send(dp)
         return self.mad.recv()
-
-    def apply_magnet_perturbations(
-        self,
-        rel_error: float | None = 1e-4,
-        seed: int = 42,
-        magnet_type: str | list[str] = "all",
-    ) -> tuple[dict[str, float], dict[str, float]]:
-        """Apply accelerator-specific perturbations via dknl to the loaded sequence."""
-        if magnet_type == "all":
-            requested = ["d", "q", "s"]
-        else:
-            requested = magnet_type if isinstance(magnet_type, list) else [magnet_type]
-        if not requested:
-            return {}, {}
-
-        family_overrides = self.accelerator.get_perturbation_families()
-        family_configs = [
-            _PERTURBATION_BASE_SPECS[family] | family_overrides[family]
-            for family in ("d", "q", "s")
-            if family in requested and family in family_overrides
-        ]
-        if not family_configs:
-            return {}, {}
-
-        rng = np.random.default_rng(seed)
-        magnet_strengths: dict[str, float] = {}
-        true_strengths: dict[str, float] = {}
-
-        for elm in self.mad.loaded_sequence:
-            for family_config in family_configs:
-                if elm.kind not in family_config["kind"]:
-                    continue
-
-                pattern = family_config.get("pattern")
-                if pattern and not re.match(str(pattern), elm.name):
-                    continue
-
-                element_rel_error = self._resolve_relative_error(
-                    family_config=family_config,
-                    element_name=str(elm.name),
-                    rel_error=rel_error,
-                )
-                if element_rel_error is None:
-                    continue
-
-                attr = str(family_config["attr"])
-                strength_before = float(elm[attr])
-                delta = float(rng.normal(0, abs(strength_before * element_rel_error)))
-                strength_after = strength_before + delta
-
-                if attr in _DKNL_STRENGTH_ATTRS:
-                    self._set_dknl_component(elm.name, attr, delta)
-                else:
-                    elm[attr] = strength_after
-
-                magnet_strengths[f"{elm.name}.{attr}"] = strength_after
-                true_strengths[str(elm.name)] = strength_after
-                break
-
-        return magnet_strengths, true_strengths
-
-    def _resolve_relative_error(
-        self,
-        family_config: dict[str, Any],
-        element_name: str,
-        rel_error: float | None,
-    ) -> float | None:
-        """Resolve the relative error for one element from the global or family settings."""
-        if rel_error is not None:
-            return rel_error
-
-        relative_error_table = family_config.get("relative_error_table")
-        if isinstance(relative_error_table, dict):
-            for prefix, rel_value in relative_error_table.items():
-                if element_name.startswith(str(prefix)):
-                    return float(rel_value)
-
-        default_rel_std = family_config.get("default_rel_std")
-        if default_rel_std is not None:
-            return float(default_rel_std)
-
-        if relative_error_table is not None:
-            return None
-
-        raise ValueError(
-            f"Relative error not specified for family with kind {family_config['kind']}"
-        )
-
-    def match_tunes(
-        self,
-        target_qx: float,
-        target_qy: float,
-        deltap: float = 0.0,
-    ) -> dict[str, float]:
-        """Match tunes using a shared recipe, with accelerator-provided tune variable names."""
-        qx_knob, qy_knob = self.accelerator.get_tune_variables()
-        qx_int, qy_int = self.accelerator.get_tune_integers()
-        self.mad["result"] = self.mad.match(
-            command=rf"\ -> twiss{{sequence=loaded_sequence, deltap={deltap:.16e}}}",
-            variables=[
-                {"var": f"'MADX.{qx_knob}'", "name": f"'{qx_knob}'"},
-                {"var": f"'MADX.{qy_knob}'", "name": f"'{qy_knob}'"},
-            ],
-            equalities=[
-                {"expr": f"\\t -> t.q1-({qx_int}+{target_qx})", "name": "'q1'"},
-                {"expr": f"\\t -> t.q2-({qy_int}+{target_qy})", "name": "'q2'"},
-            ],
-            objective={"fmin": 1e-8},
-            info=2,
-        )
-        return {
-            qx_knob: self.mad[f"MADX['{qx_knob}']"],
-            qy_knob: self.mad[f"MADX['{qy_knob}']"],
-        }
-
-    def perform_orbit_correction(
-        self,
-        machine_deltap: float,
-        target_qx: float,
-        target_qy: float,
-        corrector_file: Path | None,
-        twiss_name: str = "zero_twiss",
-    ) -> dict[str, float]:
-        """Perform orbit correction and tune rematching with a shared MAD flow."""
-        qx_knob, qy_knob = self.accelerator.get_tune_variables()
-        qx_int, qy_int = self.accelerator.get_tune_integers()
-        self.mad["machine_deltap"] = machine_deltap
-        self.mad["correct_file"] = str(corrector_file.absolute()) if corrector_file else None
-
-        self.mad.send(rf"""
-local correct, option in MAD
-
-io.write("*** orbit correction using off momentum twiss\n")
-local tws_offmom = twiss {{ sequence=loaded_sequence, deltap=machine_deltap }}
-
-! Increase file numerical formatting
-local fmt = option.numfmt ; option.numfmt = "% -.16e"
-local tbl = correct {{ sequence=loaded_sequence, model=tws_offmom, target={twiss_name}, method="svd", info=1, plane="x" }}
-if correct_file then
-    tbl:write(correct_file)
-end
-option.numfmt = fmt ! restore formatting
-
-io.write("*** rematching tunes for off-momentum twiss\n")
-match {{
-  command := twiss {{sequence=loaded_sequence, observe=0, deltap=machine_deltap}},
-  variables = {{ rtol=1e-4,
-    {{ var = 'MADX.{qx_knob}', name='{qx_knob}' }},
-    {{ var = 'MADX.{qy_knob}', name='{qy_knob}' }},
-  }},
-  equalities = {{ tol = 1e-6,
-    {{ expr = \t -> t.q1-{qx_int + target_qx:.16e}, name='q1' }},
-    {{ expr = \t -> t.q2-{qy_int + target_qy:.16e}, name='q2' }},
-  }},
-  objective = {{fmin = 1e-8}},
-  info=2
-}}
-
-{self.py_name}:send("Complete")
-""")
-        self._check_mad_response(
-            "Complete", "Error during MAD-NG orbit correction and tune matching"
-        )
-        return {
-            qx_knob: self.mad[f"MADX['{qx_knob}']"],
-            qy_knob: self.mad[f"MADX['{qy_knob}']"],
-        }
-
-    def _check_mad_response(self, expected: str, error_msg: str) -> None:
-        """Check that the response from MAD-NG matches the expected value."""
-        try:
-            if (result := self.mad.recv()) != expected:
-                raise RuntimeError(f"Unexpected response from MAD-NG: {result}. {error_msg}")
-        except Exception as e:
-            raise RuntimeError(error_msg) from e

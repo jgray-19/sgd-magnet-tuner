@@ -13,6 +13,7 @@ import pandas as pd
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
+from aba_optimiser.measurements.b2_errors import resolve_b2_error_table
 from aba_optimiser.measurements.create_datafile import (
     ACDipoleReconstructionConfig,
     process_measurements,
@@ -28,7 +29,6 @@ from aba_optimiser.measurements.squeeze_helpers import (
     get_or_make_sequence,
 )
 from aba_optimiser.measurements.utils import find_all_bad_bpms
-from aba_optimiser.model_creator.config import AC_MARKER_PATTERN
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import (
     CheckpointConfig,
@@ -50,7 +50,9 @@ class ACDipoleOptimisationWindow:
     bpm_upstream: str
     bpm_downstream: str
 
-
+# python src/aba_optimiser/measurements/optimise_squeeze_quads.py --beam 1 --acdipole-mode --skip --squeeze inj_rdt --restore-q --hess 3
+# python src/aba_optimiser/measurements/optimise_squeeze_quads.py --beam 1 --acdipole-mode --skip --squeeze 1.2m_agc --restore-b --hess 3
+# python src/aba_optimiser/measurements/plot_quad_diffs_fullring.py --beam 1 --squeeze 1.2m_agc --estimate bend-checkpoint
 # ==================== CONSTANTS ====================
 FILL_NUMBER = 10533
 SQUEEZE_STEPS = [
@@ -83,15 +85,16 @@ MINUS_300HZ = "-300Hz"
 MINUS_350HZ = "-350Hz"
 CLOSED_ORBIT_FILE = "closed_orbit_0Hz.parquet"
 CLOSED_ORBIT_TWISS_FILE = "closed_orbit_twiss_reference.parquet"
-CLOSED_ORBIT_COLUMNS = ("x", "px", "y", "py")
+# CLOSED_ORBIT_COLUMNS = ("x", "px", "y", "py")
+CLOSED_ORBIT_COLUMNS = ("y", "py")
 
 # ==================== MEASUREMENT TIMES ====================
 MEAS_TIMES = {
     1: {
         "1.2m": {
             ZEROHZ: ["06_17_47_405", "06_19_27_443", "06_20_39_422"],
-            PLUS_50HZ: ["06_24_41_350"],
-            MINUS_50HZ: ["06_26_09_426"],
+            # PLUS_50HZ: ["06_24_41_350"],
+            # MINUS_50HZ: ["06_26_09_426"],
         },
         # Please also check the 1.2m after a global correction
         "1.2m_agc": {
@@ -144,23 +147,23 @@ MEAS_TIMES = {
                 "17_41_31_474",
                 "17_42_37_338",
             ],
-            MINUS_50HZ: ["17_44_16_396"],
-            PLUS_50HZ: ["17_45_33_318"],
+            # MINUS_50HZ: ["17_44_16_396"],
+            # PLUS_50HZ: ["17_45_33_318"],
         },
         "inj": {  # This has a special date in the squeeze_helpers.py
-            ZEROHZ: ["16_49_56_490", "16_51_01_464", "16_52_08_398"],
-            # PLUS_50HZ: ["16_58_06_419", "16_59_12_366", "17_00_27_504"],
-            # PLUS_100HZ: ["17_03_16_394", "17_04_25_452", "17_05_53_444"],
-            # PLUS_150HZ: ["17_10_45_523", "17_11_52_941", "17_12_57_191"],
-            # PLUS_200HZ: ["17_20_55_315", "17_22_05_108", "17_23_09_370"],
-            # PLUS_250HZ: ["17_26_28_349", "17_27_50_402", "17_29_16_374"],
+            ZEROHZ: ["16_52_08_398"],  # "16_49_56_490", "16_51_01_464",
+            PLUS_50HZ: ["17_00_27_504"],  # "16_58_06_419", "16_59_12_366",
+            PLUS_100HZ: ["17_05_53_444"],  # "17_03_16_394", "17_04_25_452",
+            PLUS_150HZ: ["17_12_57_191"],  # "17_10_45_523", "17_11_52_941",
+            PLUS_200HZ: ["17_23_09_370"],  # "17_20_55_315", "17_22_05_108",
+            PLUS_250HZ: ["17_29_16_374"],  # "17_26_28_349", "17_27_50_402",
             # PLUS_300HZ: ["17_33_14_338", "17_34_20_356", "17_35_28_317"],
             # PLUS_350HZ: ["17_40_25_475", "17_41_36_368", "17_42_54_434"],
-            # MINUS_50HZ: ["17_51_38_387", "17_52_44_501", "17_53_50_407"],
-            # MINUS_100HZ: ["17_57_13_340", "17_58_24_385", "17_59_32_491"],
-            # MINUS_150HZ: ["18_02_51_331", "18_03_57_483", "18_05_05_332"],
-            # MINUS_200HZ: ["18_06_53_392", "18_07_59_340", "18_09_04_349"],
-            # MINUS_250HZ: ["18_11_32_374", "18_12_51_327", "18_14_23_472"],
+            MINUS_50HZ: ["17_53_50_407"],  # "17_51_38_387", "17_52_44_501",
+            MINUS_100HZ: ["17_59_32_491"],  # "17_57_13_340", "17_58_24_385",
+            MINUS_150HZ: ["18_05_05_332"],  # "18_02_51_331", "18_03_57_483",
+            MINUS_200HZ: ["18_09_04_349"],  # "18_06_53_392", "18_07_59_340",
+            MINUS_250HZ: ["18_14_23_472"],  # "18_11_32_374", "18_12_51_327",
             # MINUS_300HZ: ["18_16_36_372", "18_17_44_322", "18_18_52_182"],
             # MINUS_350HZ: ["18_20_38_431", "18_21_46_310", "18_22_51_320"],
         },
@@ -171,8 +174,8 @@ MEAS_TIMES = {
     2: {
         "1.2m": {
             ZEROHZ: ["06_18_14_332", "06_19_48_490", "06_20_57_500"],
-            PLUS_50HZ: ["06_25_20_342"],
-            MINUS_50HZ: ["06_26_47_456"],
+            # PLUS_50HZ: ["06_25_20_342"],
+            # MINUS_50HZ: ["06_26_47_456"],
         },
         "1.05m": {
             ZEROHZ: ["09_19_49_333", "09_21_08_376", "09_23_29_348"],
@@ -922,12 +925,16 @@ def create_configs(
 
 
 def get_default_simulation_config(
-    run_arc_by_arc: bool = True, using_lbfgs: bool = False
+    run_arc_by_arc: bool = True,
+    using_lbfgs: bool = False,
+    tracks_per_worker: int | None = None,
 ) -> SimulationConfig:
     """Get default simulation configuration."""
+    if tracks_per_worker is None:
+        tracks_per_worker = 10 if using_lbfgs else 12
     return SimulationConfig(
         # tracks_per_worker=824,
-        tracks_per_worker=10 if run_arc_by_arc else 250,
+        tracks_per_worker=tracks_per_worker,
         # tracks_per_worker=9_890,
         # tracks_per_worker=int(19700.0 / 2),
         num_batches=5 if not using_lbfgs else 1,
@@ -936,21 +943,35 @@ def get_default_simulation_config(
         run_arc_by_arc=run_arc_by_arc,
         n_run_turns=1 if run_arc_by_arc else 3,
         optimise_momenta=False,  # Enable momentum optimisation (x, px, y, py) not just (x, y)
-        bpm_loss_outlier_sigma=6,
+        bpm_loss_outlier_sigma=10,
     )
 
 
 def save_arc_estimates(
-    results_dir: Path, squeeze_step: str, arc_num: int, estimate: dict, rewrite_file: bool = False
+    results_dir: Path,
+    squeeze_step: str,
+    arc_num: int,
+    estimate: dict[str, float],
+    uncertainties: dict[str, float],
+    rewrite_file: bool = False,
 ) -> None:
-    """Save arc optimisation estimates to file."""
-    outfile = results_dir / f"quad_estimates_{squeeze_step}.txt"
-    write_mode = "a" if not rewrite_file else "w"
-    with outfile.open(write_mode) as f:
-        f.write(f"Arc {arc_num}:\n")
-        for magnet, value in estimate.items():
-            f.write(f"{magnet}\t{value}\n")
-        f.write("\n")
+    """Save arc optimisation estimates and uncertainties to JSON."""
+    outfile = results_dir / f"quad_estimates_{squeeze_step}.json"
+    payload: dict[str, dict[str, dict[str, float]]] = {}
+    if outfile.exists() and not rewrite_file:
+        with outfile.open() as f:
+            payload = json.load(f)
+
+    payload[f"Arc {arc_num}"] = {
+        magnet: {
+            "value": float(value),
+            "uncertainty": float(uncertainties.get(magnet, 0.0)),
+        }
+        for magnet, value in estimate.items()
+    }
+
+    with outfile.open("w") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
 
 
 def optimise_arc(
@@ -969,8 +990,10 @@ def optimise_arc(
     run_in_irs: bool = False,
     run_arc_by_arc: bool = True,
     ac_dipole_window: ACDipoleOptimisationWindow | None = None,
+    b2_errors: Path | None = None,
     restore_bends_opt: bool = False,
     restore_quads_opt: bool = False,
+    hessian_parallelism: int = 1,
 ) -> None:
     """Optimise quadrupoles for a single arc."""
     logger.info(f"Optimising arc {arc_num} for {squeeze_step}")
@@ -989,12 +1012,13 @@ def optimise_arc(
 
     checkpoint_dir = base_checkpoint_config.checkpoint_path
     output_cfg = OutputConfig(
-        include_uncertainty=False,
+        include_uncertainty=True,
         plot_real_values=True,
         show_plots=False,
         plots_dir=temp_analysis_dir,
         mad_logfile=temp_analysis_dir / "mad_log.txt",
         python_logfile=temp_analysis_dir / "python_worker_log.txt",
+        parallel_hessian=hessian_parallelism,
     )
     if checkpoint_dir is not None:
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -1017,7 +1041,7 @@ def optimise_arc(
         )
     else:
         bend_optimiser_config = OptimiserConfig(
-            max_epochs=200,
+            max_epochs=2000,
             warmup_epochs=10,
             warmup_lr_start=1e-10,
             max_lr=1e0,
@@ -1029,8 +1053,9 @@ def optimise_arc(
 
         accelerator_bends = LHC(
             beam=beam,
-            beam_energy=energy,
+            pc=energy,
             sequence_file=sequence_path,
+            b2_errors=b2_errors,
             optimise_quadrupoles=False,
             optimise_energy=False,
             optimise_bends=True,
@@ -1055,37 +1080,41 @@ def optimise_arc(
         )
         bend_estimates, _ = bend_ctrl.run()
 
-    # Increase the OptimiserConfig max_epochs for quadrupole optimisation
     quadrupole_optimiser_config = OptimiserConfig(
-        max_epochs=50,
-        warmup_epochs=5,
-        warmup_lr_start=1e-10,
+        max_epochs=1000,
+        warmup_epochs=100,
+        warmup_lr_start=1e-14,
         max_lr=1e-7,
-        min_lr=5e-8,
+        min_lr=1e-7,
         # max_lr=1,
         # min_lr=1,
         gradient_converged_value=1e-7,
         optimiser_type="adam",  # 'adam' or 'lbfgs'
-        expected_rel_error=18e-4,
+        expected_rel_error=1e-1,
     )
 
     opt_quads = LHC(
         beam=beam,
-        beam_energy=energy,
+        pc=energy,
         sequence_file=sequence_path,
+        b2_errors=b2_errors,
         optimise_energy=False,
         optimise_quadrupoles=True,
+        optimise_sextupoles=False,
         optimise_bends=True,
         optimise_correctors=False,
         optimise_other_quadrupoles=True,
-        optimise_quad_dx=False,
+        optimise_quad_dx=True,
         optimise_quad_dy=True,
     )
 
-    ctrl = Controller(
+    quad_refine_ctrl = Controller(
         opt_quads,
         quadrupole_optimiser_config,
-        get_default_simulation_config(run_arc_by_arc=run_arc_by_arc),
+        get_default_simulation_config(
+            run_arc_by_arc=run_arc_by_arc,
+            tracks_per_worker=300,
+        ),
         sequence_config,
         measurement_config,
         bpm_start_points,
@@ -1094,9 +1123,17 @@ def optimise_arc(
         true_strengths=None,
         output_config=output_cfg,
         checkpoint_config=quad_checkpoint_cfg,
+        debug=False,
     )
-    estimates, _ = ctrl.run()
-    save_arc_estimates(results_dir, squeeze_step, arc_num, estimates, rewrite_file=rewrite_file)
+    estimates, uncertainties = quad_refine_ctrl.run()
+    save_arc_estimates(
+        results_dir,
+        squeeze_step,
+        arc_num,
+        estimates,
+        uncertainties,
+        rewrite_file=rewrite_file,
+    )
 
 
 def load_measurements_from_reload(
@@ -1165,6 +1202,8 @@ def process_measurements_fresh(
     """Process raw measurement files and persist normalised parquet outputs."""
     freq_metadata: dict[str, tuple[list[Path], Path, Path]] = {}
     all_files: list[Path] = []
+    acd_tune_knobs_files: list[Path | None] = []
+    acd_corrector_knobs_files: list[Path | None] = []
     all_bad_bpms: set[str] = set()
     energy = 0.0
 
@@ -1176,21 +1215,32 @@ def process_measurements_fresh(
             prepare_frequency_metadata(freq, times, beam, meas_base_dir, results_dir, squeeze_step)
         )
         assert tune_knobs_file is not None and corrector_knobs_file is not None
+        freq_energy = float(freq_energy)
         if freq == ZEROHZ:
-            energy = float(freq_energy)
+            energy = freq_energy
         freq_metadata[freq] = (files, tune_knobs_file, corrector_knobs_file)
         all_files.extend(files)
+        acd_tune_knobs_files.extend([tune_knobs_file] * len(files))
+        acd_corrector_knobs_files.extend([corrector_knobs_file] * len(files))
         all_bad_bpms.update(bad_bpms)
 
-    update_metadata(temp_analysis_dir, energy=energy)
+    b2_errors = resolve_b2_error_table(beam, energy)
+    update_metadata(temp_analysis_dir, energy=energy, b2_errors=str(b2_errors))
 
     logger.info(f"Processing {len(all_files)} total measurement files...")
     analysis_dir = get_analysis_dir(beam, squeeze_step)
     accelerator = LHC(
         beam=beam,
-        beam_energy=energy,
+        pc=energy,
         sequence_file=sequence_path,
+        b2_errors=b2_errors,
     )
+    if ac_dipole_reconstruction_config is not None:
+        ac_dipole_reconstruction_config = ACDipoleReconstructionConfig(
+            n_bpms_each_side=ac_dipole_reconstruction_config.n_bpms_each_side,
+            tune_knobs_files=acd_tune_knobs_files,
+            corrector_knobs_files=acd_corrector_knobs_files,
+        )
     pzs_dict, bad_bpms_out, _, twiss = process_measurements(
         all_files,
         temp_analysis_dir,
@@ -1199,7 +1249,7 @@ def process_measurements_fresh(
         filename=None,
         bad_bpms=list(all_bad_bpms),
         previous_analysis_dir=analysis_dir,
-        use_uniform_vars=True,
+        use_uniform_vars=False,
         num_workers=8,
         combine_files=False,
         nattunes=nattunes,
@@ -1287,6 +1337,7 @@ def process_squeeze_step(
     ac_dipole_window: ACDipoleOptimisationWindow | None = None,
     restore_bends_opt: bool = False,
     restore_quads_opt: bool = False,
+    hessian_parallelism: int = 1,
 ) -> None:
     """Process a single squeeze step for quadrupole optimisation."""
     logger.info(f"Processing squeeze step {squeeze_step} for beam {beam}")
@@ -1347,6 +1398,9 @@ def process_squeeze_step(
             ac_dipole_window=ac_dipole_window,
         )
 
+    b2_errors = resolve_b2_error_table(beam, energy)
+    update_metadata(temp_analysis_dir, b2_errors=str(b2_errors))
+
     # Load or save bad BPMs
     all_bad_bpms = load_bad_bpms(bad_bpms_file) if skip_reload else all_bad_bpms
     save_bad_bpms(bad_bpms_file, all_bad_bpms)
@@ -1384,9 +1438,11 @@ def process_squeeze_step(
             run_in_irs=run_in_irs,
             run_arc_by_arc=run_arc_by_arc,
             ac_dipole_window=ac_dipole_window,
+            b2_errors=b2_errors,
             base_checkpoint_config=checkpoint_config,
             restore_bends_opt=restore_bends_opt and restore_arc == arc_num,
             restore_quads_opt=restore_quads_opt and restore_arc == arc_num,
+            hessian_parallelism=hessian_parallelism,
         )
         rewrite_file = False  # Only rewrite for the first arc
 
@@ -1452,6 +1508,12 @@ def main():
         action="store_true",
         help="Restore quadrupole optimisation state from quadrupole checkpoint files",
     )
+    parser.add_argument(
+        "--hessian-parallelism",
+        type=int,
+        default=3,
+        help="Number of worker Hessians to compute concurrently during shutdown",
+    )
     args = parser.parse_args()
 
     # Validate squeeze step
@@ -1463,6 +1525,9 @@ def main():
 
     if args.checkpoint_every_epochs < 0:
         raise ValueError("--checkpoint-every-epochs must be >= 0")
+
+    if args.hessian_parallelism < 1:
+        raise ValueError("--hessian-parallelism must be >= 1")
 
     if args.restore_bends_opt and args.restore_quads_opt:
         raise ValueError(
@@ -1479,8 +1544,6 @@ def main():
     ac_dipole_reconstruction_config = None
     if args.acdipole_mode:
         ac_dipole_reconstruction_config = ACDipoleReconstructionConfig(
-            ac_dipole_marker=AC_MARKER_PATTERN.format(beam=args.beam),
-            beam_energy=6800.0,
             n_bpms_each_side=args.acdipole_n_bpms_each_side,
         )
 
@@ -1507,6 +1570,7 @@ def main():
         ac_dipole_window,
         args.restore_bends_opt,
         args.restore_quads_opt,
+        args.hessian_parallelism,
     )
 
 

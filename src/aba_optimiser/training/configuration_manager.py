@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
     from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.config import SimulationConfig
+    from aba_optimiser.training.controller_config import SequenceConfig
 
 
 LOGGER = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ class ConfigurationManager:
         self,
         accelerator: Accelerator,
         simulation_config: SimulationConfig,
-        magnet_range: str,
+        sequence_config: SequenceConfig,
         bpm_start_points: list[str],
         bpm_end_points: list[str],
         optimise_knobs: list[str] | None = None,
@@ -42,25 +43,27 @@ class ConfigurationManager:
         self.accelerator: Accelerator = accelerator
         self.start_bpms: list[str] = bpm_start_points
         self.end_bpms: list[str] = bpm_end_points
-        self.magnet_range = magnet_range
+        self.sequence_config = sequence_config
+        self.magnet_range = sequence_config.magnet_range
         self.simulation_config = simulation_config
+        self.optimise_knobs = optimise_knobs
 
     def setup_mad_interface(
         self,
-        first_bpm: str | None,
-        bad_bpms: list[str] | None,
         debug: bool = False,
         mad_logfile: Path | None = None,
+        corrector_strengths: Path | None = None,
+        tune_knobs_file: Path | None = None,
     ) -> None:
         """Initialise the MAD-NG interface and get basic model parameters."""
 
         self.mad_iface = GradientDescentMadInterface(
             accelerator=self.accelerator,
-            start_bpm=first_bpm,
+            start_bpm=self.sequence_config.first_bpm,
             magnet_range=self.magnet_range,
-            corrector_strengths=None,
-            tune_knobs_file=None,
-            bad_bpms=bad_bpms,
+            corrector_strengths=corrector_strengths,
+            tune_knobs_file=tune_knobs_file,
+            bad_bpms=self.sequence_config.bad_bpms,
             debug=debug,
             mad_logfile=mad_logfile,
         )

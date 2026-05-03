@@ -145,7 +145,7 @@ def test_matcher_beta_correction(
         tune_knobs=matched_tunes,
         sequence_file_path=seq_b1,
         magnet_range="$start/$end",
-        beam_energy=6800,
+        pc=6800,
         output_dir=tmp_path / "matcher_output",
     )
 

@@ -14,6 +14,7 @@ import pandas as pd
 from nxcals.spark_session_builder import get_or_create
 from omc3.machine_data_extraction.nxcals_knobs import get_energy
 from pymadng_utils.io.utils import save_knobs
+from pymadng_utils.madx import make_madx_sequence
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
@@ -26,8 +27,6 @@ from aba_optimiser.measurements.squeeze_helpers import (
     get_or_make_sequence,
     make_machine_settings_knobs_file,
 )
-from aba_optimiser.model_creator.config import AC_MARKER_PATTERN
-from aba_optimiser.model_creator.madx_utils import make_madx_sequence
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import OutputConfig, SequenceConfig
 from aba_optimiser.training.controller_helpers import create_arc_measurement_config
@@ -210,7 +209,7 @@ def optimise_ranges(
         # Create LHC accelerator instance
         accelerator = LHC(
             beam=beam,
-            beam_energy=energy,
+            pc=energy,
             sequence_file=sequence_path,
             optimise_energy=True,  # Since we're optimizing deltap/pt
         )
@@ -289,7 +288,7 @@ def optimise_corrector_ranges(
         # Create LHC accelerator instance
         accelerator = LHC(
             beam=beam,
-            beam_energy=energy,
+            pc=energy,
             sequence_file=sequence_path,
             optimise_correctors=True,
         )
@@ -544,13 +543,13 @@ def process_single_config(
     files = [Path(f"{config.folder}/{config.name_prefix}{time}.sdds") for time in config.times]
 
     ac_dipole_reconstruction_config = ACDipoleReconstructionConfig(
-        ac_dipole_marker=AC_MARKER_PATTERN.format(beam=config.beam),
-        beam_energy=float(energy),
         n_bpms_each_side=acdipole_n_bpms_each_side,
+        tune_knobs_files=[tune_knobs_file] * len(files),
+        corrector_knobs_files=[corrector_knobs_file] * len(files),
     )
     accelerator = LHC(
         beam=config.beam,
-        beam_energy=float(energy),
+        pc=float(energy),
         sequence_file=sequence_file,
     )
 

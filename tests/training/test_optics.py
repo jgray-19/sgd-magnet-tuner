@@ -44,7 +44,6 @@ TRACK_COLUMNS = (
 
 def _generate_fake_measurement(
     tmp_path: Path,
-    model_dir: Path,
     interface: AbaMadInterface,
     flattop_turns: int,
     dpp_value: float,
@@ -108,36 +107,18 @@ def test_controller_opt(
     tmp_path: Path,
     seq_b1: Path,
     loaded_interface: AbaMadInterface,
-    model_dir_b1: Path,
 ) -> None:
-    """Test that the controller initializes correctly with custom num_tracks and flattop_turns."""
+    """OpticsController should build beta targets directly from measurement Twiss data."""
     magnet_range = "BPM.9R2.B1/BPM.9L3.B1"
 
     corrector_file, magnet_strengths, tune_knobs_file, analysis_dir = _generate_fake_measurement(
         tmp_path,
-        model_dir_b1,
         loaded_interface,
         6600,
         0e-4,
         magnet_range,
         perturb_quads=True,
     )
-
-    # Constants for the test
-    bpm_start_points = [
-        "BPM.9R2.B1",
-        "BPM.10R2.B1",
-        # "BPM.11R2.B1",
-    ]
-    bpm_end_points = [
-        "BPM.9L3.B1",
-        "BPM.10L3.B1",
-        # "BPM.11L3.B1",
-    ]
-
-    # print all files in analysis_dir for debugging
-    for f in analysis_dir.glob("*"):
-        logger.info(f"Analysis dir file: {f}")
 
     optimiser_config = OptimiserConfig(
         max_epochs=2000,
@@ -148,20 +129,20 @@ def test_controller_opt(
         gradient_converged_value=1e-5,
     )
 
-    sequence_config = SequenceConfig(
-        magnet_range=magnet_range,
-    )
-
-    accel = LHC(beam=1, sequence_file=seq_b1, beam_energy=6800.0, optimise_quadrupoles=True)
+    accel = LHC(beam=1, sequence_file=seq_b1, pc=6800.0, optimise_quadrupoles=True)
 
     ctrl = OpticsController(
         accel,
-        sequence_config,
+        SequenceConfig(magnet_range=magnet_range),
         optimiser_config,
         analysis_dir,
-        bpm_start_points,
-        bpm_end_points,
-        output_config=OutputConfig(show_plots=False),
+        ["BPM.9R2.B1"],
+        ["BPM.9L3.B1"],
+        output_config=OutputConfig(
+            show_plots=False,
+            write_tensorboard_logs=False,
+            include_uncertainty=False,
+        ),
         corrector_file=corrector_file,
         tune_knobs_file=tune_knobs_file,
         true_strengths=magnet_strengths,

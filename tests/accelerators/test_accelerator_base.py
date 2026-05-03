@@ -29,11 +29,13 @@ class ConcreteAccelerator(Accelerator):
         del bpm_name
         return "HV"
 
-    def get_tune_variables(self) -> tuple[str, str]:
+    @property
+    def tune_variables(self) -> tuple[str, str]:
         """Return dummy tune variable names for abstract interface compliance."""
         return "qx_test", "qy_test"
 
-    def get_tune_integers(self) -> tuple[int, int]:
+    @property
+    def tune_integers(self) -> tuple[int, int]:
         """Return dummy integer tune parts for abstract interface compliance."""
         return 62, 60
 
@@ -52,10 +54,10 @@ class TestAcceleratorBase:
         """Test basic initialization with minimal parameters."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
         )
         assert acc.sequence_file == test_sequence_file
-        assert acc.beam_energy == 6800.0
+        assert acc.pc == 6800.0
         assert acc.seq_name == "test_seq"
         assert acc.optimise_energy is False
         assert acc.optimise_quadrupoles is False
@@ -66,7 +68,7 @@ class TestAcceleratorBase:
         """Test initialization with sequence name."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
         )
         assert acc.seq_name == "test_seq"
 
@@ -74,7 +76,7 @@ class TestAcceleratorBase:
         """Test initialization with energy optimization enabled."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
             optimise_energy=True,
         )
         assert acc.optimise_energy is True
@@ -83,7 +85,7 @@ class TestAcceleratorBase:
         """Test initialization with all optimisation flags enabled."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
             optimise_energy=True,
             optimise_quadrupoles=True,
             optimise_sextupoles=True,
@@ -98,7 +100,7 @@ class TestAcceleratorBase:
         """Test that sequence file can be provided as string."""
         acc = ConcreteAccelerator(
             sequence_file=str(test_sequence_file),
-            beam_energy=6800.0,
+            pc=6800.0,
         )
         assert isinstance(acc.sequence_file, Path)
         assert acc.sequence_file == test_sequence_file
@@ -107,7 +109,7 @@ class TestAcceleratorBase:
         """Test has_any_optimisation returns False when no optimisation enabled."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
         )
         assert acc.has_any_optimisation() is False
 
@@ -115,7 +117,7 @@ class TestAcceleratorBase:
         """Test has_any_optimisation returns True when energy optimisation enabled."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
             optimise_energy=True,
         )
         assert acc.has_any_optimisation() is True
@@ -124,7 +126,7 @@ class TestAcceleratorBase:
         """Test has_any_optimisation returns True when quad optimisation enabled."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
             optimise_quadrupoles=True,
         )
         assert acc.has_any_optimisation() is True
@@ -133,7 +135,7 @@ class TestAcceleratorBase:
         """Test has_any_optimisation returns True when sextupole optimisation enabled."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
             optimise_sextupoles=True,
         )
         assert acc.has_any_optimisation() is True
@@ -142,7 +144,7 @@ class TestAcceleratorBase:
         """Test has_any_optimisation returns True when custom knobs provided."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
             custom_knobs_to_optimise=["K1"],
         )
         assert acc.has_any_optimisation() is True
@@ -151,7 +153,7 @@ class TestAcceleratorBase:
         """Test that base get_bend_lengths returns None."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
         )
         result = acc.get_bend_lengths()
         assert result is None
@@ -162,7 +164,7 @@ class TestAcceleratorBase:
         """Test that base normalise_true_strengths returns unchanged dictionary."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
         )
         test_strengths = {"K1": 0.5, "K2": -0.3}
         result = acc.normalise_true_strengths(test_strengths, None)
@@ -175,7 +177,7 @@ class TestAcceleratorBase:
         """Test normalise_true_strengths with bend lengths provided."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
         )
         test_strengths = {"K0": 1.0}
         bend_lengths = {"K0": 2.0}
@@ -188,7 +190,7 @@ class TestAcceleratorBase:
         """Test format_result_knob_names without energy optimisation."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
             optimise_energy=False,
         )
         knob_names = ["K1.b1", "K2.b1", "pt"]
@@ -201,7 +203,7 @@ class TestAcceleratorBase:
         """Test format_result_knob_names with energy but no pt knob."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
             optimise_energy=True,
         )
         knob_names = ["K1.b1", "K2.b1"]
@@ -214,7 +216,7 @@ class TestAcceleratorBase:
         """Test format_result_knob_names converts pt to deltap when energy optimisation enabled."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
             optimise_energy=True,
         )
         knob_names = ["K1.b1", "K2.b1", "pt"]
@@ -230,7 +232,7 @@ class TestAcceleratorBase:
         """Test that format_result_knob_names returns a new list."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
         )
         original = ["K1.b1", "K2.b1"]
         result = acc.format_result_knob_names(original)
@@ -241,7 +243,7 @@ class TestAcceleratorBase:
         """Test log_optimisation_targets with no optimisations."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
         )
         acc.log_optimisation_targets()
         assert "No optimisation targets set" in caplog.text
@@ -250,7 +252,7 @@ class TestAcceleratorBase:
         """Test log_optimisation_targets logs energy."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
             optimise_energy=True,
         )
         acc.log_optimisation_targets()
@@ -262,7 +264,7 @@ class TestAcceleratorBase:
         """Test log_optimisation_targets logs multiple targets."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
-            beam_energy=6800.0,
+            pc=6800.0,
             optimise_energy=True,
             optimise_quadrupoles=True,
             custom_knobs_to_optimise=["K1"],

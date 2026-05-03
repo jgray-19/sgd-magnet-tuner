@@ -54,7 +54,7 @@ if __name__ == "__main__":
     bad_bpms_file = analysis_dir / "bad_bpms.txt"
     accelerator = LHC(
         beam=2,
-        beam_energy=6800,
+        pc=6800,
         sequence_file=get_or_make_sequence(2, Path(model_dir)),
     )
 

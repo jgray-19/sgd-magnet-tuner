@@ -219,7 +219,7 @@ def process_single_config(
     bad_bpms_file = temp_analysis_dir / "bad_bpms.txt"
     accelerator = LHC(
         beam=config.beam,
-        beam_energy=6800,
+        pc=6800,
         sequence_file=get_or_make_sequence(config.beam, Path(config.model_dir)),
     )
 

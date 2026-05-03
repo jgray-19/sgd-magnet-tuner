@@ -23,15 +23,15 @@ def instantiate_accelerator_from(
 
     Args:
         accelerator: The accelerator instance to base the new one on
-        **kwargs: Optional parameter overrides (e.g., beam_energy=7000.0, beam=2)
+        **kwargs: Optional parameter overrides (e.g., pc=7000.0, beam=2)
 
     Returns:
         A new Accelerator instance of the same type with merged parameters
 
     Examples:
-        >>> lhc_b1 = LHC(beam=1, sequence_file="lhc.seq", beam_energy=6800)
+        >>> lhc_b1 = LHC(beam=1, sequence_file="lhc.seq", pc=6800)
         >>> # Create a copy with different beam energy
-        >>> lhc_b1_7tev = instantiate_accelerator_from(lhc_b1, beam_energy=7000)
+        >>> lhc_b1_7tev = instantiate_accelerator_from(lhc_b1, pc=7000)
         >>> # Create LHC beam 2 from beam 1
         >>> lhc_b2 = instantiate_accelerator_from(lhc_b1, beam=2)
         >>> # Create SPS variant with different optimization targets
@@ -40,7 +40,7 @@ def instantiate_accelerator_from(
     # Common parameters for all accelerators
     common_params = {
         "sequence_file": kwargs.get("sequence_file", accelerator.sequence_file),
-        "beam_energy": kwargs.get("beam_energy", accelerator.beam_energy),
+        "pc": kwargs.get("pc", accelerator.pc),
         "optimise_energy": kwargs.get("optimise_energy", accelerator.optimise_energy),
         "optimise_quadrupoles": kwargs.get(
             "optimise_quadrupoles", accelerator.optimise_quadrupoles
@@ -62,6 +62,7 @@ def instantiate_accelerator_from(
                 "optimise_other_quadrupoles", accelerator.optimise_other_quadrupoles
             ),
             "optimise_quad_dx": kwargs.get("optimise_quad_dx", accelerator.optimise_quad_dx),
+            "b2_errors": kwargs.get("b2_errors", accelerator.b2_errors),
         }
         return LHC(**params)
 

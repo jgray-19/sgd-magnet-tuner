@@ -33,6 +33,40 @@ logger = logging.getLogger(__name__)
 random.seed(42)  # For reproducibility
 
 
+def _estimate_uncertainties_from_hessian(
+    total_hessian: np.ndarray,
+    *,
+    min_eigenvalue: float = 1e-8,
+) -> np.ndarray:
+    """Convert an approximate Hessian into 1-sigma parameter uncertainties.
+
+    The tracking Hessian is assembled as a sum of weighted Jacobian outer products,
+    so it should be symmetric positive semidefinite. In practice, accumulated
+    numerical noise can introduce asymmetry or slightly negative modes, which can
+    yield negative entries on the covariance diagonal after a direct inversion.
+
+    To keep the uncertainty estimate physically meaningful, we symmetrise the
+    Hessian, floor non-positive eigenvalues to a small positive curvature, and
+    build the covariance from the resulting eigendecomposition.
+    """
+    sym_hessian = 0.5 * (total_hessian + total_hessian.T)
+    eigenvalues, eigenvectors = np.linalg.eigh(sym_hessian)
+    clipped_eigenvalues = np.maximum(eigenvalues, min_eigenvalue)
+
+    n_clipped = int(np.count_nonzero(eigenvalues < min_eigenvalue))
+    if n_clipped:
+        logger.warning(
+            "Hessian had %d eigenvalue(s) below %.3e; using the floor to keep "
+            "uncertainties finite and non-negative.",
+            n_clipped,
+            min_eigenvalue,
+        )
+
+    covariance = (eigenvectors / clipped_eigenvalues) @ eigenvectors.T
+    variances = np.clip(np.diag(covariance), 0.0, None)
+    return np.sqrt(variances)
+
+
 class Controller(BaseController):
     """
     Orchestrates multi-process knob optimisation using MAD-NG.
@@ -45,9 +79,6 @@ class Controller(BaseController):
     exclusively in delta-space. Results are converted back to absolute-space only at exit
     (in _save_results). This ensures the optimization logic never branches on absolute vs delta
     assumptions and remains simple and unified.
-
-    Default behavior: Any knobs not explicitly provided by the user default to 1e-7 in delta-space
-    to avoid flat optimization starts.
     """
 
     def __init__(
@@ -82,7 +113,6 @@ class Controller(BaseController):
             bpm_start_points (list[str]): Starting BPM names for each range.
             bpm_end_points (list[str]): Ending BPM names for each range.
             initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths (absolute-space).
-                Missing keys default to 1e-7 in delta-space after conversion.
             true_strengths (Path | dict[str, float], optional): True strengths file or dict (absolute-space).
             debug (bool, optional): Enable debug mode. Defaults to False.
             optimise_knobs (list[str] | None, optional): List of global knob names to optimise.
@@ -96,19 +126,13 @@ class Controller(BaseController):
             logger.info("Using position-only optimisation (x, y only)")
 
         # Normalize and validate multi-config inputs
-        measurement_files, corrector_files, tune_knobs_files, machine_deltaps = (
-            self._validate_config_inputs(
-                measurement_config.measurement_files,
-                measurement_config.corrector_files,
-                measurement_config.tune_knobs_files,
-                measurement_config.machine_deltaps,
-            )
-        )
-        self.measurement_files = measurement_files
-        self.corrector_files = corrector_files
-        self.tune_knobs_files = tune_knobs_files
-        self.machine_deltaps = machine_deltaps
-        self.num_configs = len(measurement_files)
+        measurement_config = measurement_config.expanded_for_measurements()
+        self.measurement_config = measurement_config
+        self.measurement_files = measurement_config.measurement_files
+        self.corrector_files = measurement_config.corrector_files
+        self.tune_knobs_files = measurement_config.tune_knobs_files
+        self.machine_deltaps = measurement_config.machine_deltaps
+        self.num_configs = len(self.measurement_files)
         self.output_config = output_config if output_config is not None else OutputConfig()
         self.checkpoint_config = checkpoint_config
 
@@ -119,13 +143,11 @@ class Controller(BaseController):
             accelerator,
             optimiser_config,
             simulation_config,
-            sequence_config.magnet_range,
+            sequence_config,
             bpm_start_points,
             bpm_end_points,
             initial_knob_strengths=initial_knob_strengths,  # Pass actual values
             true_strengths=true_strengths,  # Pass actual values
-            bad_bpms=sequence_config.bad_bpms,
-            first_bpm=sequence_config.first_bpm,
             debug=debug,
             optimise_knobs=optimise_knobs,
             output_config=self.output_config,
@@ -154,6 +176,7 @@ class Controller(BaseController):
         run_start = time.time()
         writer = self.setup_logging("tracking_opt")
         total_turns = self.data_manager.get_total_turns()
+        self.final_knobs = None  # Will be set after optimisation loop
 
         try:
             self.worker_manager.start_workers(
@@ -194,17 +217,23 @@ class Controller(BaseController):
             total_hessian = self.worker_manager.termination_and_hessian(
                 len(self.final_knobs),
                 estimate_hessian=self.output_config.include_uncertainty,
+                parallelism=self.output_config.parallel_hessian,
             )
         except RuntimeError as e:
             logger.error(f"optimisation failed: {e}")
             self.worker_manager.terminate_workers()
             raise RuntimeError(f"Worker error during optimisation: {e}") from e
         except KeyboardInterrupt:
-            logger.warning("\nKeyboardInterrupt detected. Terminating early and writing results.")
+            logger.warning(
+                "\nKeyboardInterrupt detected. Terminating early and writing results."
+            )
             self.worker_manager.terminate_workers()
             self.final_knobs = self.optimisation_loop.best_knobs
             total_hessian = None
-        uncertainties = self._save_results(total_hessian, writer)
+        finally:
+            initial_knobs_abs = self._deltas_to_abs()
+
+        uncertainties = self._save_results(initial_knobs_abs, total_hessian, writer)
         uncertainties = dict(zip(self.final_knobs.keys(), uncertainties))
 
         return self.final_knobs, uncertainties
@@ -214,16 +243,61 @@ class Controller(BaseController):
         del self.data_manager
         gc.collect()
 
+    def _deltas_to_abs(self) -> dict[str, float]:
+        # All results are currently in delta-space; convert to absolute for output.
+        # Create initial knobs dict in delta-space for conversion.
+        initial_knobs_delta = dict(
+            zip(
+                self.config_manager.knob_names,
+                self.config_manager.initial_strengths,
+                strict=False,
+            )
+        )
+        if self.final_knobs is None:
+            self.final_knobs = self.optimisation_loop.best_knobs
+
+        # Convert all results from delta-space to absolute-space
+        initial_knobs_abs = (
+            self.config_manager.mad_iface.optimisation_to_absolute_knobs(
+                initial_knobs_delta
+            )
+        )
+        final_knobs_abs = self.config_manager.mad_iface.optimisation_to_absolute_knobs(
+            self.final_knobs
+        )
+        true_strengths_abs = (
+            self.config_manager.mad_iface.optimisation_to_absolute_knobs(
+                self.filtered_true_strengths
+            )
+        )
+
+        output_knob_names = self.result_manager.knob_names
+        if "deltap" in output_knob_names and "pt" in initial_knobs_abs:
+            initial_knobs_abs["deltap"] = self.config_manager.mad_iface.pt2dp(
+                initial_knobs_abs.pop("pt")
+            )
+            final_knobs_abs["deltap"] = self.config_manager.mad_iface.pt2dp(
+                final_knobs_abs.pop("pt")
+            )
+            true_strengths_abs["deltap"] = self.config_manager.mad_iface.pt2dp(
+                true_strengths_abs.pop("pt")
+            )
+
+        # Keep controller outputs user-facing (absolute-space) after save.
+        self.final_knobs = final_knobs_abs
+        self.filtered_true_strengths = true_strengths_abs
+        return initial_knobs_abs
+
     def _save_results(
         self,
+        initial_knobs_abs: dict[str, float],
         total_hessian: np.ndarray | None,
         writer: SummaryWriter | None,
     ) -> np.ndarray:
         """Save final results and convert from delta-space to user-facing absolute-space."""
         # Calculate uncertainties only when explicitly requested.
         if self.output_config.include_uncertainty and total_hessian is not None:
-            cov = np.linalg.inv(total_hessian + 1e-8 * np.eye(total_hessian.shape[0]))
-            uncertainties = np.sqrt(np.diag(cov))
+            uncertainties = _estimate_uncertainties_from_hessian(total_hessian)
         else:
             uncertainties = np.zeros(len(self.final_knobs), dtype=np.float64)
 
@@ -231,77 +305,34 @@ class Controller(BaseController):
         if writer is not None:
             writer.close()
 
-        # All results are currently in delta-space; convert to absolute for output.
-        # Create initial knobs dict in delta-space for conversion.
-        initial_knobs_delta = dict(
-            zip(self.config_manager.knob_names, self.config_manager.initial_strengths, strict=False)
-        )
-
-        # Convert all results from delta-space to absolute-space
-        initial_knobs_abs = self.config_manager.mad_iface.optimisation_to_absolute_knobs(
-            initial_knobs_delta
-        )
-        final_knobs_abs = self.config_manager.mad_iface.optimisation_to_absolute_knobs(
-            self.final_knobs
-        )
-        true_strengths_abs = self.config_manager.mad_iface.optimisation_to_absolute_knobs(
-            self.filtered_true_strengths
-        )
-        uncertainties_abs = self.config_manager.mad_iface.convert_uncertainties_to_absolute(
-            self.config_manager.knob_names,
-            uncertainties,
+        uncertainties_abs = (
+            self.config_manager.mad_iface.convert_uncertainties_to_absolute(
+                self.config_manager.knob_names,
+                uncertainties,
+            )
         )
 
         # Replace "pt" with "deltap" if needed for output
         output_knob_names = self.result_manager.knob_names
-        if "deltap" in output_knob_names and "pt" in initial_knobs_abs:
-            initial_knobs_abs["deltap"] = self.config_manager.mad_iface.pt2dp(
-                initial_knobs_abs.pop("pt")
-            )
         initial_strengths_abs = np.array(
             [initial_knobs_abs[name] for name in output_knob_names], dtype=np.float64
         )
 
         # Save and plot using the final knobs
         self.result_manager.save_results(
-            final_knobs_abs,
+            self.final_knobs,
             uncertainties_abs,
-            true_strengths_abs,
+            self.filtered_true_strengths,
         )
         self.result_manager.generate_plots(
-            final_knobs_abs,
+            self.final_knobs,
             initial_strengths_abs,
-            true_strengths_abs,
+            self.filtered_true_strengths,
             uncertainties_abs,
         )
-
-        # Keep controller outputs user-facing (absolute-space) after save.
-        self.final_knobs = final_knobs_abs
-        self.filtered_true_strengths = true_strengths_abs
 
         logger.info("Optimisation complete.")
         return uncertainties_abs
-
-    @staticmethod
-    def _validate_config_inputs(
-        measurement_files, corrector_files, tune_knobs_files, machine_deltaps
-    ) -> tuple:
-        """Validate and normalise multi-configuration inputs."""
-        # Validate and expand lists
-        num_configs = len(measurement_files)
-        for name, lst in [
-            ("corrector_files", corrector_files),
-            ("tune_knobs_files", tune_knobs_files),
-            ("machine_deltaps", machine_deltaps),
-        ]:
-            if len(lst) == 1:
-                lst *= num_configs
-            elif len(lst) != num_configs:
-                raise ValueError(
-                    f"Number of {name} ({len(lst)}) must match number of measurement files ({num_configs}) or be 1"
-                )
-
-        return measurement_files, corrector_files, tune_knobs_files, machine_deltaps
 
     def _init_data_manager(self, num_tracks: int, flattop_turns: int) -> None:
         """Initialize data manager and load track data."""
@@ -432,3 +463,10 @@ class Controller(BaseController):
             save_prefix=self.output_config.save_prefix,
             plots_dir=self.output_config.plots_dir,
         )
+
+    def _get_controller_mad_setup_kwargs(self) -> dict:
+        """Mirror the worker MAD setup when building the expected knob list."""
+        return {
+            "corrector_strengths": next((p for p in self.corrector_files if p is not None), None),
+            "tune_knobs_file": next((p for p in self.tune_knobs_files if p is not None), None),
+        }

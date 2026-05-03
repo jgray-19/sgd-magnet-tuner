@@ -9,6 +9,8 @@ from aba_optimiser.accelerators.base import Accelerator
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
+
 
 class SPS(Accelerator):
     """Super Proton Synchrotron accelerator configuration.
@@ -26,7 +28,7 @@ class SPS(Accelerator):
     def __init__(
         self,
         sequence_file: Path | str,
-        beam_energy: float = 450.0,
+        pc: float = 450.0,
         bpm_pattern: str = BPM_PATTERN,
         optimise_quadrupoles: bool = False,
         optimise_sextupoles: bool = False,
@@ -37,7 +39,7 @@ class SPS(Accelerator):
 
         Args:
             sequence_file: Path to sequence file.
-            beam_energy: Beam energy in GeV.
+            pc: Beam momentum in GeV/c.
             seq_name: Sequence name to use in MAD.
             optimise_quadrupoles: Whether to optimise quadrupole strengths.
             optimise_sextupoles: Whether to optimise sextupole strengths.
@@ -46,7 +48,7 @@ class SPS(Accelerator):
         """
         super().__init__(
             sequence_file=sequence_file,
-            beam_energy=beam_energy,
+            pc=pc,
             bpm_pattern=bpm_pattern,
             optimise_energy=optimise_energy,
             optimise_quadrupoles=optimise_quadrupoles,
@@ -59,15 +61,15 @@ class SPS(Accelerator):
         """Return the sequence name for SPS."""
         return "sps"
 
-    def get_supported_knob_specs(self) -> list[tuple[str, str, str, bool, bool]]:
+    def get_supported_knob_specs(self) -> list[tuple[str, str, str, str | None, bool]]:
         """Return generic SPS knob specifications.
 
         Returns:
-            List of (kind, attribute, pattern, zero_check, optimise_flag) tuples.
+            List of (kind, attribute, pattern, nonzero_attr, optimise_flag) tuples.
         """
         return [
-            ("quadrupole", "k1", self.PATTERN_QUADRUPOLE, True, self.optimise_quadrupoles),
-            ("sextupole", "k2", self.PATTERN_SEXTUPOLE, True, self.optimise_sextupoles),
+            ("quadrupole", "k1", self.PATTERN_QUADRUPOLE, "k1", self.optimise_quadrupoles),
+            ("sextupole", "k2", self.PATTERN_SEXTUPOLE, "k2", self.optimise_sextupoles),
         ]
 
     def get_perturbation_families(self) -> dict[str, dict[str, str | float | dict]]:
@@ -88,6 +90,10 @@ class SPS(Accelerator):
             },
         }
 
+    def apply_accelerator_specific_errors(self, mad_iface: AbaMadInterface) -> None:
+        """SPS has no accelerator-specific startup error tables."""
+        del mad_iface
+
     @staticmethod
     def infer_monitor_plane(bpm_name: str) -> str:
         """Infer measurement plane from SPS BPM family name."""
@@ -98,11 +104,30 @@ class SPS(Accelerator):
             return "V"
         raise ValueError(f"Unsupported SPS BPM name for plane inference: {bpm_name}")
 
+    def get_ac_dipole_marker(self) -> str:
+        """SPS does not use the LHC AC-dipole exciter model."""
+        raise NotImplementedError("SPS does not define an AC-dipole exciter marker")
 
-    def get_tune_variables(self) -> tuple[str, str]:
+    @property
+    def ac_dipole_location(self) -> tuple[str, float]:
+        """SPS does not use the LHC AC-dipole exciter model."""
+        raise NotImplementedError("SPS does not define an AC-dipole exciter location")
+
+    def get_exciter_bpm(
+        self,
+        plane: str,
+        common_bpms: list[str] | None = None,
+    ) -> tuple[str, str] | None:
+        """SPS does not define an upstream-style AC-dipole exciter BPM."""
+        del plane, common_bpms
+        raise NotImplementedError("SPS does not define an AC-dipole exciter BPM")
+
+    @property
+    def tune_variables(self) -> tuple[str, str]:
         """Return SPS tune variable names."""
         return "kqf", "kqd"
 
-    def get_tune_integers(self) -> tuple[int, int]:
+    @property
+    def tune_integers(self) -> tuple[int, int]:
         """Return SPS integer tunes."""
         return 20, 20

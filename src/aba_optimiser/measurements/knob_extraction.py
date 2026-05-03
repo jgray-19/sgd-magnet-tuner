@@ -121,8 +121,24 @@ def get_mq_vals(
     Raises:
         RuntimeError: If no data is found in NXCALS or LSA calculations fail.
     """
+    # All quadrupoles for the entire machine.
     patterns = [
-        "%.RQ%.A%:I_MEAS",  # All arc quadrupoles
+        # "%.RQ%.A%:I_MEAS",  # All arc quadrupoles
+        "RPHE.%.RQ%:I_MEAS",
+        # "RPHFC.%.RQ%:I_MEAS",
+        f"RPHGA.%.RQ%B{beam}:I_MEAS",
+        f"RPHGB.%.RQ%B{beam}:I_MEAS",
+        f"RPHH.%.RQ%B{beam}:I_MEAS",
+        f"RPHS%.%.RQ%B{beam}:I_MEAS",
+        f"RPHRA.%.RQ%B{beam}:I_MEAS",
+        # f"RPMBA.%.RQ%B{beam}:I_MEAS", # Will include kqs as well
+        f"RPMBA.%.RQT%B{beam}:I_MEAS",
+        # "RPMBB.%.RQ%:I_MEAS", # Will include kqsx as well
+        f"RPMBB.%.RQ%B{beam}:I_MEAS",
+        # f"RPMBD.%.RQ%B{beam}:I_MEAS", # Will include kqs as well
+        f"RPMBD.%.RQT%B{beam}:I_MEAS",
+        "RPMC.%.RQ%:I_MEAS",
+        "RPTF.%.RQ%:I_MEAS",
     ]
     knob_list = get_knob_vals(
         spark,

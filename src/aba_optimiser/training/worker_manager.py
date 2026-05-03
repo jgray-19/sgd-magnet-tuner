@@ -82,7 +82,7 @@ class WorkerManager:
         self.all_bpms = all_bpms
         self.file_kick_planes = file_kick_planes or {}
         self.use_fixed_bpm = use_fixed_bpm
-        self.beam_energy = accelerator.beam_energy
+        self.pc = accelerator.pc
         self.flattop_turns = flattop_turns
         self.num_tracks = num_tracks
         self.debug = debug
@@ -115,7 +115,7 @@ class WorkerManager:
         self.payload_builder = WorkerPayloadBuilder(
             accelerator=accelerator,
             all_bpms=all_bpms,
-            beam_energy=self.beam_energy,
+            pc=self.pc,
         )
 
     def _sync_helpers(self) -> None:
@@ -725,29 +725,16 @@ class WorkerManager:
         for worker in self.validation_workers:
             worker.join()
 
-    def termination_and_hessian(self, n_knobs: int, estimate_hessian: bool = True) -> np.ndarray:
+    def termination_and_hessian(
+        self,
+        n_knobs: int,
+        estimate_hessian: bool = True,
+        parallelism: bool | int = True,
+    ) -> np.ndarray:
         """Terminate training workers, collect Hessians, then stop validation."""
         LOGGER.info("Terminating workers...")
         del n_knobs
-        channels = self._channels()
-        if not estimate_hessian:
-            channels.send_all({"cmd": "set_hessian_mode", "enabled": False})
-            for response in channels.recv_all():
-                response_dict = (
-                    cast("dict[object, object]", response) if isinstance(response, dict) else None
-                )
-                if response_dict is None or response_dict.get("status") != "ok":
-                    raise RuntimeError(
-                        f"Unexpected worker ack for hessian mode command: {response!r}"
-                    )
-        channels.send_all((None, None))
-        hessians = []
-        for hessian in channels.recv_all():
-            if not isinstance(hessian, np.ndarray):
-                raise RuntimeError(f"Unexpected Hessian payload from worker: {hessian!r}")
-            hessians.append(hessian)
-        for worker in self.workers:
-            worker.join()
+        hessians = self._collect_hessians(estimate_hessian, parallelism)
 
         if self.validation_channels is not None:
             with contextlib.suppress(BrokenPipeError, EOFError):
@@ -759,3 +746,75 @@ class WorkerManager:
         for worker in self.validation_workers:
             worker.join()
         return sum(hessians)
+
+    @staticmethod
+    def _assert_hessian_mode_ack(response: object) -> None:
+        response_dict = cast("dict[object, object]", response) if isinstance(response, dict) else None
+        if response_dict is None or response_dict.get("status") != "ok":
+            raise RuntimeError(f"Unexpected worker ack for hessian mode command: {response!r}")
+
+    def _collect_hessians(self, estimate_hessian: bool, parallelism: bool | int) -> list[np.ndarray]:
+        """Collect worker Hessians with a bounded shutdown concurrency."""
+        max_parallel = self._normalise_hessian_parallelism(parallelism)
+        if max_parallel == 1:
+            return self._collect_hessians_serial(estimate_hessian)
+        if max_parallel >= len(self.workers):
+            return self._collect_hessians_parallel(estimate_hessian)
+
+        hessians: list[np.ndarray] = []
+        for start in range(0, len(self.workers), max_parallel):
+            chunk_conns = self.parent_conns[start : start + max_parallel]
+            chunk_workers = self.workers[start : start + max_parallel]
+            channels = WorkerChannels(chunk_conns, chunk_workers)
+            if not estimate_hessian:
+                channels.send_all({"cmd": "set_hessian_mode", "enabled": False})
+                for response in channels.recv_all():
+                    self._assert_hessian_mode_ack(response)
+            channels.send_all((None, None))
+            for hessian in channels.recv_all():
+                if not isinstance(hessian, np.ndarray):
+                    raise RuntimeError(f"Unexpected Hessian payload from worker: {hessian!r}")
+                hessians.append(hessian)
+            for worker in chunk_workers:
+                worker.join()
+        return hessians
+
+    def _collect_hessians_parallel(self, estimate_hessian: bool) -> list[np.ndarray]:
+        """Collect worker Hessians by shutting down all workers concurrently."""
+        channels = self._channels()
+        if not estimate_hessian:
+            channels.send_all({"cmd": "set_hessian_mode", "enabled": False})
+            for response in channels.recv_all():
+                self._assert_hessian_mode_ack(response)
+        channels.send_all((None, None))
+        hessians: list[np.ndarray] = []
+        for hessian in channels.recv_all():
+            if not isinstance(hessian, np.ndarray):
+                raise RuntimeError(f"Unexpected Hessian payload from worker: {hessian!r}")
+            hessians.append(hessian)
+        for worker in self.workers:
+            worker.join()
+        return hessians
+
+    def _collect_hessians_serial(self, estimate_hessian: bool) -> list[np.ndarray]:
+        """Collect worker Hessians while terminating workers one at a time."""
+        hessians: list[np.ndarray] = []
+        for conn, worker in zip(self.parent_conns, self.workers, strict=True):
+            if not estimate_hessian:
+                conn.send({"cmd": "set_hessian_mode", "enabled": False})
+                self._assert_hessian_mode_ack(WorkerChannels._recv(conn, worker))
+            conn.send((None, None))
+            hessian = WorkerChannels._recv(conn, worker)
+            if not isinstance(hessian, np.ndarray):
+                raise RuntimeError(f"Unexpected Hessian payload from worker: {hessian!r}")
+            hessians.append(hessian)
+            worker.join()
+        return hessians
+
+    def _normalise_hessian_parallelism(self, parallelism: bool | int) -> int:
+        """Convert config input into an explicit concurrency cap."""
+        if isinstance(parallelism, bool):
+            return len(self.workers) if parallelism else 1
+        if parallelism < 1:
+            raise ValueError("Hessian parallelism must be at least 1")
+        return min(parallelism, len(self.workers))

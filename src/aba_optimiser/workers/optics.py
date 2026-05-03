@@ -112,13 +112,31 @@ class OpticsWorker(AbstractWorker[OpticsData]):
             beta_y=norm_beta_y_weight
             * 0.1,  # Scale beta weights by 0.1 to prioritise phase advances
         )
+        self.normalisation_points = max(
+            1,
+            int(np.count_nonzero(self.weights.phase_adv_x))
+            + int(np.count_nonzero(self.weights.phase_adv_y))
+            + int(np.count_nonzero(self.weights.beta_x))
+            + int(np.count_nonzero(self.weights.beta_y)),
+        )
 
         # Store initial conditions
         self.init_coords = data.init_coords
 
         # Load MAD-NG optics tracking scripts
-        self.run_track_script = TRACK_OPTICS_SCRIPT.read_text()
-        self.run_track_init_path = TRACK_OPTICS_INIT
+        self.run_track_init_text = self._strip_comment_lines(TRACK_OPTICS_INIT.read_text())
+        self.run_track_script = self._strip_comment_lines(TRACK_OPTICS_SCRIPT.read_text())
+
+    @staticmethod
+    def _strip_comment_lines(text: str) -> str:
+        """Remove full-line comments and blank lines before sending code to MAD-NG."""
+        filtered_lines = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("--") or stripped.startswith("!"):
+                continue
+            filtered_lines.append(line)
+        return "\n".join(filtered_lines)
 
     def setup_mad_sequence(self, mad: MAD) -> None:
         """Configure MAD-NG sequence for optics computation.
@@ -149,7 +167,7 @@ class OpticsWorker(AbstractWorker[OpticsData]):
         mad.send("""
 knob_monomials = {}
 for i,param in ipairs(knob_names) do
-    MADX[param] = MADX[param] + da_x0_base[param]
+    loaded_sequence[param] = loaded_sequence[param] + da_x0_base[param]
     knob_monomials[param] = string.rep("0", 6 + i - 1) .. "1"
 end
 """)
@@ -191,13 +209,7 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
         Args:
             mad: MAD-NG interface object
         """
-        text = self.run_track_init_path.read_text()
-        # Remove all comments from the initialization script and embed worker ID
-        filtered_lines = [
-            line for line in text.splitlines() if not line.strip().startswith("--") and line.strip()
-        ]
-        filtered_lines[0] += "!Worker ID: " + str(self.worker_id)
-        mad.send("\n".join(filtered_lines))
+        mad.send(self.run_track_init_text)
 
         # Verify initialization
         if not mad.send("python:send(true)").recv():
@@ -221,7 +233,9 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
             Tuple of (gradient array, loss value)
         """
         # Send knob updates to MAD-NG
-        update_commands = [f"MADX['{name}']:set0({val:.15e})" for name, val in knob_updates.items()]
+        update_commands = [
+            f"loaded_sequence['{name}']:set0({val:.15e})" for name, val in knob_updates.items()
+        ]
         mad.send("\n".join(update_commands))
 
         # Run optics computation
@@ -334,6 +348,66 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
         loss = loss_px + loss_py + loss_bx + loss_by
 
         return grad, loss
+
+    def run(self) -> None:
+        """Main worker run loop for optics optimisation."""
+        mad: MAD | None = None
+
+        try:
+            self.configure_python_worker_logging()
+            message = self.conn.recv()
+            if message is None:
+                return
+            if not isinstance(message, tuple) or len(message) != 2:
+                raise ValueError(
+                    f"Worker {self.worker_id}: unexpected startup payload {type(message)}"
+                )
+
+            knob_values, batch = message
+            if knob_values is None or batch is None:
+                return
+
+            mad, nbpms = self.setup_mad_interface(knob_values)
+            self.send_initial_conditions(mad)
+            self._initialise_mad_computation(mad)
+            LOGGER.debug(
+                "Worker %s: Ready for optics computation with %d BPMs",
+                self.worker_id,
+                nbpms,
+            )
+
+            while True:
+                message = self.conn.recv()
+                if not isinstance(message, tuple) or len(message) != 2:
+                    raise ValueError(
+                        f"Worker {self.worker_id}: unexpected optics payload {type(message)}"
+                    )
+
+                knob_values, batch = message
+                if knob_values is None or batch is None:
+                    LOGGER.debug("Worker %s: Received termination signal", self.worker_id)
+                    break
+
+                try:
+                    grad, loss = self.compute_gradients_and_loss(mad, knob_values, int(batch))
+                except Exception as exc:  # noqa: BLE001
+                    self.send_error_payload(exc, phase="computation")
+                    break
+
+                self.conn.send(
+                    (
+                        self.worker_id,
+                        grad / self.normalisation_points,
+                        loss / self.normalisation_points,
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001
+            self.send_error_payload(exc, phase="startup")
+        finally:
+            LOGGER.debug("Worker %s: Terminating", self.worker_id)
+            if mad is not None:
+                mad.send("shush()")
+                del mad
 
     @staticmethod
     def get_n_data_points(nbpms: int) -> int:

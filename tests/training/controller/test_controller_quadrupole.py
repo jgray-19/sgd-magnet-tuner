@@ -59,7 +59,7 @@ def _build_lhc_quad_controller(
     ctrl = Controller(
         LHC(
             beam=1,
-            beam_energy=6800,
+            pc=6800,
             sequence_file=seq_b1,
             optimise_quadrupoles=True,
             optimise_other_quadrupoles=False,
@@ -226,7 +226,7 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
     )
 
     accelerator = SPS(
-        beam_energy=450.0,
+        pc=450.0,
         sequence_file=seq_sps,
         optimise_quadrupoles=True,
     )
@@ -274,7 +274,7 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
     )
     estimate, unc = ctrl.run()
 
-    iface = AbaMadInterface(accelerator=SPS(sequence_file=seq_sps, beam_energy=450.0))
+    iface = AbaMadInterface(accelerator=SPS(sequence_file=seq_sps, pc=450.0))
     iface.set_magnet_strengths(estimate)
     iface.observe_bpms()
     est_errors = iface.run_twiss()

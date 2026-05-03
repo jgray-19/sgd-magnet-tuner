@@ -106,7 +106,7 @@ class GenericMadInterface(AbaMadInterface):
             bpm_range: Range of BPMs to observe, e.g., "BPM.13R3.B1/BPM.12L4.B1"
             bpm_pattern: Pattern for BPM matching. Defaults to accelerator pattern.
             bad_bpms: List of bad BPMs to exclude from observation
-            beam_energy: Beam energy in GeV
+            pc: Beam energy in GeV
             corrector_strengths: Path to corrector strengths file, or None to skip
             seq_name: Name of the sequence to load
             tune_knobs_file: Path to tune knobs file, or None to skip
@@ -382,24 +382,24 @@ class GradientDescentMadInterface(GenericMadInterface):
                 "\nUse GenericMadInterface if no optimisation is required."
             )
 
-    def get_knob_specs(self) -> list[tuple[str, str, str, bool, bool]]:
+    def get_knob_specs(self) -> list[tuple[str, str, str, str | None, bool]]:
         """
         Get the list of knob specifications for this accelerator.
 
         Returns the full list of supported knobs from the accelerator definition.
 
         Returns:
-            List of (kind, attribute, pattern, zero_check) tuples:
+            List of (kind, attribute, pattern, nonzero_attr) tuples:
             - kind: MAD element kind (e.g., "sbend", "quadrupole", "hkicker")
             - attribute: MAD element attribute (e.g., "k0", "k1", "kick")
             - pattern: Regex pattern to match element names
-            - zero_check: Whether to exclude elements with zero attribute values
+            - nonzero_attr: Optional MAD attribute that must be nonzero
         """
         return self.accelerator.get_supported_knob_specs()
 
     def _filter_knob_specs(
-        self, all_specs: list[tuple[str, str, str, bool, bool]]
-    ) -> list[tuple[str, str, str, bool]]:
+        self, all_specs: list[tuple[str, str, str, str | None, bool]]
+    ) -> list[tuple[str, str, str, str | None]]:
         """
         Filter knob specifications based on the accelerator's optimisation settings.
 
@@ -412,12 +412,12 @@ class GradientDescentMadInterface(GenericMadInterface):
             Filtered list of specs to actually create knobs for
         """
         return [
-            (kind, attr, pattern, zero_check)
-            for kind, attr, pattern, zero_check, optimise_flag in all_specs
+            (kind, attr, pattern, nonzero_attr)
+            for kind, attr, pattern, nonzero_attr, optimise_flag in all_specs
             if optimise_flag
         ]
 
-    def _prepare_knob_data(self, selected_specs: list[tuple[str, str, str, bool]]) -> None:
+    def _prepare_knob_data(self, selected_specs: list[tuple[str, str, str, str | None]]) -> None:
         """Prepare accelerator-specific MAD state required for knob creation."""
         self.accelerator.prepare_mad_for_knob_creation(self, selected_specs)
 
@@ -561,9 +561,9 @@ class GradientDescentMadInterface(GenericMadInterface):
 
         if filtered_specs:
             attr_conditions: list[tuple[str, str, str]] = []
-            for kind, attr, pattern, zero_check in filtered_specs:
-                zero_chk_str = f"and e.{attr} ~=0" if zero_check else ""
-                condition = f'(e.kind == "{kind}" {zero_chk_str} and e.name:match("{pattern}"))'
+            for kind, attr, pattern, nonzero_attr in filtered_specs:
+                nonzero_chk_str = f"and e.{nonzero_attr} ~=0" if nonzero_attr else ""
+                condition = f'(e.kind == "{kind}" {nonzero_chk_str} and e.name:match("{pattern}"))'
                 attr_conditions.append((kind, attr, condition))
 
             attr_block = self._build_attr_block(attr_conditions)

@@ -8,12 +8,25 @@ from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.training.base_controller import BaseController
 from aba_optimiser.training.configuration_manager import ConfigurationManager
-from aba_optimiser.training.controller_config import OutputConfig
+from aba_optimiser.training.controller_config import MeasurementConfig, OutputConfig, SequenceConfig
 
 
 class DummyController(BaseController):
     def run(self) -> tuple[dict[str, float], dict[str, float]]:
         return {}, {}
+
+
+def test_measurement_config_expands_single_file_scoped_values(tmp_path) -> None:
+    config = MeasurementConfig(
+        measurement_files=[tmp_path / "m0.parquet", tmp_path / "m1.parquet"],
+        corrector_files=tmp_path / "correctors.tfs",
+        tune_knobs_files=None,
+        machine_deltaps=1e-4,
+    ).expanded_for_measurements()
+
+    assert config.corrector_files == [tmp_path / "correctors.tfs", tmp_path / "correctors.tfs"]
+    assert config.tune_knobs_files == [None, None]
+    assert config.machine_deltaps == [1e-4, 1e-4]
 
 
 def test_base_controller_raises_when_no_knobs_created(
@@ -22,12 +35,10 @@ def test_base_controller_raises_when_no_knobs_created(
 ) -> None:
     def fake_setup_mad_interface(
         self,
-        first_bpm,
-        bad_bpms,
         debug=False,
         mad_logfile=None,
     ) -> None:
-        del first_bpm, bad_bpms, debug, mad_logfile
+        del debug, mad_logfile
         self.mad_iface = SimpleNamespace()
         self.knob_names = []
         self.elem_spos = []
@@ -56,7 +67,7 @@ def test_base_controller_raises_when_no_knobs_created(
 
     accelerator = LHC(
         beam=1,
-        beam_energy=6800,
+        pc=6800,
         sequence_file=seq_b1,
         optimise_quadrupoles=True,
     )
@@ -79,7 +90,7 @@ def test_base_controller_raises_when_no_knobs_created(
             accelerator=accelerator,
             optimiser_config=optimiser_config,
             simulation_config=simulation_config,
-            magnet_range="BPM.9R1.B1/BPM.9L2.B1",
+            sequence_config=SequenceConfig("BPM.9R1.B1/BPM.9L2.B1"),
             bpm_start_points=["BPM.9R1.B1"],
             bpm_end_points=["BPM.9L2.B1"],
             output_config=OutputConfig(show_plots=False, write_tensorboard_logs=False),

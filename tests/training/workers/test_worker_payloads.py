@@ -15,12 +15,12 @@ from aba_optimiser.workers.common import TrackingData, WorkerConfig
 def _make_builder(tmp_path: Path, all_bpms: list[str] | None = None) -> WorkerPayloadBuilder:
     seq_file = tmp_path / "sps.seq"
     seq_file.write_text("! Dummy SPS sequence file\n")
-    accelerator = SPS(sequence_file=seq_file, beam_energy=450.0)
+    accelerator = SPS(sequence_file=seq_file, pc=450.0)
     accelerator.infer_monitor_plane = lambda bpm: "H" if "BPH" in bpm else "V"  # type: ignore[method-assign]
     return WorkerPayloadBuilder(
         accelerator=accelerator,
         all_bpms=all_bpms or ["BPH.13208", "BPV.13308"],
-        beam_energy=450.0,
+        pc=450.0,
     )
 
 

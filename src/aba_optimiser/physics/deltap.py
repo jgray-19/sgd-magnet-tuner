@@ -49,3 +49,12 @@ def dp2pt(dp, mass, energy):
     LOGGER.debug("Calculating dp2pt for dp=%f, mass=%f, energy=%f", dp, mass, energy)
     _beta0 = 1 / get_beam_beta(mass, energy)
     return sqrt((1 + dp) ** 2 + (_beta0**2 - 1)) - _beta0
+
+
+def kinetic_to_total_energy(kinetic_energy: float, mass: float) -> float:
+    """Convert a momentum-like kinetic parameter to total energy.
+
+    This follows the convention already used in PSB setup where the supplied
+    value is converted via ``sqrt(p^2 + m^2)``.
+    """
+    return sqrt(kinetic_energy**2 + mass**2)

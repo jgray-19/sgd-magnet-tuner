@@ -13,7 +13,6 @@ from omc3.optics_measurements.constants import PHASE_ADV
 from tmom_recon import build_twiss_from_measurements
 
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
-from aba_optimiser.mad import GradientDescentMadInterface
 from aba_optimiser.training.base_controller import BaseController
 from aba_optimiser.training.utils import extract_bpm_range_names
 from aba_optimiser.training.worker_lifecycle import WorkerLifecycleManager
@@ -24,9 +23,6 @@ if TYPE_CHECKING:
 
     from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.training.controller_config import OutputConfig, SequenceConfig
-
-X = "x"
-Y = "y"
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +50,7 @@ class OpticsController(BaseController):
         true_strengths: Path | dict[str, float] | None = None,
         use_errors: bool = True,
         use_amplitude_beta: bool = True,
+        include_phase_advances: bool = False,
         output_config: OutputConfig | None = None,
     ):
         """
@@ -72,9 +69,10 @@ class OpticsController(BaseController):
             true_strengths (Path | dict[str, float] | None): True strengths (Path, dict, or None).
             use_errors (bool): Whether to use measurement errors in optimisation.
             use_amplitude_beta (bool): Use beta from amplitude (True) or phase (False
+            include_phase_advances (bool): Include phase-advance targets alongside beta targets.
             output_config (OutputConfig | None): Output and logging configuration.
         """
-        logger.info("Optimising quadrupoles for beta functions")
+        logger.info("Optimising quadrupoles to match measurement-built optics")
 
         # Create optics-specific simulation config
         simulation_config = SimulationConfig(
@@ -89,13 +87,11 @@ class OpticsController(BaseController):
             accelerator=accelerator,
             optimiser_config=optimiser_config,
             simulation_config=simulation_config,
-            magnet_range=sequence_config.magnet_range,
+            sequence_config=sequence_config,
             bpm_start_points=bpm_start_points,
             bpm_end_points=bpm_end_points,
             initial_knob_strengths=initial_knob_strengths,
             true_strengths=true_strengths,
-            bad_bpms=sequence_config.bad_bpms,
-            first_bpm=sequence_config.first_bpm,
             output_config=output_config,
         )
 
@@ -105,9 +101,10 @@ class OpticsController(BaseController):
         self.tune_knobs_file = tune_knobs_file
         self.use_errors = use_errors
         self.use_amplitude_beta = use_amplitude_beta
+        self.include_phase_advances = include_phase_advances
+        self.target_twiss = load_optics_data(self.optics_folder, use_amplitude_beta)
 
         # Create optics-specific worker payloads
-        optics_path = Path(optics_folder)
         template_config = WorkerConfig(
             accelerator=accelerator,
             start_bpm="TEMP",
@@ -117,57 +114,107 @@ class OpticsController(BaseController):
             tune_knobs_file=tune_knobs_file,
             sdir=0,
             bad_bpms=sequence_config.bad_bpms,
+            mad_logfile=self.mad_logfile,
+            python_logfile=self.python_logfile,
         )
 
         # Use explicit BPM (start, end) pairs from config manager
         self.worker_payloads = create_worker_payloads(
-            accelerator,
-            optics_path,
+            self.target_twiss,
+            self.config_manager.all_bpms,
             self.config_manager.bpm_pairs,
             sequence_config.bad_bpms,
             template_config,
             self.use_errors,
-            self.use_amplitude_beta,
+            self.include_phase_advances,
         )
 
     def run(self) -> tuple[dict[str, float], dict[str, float]]:
         """Execute the optimisation process using optics workers."""
         writer = self.setup_logging("optics_opt")
-
-        # Create and start workers
         worker_manager = WorkerLifecycleManager(OpticsWorker)
-        worker_manager.create_and_start_workers(
-            [(data, config, self.simulation_config) for config, data in self.worker_payloads],
-            send_handshake=True,
+        self.final_knobs = None
+
+        try:
+            worker_manager.create_and_start_workers(
+                [(data, config, self.simulation_config) for config, data in self.worker_payloads],
+                send_handshake=False,
+            )
+            channels = worker_manager.channels
+            if channels is None:
+                raise RuntimeError("Worker channels are not initialised")
+
+            self.final_knobs = self.optimisation_loop.run_optimisation(
+                self.initial_knobs,
+                channels,
+                writer,
+                run_start=time.time(),
+                total_turns=1,
+            )
+        except KeyboardInterrupt:
+            logger.warning("KeyboardInterrupt detected. Terminating optics optimisation early.")
+            self.final_knobs = self.optimisation_loop.best_knobs
+        finally:
+            worker_manager.terminate_workers()
+            initial_knobs_abs = self._deltas_to_abs()
+
+        uncertainties = self._save_results(initial_knobs_abs, writer)
+        return self.final_knobs, dict(zip(self.final_knobs.keys(), uncertainties, strict=False))
+
+    def _deltas_to_abs(self) -> dict[str, float]:
+        """Convert internal delta-space optics results to absolute-space output."""
+        initial_knobs_delta = dict(
+            zip(
+                self.config_manager.knob_names,
+                self.config_manager.initial_strengths,
+                strict=False,
+            )
         )
-        channels = worker_manager.channels
-        if channels is None:
-            raise RuntimeError("Worker channels are not initialised")
+        if self.final_knobs is None:
+            self.final_knobs = self.optimisation_loop.best_knobs
 
-        # Run optimisation
-        self.final_knobs = self.optimisation_loop.run_optimisation(
-            self.initial_knobs,
-            channels,
-            writer,
-            run_start=time.time(),
-            total_turns=1,
+        initial_knobs_abs = self.config_manager.mad_iface.optimisation_to_absolute_knobs(
+            initial_knobs_delta
         )
-
-        # Terminate workers
-        worker_manager.terminate_workers()
-
-        # Generate results
-        uncertainties = np.zeros(len(self.initial_knobs))
-        self.result_manager.generate_plots(
-            self.final_knobs,
-            self.config_manager.initial_strengths,
-            self.filtered_true_strengths,
-            uncertainties,
+        self.final_knobs = self.config_manager.mad_iface.optimisation_to_absolute_knobs(
+            self.final_knobs
         )
+        self.filtered_true_strengths = self.config_manager.mad_iface.optimisation_to_absolute_knobs(
+            self.filtered_true_strengths
+        )
+        return initial_knobs_abs
 
+    def _save_results(
+        self,
+        initial_knobs_abs: dict[str, float],
+        writer,
+    ) -> np.ndarray:
+        """Save optics optimisation results in user-facing absolute space."""
         if writer is not None:
             writer.close()
-        return self.final_knobs, dict(zip(self.final_knobs.keys(), uncertainties))
+
+        uncertainties_abs = self.config_manager.mad_iface.convert_uncertainties_to_absolute(
+            self.config_manager.knob_names,
+            np.zeros(len(self.config_manager.knob_names), dtype=np.float64),
+        )
+        output_knob_names = self.result_manager.knob_names
+        initial_strengths_abs = np.array(
+            [initial_knobs_abs[name] for name in output_knob_names], dtype=np.float64
+        )
+
+        self.result_manager.save_results(
+            self.final_knobs,
+            uncertainties_abs,
+            self.filtered_true_strengths,
+        )
+        self.result_manager.generate_plots(
+            self.final_knobs,
+            initial_strengths_abs,
+            self.filtered_true_strengths,
+            uncertainties_abs,
+        )
+        logger.info("Optics optimisation complete.")
+        return uncertainties_abs
 
 
 def load_optics_data(
@@ -311,63 +358,53 @@ def _extract_phase_advances(
 
 
 def create_worker_payloads(
-    accelerator: Accelerator,
-    optics_dir: Path,
+    twiss_df: pd.DataFrame,
+    all_bpms: list[str],
     bpm_pairs: list[tuple[str, str]],
     bad_bpms: list[str] | None,
     template_config: WorkerConfig,
     use_errors: bool = True,
-    use_amplitude_beta: bool = True,
+    include_phase_advances: bool = False,
 ) -> list[tuple[WorkerConfig, OpticsData]]:
     """Create worker payloads for optics optimisation.
 
     Args:
-        optics_dir: Path to directory containing TFS optics measurement files
+        twiss_df: Measurement-built optics Twiss used as the optimisation target.
+        all_bpms: Full model BPM ordering.
         bpm_pairs: List of (start_bpm, end_bpm) tuples defining tracking ranges
         bad_bpms: Optional list of BPM names to exclude from analysis
         template_config: Template configuration to use for all workers
         use_errors: Whether to use measurement errors in optimisation
-        use_amplitude_beta: Use beta from amplitude (True) or phase (False)
+        include_phase_advances: Include phase advances in the loss alongside beta targets
 
     Returns:
         List of (WorkerConfig, OpticsData) tuples for each worker
     """
-
-    logger.info(f"Loading beta measurements from {optics_dir}")
-
-    twiss_df = load_optics_data(optics_dir, use_amplitude_beta)
+    logger.info(
+        "Preparing optics worker payloads from measurement-built Twiss (%sphase targets)",
+        "with " if include_phase_advances else "without ",
+    )
 
     if not bpm_pairs:
         raise ValueError("No BPM pairs provided for worker payload creation")
 
+    filtered_model_bpms = [bpm for bpm in all_bpms if bad_bpms is None or bpm not in bad_bpms]
     worker_payloads = []
 
-    for start_bpm, end_bpm in bpm_pairs:
+    unique_bpm_pairs = list(dict.fromkeys(bpm_pairs))
+
+    for start_bpm, end_bpm in unique_bpm_pairs:
         for sdir in (1, -1):
-            # Choose init_bpm as the first good BPM in the list
-            init_bpm = start_bpm if sdir == 1 else end_bpm
-
-            # Get all BPMs in the sequence for range extraction
-            temp_mad = GradientDescentMadInterface(
-                accelerator,
-                magnet_range=template_config.magnet_range,
-                bpm_range=f"{start_bpm}/{end_bpm}",
-                bad_bpms=bad_bpms,  # Filter out bad BPMs
-            )
-            extracted_bpms = temp_mad.bpms_in_range
-            del temp_mad  # Clean up
-
-            additional_bad_bpms = list(set(extracted_bpms) - set(twiss_df.index))
-            extracted_bpms = [bpm for bpm in extracted_bpms if bpm in twiss_df.index]
-
             try:
-                # Get all BPMs in range from sequence (includes bad BPMs)
-                bpm_list = extract_bpm_range_names(extracted_bpms, start_bpm, end_bpm, sdir)
+                bpm_list = extract_bpm_range_names(filtered_model_bpms, start_bpm, end_bpm, sdir)
             except ValueError:
                 logger.warning(
                     f"Skipping BPM range {start_bpm} to {end_bpm} (sdir={sdir}): BPM(s) not found in model"
                 )
                 continue
+
+            additional_bad_bpms = [bpm for bpm in bpm_list if bpm not in twiss_df.index]
+            bpm_list = [bpm for bpm in bpm_list if bpm in twiss_df.index]
 
             if len(bpm_list) < 2:
                 logger.warning(
@@ -375,28 +412,31 @@ def create_worker_payloads(
                 )
                 continue
 
+            init_bpm = bpm_list[0]
             logger.info(
-                f"Using {len(bpm_list)} BPMs in range {extracted_bpms[0]} to {extracted_bpms[-1]} (sdir={sdir})"
+                f"Using {len(bpm_list)} measured BPMs in range {bpm_list[0]} to {bpm_list[-1]} (sdir={sdir})"
             )
 
-            # Extract phase advances
-            phase_x_list, phase_y_list, err_x_list, err_y_list, missing = _extract_phase_advances(
-                bpm_list, twiss_df
-            )
-
-            if missing > 0:
-                logger.info(
-                    f"BPM range {start_bpm} to {end_bpm} (sdir={sdir}): "
-                    f"{missing}/{len(bpm_list) - 1} phase measurements missing"
+            if include_phase_advances:
+                phase_x_list, phase_y_list, err_x_list, err_y_list, missing = _extract_phase_advances(
+                    bpm_list, twiss_df
                 )
+                if missing > 0:
+                    logger.info(
+                        f"BPM range {start_bpm} to {end_bpm} (sdir={sdir}): "
+                        f"{missing}/{len(bpm_list) - 1} phase measurements missing"
+                    )
+            else:
+                phase_x_list = [0.0] * (len(bpm_list) - 1)
+                phase_y_list = [0.0] * (len(bpm_list) - 1)
+                err_x_list = [float("inf")] * (len(bpm_list) - 1)
+                err_y_list = [float("inf")] * (len(bpm_list) - 1)
 
-            # Extract beta function measurements at each BPM
             beta_x_list = [twiss_df.loc[bpm, "BETX"] for bpm in bpm_list]
             beta_y_list = [twiss_df.loc[bpm, "BETY"] for bpm in bpm_list]
             err_beta_x_list = [twiss_df.loc[bpm, "ERRBETX"] for bpm in bpm_list]
             err_beta_y_list = [twiss_df.loc[bpm, "ERRBETY"] for bpm in bpm_list]
 
-            # Prepare arrays for phase advances
             comp = np.hstack(
                 [np.array(phase_x_list).reshape(-1, 1), np.array(phase_y_list).reshape(-1, 1)]
             )
@@ -404,7 +444,6 @@ def create_worker_payloads(
                 [np.array(err_x_list).reshape(-1, 1), np.array(err_y_list).reshape(-1, 1)]
             )
 
-            # Prepare arrays for beta functions
             beta_comp = np.hstack(
                 [np.array(beta_x_list).reshape(-1, 1), np.array(beta_y_list).reshape(-1, 1)]
             )
@@ -412,25 +451,26 @@ def create_worker_payloads(
                 [np.array(err_beta_x_list).reshape(-1, 1), np.array(err_beta_y_list).reshape(-1, 1)]
             )
 
-            if not use_errors or np.all(err_comp == 0):
+            if include_phase_advances and (
+                not use_errors or not np.any(np.isfinite(err_comp) & (err_comp > 0))
+            ):
                 logger.warning(
                     f"No valid phase errors for {start_bpm} to {end_bpm}. Using 10% of phase values."
                 )
-                err_comp = 0.001 * comp
+                err_comp = 0.001 * np.maximum(np.abs(comp), 1e-12)
 
-            if not use_errors or np.all(err_beta_comp == 0):
+            if not use_errors or not np.any(np.isfinite(err_beta_comp) & (err_beta_comp > 0)):
                 logger.warning(
                     f"No valid beta errors for {start_bpm} to {end_bpm}. Using 10% of beta values."
                 )
-                err_beta_comp = 0.1 * beta_comp
+                err_beta_comp = 0.1 * np.maximum(np.abs(beta_comp), 1e-12)
 
-            # Create payload
             config = replace(template_config, start_bpm=start_bpm, end_bpm=end_bpm, sdir=sdir)
             if additional_bad_bpms:
-                if config.bad_bpms is None:
-                    config = replace(config, bad_bpms=additional_bad_bpms)
-                else:
-                    config.bad_bpms = additional_bad_bpms + config.bad_bpms
+                config = replace(
+                    config,
+                    bad_bpms=additional_bad_bpms + ([] if config.bad_bpms is None else config.bad_bpms),
+                )
 
             data = OpticsData(
                 comparisons=comp,

@@ -1,6 +1,6 @@
 import numpy as np
 
-from src.aba_optimiser.physics.deltap import dp2pt, get_beam_beta
+from src.aba_optimiser.physics.deltap import dp2pt, get_beam_beta, kinetic_to_total_energy
 
 
 class TestGetBeamBeta:
@@ -75,3 +75,14 @@ class TestDp2pt:
         pt = dp2pt(dp, mass, energy)
         # At high energy, pt should be close to dp
         assert np.isclose(pt, dp, rtol=1e-3, atol=1e-6)
+
+
+class TestKineticToTotalEnergy:
+    def test_zero_kinetic(self):
+        """Zero kinetic term returns rest mass."""
+        assert np.isclose(kinetic_to_total_energy(0.0, 0.938), 0.938)
+
+    def test_matches_psb_convention(self):
+        """Conversion follows sqrt(p^2 + m^2) convention used by PSB."""
+        expected = np.sqrt(0.160**2 + 0.93827208816**2)
+        assert np.isclose(kinetic_to_total_energy(0.160, 0.93827208816), expected)

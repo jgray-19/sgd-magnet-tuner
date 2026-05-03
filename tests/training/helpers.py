@@ -167,7 +167,7 @@ def generate_xsuite_env_with_errors(
         corrector_table=corrector_table,
         sequence_file=accel.sequence_file,
         seq_name=accel.seq_name,
-        beam_energy=accel.beam_energy,
+        pc=accel.pc,
         strict_set=False,
     )
     return env, magnet_strengths, matched_tunes, corrector_table

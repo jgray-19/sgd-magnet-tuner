@@ -3,22 +3,23 @@
 from __future__ import annotations
 
 from math import sqrt
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from aba_optimiser.accelerators import PSB
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestPSBAccelerator:
     """Tests for the PSB accelerator class."""
 
     @pytest.fixture
-    def test_sequence_file(self, tmp_path: Path) -> Path:
-        """Create a dummy sequence file for testing."""
-        seq_file = tmp_path / "test.seq"
-        seq_file.write_text("! Dummy sequence file\n")
-        return seq_file
+    def test_sequence_file(self, data_dir: Path) -> Path:
+        """Use the psb sequence in the data directory for testing."""
+        return data_dir / "sequences" / "psb.seq"
 
     def test_init_basic(self, test_sequence_file: Path) -> None:
         """Test basic PSB initialisation."""
@@ -27,7 +28,7 @@ class TestPSBAccelerator:
         expected_energy = sqrt(0.571**2 + 0.9382720813**2)
         assert psb.ring == 1
         assert psb.sequence_file == test_sequence_file
-        assert psb.beam_energy == pytest.approx(expected_energy)
+        assert psb.pc == pytest.approx(expected_energy)
         assert psb.bpm_pattern == "^BR1%.BPM"
         assert psb.optimise_quadrupoles is False
         assert psb.optimise_energy is False
@@ -62,7 +63,7 @@ class TestPSBAccelerator:
         )
 
         assert psb.get_supported_knob_specs() == [
-            ("quadrupole", "k1", "^BR%.Q(FO%d+|DE%d+)$", True, True),
+            ("quadrupole", "k1", "^BR%.Q(FO%d+|DE%d+)$", "k1", True),
         ]
 
     def test_get_perturbation_families(self, test_sequence_file: Path) -> None:
@@ -96,8 +97,8 @@ class TestPSBAccelerator:
     def test_tune_configuration(self, test_sequence_file: Path) -> None:
         """Test PSB tune variable names and integer tunes."""
         psb = PSB(ring=1, sequence_file=test_sequence_file)
-        assert psb.get_tune_variables() == ("kBRQF", "kBRQD")
-        assert psb.get_tune_integers() == (4, 4)
+        assert psb.tune_variables == ("kBRQF", "kBRQD")
+        assert psb.tune_integers == (4, 4)
 
     def test_has_any_optimisation(self, test_sequence_file: Path) -> None:
         """Test generic optimisation flags work for PSB."""

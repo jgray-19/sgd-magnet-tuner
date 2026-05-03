@@ -61,9 +61,10 @@ def _boundary_turns_for_track(track_turns: list[int], margin: int) -> list[int]:
 def _distribute_target_batches_by_file(
     turns_by_file: dict[int, list[int]],
     tracks_per_worker: int,
-    num_batches: int,
+    num_turn_batches: int,
+    per_worker_batches: int,
 ) -> tuple[dict[int, int], bool, int]:
-    """Allocate target batch counts per file for a given global batch budget.
+    """Allocate target turn-batch counts per file for worker assignment.
 
     Returns:
         target_batches_by_file: number of batches to draw from each file
@@ -73,9 +74,18 @@ def _distribute_target_batches_by_file(
     file_ids = sorted(turns_by_file.keys())
     target_batches_by_file = {file_idx: 0 for file_idx in file_ids}
 
-    batches_to_assign = max(0, num_batches)
-    total_available_turns = sum(len(turns_by_file[file_idx]) for file_idx in file_ids)
-    batches_to_assign = min(batches_to_assign, total_available_turns)
+    if per_worker_batches <= 0:
+        raise ValueError(f"per_worker_batches must be positive, got {per_worker_batches}")
+    if tracks_per_worker < per_worker_batches:
+        raise ValueError(
+            f"tracks_per_worker={tracks_per_worker} must be >= per_worker_batches={per_worker_batches}"
+        )
+
+    batches_to_assign = max(0, num_turn_batches)
+    total_available_batches = sum(
+        len(turns_by_file[file_idx]) // per_worker_batches for file_idx in file_ids
+    )
+    batches_to_assign = min(batches_to_assign, total_available_batches)
 
     # First pass: spread across files to avoid starving files when budget allows it.
     while batches_to_assign > 0:
@@ -83,7 +93,10 @@ def _distribute_target_batches_by_file(
         for file_idx in file_ids:
             if batches_to_assign == 0:
                 break
-            if target_batches_by_file[file_idx] < len(turns_by_file[file_idx]):
+            if (
+                target_batches_by_file[file_idx]
+                < len(turns_by_file[file_idx]) // per_worker_batches
+            ):
                 target_batches_by_file[file_idx] += 1
                 batches_to_assign -= 1
                 assigned_in_round = True
@@ -91,7 +104,10 @@ def _distribute_target_batches_by_file(
             break
 
     min_needed_per_file = {
-        file_idx: _ceil_div(len(turns_by_file[file_idx]), tracks_per_worker)
+        file_idx: _ceil_div(
+            len(turns_by_file[file_idx]),
+            (tracks_per_worker // per_worker_batches) * per_worker_batches,
+        )
         for file_idx in file_ids
     }
     use_balanced_sizing = any(
@@ -238,10 +254,11 @@ class DataManager:
     def _build_turn_batches(
         self,
         turns_by_file: dict[int, list[int]],
-        num_batches: int,
+        num_turn_batches: int,
         tracks_per_worker: int,
+        per_worker_batches: int,
     ) -> list[list[int]]:
-        """Materialise turn batches from grouped turns under a target batch budget."""
+        """Materialise worker turn batches from grouped turns."""
         for turns in turns_by_file.values():
             random.shuffle(turns)
 
@@ -249,23 +266,28 @@ class DataManager:
             _distribute_target_batches_by_file(
                 turns_by_file,
                 tracks_per_worker,
-                num_batches,
+                num_turn_batches,
+                per_worker_batches,
             )
         )
-        if effective_num_batches != num_batches:
+        if effective_num_batches != num_turn_batches:
             LOGGER.warning(
-                "Could only allocate %d/%d target batches across files while keeping >=1 turn per batch",
+                "Could only allocate %d/%d worker turn batches across files while keeping >=1 turn per batch",
                 effective_num_batches,
-                num_batches,
+                num_turn_batches,
             )
-            num_batches = effective_num_batches
+            num_turn_batches = effective_num_batches
 
         turn_batches: list[list[int]] = []
         file_queue = deque(sorted(target_batches_by_file.keys()))
 
-        for _ in range(num_batches):
+        for _ in range(num_turn_batches):
             if not file_queue:
-                LOGGER.warning(f"Only created {len(turn_batches)}/{num_batches} batches")
+                LOGGER.warning(
+                    "Only created %d/%d worker turn batches",
+                    len(turn_batches),
+                    num_turn_batches,
+                )
                 break
 
             file_idx: int | None = None
@@ -276,20 +298,27 @@ class DataManager:
                     break
 
             if file_idx is None:
-                LOGGER.warning(f"Only created {len(turn_batches)}/{num_batches} batches")
+                LOGGER.warning(
+                    "Only created %d/%d worker turn batches",
+                    len(turn_batches),
+                    num_turn_batches,
+                )
                 break
 
             turns_left = len(turns_by_file[file_idx])
             batches_left_for_file = target_batches_by_file[file_idx]
+            max_turns_per_batch = (tracks_per_worker // per_worker_batches) * per_worker_batches
             if use_balanced_sizing:
-                batch_size = min(
-                    tracks_per_worker,
-                    _ceil_div(turns_left, batches_left_for_file),
+                batch_size = per_worker_batches * _ceil_div(
+                    _ceil_div(turns_left, per_worker_batches),
+                    batches_left_for_file,
                 )
-                batch_size = min(batch_size, turns_left - (batches_left_for_file - 1))
-                batch_size = max(1, batch_size)
+                batch_size = min(batch_size, max_turns_per_batch)
+                max_assignable = turns_left - per_worker_batches * (batches_left_for_file - 1)
+                batch_size = min(batch_size, (max_assignable // per_worker_batches) * per_worker_batches)
+                batch_size = max(per_worker_batches, batch_size)
             else:
-                batch_size = min(tracks_per_worker, turns_left)
+                batch_size = min(max_turns_per_batch, (turns_left // per_worker_batches) * per_worker_batches)
 
             batch = turns_by_file[file_idx][:batch_size]
             turns_by_file[file_idx] = turns_by_file[file_idx][batch_size:]
@@ -437,6 +466,9 @@ class DataManager:
         tracks_per_worker = self.simulation_config.tracks_per_worker
 
         num_workers = self.simulation_config.num_workers
+        num_batches = self.simulation_config.num_batches
+        if num_batches <= 0:
+            raise ValueError(f"num_batches must be positive, got {num_batches}")
         num_files = len(self.track_data)
         num_starts = len(config_manager.start_bpms)
         num_ends = len(config_manager.end_bpms)
@@ -447,22 +479,22 @@ class DataManager:
             num_ends=num_ends,
         )
         worker_budget_batches = max(1, num_workers // max(1, range_specs_per_batch))
-        requested_batches = max(self.simulation_config.num_batches, worker_budget_batches)
         max_batches_by_turn_capacity = sum(
             _ceil_div(len(turns), tracks_per_worker) for turns in turns_by_file.values()
         )
-        num_batches = requested_batches
-        max_feasible_batches = sum(len(turns) for turns in turns_by_file.values())
-        if num_batches > max_feasible_batches:
+        num_turn_batches = worker_budget_batches
+        max_feasible_batches = sum(len(turns) // num_batches for turns in turns_by_file.values())
+        if num_turn_batches > max_feasible_batches:
             LOGGER.warning(
-                "Requested %d batches but only %d turns are available. Using %d batches.",
+                "Requested %d worker turn batches but only %d batches of at least %d turns are available. Using %d batches.",
+                num_turn_batches,
+                max_feasible_batches,
                 num_batches,
                 max_feasible_batches,
-                max_feasible_batches,
             )
-            num_batches = max_feasible_batches
+            num_turn_batches = max_feasible_batches
 
-        planned_workers = num_batches * range_specs_per_batch
+        planned_workers = num_turn_batches * range_specs_per_batch
         LOGGER.info(
             "Worker planning: requested=%d workers, starts=%d, ends=%d, range_specs_per_batch=%d (%s)",
             num_workers,
@@ -472,30 +504,32 @@ class DataManager:
             range_specs_desc,
         )
         LOGGER.info(
-            "Batch planning: requested_batches=%d, turn_capacity_batches=%d, selected_batches=%d, tracks_per_worker(max)=%d, files=%d",
-            requested_batches,
+            "Turn-batch planning: worker_turn_batches=%d, per_worker_batches=%d, turn_capacity_batches=%d, selected_turn_batches=%d, tracks_per_worker(max)=%d, files=%d",
+            worker_budget_batches,
+            self.simulation_config.num_batches,
             max_batches_by_turn_capacity,
-            num_batches,
+            num_turn_batches,
             tracks_per_worker,
             num_files,
         )
-        if requested_batches < max_batches_by_turn_capacity:
+        if worker_budget_batches < max_batches_by_turn_capacity:
             LOGGER.info(
-                "Worker cap active: limiting batches to %d (turn-capacity would allow %d); some turns will remain unused.",
-                requested_batches,
+                "Worker cap active: limiting worker turn batches to %d (turn-capacity would allow %d); some turns will remain unused.",
+                worker_budget_batches,
                 max_batches_by_turn_capacity,
             )
         LOGGER.info(
-            "Planned workers from batches: %d batches x %d range specs = %d workers",
-            num_batches,
+            "Planned workers from turn batches: %d batches x %d range specs = %d workers",
+            num_turn_batches,
             range_specs_per_batch,
             planned_workers,
         )
 
         self.turn_batches = self._build_turn_batches(
             turns_by_file,
-            num_batches,
+            num_turn_batches,
             tracks_per_worker,
+            num_batches,
         )
 
         if len(self.turn_batches) == 0:

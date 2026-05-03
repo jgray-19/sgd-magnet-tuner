@@ -161,7 +161,7 @@ def test_prepare_turn_batches_respects_worker_cap_when_capacity_is_higher(
 
 
 
-def test_prepare_turn_batches_honours_explicit_num_batches_floor(
+def test_prepare_turn_batches_num_batches_does_not_inflate_worker_groups(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
@@ -169,35 +169,41 @@ def test_prepare_turn_batches_honours_explicit_num_batches_floor(
         lambda turns: None,
     )
 
-    total_turns = 12
     data_manager = DataManager(
         bpms_in_range=["BPM.1"],
         all_bpms=["BPM.1"],
         simulation_config=SimulationConfig(
             tracks_per_worker=5,
-            num_workers=1,
-            num_batches=3,
+            num_workers=60,
+            num_batches=40,
             run_arc_by_arc=True,
             use_fixed_bpm=True,
             n_run_turns=1,
         ),
         measurement_files=["file0.parquet"],
         num_bunches=1,
-        flattop_turns=total_turns,
+        flattop_turns=400,
     )
-    data_manager.track_data = {0: _make_track_df(list(range(total_turns)))}
-    data_manager.available_turns = list(range(total_turns))
-    data_manager.file_map = dict.fromkeys(range(total_turns), 0)
+    data_manager.track_data = {0: _make_track_df(list(range(400)))}
+    data_manager.available_turns = list(range(400))
+    data_manager.file_map = dict.fromkeys(range(400), 0)
 
     data_manager.prepare_turn_batches(
         SimpleNamespace(
             start_bpms=["BPM.1", "BPM.2"],
-            end_bpms=["BPM.3", "BPM.4"],
+            end_bpms=[],
         )  # ty:ignore[invalid-argument-type]
     )
 
-    assert len(data_manager.turn_batches) == 3
-    assert sorted(len(batch) for batch in data_manager.turn_batches) == [3, 3, 4]
+    assert len(data_manager.turn_batches) == 30
+    assert all(len(batch) <= 5 for batch in data_manager.turn_batches)
+    range_specs_per_batch, _ = _get_range_spec_plan(
+        run_arc_by_arc=True,
+        use_fixed_bpm=True,
+        num_starts=2,
+        num_ends=0,
+    )
+    assert len(data_manager.turn_batches) * range_specs_per_batch == 60
 
 def test_get_total_turns_uses_real_batch_sizes() -> None:
     data_manager = DataManager(
@@ -257,7 +263,7 @@ def test_distribute_target_batches_by_file_balances_when_needed() -> None:
     targets, use_balanced, effective = _distribute_target_batches_by_file(
         turns_by_file,
         tracks_per_worker=5,
-        num_batches=6,
+        num_turn_batches=6,
     )
 
     assert use_balanced is True

@@ -27,7 +27,7 @@ class MatcherConfig:
         tune_knobs: Dictionary of tune knob names to initial values
         sequence_file_path: Path to MAD-NG sequence file
         magnet_range: Range of magnets for matching (e.g., "BPM.9R2.B1/BPM.9L3.B1")
-        beam_energy: Beam energy in GeV
+        pc: Beam energy in GeV
         output_dir: Directory to save matching results
         seq_name: Sequence name in MAD-NG file
     """
@@ -39,7 +39,7 @@ class MatcherConfig:
     tune_knobs: dict[str, float]
     sequence_file_path: Path
     magnet_range: str
-    beam_energy: float = 6800.0
+    pc: float = 6800.0
     output_dir: Path | None = None
     # knob_limits: dict[str, tuple[float, float]] | None = None
 

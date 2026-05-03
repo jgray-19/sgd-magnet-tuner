@@ -188,7 +188,7 @@ def test_match_tunes(
 ):
     """Test matching tunes."""
     interface = loaded_interface
-    tune_qx, tune_qy = interface.accelerator.get_tune_variables()
+    tune_qx, tune_qy = interface.accelerator.tune_variables
     initial_knobs = {
         tune_qx: interface.mad.MADX[tune_qx],
         tune_qy: interface.mad.MADX[tune_qy],
@@ -231,7 +231,7 @@ class TestDp2pt:
         pt = interface.dp2pt(dp)
         # Compare with physics calculation
         mass = 0.938  # proton mass
-        energy = interface.mad.loaded_sequence.beam.energy
+        pc = interface.mad.loaded_sequence.beam.pc
         expected_pt = physics_dp2pt(dp, mass, energy)
         assert np.isclose(pt, expected_pt, rtol=1e-12, atol=1e-13)
 
@@ -242,7 +242,7 @@ class TestDp2pt:
         pt = interface.dp2pt(dp)
         # Compare with physics calculation
         mass = 0.938
-        energy = interface.mad.loaded_sequence.beam.energy
+        pc = interface.mad.loaded_sequence.beam.pc
         expected_pt = physics_dp2pt(dp, mass, energy)
         assert np.isclose(pt, expected_pt, rtol=1e-12, atol=1e-13)
 

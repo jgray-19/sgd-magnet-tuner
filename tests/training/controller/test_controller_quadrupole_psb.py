@@ -26,8 +26,8 @@ if TYPE_CHECKING:
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 
-PSB_TARGET_QX = 0.21
-PSB_TARGET_QY = 0.24
+PSB_TARGET_QX = 0.40
+PSB_TARGET_QY = 0.45
 PSB_TRACK_BPM_PATTERN = r"br1\.bpm.*"
 PSB_BPM_START_POINTS = [
     "BR1.BPM1L3",
@@ -38,7 +38,6 @@ PSB_BPM_START_POINTS = [
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(strict=False, reason="PSB quadrupole optimisation still under investigation")
 def test_controller_quad_opt_psb_ring1(
     tmp_path: Path,
     seq_psb: Path,
@@ -47,6 +46,8 @@ def test_controller_quad_opt_psb_ring1(
     """Run a PSB ring-1 quadrupole optimisation scenario."""
     flattop_turns = 256
     off_magnet_path = tmp_path / "track_off_magnet_psb.parquet"
+
+    print(loaded_psb_interface.run_twiss(observe=0))
     corrector_file, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
         loaded_psb_interface,
         flattop_turns,
@@ -91,7 +92,7 @@ def test_controller_quad_opt_psb_ring1(
     )
     accelerator = PSB(
         ring=1,
-        beam_energy=loaded_psb_interface.accelerator.beam_energy,
+        kinetic_energy=loaded_psb_interface.accelerator.kinetic_energy,
         sequence_file=seq_psb,
         optimise_quadrupoles=True,
     )

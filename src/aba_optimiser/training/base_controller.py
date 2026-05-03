@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
     from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.config import OptimiserConfig, SimulationConfig
+    from aba_optimiser.training.controller_config import SequenceConfig
 
 LOGGER = logging.getLogger(__name__)
 
@@ -45,13 +46,11 @@ class BaseController(ABC):
         accelerator: Accelerator,
         optimiser_config: OptimiserConfig,
         simulation_config: SimulationConfig,
-        magnet_range: str,
+        sequence_config: SequenceConfig,
         bpm_start_points: list[str],
         bpm_end_points: list[str],
         initial_knob_strengths: dict[str, float] | None = None,
         true_strengths: Path | dict[str, float] | None = None,
-        bad_bpms: list[str] | None = None,
-        first_bpm: str | None = None,
         debug: bool = False,
         optimise_knobs: list[str] | None = None,
         output_config: OutputConfig | None = None,
@@ -65,14 +64,11 @@ class BaseController(ABC):
             accelerator: Accelerator instance defining machine configuration
             optimiser_config: Gradient descent optimiser configuration
             simulation_config: Simulation and worker configuration
-            magnet_range: Magnet range specification
+            sequence_config: Sequence and BPM filtering configuration
             bpm_start_points: Start BPMs for each range
             bpm_end_points: End BPMs for each range
-            initial_knob_strengths: Initial knob strengths (absolute-space). Missing keys
-                default to 1e-7 in delta-space after conversion.
+            initial_knob_strengths: Initial knob strengths (absolute-space).
             true_strengths: True strengths (Path, dict, or None) in absolute-space
-            bad_bpms: List of bad BPMs to exclude
-            first_bpm: First BPM in the sequence
             debug: Enable debug mode
             optimise_knobs: List of global knob names to optimise, or None
             output_config: Output and logging configuration. Defaults to OutputConfig().
@@ -91,7 +87,7 @@ class BaseController(ABC):
 
         # Filter bad BPMs
         bpm_start_points, bpm_end_points = filter_bad_bpms(
-            bpm_start_points, bpm_end_points, bad_bpms
+            bpm_start_points, bpm_end_points, sequence_config.bad_bpms
         )
         LOGGER.warning(f"After filtering bad BPMs, using BPM start points: {bpm_start_points}, end points: {bpm_end_points}")
 
@@ -99,16 +95,16 @@ class BaseController(ABC):
         self.config_manager = ConfigurationManager(
             accelerator,
             simulation_config,
-            magnet_range,
+            sequence_config,
             bpm_start_points,
             bpm_end_points,
             optimise_knobs,
         )
+        mad_setup_kwargs = self._get_controller_mad_setup_kwargs()
         self.config_manager.setup_mad_interface(
-            first_bpm,
-            bad_bpms,
             debug,
             self.mad_logfile,
+            **mad_setup_kwargs,
         )
 
         # Convert user-space (absolute) inputs to internal delta-space
@@ -178,6 +174,10 @@ class BaseController(ABC):
             self.config_manager.elem_spos,
             show_plots=self.show_plots,
             accelerator=self.accelerator,
+            include_uncertainty=self.output_config.include_uncertainty,
+            plot_real_values=self.output_config.plot_real_values,
+            save_prefix=self.output_config.save_prefix,
+            plots_dir=self.output_config.plots_dir,
         )
 
     def _validate_knob_initialisation(self) -> None:
@@ -197,6 +197,10 @@ class BaseController(ABC):
                 "Knob initialisation produced an inconsistent result: "
                 f"{len(knob_names)} knob names but {len(self.initial_knobs)} initial values."
             )
+
+    def _get_controller_mad_setup_kwargs(self) -> dict:
+        """Return extra kwargs for controller-side MAD interface setup."""
+        return {}
 
     def setup_logging(self, log_suffix: str = "opt") -> SummaryWriter | None:
         """Set up TensorBoard logging.
@@ -222,30 +226,3 @@ class BaseController(ABC):
             Tuple of (final_knobs, uncertainties)
         """
         pass
-
-
-# class LHCControllerMixin:
-#     """Mixin providing LHC-specific configuration helpers."""
-
-#     @staticmethod
-#     def get_lhc_config(beam: int, sequence_path: Path | None = None) -> dict[str, str]:
-#         """Get LHC-specific configuration for a beam.
-
-#         Args:
-#             beam: Beam number (1 or 2)
-#             sequence_path: Optional custom sequence path
-
-#         Returns:
-#             Dictionary with 'sequence_file_path', 'first_bpm', and 'seq_name'
-#         """
-#         from aba_optimiser.io.utils import get_lhc_file_path
-
-#         sequence_file = str(get_lhc_file_path(beam) if sequence_path is None else sequence_path)
-#         first_bpm = "BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2"
-#         seq_name = f"lhcb{beam}"
-
-#         return {
-#             "sequence_file_path": sequence_file,
-#             "first_bpm": first_bpm,
-#             "seq_name": seq_name,
-#         }

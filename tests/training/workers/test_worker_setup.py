@@ -10,7 +10,7 @@ from aba_optimiser.training.worker_setup import WorkerRangeSpec, WorkerSetupHelp
 def _make_helper(tmp_path: Path) -> WorkerSetupHelper:
     seq_file = tmp_path / "sps.seq"
     seq_file.write_text("! Dummy SPS sequence file\n")
-    accelerator = SPS(sequence_file=seq_file, beam_energy=450.0)
+    accelerator = SPS(sequence_file=seq_file, pc=450.0)
     accelerator.infer_monitor_plane = lambda bpm: "H" if "BPH" in bpm else "V"  # type: ignore[method-assign]
     return WorkerSetupHelper(
         accelerator=accelerator,
