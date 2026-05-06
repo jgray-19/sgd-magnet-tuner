@@ -20,10 +20,11 @@ from .aba_mad_interface import (
     _DKNL_STRENGTH_ATTRS,
     AbaMadInterface,
 )
-from .knob_transform import KnobSpaceTransform
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from pymadng_utils.accelerators import Accelerator as PyMadAccelerator
 
     from aba_optimiser.accelerators import Accelerator
 
@@ -66,6 +67,16 @@ _CORRECTOR_ATTRS_BY_KIND: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 
+def _absolute_name_from_dknl_knob(knob_name: str) -> str | None:
+    if knob_name.endswith(".dk0l"):
+        return f"{knob_name[:-5]}.k0"
+    if knob_name.endswith(".dk1l"):
+        return f"{knob_name[:-5]}.k1"
+    if knob_name.endswith(".dk2l"):
+        return f"{knob_name[:-5]}.k2"
+    return None
+
+
 class GenericMadInterface(AbaMadInterface):
     """
     Generic MAD interface for all setup tasks EXCEPT knob creation.
@@ -84,7 +95,7 @@ class GenericMadInterface(AbaMadInterface):
 
     def __init__(
         self,
-        accelerator: Accelerator,
+        accelerator: PyMadAccelerator,
         magnet_range: str = "$start/$end",
         bpm_range: str | None = None,
         bad_bpms: list[str] | None = None,
@@ -156,6 +167,7 @@ class GenericMadInterface(AbaMadInterface):
 
         nbpms = None
         if replace_all_monitors_with_markers:
+            LOGGER.info("Replacing all monitors with markers for MAD tracking")
             # Setup observation and ranges
             self.observe_bpms(accelerator.bpm_pattern, bad_bpms)
             bpms_in_range, nbpms, all_bpms = self.count_bpms(self.bpm_range)
@@ -371,8 +383,6 @@ class GradientDescentMadInterface(GenericMadInterface):
             discard_mad_output,
         )
 
-        self.knob_transform = KnobSpaceTransform.empty()
-
         if accelerator.has_any_optimisation():
             # Create gradient descent knobs using accelerator-provided specs
             self._make_adj_knobs()
@@ -441,32 +451,39 @@ class GradientDescentMadInterface(GenericMadInterface):
 
         for idx, (kind, attr, condition) in enumerate(attr_conditions):
             spec = attr_specs.get(kind, {})
+            # dknl-style knobs always carry the explicit length suffix and the
+            # optimisation value is the raw deferred dknl entry.
             default_name_expr = (
-                f'e.name .. ".d{attr}"' if attr in _DKNL_STRENGTH_ATTRS else f'e.name .. ".{attr}"'
+                f'e.name .. ".d{attr}l"'
+                if attr in _DKNL_STRENGTH_ATTRS
+                else f'e.name .. ".{attr}"'
             )
             name_expr = spec.get("name_expr", default_name_expr)
             mad_value = spec.get("mad_value", f"e.{attr}")
+            tmpl = [
+                f"if {condition} then",
+                f"    local k_str_name = {name_expr}",
+                "    loaded_sequence[k_str_name] = loaded_sequence[k_str_name] or 0.0",
+            ]
             if attr in _DKNL_STRENGTH_ATTRS:
                 dknl_index = _DKNL_INDEX_BY_ATTR_LUA[attr]
-                tmpl = [
-                    f"if {condition} then",
-                    f"    local k_str_name = {name_expr}",
-                    "    loaded_sequence[k_str_name] = loaded_sequence[k_str_name] or 0.0",
+                tmpl.extend([
                     MAKE_DKNL_DEFERRED,
                     f"   loaded_sequence[e.name].dknl[{dknl_index}] = \\->loaded_sequence[k_str_name]",
-                    STORE_KNOBS,
-                    "end",
-                ]
+                ])
+            elif "knl" in attr:
+                dknl_index = int(attr[4])  # Extract index from knl[i]
+                tmpl.extend([
+                    MAKE_DKNL_DEFERRED,
+                    f"    loaded_sequence[e.name].dknl[{dknl_index}] = \\->loaded_sequence[k_str_name]",
+                ])
             else:
-                tmpl = [
-                    f"if {condition} then",
-                    f"    local k_str_name = {name_expr}",
-                    "    loaded_sequence[k_str_name] = loaded_sequence[k_str_name] or 0.0",
+                tmpl.extend([
                     f"    loaded_sequence[k_str_name] = {mad_value}",
                     f"    loaded_sequence[e.name].{attr} = \\->loaded_sequence[k_str_name]",
-                    STORE_KNOBS,
-                    "end",
-                ]
+                ])
+            tmpl.append(STORE_KNOBS)
+            tmpl.append("end")
             for line in tmpl:
                 lines.append(f"    {line}")
 
@@ -474,75 +491,15 @@ class GradientDescentMadInterface(GenericMadInterface):
             lines.append("        -- no attributes selected")
         return "\n".join(lines)
 
-    def _cache_dknl_knob_metadata(self) -> None:
-        """Cache base-strength and length metadata for dknl-native knobs."""
-        dknl_knob_to_absolute: dict[str, str] = {}
-        absolute_to_dknl_knob: dict[str, str] = {}
-        dknl_knob_base_strength: dict[str, float] = {}
-        dknl_knob_length: dict[str, float] = {}
-
-        for knob_name in self.knob_names:
-            absolute_name = KnobSpaceTransform.absolute_name_from_dknl_knob(knob_name)
-            if absolute_name is None:
-                continue
-
-            element_name, attr = absolute_name.rsplit(".", 1)
-            length = float(self.mad[f"loaded_sequence['{element_name}'].l"])
-            if length == 0.0:
-                raise ValueError(
-                    f"Cannot optimise dknl knob '{knob_name}' for zero-length element {element_name}"
-                )
-
-            base_strength = float(self.mad[f"loaded_sequence['{element_name}'].{attr}"])
-            dknl_knob_to_absolute[knob_name] = absolute_name
-            absolute_to_dknl_knob[absolute_name] = knob_name
-            dknl_knob_base_strength[knob_name] = base_strength
-            dknl_knob_length[knob_name] = length
-
-        self.knob_transform = KnobSpaceTransform(
-            dknl_knob_to_absolute=dknl_knob_to_absolute,
-            absolute_to_dknl_knob=absolute_to_dknl_knob,
-            dknl_knob_base_strength=dknl_knob_base_strength,
-            dknl_knob_length=dknl_knob_length,
-        )
-
-    def absolute_to_optimisation_knobs(self, knob_values: dict[str, float]) -> dict[str, float]:
-        """Convert absolute strengths (k0/k1/k2) to optimisation knobs (dk* where applicable)."""
-        converted = self.knob_transform.absolute_to_optimisation_knobs(knob_values)
-        return {name: value for name, value in converted.items() if name in self.knob_name_set}
-
-    def optimisation_to_absolute_knobs(self, knob_values: dict[str, float]) -> dict[str, float]:
-        """Convert optimisation knobs (dk*) back to absolute strengths for reporting/output."""
-        return self.knob_transform.optimisation_to_absolute_knobs(knob_values)
-
     def get_absolute_knob_values(self, knob_names: list[str]) -> dict[str, float]:
         """Return underlying absolute strengths for optimisation knob names.
 
-        For ``*.dk0/*.dk1/*.dk2`` knobs this returns the corresponding base
+        For ``*.dk0l/*.dk1l/*.dk2l`` knobs this returns the corresponding base
         ``*.k0/*.k1/*.k2`` element strength before any dknl perturbation. For
         direct knobs it returns the current absolute value from the sequence.
         """
-        absolute_names = self.format_knob_names_for_output(knob_names)
+        absolute_names = [_absolute_name_from_dknl_knob(knob) or knob for knob in knob_names]
         return self.get_base_magnet_strengths(absolute_names)
-
-    def format_knob_names_for_output(self, knob_names: list[str]) -> list[str]:
-        """Return output-friendly knob names (dk0/dk1/dk2 mapped to k0/k1/k2)."""
-        return self.knob_transform.format_knob_names_for_output(knob_names)
-
-    def convert_uncertainties_to_absolute(
-        self,
-        knob_names: list[str],
-        uncertainties: np.ndarray,
-    ) -> np.ndarray:
-        """Convert optimisation-space uncertainties to absolute-strength uncertainties."""
-        return self.knob_transform.convert_uncertainties_to_absolute(knob_names, uncertainties)
-
-    def optimisation_to_absolute_affine(
-        self,
-        knob_names: list[str],
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Return affine map arrays for optimisation -> absolute conversion."""
-        return self.knob_transform.optimisation_to_absolute_affine(knob_names)
 
     def _make_adj_knobs(self) -> None:
         """
@@ -578,13 +535,11 @@ end
         if self.accelerator.optimise_energy:
             mad_code += "loaded_sequence['pt'] = loaded_sequence['pt'] or 1e-6\n"
             mad_code += 'table.insert(knob_names, "pt")\n'
-
         mad_code += f"""
 coord_names = {{"x", "px", "y", "py", "t", "pt"}}
 {self.py_name}:send(knob_names, true)
 {self.py_name}:send(spos_list, true)
         """
-
         self.mad.send(mad_code)
         knob_names_all: list[str] = self.mad.recv()
         elem_spos_all: list[float] = self.mad.recv()
@@ -608,7 +563,6 @@ coord_names = {{"x", "px", "y", "py", "t", "pt"}}
 
         self.knob_name_set = set(self.knob_names)
         self.mad["knob_names"] = self.knob_names
-        self._cache_dknl_knob_metadata()
 
         if self.elem_spos:
             LOGGER.info(

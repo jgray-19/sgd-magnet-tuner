@@ -1,10 +1,6 @@
 """Repository-specific MAD-NG interface extensions.
 
 This module builds on shared classes from ``pymadng-utils``:
-- ``CoreMadInterface``: minimal common API.
-- ``AcDipoleMadInterface``: optional AC dipole extension.
-
-``AbaMadInterface`` adds repository-only helper methods.
 """
 
 from __future__ import annotations
@@ -15,15 +11,26 @@ from typing import TYPE_CHECKING
 from pymadng_utils.mad.knob_mad_interface import KnobMadInterface
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from aba_optimiser.accelerators import Accelerator
 
 logger = logging.getLogger(__name__)
 
-_MAGNET_STRENGTH_SUFFIXES = {".k0", ".k1", ".k2", ".kick"}
-_DKNL_INDEX_BY_ATTR_LUA = {"k0": 1, "k1": 2, "k2": 3}
+_MAGNET_STRENGTH_SUFFIXES = {
+    ".k0",
+    ".k1",
+    ".k2",
+    ".kick",
+    ".dk0l",
+    ".dk1l",
+    ".dk2l",
+    ".dy",
+    ".dx",
+}
+
+# Only explicit dknl attributes are supported (dkNl). Do not accept legacy dkN.
+_DKNL_INDEX_BY_ATTR_LUA = {"k0": 1, "k1": 2, "k2": 3, "dk0l": 1, "dk1l": 2, "dk2l": 3}
 _DKNL_STRENGTH_ATTRS = frozenset(_DKNL_INDEX_BY_ATTR_LUA)
+_MISALIGN_ATTRS = frozenset({"dx", "dy"})
 
 
 class AbaMadInterface(KnobMadInterface):
@@ -45,51 +52,70 @@ end
     def _set_dknl_component(self, element_name: str, attr: str, delta_strength: float) -> None:
         """Store a strength delta in one dknl component."""
         dknl_index = _DKNL_INDEX_BY_ATTR_LUA[attr]
-        if float(self.mad[f"loaded_sequence['{element_name}'].l"]) == 0.0:
-            raise ValueError(f"Cannot set dknl delta for element {element_name} with zero length")
-
         self._add_deferred_dknl(element_name)
 
         self.mad.send(f"""
-loaded_sequence['{element_name}'].dknl[{dknl_index}] = {self.py_name}:recv() * loaded_sequence['{element_name}'].l
+loaded_sequence['{element_name}'].dknl[{dknl_index}] = {self.py_name}:recv()
         """)
         self.mad.send(delta_strength)
 
+    def _set_misalignment(self, element_name: str, attr: str, value: float) -> None:
+        """Set a misalignment value, ensuring the misalign attribute is set up to store it."""
+        if not self.mad[f"loaded_sequence['{element_name}'].misalign"]:
+            self.mad[f"loaded_sequence['{element_name}'].misalign"] = []
+        self.mad[f"loaded_sequence['{element_name}'].misalign.{attr}"] = value
+
+    def _get_misalignment(self, element_name: str, attr: str) -> float:
+        """Get a misalignment value, returning 0.0 if not set."""
+        if not self.mad[f"loaded_sequence['{element_name}'].misalign"]:
+            return 0.0
+        return float(self.mad[f"loaded_sequence['{element_name}'].misalign.{attr}"])
+
     def _get_effective_element_strength(self, element_name: str, attr: str) -> float:
         """Return the effective element strength, including dknl perturbations."""
+        if attr in _MISALIGN_ATTRS:
+            return self._get_misalignment(element_name, attr)
+
         if attr not in _DKNL_STRENGTH_ATTRS:
             return self.mad[f"loaded_sequence['{element_name}'].{attr}"]
-
-        if self.mad[f"loaded_sequence['{element_name}'].l"] == 0.0:
-            raise ValueError(
-                f"Cannot get effective strength for element {element_name} with zero length"
-            )
 
         # This will pass if the dknl table is empty (not created yet)
         if len(self.mad.loaded_sequence[element_name].dknl) == 0:
             return self.mad[f"loaded_sequence['{element_name}'].{attr}"]
 
         dknl_index = _DKNL_INDEX_BY_ATTR_LUA[attr]
+        if attr.startswith("d"):
+            return float(self.mad[f"loaded_sequence['{element_name}'].dknl[{dknl_index}]"])
+
+        main_attr = attr[1:-1] if attr.startswith("d") else attr
         self.mad.send(f"""
-local l, dknl, {attr} in loaded_sequence['{element_name}']
-{self.py_name}:send({attr} + dknl[{dknl_index}] / l)
+local dknl, {main_attr} in loaded_sequence['{element_name}']
+{self.py_name}:send({main_attr} + dknl[{dknl_index}])
         """)
         return self.mad.recv()
 
     def _get_base_element_strength(self, element_name: str, attr: str) -> float:
         """Return the underlying element strength without any dknl perturbation applied."""
-        return float(self.mad[f"loaded_sequence['{element_name}'].{attr}"])
+        # Try getting the kN value directly, otherwise get the knl[N+1] value
+        if self.mad[f"loaded_sequence['{element_name}'].{attr}"] is not None:
+            return float(self.mad[f"loaded_sequence['{element_name}'].{attr}"])
+        return float(self.mad[f"loaded_sequence['{element_name}'].knl[{_DKNL_INDEX_BY_ATTR_LUA[attr]}]"])
 
     def _set_effective_element_strength(
         self, element_name: str, attr: str, target_strength: float
     ) -> None:
-        """Set an element strength, routing k0/k1/k2 through dknl."""
+        """Set an element strength, routing k0/k1/k2 or dk0/dk1/dk2 through dknl."""
         if attr not in _DKNL_STRENGTH_ATTRS:
             self.mad[f"loaded_sequence['{element_name}'].{attr}"] = target_strength
             return
 
-        base_strength = float(self.mad[f"loaded_sequence['{element_name}'].{attr}"])
-        self._set_dknl_component(element_name, attr, float(target_strength) - base_strength)
+        if "d" in attr:
+            delta_strength = float(target_strength)
+        else:
+            delta_strength = float(target_strength) - float(
+                self.mad[f"loaded_sequence['{element_name}'].{attr}"]
+            )
+        self._set_dknl_component(element_name, attr, delta_strength)
 
     def set_magnet_strengths(self, strengths: dict[str, float]) -> None:
         """Set magnet strengths, storing quadrupole updates in dknl."""
@@ -103,7 +129,9 @@ local l, dknl, {attr} in loaded_sequence['{element_name}']
                 )
 
             magnet_name, attr = name.rsplit(".", 1)
-            if attr in _DKNL_STRENGTH_ATTRS:
+            if attr in _MISALIGN_ATTRS:
+                self._set_misalignment(magnet_name, attr, strength)
+            elif attr in _DKNL_STRENGTH_ATTRS:
                 self._set_effective_element_strength(magnet_name, attr, strength)
             else:
                 direct_variables[f"loaded_sequence['{magnet_name}'].{attr}"] = strength
