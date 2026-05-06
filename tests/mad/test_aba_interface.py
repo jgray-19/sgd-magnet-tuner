@@ -232,7 +232,7 @@ class TestDp2pt:
         # Compare with physics calculation
         mass = 0.938  # proton mass
         pc = interface.mad.loaded_sequence.beam.pc
-        expected_pt = physics_dp2pt(dp, mass, energy)
+        expected_pt = physics_dp2pt(dp, mass, pc=pc)
         assert np.isclose(pt, expected_pt, rtol=1e-12, atol=1e-13)
 
     def test_negative_dp(self, loaded_interface: AbaMadInterface):
@@ -243,7 +243,7 @@ class TestDp2pt:
         # Compare with physics calculation
         mass = 0.938
         pc = interface.mad.loaded_sequence.beam.pc
-        expected_pt = physics_dp2pt(dp, mass, energy)
+        expected_pt = physics_dp2pt(dp, mass, pc=pc)
         assert np.isclose(pt, expected_pt, rtol=1e-12, atol=1e-13)
 
     def test_high_energy_approximation(self, loaded_interface: AbaMadInterface):
@@ -308,7 +308,7 @@ def test_get_bpm_list(loaded_interface: AbaMadInterface, end_num: int) -> None:
     interface = loaded_interface
 
     # Set up BPM observation
-    interface.observe_elements("BPM")
+    interface.observe("BPM")
 
     # Test getting BPM list for a range
     start_num = 9
