@@ -162,7 +162,7 @@ class OpticsController(BaseController):
         return self.final_knobs, dict(zip(self.final_knobs.keys(), uncertainties, strict=False))
 
     def _deltas_to_abs(self) -> dict[str, float]:
-        """Convert internal delta-space optics results to absolute-space output."""
+        """Keep optics optimisation results in optimisation space."""
         initial_knobs_delta = dict(
             zip(
                 self.config_manager.knob_names,
@@ -173,30 +173,20 @@ class OpticsController(BaseController):
         if self.final_knobs is None:
             self.final_knobs = self.optimisation_loop.best_knobs
 
-        initial_knobs_abs = self.config_manager.mad_iface.optimisation_to_absolute_knobs(
-            initial_knobs_delta
-        )
-        self.final_knobs = self.config_manager.mad_iface.optimisation_to_absolute_knobs(
-            self.final_knobs
-        )
-        self.filtered_true_strengths = self.config_manager.mad_iface.optimisation_to_absolute_knobs(
-            self.filtered_true_strengths
-        )
-        return initial_knobs_abs
+        self.final_knobs = self.final_knobs.copy()
+        self.filtered_true_strengths = self.filtered_true_strengths.copy()
+        return initial_knobs_delta
 
     def _save_results(
         self,
         initial_knobs_abs: dict[str, float],
         writer,
     ) -> np.ndarray:
-        """Save optics optimisation results in user-facing absolute space."""
+        """Save optics optimisation results in optimisation space."""
         if writer is not None:
             writer.close()
 
-        uncertainties_abs = self.config_manager.mad_iface.convert_uncertainties_to_absolute(
-            self.config_manager.knob_names,
-            np.zeros(len(self.config_manager.knob_names), dtype=np.float64),
-        )
+        uncertainties_abs = np.zeros(len(self.config_manager.knob_names), dtype=np.float64)
         output_knob_names = self.result_manager.knob_names
         initial_strengths_abs = np.array(
             [initial_knobs_abs[name] for name in output_knob_names], dtype=np.float64

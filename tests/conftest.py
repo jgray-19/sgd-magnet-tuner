@@ -57,7 +57,7 @@ def seq_sps(data_dir: Path) -> Path:
 @pytest.fixture(scope="session")
 def seq_psb(data_dir: Path) -> Path:
     """Path to a PSB sequence file for integration tests."""
-    return data_dir / "sequences" / "psb.seq"
+    return data_dir / "sequences" / "psb1.seq"
 
 
 @pytest.fixture(scope="session")
@@ -113,7 +113,7 @@ def corrector_table(corrector_file: Path) -> tfs.TfsDataFrame:
 @pytest.fixture(scope="function")
 def loaded_interface(seq_b1: Path) -> Generator[AbaMadInterface, None, None]:
     """Create a fresh AbaMadInterface for each test."""
-    iface = AbaMadInterface(accelerator=LHC(beam=1, sequence_file=seq_b1, beam_energy=6800.0))
+    iface = AbaMadInterface(accelerator=LHC(beam=1, sequence_file=seq_b1, pc=6800.0))
     yield iface
     with contextlib.suppress(Exception):
         del iface
@@ -122,7 +122,7 @@ def loaded_interface(seq_b1: Path) -> Generator[AbaMadInterface, None, None]:
 @pytest.fixture(scope="function")
 def loaded_sps_interface(seq_sps: Path) -> Generator[AbaMadInterface, None, None]:
     """Fixture that returns an interface with SPS sequence loaded and beam set up."""
-    iface = AbaMadInterface(accelerator=SPS(sequence_file=seq_sps, beam_energy=450.0))
+    iface = AbaMadInterface(accelerator=SPS(sequence_file=seq_sps, pc=450.0))
     yield iface
     with contextlib.suppress(Exception):
         del iface
@@ -142,7 +142,7 @@ def beam2_interface(interface: AbaMadInterface, seq_b2: Path) -> AbaMadInterface
     """Fixture that returns an interface with the example sequence loaded and beam set up."""
     interface.accelerator = LHC(beam=2, sequence_file=seq_b2)
     interface.load_sequence(seq_b2, "lhcb2")
-    interface.setup_beam(particle="proton", beam_energy=6800.0)
+    interface.setup_beam(particle="proton", pc=6800.0)
     return interface
 
 

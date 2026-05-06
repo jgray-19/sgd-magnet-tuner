@@ -14,7 +14,7 @@ import tfs
 pytest.importorskip("tmom_recon")
 
 from aba_optimiser.accelerators import LHC
-from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
+from aba_optimiser.mad.optimising_mad_interface import GradientDescentMadInterface
 from aba_optimiser.matching.matcher import BetaMatcher
 from aba_optimiser.matching.matcher_config import MatcherConfig
 from tests.training.helpers import (
@@ -157,10 +157,16 @@ def test_matcher_beta_correction(
     for tune_knob in matched_tunes:
         assert tune_knob in final_knobs, f"Tune knob {tune_knob} not found in final knobs"
 
-    # Compute twiss with estimated strengths + final knobs using AbaMadInterface
+    # Compute twiss with estimated strengths + final knobs using the optimisation interface
     # This includes both beta and tune knobs
-    new_interface = AbaMadInterface(accelerator=LHC(beam=1, sequence_file=seq_b1))
-    new_interface.set_magnet_strengths(all_estimates)  # Apply estimated strengths
+    new_interface = GradientDescentMadInterface(
+        accelerator=LHC(
+            beam=1,
+            sequence_file=seq_b1,
+            custom_knobs_to_optimise=list(all_estimates),
+        )
+    )
+    new_interface.update_knob_values(all_estimates)
     new_interface.set_madx_variables(**final_knobs)  # Apply correction knobs
     new_interface.observe_elements()
     tws_corrected = new_interface.run_twiss(observe=1)  # Observe

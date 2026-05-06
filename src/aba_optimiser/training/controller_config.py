@@ -6,9 +6,12 @@ individual arguments passed to controller constructors.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -22,6 +25,10 @@ class SequenceConfig:
     magnet_range: str
     first_bpm: str | None = None
     bad_bpms: list[str] | None = None
+
+    def log_state(self) -> None:
+        """Log the current sequence config settings."""
+        logger.info("SequenceConfig: %s", self)
 
 
 @dataclass
@@ -67,6 +74,10 @@ class MeasurementConfig:
                 )
         return self
 
+    def log_state(self) -> None:
+        """Log the current measurement config settings."""
+        logger.info("MeasurementConfig: %s", self)
+
 
 @dataclass
 class OutputConfig:
@@ -105,6 +116,10 @@ class OutputConfig:
             return
         if self.parallel_hessian < 1:
             raise ValueError("parallel_hessian must be a positive integer, True, or False")
+
+    def log_state(self) -> None:
+        """Log the current output config settings."""
+        logger.info("OutputConfig: %s", self)
 
 
 @dataclass

@@ -11,7 +11,7 @@ import tfs
 from xtrack_tools.env import initialise_env
 
 from aba_optimiser.accelerators import LHC
-from aba_optimiser.mad import AbaMadInterface, GenericMadInterface
+from aba_optimiser.mad import AbaMadInterface, GenericMadInterface, GradientDescentMadInterface
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -194,5 +194,11 @@ def get_twiss_without_errors(
     )
     convert_rbends_to_true_rbends(mad)
     if estimated_magnets is not None:
-        mad.set_magnet_strengths(estimated_magnets)
+        gradient = GradientDescentMadInterface(
+            accelerator,
+            corrector_strengths=corrector_file,
+            tune_knobs_file=tune_knobs_file,
+        )
+        gradient.update_knob_values(estimated_magnets)
+        mad = gradient
     return mad.run_twiss(observe=int(just_bpms))

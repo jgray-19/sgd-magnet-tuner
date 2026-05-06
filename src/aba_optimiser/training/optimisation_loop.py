@@ -55,7 +55,7 @@ class OptimisationLoop:
         self.smoothed_grad_norm: float = 0.0
         self.smoothed_loss_change: float = 0.0
         self.grad_norm_alpha = optimiser_config.grad_norm_alpha
-        self.expected_rel_error_abs = optimiser_config.expected_rel_error
+        self.expected_rel_error_opt = optimiser_config.expected_rel_error
         self.max_clipping_ratio: float = 0.0  # Track max clipping ratio per epoch
 
         # Track best knobs and loss for rejection logic
@@ -104,14 +104,10 @@ class OptimisationLoop:
 
         self.dopt_dabs = 1.0 / self.dabs_dopt
 
-        # Convert user-space relative tolerance (absolute space) into an internal
-        # optimisation-space relative tolerance scalar.
-        self.expected_rel_error = self._transform_expected_rel_error_to_optimisation_space(
-            initial_strengths
-        )
+        self.expected_rel_error = self.expected_rel_error_opt
 
         # Per-parameter floor in optimisation space to avoid vanishing limits near zero.
-        # Use a stable baseline mapped from absolute-space, not only current delta values.
+        # Use a stable baseline in optimisation space, not only current delta values.
         baseline_opt_scale = np.maximum(
             np.abs(self.abs_offsets * self.dopt_dabs),
             np.abs(self.dopt_dabs) * self.absolute_param_floor,
@@ -128,7 +124,6 @@ class OptimisationLoop:
             )
             LOGGER.info(
                 "Per-parameter trust region enabled: "
-                f"rel_sigma_total_abs={self.expected_rel_error_abs:.3e}, "
                 f"rel_sigma_total_opt={self.expected_rel_error:.3e}, "
                 f"rel_sigma_step={self.rel_sigma_step:.3e}, "
                 f"steps={self.total_steps}, safety={self.trust_region_safety:g}"
@@ -136,37 +131,6 @@ class OptimisationLoop:
         else:
             LOGGER.info("Per-parameter trust region disabled")
             self.rel_sigma_step = 0.0
-
-    def _transform_expected_rel_error_to_optimisation_space(
-        self,
-        initial_strengths: np.ndarray,
-    ) -> float:
-        """Map user absolute-space relative tolerance to optimisation-space scalar.
-
-        The user config is defined in absolute strength space. Internally we optimise
-        in optimisation space (e.g. dknl), so we convert to an equivalent scalar by
-        evaluating per-parameter local scale factors at the initial point and taking
-        a robust median across knobs.
-        """
-        if self.expected_rel_error_abs <= 0:
-            return 0.0
-
-        # Reference scales are defined around the absolute baseline (offset), not
-        # the current delta values, to avoid exploding conversions near dk~=0.
-        abs_scale = np.maximum(np.abs(self.abs_offsets), self.absolute_param_floor)
-        opt_scale = np.maximum(
-            np.abs(self.abs_offsets * self.dopt_dabs),
-            np.abs(self.dopt_dabs) * self.absolute_param_floor,
-        )
-
-        with np.errstate(divide="ignore", invalid="ignore"):
-            conversion = abs_scale * np.abs(self.dopt_dabs) / opt_scale
-        conversion = np.nan_to_num(conversion, nan=1.0, posinf=1.0, neginf=1.0)
-
-        # Keep conversion robust to outlier knobs with unusual local scaling.
-        conversion = np.clip(conversion, 1e-2, 1e2)
-
-        return float(self.expected_rel_error_abs * np.median(conversion))
 
     def _init_optimiser(self, shape: tuple[int, ...], optimiser_type: str) -> None:
         """Initialise the optimiser based on type."""

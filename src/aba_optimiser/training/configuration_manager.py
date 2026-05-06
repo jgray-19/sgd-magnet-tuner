@@ -137,14 +137,23 @@ class ConfigurationManager:
     ) -> tuple[dict[str, float], dict[str, float]]:
         """Initialise knob strengths from MAD and filter true strengths.
 
-        All inputs must be in delta-space (internal optimisation space).
+        All inputs must be in optimisation space.
         Missing keys in provided_initial_knobs default to 1e-7 to avoid flat starts.
         """
         if self.mad_iface is None:
             raise ValueError("MAD interface must be setup first")
 
+        knob_name_set = set(self.knob_names)
+
         if provided_initial_knobs is not None:
-            # Use provided initial knobs (in delta-space) where available.
+            unknown_initial = sorted(set(provided_initial_knobs) - knob_name_set)
+            if unknown_initial:
+                raise ValueError(
+                    "Unknown optimisation knob names supplied for initialisation: "
+                    + ", ".join(unknown_initial[:10])
+                    + ("..." if len(unknown_initial) > 10 else "")
+                )
+            # Use provided initial knobs (in optimisation space) where available.
             LOGGER.info("Using provided initial knob strengths from previous optimisation")
             full_initial_knobs = {
                 knob_name: provided_initial_knobs.get(knob_name, 0) for knob_name in self.knob_names
@@ -161,6 +170,13 @@ class ConfigurationManager:
             LOGGER.warning("No true strengths provided, skipping filtering")
             filtered_true_strengths = {}
         else:
+            unknown_true = sorted(set(true_strengths) - knob_name_set)
+            if unknown_true:
+                raise ValueError(
+                    "Unknown optimisation knob names supplied as true strengths: "
+                    + ", ".join(unknown_true[:10])
+                    + ("..." if len(unknown_true) > 10 else "")
+                )
             filtered_true_strengths = {knob: true_strengths[knob] for knob in self.knob_names}
         return current_knobs, filtered_true_strengths
 

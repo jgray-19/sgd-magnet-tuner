@@ -224,7 +224,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         )
         root_logger.addHandler(file_handler)
 
-        LOGGER.warning(
+        LOGGER.debug(
             "Worker %s Python logging attached to %s",
             self.worker_id,
             worker_logfile,

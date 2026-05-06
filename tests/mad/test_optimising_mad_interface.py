@@ -36,10 +36,10 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-def _spec_key(spec: tuple[str, str, str, bool]) -> str:
+def _spec_key(spec: tuple[str, str, str, str | None]) -> str:
     """Build a stable comparable key for a single knob specification."""
-    kind, attr, pattern, zero_check = spec
-    return f"{kind}:{attr}:{pattern}:{int(zero_check)}"
+    kind, attr, pattern, nonzero_attr = spec
+    return f"{kind}:{attr}:{pattern}:{nonzero_attr or ''}"
 
 
 def _expected_lhc_knob_spec_keys(
@@ -54,18 +54,18 @@ def _expected_lhc_knob_spec_keys(
     """Return expected ordered knob-spec keys for LHC optimisation flags."""
     expected: list[str] = []
     if optimise_bends:
-        expected.append(_spec_key(("sbend", "k0", LHC.PATTERN_MAIN_BEND, True)))
+        expected.append(_spec_key(("sbend", "k0", LHC.PATTERN_MAIN_BEND, "k0")))
     if optimise_quadrupoles:
-        expected.append(_spec_key(("quadrupole", "k1", LHC.PATTERN_MAIN_QUAD, True)))
+        expected.append(_spec_key(("quadrupole", "k1", LHC.PATTERN_MAIN_QUAD, "k1")))
     if optimise_other_quadrupoles:
-        expected.append(_spec_key(("quadrupole", "k1", LHC.PATTERN_QUAD_NON_TUNE, True)))
+        expected.append(_spec_key(("quadrupole", "k1", LHC.PATTERN_QUAD_NON_TUNE, "k1")))
     if optimise_correctors:
-        expected.append(_spec_key(("hkicker", "kick", LHC.PATTERN_CORRECTOR, False)))
-        expected.append(_spec_key(("vkicker", "kick", LHC.PATTERN_CORRECTOR, False)))
+        expected.append(_spec_key(("hkicker", "kick", LHC.PATTERN_CORRECTOR, None)))
+        expected.append(_spec_key(("vkicker", "kick", LHC.PATTERN_CORRECTOR, None)))
     if optimise_quad_dx:
-        expected.append(_spec_key(("quadrupole", "dx", LHC.PATTERN_QUAD_DISPLACEMENT, False)))
+        expected.append(_spec_key(("quadrupole", "dx", LHC.PATTERN_QUAD_DISPLACEMENT, None)))
     if optimise_quad_dy:
-        expected.append(_spec_key(("quadrupole", "dy", LHC.PATTERN_QUAD_DISPLACEMENT, False)))
+        expected.append(_spec_key(("quadrupole", "dy", LHC.PATTERN_QUAD_DISPLACEMENT, None)))
     return expected
 
 
@@ -577,17 +577,16 @@ def test_quadrupole_knob_updates_use_dknl(seq_b1: Path) -> None:
         discard_mad_output=True,
     )
 
-    knob_name = next(knob for knob in interface.knob_names if knob.endswith(".dk1"))
-    element_name = knob_name.removesuffix(".dk1")
+    knob_name = next(knob for knob in interface.knob_names if knob.endswith(".dk1l"))
+    element_name = knob_name.removesuffix(".dk1l")
     absolute_name = f"{element_name}.k1"
     initial_strength_base = interface.get_base_magnet_strengths([absolute_name])[absolute_name]
     initial_strength = interface.get_magnet_strengths([absolute_name])[absolute_name]
     assert np.isclose(initial_strength, initial_strength_base)
     initial_k1 = float(interface.mad.loaded_sequence[element_name].k1)
 
-    element_length = float(interface.mad.loaded_sequence[element_name].l)
     step = 1e-4
-    interface.mad.send(f"loaded_sequence['{knob_name}'] = {step * element_length}")
+    interface.mad.send(f"loaded_sequence['{knob_name}'] = {step}")
 
     updated_strength = interface.get_magnet_strengths([absolute_name])[absolute_name]
     updated_k1 = float(interface.mad.loaded_sequence[element_name].k1)
@@ -595,7 +594,7 @@ def test_quadrupole_knob_updates_use_dknl(seq_b1: Path) -> None:
 
     assert np.isclose(updated_strength, initial_strength + step)
     assert np.isclose(updated_k1, initial_k1)
-    assert np.isclose(updated_dknl, step * element_length)
+    assert np.isclose(updated_dknl, step)
 
     interface.set_magnet_strengths({absolute_name: initial_strength_base})
     final_strength = interface.get_magnet_strengths([absolute_name])[absolute_name]
