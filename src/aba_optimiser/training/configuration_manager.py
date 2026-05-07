@@ -172,12 +172,15 @@ class ConfigurationManager:
         else:
             unknown_true = sorted(set(true_strengths) - knob_name_set)
             if unknown_true:
-                raise ValueError(
-                    "Unknown optimisation knob names supplied as true strengths: "
-                    + ", ".join(unknown_true[:10])
-                    + ("..." if len(unknown_true) > 10 else "")
+                LOGGER.warning(
+                    "Ignoring %d true strengths outside the optimisation range: %s%s",
+                    len(unknown_true),
+                    ", ".join(unknown_true[:10]),
+                    "..." if len(unknown_true) > 10 else "",
                 )
-            filtered_true_strengths = {knob: true_strengths[knob] for knob in self.knob_names}
+            filtered_true_strengths = {
+                knob: true_strengths[knob] for knob in self.knob_names if knob in true_strengths
+            }
         return current_knobs, filtered_true_strengths
 
     def calculate_n_data_points(self) -> dict[tuple[str, str], int]:

@@ -35,17 +35,15 @@ class OptimiserConfig:
     # Gradient smoothing for loss tracking
     grad_norm_alpha: float = field(default=0.2)
 
-    # Per-parameter trust region: relative step limit per update
-    # Constrains each parameter update: |Δp_i| <= expected_rel_error * max(|p_i|, param_floor)
-    # This enforces per-step bounds independent of optimizer-proposed step size.
-    # Set to 0 to disable trust region (use optimizer step directly).
-    expected_rel_error: float = field(default=18e-4)
-
     # Computed fields
     decay_epochs: int = field(init=False)
 
     def __post_init__(self):
         self.decay_epochs = self.max_epochs - self.warmup_epochs
+
+    def log_state(self) -> None:
+        """Log the current optimiser config settings."""
+        logger.info("OptimiserConfig: %s", self)
 
 
 @dataclass
@@ -111,6 +109,10 @@ class SimulationConfig:
         if self.n_run_turns < 1:
             raise ValueError("SimulationConfig.n_run_turns must be >= 1")
         self.total_tracks = self.tracks_per_worker * self.num_workers
+
+    def log_state(self) -> None:
+        """Log the current simulation config settings."""
+        logger.info("SimulationConfig: %s", self)
 
 
 # In the future, mode needs to be removed, instead it needs to be a flexible code that can set which parameters will be optimised on the fly.

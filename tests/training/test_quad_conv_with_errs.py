@@ -130,7 +130,6 @@ def _make_optimiser_config_bend() -> OptimiserConfig:
         min_lr=4e-7,
         gradient_converged_value=1e-10,
         optimiser_type="adam",
-        expected_rel_error=1e-3,
     )
 
 
@@ -177,7 +176,7 @@ def test_controller_bend_opt_simple(
     ac_dipole_model = ACDipoleMadDriver(
         sequence_file=seq_b1,
         beam=1,
-        pc=6800.0,
+        kinetic_energy=6800.0,
         deltap=0.0,
         observed_elements=loaded_interface.accelerator.get_ac_dipole_marker(),
         discard_mad_output=True,
@@ -270,9 +269,6 @@ def test_controller_bend_opt_simple(
             bunches_per_file=1,
         )
 
-        plots_dir_name = magnet_range.replace("/", "_").replace(".", "_")
-        plots_dir = tmp_path / f"plots_{plots_dir_name}"
-
         ctrl = Controller(
             accelerator=lhc_accelerator,
             optimiser_config=optimiser_config,
@@ -281,10 +277,7 @@ def test_controller_bend_opt_simple(
             measurement_config=measurement_config,
             bpm_start_points=start_points,
             bpm_end_points=end_points,
-            output_config=OutputConfig(
-                show_plots=False,
-                plots_dir=plots_dir,
-            ),
+            output_config=OutputConfig(),
             true_strengths=magnet_strengths,
             debug=True,
         )

@@ -26,7 +26,7 @@ def get_beam_beta(mass, energy):
     return sqrt(beta0_sq)
 
 
-def dp2pt(dp, mass, energy):
+def dp2pt(dp, mass, energy = None, pc = None):
     """Convert relative momentum deviation dp/p to transverse momentum pt/p.
 
     Parameters
@@ -37,12 +37,18 @@ def dp2pt(dp, mass, energy):
         Particle rest mass in GeV/c².
     energy : float
         Total particle energy in GeV.
+    pc : float
+        Canonical momentum in GeV.
 
     Returns
     -------
     float
         Transverse momentum relative to total momentum (pt/p, dimensionless).
     """
+    if energy is None and pc is not None:
+        energy = kinetic_to_total_energy(pc, mass)
+    elif energy is None:
+        raise ValueError("Either energy or pc must be provided")
     if dp == 0:
         LOGGER.debug("dp2pt: dp is zero, returning 0.0")
         return 0.0

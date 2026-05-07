@@ -60,6 +60,7 @@ class WorkerRuntimeMetadata:
     """Controller-side metadata retained for screening and diagnostics."""
 
     worker_id: int
+    file_idx: int
     start_bpm: str
     end_bpm: str
     sdir: int
@@ -330,6 +331,7 @@ class WorkerSetupHelper:
     @staticmethod
     def make_runtime_metadata(
         worker_id: int,
+        file_idx: int,
         config: WorkerConfig,
         bpm_names: list[str],
         n_run_turns: int,
@@ -337,6 +339,7 @@ class WorkerSetupHelper:
         """Return the metadata needed after a worker has started."""
         return WorkerRuntimeMetadata(
             worker_id=worker_id,
+            file_idx=file_idx,
             start_bpm=config.start_bpm,
             end_bpm=config.end_bpm,
             sdir=config.sdir,

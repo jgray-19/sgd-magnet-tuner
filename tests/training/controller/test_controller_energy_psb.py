@@ -53,7 +53,6 @@ def test_controller_energy_opt_psb(
         max_lr=2e-6,
         min_lr=2e-6,
         gradient_converged_value=5e-11,
-        expected_rel_error=0,
     )
 
     estimate, unc = _run_energy_optimisation_case(

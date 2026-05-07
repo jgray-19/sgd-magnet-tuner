@@ -39,19 +39,23 @@ local spos_list = {}
 local used = {}
 """
 
-MAKE_DKNL_DEFERRED = """
-\tif not MAD.typeid.is_deferred(loaded_sequence[e.name].dknl) then
-\t    loaded_sequence[e.name].dknl = MAD.typeid.deferred {0.0, 0.0, 0.0, 0.0}
-\tend
+DEFINE_MAKE_DKNL_DEFERRED = """
+local function make_dknl_deferred_knob(e)
+    if not MAD.typeid.is_deferred(loaded_sequence[e.name].dknl) then
+        loaded_sequence[e.name].dknl = MAD.typeid.deferred {0.0, 0.0, 0.0, 0.0}
+    end
+end
 """
 
-STORE_KNOBS = """
-\tif not used[k_str_name] then
-\t    ! If knob was redefined and not used yet, then add it
-\t    used[k_str_name] = true ! We assume that all the bends have the same k0 for [A-Dx].
-\t    table.insert(knob_names, k_str_name)
-\t    table.insert(spos_list, s)
-\tend
+DEFINE_STORE_KNOBS = """
+local function store_knobs(k_str_name, mad_value, attr, spos)
+    if not used[k_str_name] then
+        ! If knob was redefined and not used yet, then add it
+        used[k_str_name] = true ! We assume that all the bends have the same k0 for [A-Dx].
+        table.insert(knob_names, k_str_name)
+        table.insert(spos_list, spos)
+    end
+end
 """
 
 MAKE_KNOBS_END_MAD = """
@@ -102,7 +106,6 @@ class GenericMadInterface(AbaMadInterface):
         corrector_strengths: Path | None = None,
         tune_knobs_file: Path | None = None,
         start_bpm: str | None = None,
-        replace_all_monitors_with_markers: bool = False,
         py_name: str = "py",
         debug: bool = False,
         mad_logfile: Path | None = None,
@@ -165,38 +168,20 @@ class GenericMadInterface(AbaMadInterface):
         self.mad["magnet_range"] = self.magnet_range
         self.mad["bpm_range"] = self.bpm_range
 
-        nbpms = None
-        if replace_all_monitors_with_markers:
-            LOGGER.info("Replacing all monitors with markers for MAD tracking")
-            # Setup observation and ranges
-            self.observe_bpms(accelerator.bpm_pattern, bad_bpms)
-            bpms_in_range, nbpms, all_bpms = self.count_bpms(self.bpm_range)
-            # Unobserve all BPMs first to avoid duplicates
-            self.unobserve_elements([accelerator.bpm_pattern])
-            for bpm in bpms_in_range:
-                if "monitor" in self.mad.MADX[bpm].kind:
-                    self.replace_with_marker(bpm)
-            self.mad.send("loaded_sequence:update()")
+        self.observe_bpms(bad_bpms=bad_bpms)
+        all_bpms, _ = self.get_bpm_list(self.bpm_range)
+        self.replace_monitors_with_markers(all_bpms)
+        self.unobserve_all_elements()
 
         if start_bpm is not None:
-            if self.mad.MADX[start_bpm].kind != "marker":
-                start_bpm = self.install_marker(start_bpm, "marker_" + start_bpm)
             self.cycle_sequence(marker_name=start_bpm)
             LOGGER.info(f"Cycled sequence to start at BPM: {start_bpm}")
         else:
             LOGGER.info("Skipping sequence cycling (no start BPM provided)")
 
         # Setup observation and ranges
-        self.observe_bpms(accelerator.bpm_pattern, bad_bpms)
+        self.observe_bpms(bad_bpms=bad_bpms)
         self.bpms_in_range, self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
-        if nbpms is not None and nbpms != self.nbpms:
-            print(
-                f"I had {nbpms} in range {bpms_in_range} but counted {self.nbpms} BPMs in {self.bpms_in_range}"
-            )
-            print(f"First bpm: {start_bpm}, range: {self.bpm_range}")
-            raise ValueError(
-                f"Number of BPMs in range {self.bpm_range} does not match expected count: {nbpms} != {self.nbpms}"
-            )
 
         # Apply corrector strengths if provided
         if corrector_strengths is not None:
@@ -216,6 +201,18 @@ class GenericMadInterface(AbaMadInterface):
         nbpms = len(bpms_in_range)
         LOGGER.info(f"Counted {nbpms} BPMs in range: {bpm_range}")
         return bpms_in_range, nbpms, all_bpms
+
+    def replace_monitors_with_markers(self, monitors: list[str]) -> None:
+        """Replace monitor elements with markers in the specified BPM range."""
+        for bpm in monitors:
+            if self.mad.MADX[bpm].kind != "marker":
+                assert "monitor" in self.mad.MADX[bpm].kind, (
+                    f"Element {bpm} is not a monitor, cannot replace with marker"
+                )
+                self.replace_with_marker(bpm)
+        LOGGER.info(
+            f"Replaced {len(monitors)} monitor BPMs with markers in range: {self.bpm_range}"
+        )
 
     def _sync_corrector_table_to_loaded_sequence(self, corrector_table: tfs.TfsDataFrame) -> None:
         """Mirror applied corrector strengths onto the tracked sequence copy."""
@@ -347,7 +344,6 @@ class GradientDescentMadInterface(GenericMadInterface):
         corrector_strengths: Path | None = None,
         tune_knobs_file: Path | None = None,
         start_bpm: str | None = None,
-        replace_all_monitors_with_markers: bool = True,
         py_name: str = "py",
         debug: bool = False,
         mad_logfile: Path | None = None,
@@ -376,7 +372,6 @@ class GradientDescentMadInterface(GenericMadInterface):
             corrector_strengths,
             tune_knobs_file,
             start_bpm,
-            replace_all_monitors_with_markers,
             py_name,
             debug,
             mad_logfile,
@@ -467,22 +462,28 @@ class GradientDescentMadInterface(GenericMadInterface):
             ]
             if attr in _DKNL_STRENGTH_ATTRS:
                 dknl_index = _DKNL_INDEX_BY_ATTR_LUA[attr]
-                tmpl.extend([
-                    MAKE_DKNL_DEFERRED,
-                    f"   loaded_sequence[e.name].dknl[{dknl_index}] = \\->loaded_sequence[k_str_name]",
-                ])
+                tmpl.extend(
+                    [
+                         "    make_dknl_deferred_knob(e)",
+                        f"    loaded_sequence[e.name].dknl[{dknl_index}] = \\->loaded_sequence[k_str_name]",
+                    ]
+                )
             elif "knl" in attr:
                 dknl_index = int(attr[4])  # Extract index from knl[i]
-                tmpl.extend([
-                    MAKE_DKNL_DEFERRED,
-                    f"    loaded_sequence[e.name].dknl[{dknl_index}] = \\->loaded_sequence[k_str_name]",
-                ])
+                tmpl.extend(
+                    [
+                         "    make_dknl_deferred_knob(e)",
+                        f"    loaded_sequence[e.name].dknl[{dknl_index}] = \\->loaded_sequence[k_str_name]",
+                    ]
+                )
             else:
-                tmpl.extend([
-                    f"    loaded_sequence[k_str_name] = {mad_value}",
-                    f"    loaded_sequence[e.name].{attr} = \\->loaded_sequence[k_str_name]",
-                ])
-            tmpl.append(STORE_KNOBS)
+                tmpl.extend(
+                    [
+                        f"    loaded_sequence[k_str_name] = {mad_value}",
+                        f"    loaded_sequence[e.name].{attr} = \\->loaded_sequence[k_str_name]",
+                    ]
+                )
+            tmpl.append(f"    store_knobs(k_str_name, {mad_value}, '{attr}', s)")
             tmpl.append("end")
             for line in tmpl:
                 lines.append(f"    {line}")
@@ -525,12 +526,13 @@ class GradientDescentMadInterface(GenericMadInterface):
 
             attr_block = self._build_attr_block(attr_conditions)
             loop_code = f"""
+{DEFINE_STORE_KNOBS}
+{DEFINE_MAKE_DKNL_DEFERRED}
 for i, e, s, ds in loaded_sequence:siter(magnet_range) do
 {attr_block}
 end
             """
             mad_code += loop_code
-
         # Add energy knob if needed
         if self.accelerator.optimise_energy:
             mad_code += "loaded_sequence['pt'] = loaded_sequence['pt'] or 1e-6\n"

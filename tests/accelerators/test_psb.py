@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from math import sqrt
 from typing import TYPE_CHECKING
 
 import pytest
@@ -19,18 +18,19 @@ class TestPSBAccelerator:
     @pytest.fixture
     def test_sequence_file(self, data_dir: Path) -> Path:
         """Use the psb sequence in the data directory for testing."""
-        return data_dir / "sequences" / "psb.seq"
+        return data_dir / "sequences" / "psb1.seq"
 
     def test_init_basic(self, test_sequence_file: Path) -> None:
         """Test basic PSB initialisation."""
         psb = PSB(ring=1, sequence_file=test_sequence_file)
 
-        expected_energy = sqrt(0.571**2 + 0.9382720813**2)
+        expected_energy = 0.160 + 0.9382720813  # kinetic + proton mass = total energy
         assert psb.ring == 1
         assert psb.sequence_file == test_sequence_file
         assert psb.pc == pytest.approx(expected_energy)
         assert psb.bpm_pattern == "^BR1%.BPM"
         assert psb.optimise_quadrupoles is False
+        assert psb.optimise_correctors is False
         assert psb.optimise_energy is False
 
     @pytest.mark.parametrize("ring", [1, 2, 3, 4])
@@ -62,9 +62,32 @@ class TestPSBAccelerator:
             optimise_quadrupoles=True,
         )
 
-        assert psb.get_supported_knob_specs() == [
-            ("quadrupole", "k1", "^BR%.Q(FO%d+|DE%d+)$", "k1", True),
-        ]
+        assert ("quadrupole", "k1", "^BR%.Q[FD][OE]%d+$", "k1", True) in psb.get_supported_knob_specs()
+
+    def test_init_with_optimise_correctors(self, test_sequence_file: Path) -> None:
+        """Test initialization with corrector optimization."""
+        psb = PSB(
+            ring=1,
+            sequence_file=test_sequence_file,
+            optimise_correctors=True,
+        )
+        assert psb.optimise_correctors is True
+
+    def test_get_supported_knob_specs_with_correctors(self, test_sequence_file: Path) -> None:
+        """Test PSB exposes sequence-name patterns for horizontal and vertical correctors."""
+        psb = PSB(
+            ring=1,
+            sequence_file=test_sequence_file,
+            optimise_correctors=True,
+        )
+
+        assert ("hkicker", "kick", "^B[RE]%d+%.DHZ%d+L%d+$", None, True) in psb.get_supported_knob_specs()
+        assert ("vkicker", "kick", "^B[RE]%d+%.DVT%d+L%d+$", None, True) in psb.get_supported_knob_specs()
+
+    def test_get_mad_attr_specs_sextupole_name_expr(self, test_sequence_file: Path) -> None:
+        """Test PSB sextupole knobs are named as dk2l during MAD knob creation."""
+        psb = PSB(ring=1, sequence_file=test_sequence_file, optimise_sextupoles=True)
+        assert psb.get_mad_attr_specs()["multipole"]["name_expr"] == 'e.name .. ".dk2l"'
 
     def test_get_perturbation_families(self, test_sequence_file: Path) -> None:
         """Test PSB perturbation metadata is available for quadrupoles."""
@@ -107,6 +130,20 @@ class TestPSBAccelerator:
             sequence_file=test_sequence_file,
             optimise_quadrupoles=True,
             optimise_energy=True,
-            custom_knobs_to_optimise=["BR.QFO11.k1"],
+            custom_knobs_to_optimise=["BR.QFO11.dk1l"],
         )
         assert psb.has_any_optimisation() is True
+
+    def test_has_any_optimisation_correctors(self, test_sequence_file: Path) -> None:
+        """Test corrector optimisation contributes to PSB optimisation state."""
+        psb = PSB(
+            ring=1,
+            sequence_file=test_sequence_file,
+            optimise_correctors=True,
+        )
+        assert psb.has_any_optimisation() is True
+
+    def test_format_result_knob_names_maps_knl3_to_dk2l(self, test_sequence_file: Path) -> None:
+        """Test PSB rewrites knl[3] sextupole knob names to dk2l for reporting."""
+        psb = PSB(ring=1, sequence_file=test_sequence_file)
+        assert psb.format_result_knob_names(["br3.xnoh0.4l1.knl[3]"]) == ["br3.xnoh0.4l1.dk2l"]

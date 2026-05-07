@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from aba_optimiser.accelerators import LHC
+from pymadng_utils.accelerators.base import PROTON_MASS_GEV
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -25,11 +26,12 @@ class TestLHCAccelerator:
         """Test basic LHC initialization."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
         )
         assert lhc.beam == 1
-        assert lhc.pc == 6800.0
+        assert lhc.kinetic_energy == 6800.0
+        assert lhc.pc == pytest.approx(6800.0 + PROTON_MASS_GEV)
         assert lhc.optimise_bends is False
         assert lhc.optimise_correctors is False
         assert lhc.normalise_bends is False
@@ -39,7 +41,7 @@ class TestLHCAccelerator:
         """Test LHC initialization with beam 2."""
         lhc = LHC(
             beam=2,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
         )
         assert lhc.beam == 2
@@ -50,7 +52,7 @@ class TestLHCAccelerator:
         with pytest.raises(ValueError, match="LHC beam must be 1 or 2"):
             LHC(
                 beam=3,
-                pc=6800.0,
+                kinetic_energy=6800.0,
                 sequence_file=str(test_sequence_file),
             )
 
@@ -59,7 +61,7 @@ class TestLHCAccelerator:
         with pytest.raises(ValueError, match="LHC beam must be 1 or 2"):
             LHC(
                 beam=0,
-                pc=6800.0,
+                kinetic_energy=6800.0,
                 sequence_file=str(test_sequence_file),
             )
 
@@ -67,7 +69,7 @@ class TestLHCAccelerator:
         """Test initialization with energy optimization."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_energy=True,
         )
@@ -77,7 +79,7 @@ class TestLHCAccelerator:
         """Test initialization with bend optimization."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_bends=True,
         )
@@ -88,7 +90,7 @@ class TestLHCAccelerator:
         """Test initialization with bend optimization but no normalization."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_bends=True,
             normalise_bends=False,
@@ -100,7 +102,7 @@ class TestLHCAccelerator:
         """Test normalise_bends defaults to False when optimise_bends is False."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_bends=False,
             normalise_bends=None,
@@ -111,7 +113,7 @@ class TestLHCAccelerator:
         """Test initialization with corrector optimization."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_correctors=True,
         )
@@ -121,7 +123,7 @@ class TestLHCAccelerator:
         """Test initialization with all optimizations enabled."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_energy=True,
             optimise_bends=True,
@@ -139,7 +141,7 @@ class TestLHCAccelerator:
         """Test seq_name returns correct sequence name for beam 1."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
         )
         assert lhc.seq_name == "lhcb1"
@@ -148,7 +150,7 @@ class TestLHCAccelerator:
         """Test seq_name returns correct sequence name for beam 2."""
         lhc = LHC(
             beam=2,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
         )
         assert lhc.seq_name == "lhcb2"
@@ -157,7 +159,7 @@ class TestLHCAccelerator:
         """Test has_any_optimisation returns False with no optimizations."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
         )
         assert lhc.has_any_optimisation() is False
@@ -166,7 +168,7 @@ class TestLHCAccelerator:
         """Test has_any_optimisation returns True with energy optimization."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_energy=True,
         )
@@ -176,7 +178,7 @@ class TestLHCAccelerator:
         """Test has_any_optimisation returns True with bend optimization."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_bends=True,
         )
@@ -186,7 +188,7 @@ class TestLHCAccelerator:
         """Test has_any_optimisation returns True with corrector optimization."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_correctors=True,
         )
@@ -196,7 +198,7 @@ class TestLHCAccelerator:
         """Test log_optimisation_targets with no optimizations."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
         )
         lhc.log_optimisation_targets()
@@ -206,7 +208,7 @@ class TestLHCAccelerator:
         """Test log_optimisation_targets logs all optimizations."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_energy=True,
             optimise_bends=True,
@@ -225,7 +227,7 @@ class TestLHCAccelerator:
         """Test get_bend_lengths returns None when bends not optimized."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_bends=False,
         )
@@ -236,7 +238,7 @@ class TestLHCAccelerator:
         """Test get_bend_lengths returns None when normalisation disabled."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_bends=True,
             normalise_bends=False,
@@ -248,7 +250,7 @@ class TestLHCAccelerator:
         """Test get_bend_lengths returns bend_lengths from accelerator state."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_bends=True,
             normalise_bends=True,
@@ -261,7 +263,7 @@ class TestLHCAccelerator:
         """Test get_bend_lengths handles missing accelerator bend_lengths."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_bends=True,
             normalise_bends=True,
@@ -273,7 +275,7 @@ class TestLHCAccelerator:
         """Test normalise_true_strengths returns unchanged when bends not optimized."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_bends=False,
         )
@@ -285,7 +287,7 @@ class TestLHCAccelerator:
         """Test normalise_true_strengths returns unchanged when no bend_lengths provided."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_bends=True,
         )
@@ -299,7 +301,7 @@ class TestLHCAccelerator:
         """Test normalise_true_strengths calls normalise_lhcbend_magnets."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_bends=True,
             normalise_bends=True,
@@ -321,7 +323,7 @@ class TestLHCAccelerator:
         """Test format_result_knob_names converts pt to deltap."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_energy=True,
         )
@@ -334,7 +336,7 @@ class TestLHCAccelerator:
         """Test format_result_knob_names leaves knobs unchanged without energy."""
         lhc = LHC(
             beam=1,
-            pc=6800.0,
+            kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
             optimise_energy=False,
         )

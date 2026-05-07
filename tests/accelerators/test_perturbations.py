@@ -80,9 +80,9 @@ def test_lhc_quadrupole_perturbation_modes(
     )
     non_table_changed = non_table_rel_change > 1e-3
     assert non_table_changed == expect_non_table_changed
-    assert f"{table_family_quad}.k1" in magnet_strengths
+    assert f"{table_family_quad}.dk1l" in magnet_strengths
     if expect_non_table_changed:
-        assert f"{non_table_quad}.k1" in magnet_strengths
+        assert f"{non_table_quad}.dk1l" in magnet_strengths
 
 
 def test_sps_quadrupole_only_perturbation(
@@ -111,9 +111,9 @@ def test_sps_quadrupole_only_perturbation(
     assert not np.isclose(quad_after, quad_before)
     assert np.isclose(sext_after, sext_before)
     assert np.isclose(dip_after, dip_before)
-    assert f"{quad_name}.k1" in magnet_strengths
-    assert f"{sext_name}.k2" not in magnet_strengths
-    assert f"{dip_name}.k0" not in magnet_strengths
+    assert f"{quad_name}.dk1l" in magnet_strengths
+    assert f"{sext_name}.dk2l" not in magnet_strengths
+    assert f"{dip_name}.dk0l" not in magnet_strengths
 
 
 def test_sps_perturbation_sets_dknl(
@@ -138,7 +138,7 @@ def test_sps_perturbation_sets_dknl(
     assert np.isclose(k2_after, k2_before)
     assert dknl_before is None or np.isclose(dknl_before, 0.0)
     assert dknl_after is not None and not np.isclose(dknl_after, 0.0)
-    assert f"{sext_name}.k2" in magnet_strengths
+    assert f"{sext_name}.dk2l" in magnet_strengths
     assert sext_name in true_strengths
 
 

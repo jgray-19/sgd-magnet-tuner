@@ -81,21 +81,16 @@ class MeasurementConfig:
 
 @dataclass
 class OutputConfig:
-    """Output, logging and plotting behaviour for optimisation runs.
+    """Output and logging behaviour for optimisation runs.
 
     Attributes:
         write_tensorboard_logs: Whether to write TensorBoard event files.
-        include_uncertainty: Whether to compute and plot uncertainties. Disabling this
+        include_uncertainty: Whether to compute uncertainties. Disabling this
             skips worker-side Hessian estimation for faster execution.
         parallel_hessian: Controls how many worker-side Hessians may be computed
             concurrently during shutdown. ``True`` means use all workers, ``False``
             means run one-by-one, and a positive integer sets an explicit concurrency
             cap.
-        plot_real_values: Whether plots show absolute values (True) or relative values
-            (False). Defaults to relative values.
-        save_prefix: Prefix prepended to generated plot filenames.
-        show_plots: Whether to display plots interactively.
-        plots_dir: Directory where plots are saved.
         mad_logfile: Optional MAD log file path.
         python_logfile: Optional Python worker log file path.
     """
@@ -103,10 +98,6 @@ class OutputConfig:
     write_tensorboard_logs: bool = True
     include_uncertainty: bool = True
     parallel_hessian: bool | int = True
-    plot_real_values: bool = False
-    save_prefix: str = ""
-    show_plots: bool = True
-    plots_dir: Path | None = None
     mad_logfile: Path | None = None
     python_logfile: Path | None = None
 

@@ -82,7 +82,7 @@ def _generate_fake_measurement(
 
     analysis_dir = tmp_path / "analysis"
 
-    interface.observe_elements()
+    interface.observe()
     twiss = interface.run_twiss(coupling=True)
 
     # Convert all the columns to uppercase
@@ -129,7 +129,7 @@ def test_controller_opt(
         gradient_converged_value=1e-5,
     )
 
-    accel = LHC(beam=1, sequence_file=seq_b1, pc=6800.0, optimise_quadrupoles=True)
+    accel = LHC(beam=1, sequence_file=seq_b1, kinetic_energy=6800.0, optimise_quadrupoles=True)
 
     ctrl = OpticsController(
         accel,
@@ -139,7 +139,6 @@ def test_controller_opt(
         ["BPM.9R2.B1"],
         ["BPM.9L3.B1"],
         output_config=OutputConfig(
-            show_plots=False,
             write_tensorboard_logs=False,
             include_uncertainty=False,
         ),

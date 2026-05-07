@@ -78,7 +78,6 @@ def test_controller_quad_opt_psb_ring1(
         max_lr=3e-6,
         min_lr=3e-6,
         gradient_converged_value=5e-15,
-        expected_rel_error=loaded_psb_interface.accelerator.get_perturbation_families()["q"]["default_rel_std"],  # ty:ignore[invalid-assignment, index]
         optimiser_type="adam",
     )
 

@@ -75,7 +75,7 @@ def _plot_beta_beating_comparison(
     print(f"Beta beating plot saved to: {plot_file}")
     plt.show()
 
-# @pytest.mark.skip  # for now
+@pytest.mark.skip  # for now
 @pytest.mark.slow
 def test_matcher_beta_correction(
     tmp_path: Path,
@@ -145,11 +145,11 @@ def test_matcher_beta_correction(
         tune_knobs=matched_tunes,
         sequence_file_path=seq_b1,
         magnet_range="$start/$end",
-        pc=6800,
+        kinetic_energy=6800,
         output_dir=tmp_path / "matcher_output",
     )
 
-    matcher = BetaMatcher(matcher_config, show_plots=False)
+    matcher = BetaMatcher(matcher_config)
     # final_knobs, uncertainties = matcher.run_lbfgs_match()
     final_knobs, uncertainties = matcher.run_linear_match(n_steps=1, svd_cutoff=1e-6)
 

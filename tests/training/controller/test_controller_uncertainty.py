@@ -28,9 +28,10 @@ def test_estimate_uncertainties_from_hessian_handles_negative_mode() -> None:
 
 def test_save_results_uses_finite_non_negative_uncertainties_for_indefinite_hessian() -> None:
     ctrl = Controller.__new__(Controller)
-    ctrl.output_config = OutputConfig(include_uncertainty=True, show_plots=False)
+    ctrl.output_config = OutputConfig(include_uncertainty=True)
     ctrl.final_knobs = {"kq1": 1.0, "kq2": 2.0}
     ctrl.filtered_true_strengths = {"kq1": 1.1, "kq2": 2.1}
+    ctrl.accelerator = SimpleNamespace(optimise_energy=False)
     ctrl.config_manager = SimpleNamespace(
         knob_names=["kq1", "kq2"],
         mad_iface=SimpleNamespace(
@@ -43,7 +44,6 @@ def test_save_results_uses_finite_non_negative_uncertainties_for_indefinite_hess
     ctrl.result_manager = SimpleNamespace(
         knob_names=["kq1", "kq2"],
         save_results=lambda *args, **kwargs: None,
-        generate_plots=lambda *args, **kwargs: None,
     )
 
     uncertainties = ctrl._save_results(
@@ -161,7 +161,7 @@ def test_controller_worker_hessian_matches_finite_difference_on_reduced_knob_sub
     ctrl = Controller(
         LHC(
             beam=1,
-            pc=6800,
+            kinetic_energy=6800,
             sequence_file=seq_b1,
             optimise_quadrupoles=True,
             optimise_other_quadrupoles=False,
@@ -182,11 +182,9 @@ def test_controller_worker_hessian_matches_finite_difference_on_reduced_knob_sub
         bpm_start_points,
         bpm_end_points,
         output_config=OutputConfig(
-            show_plots=False,
             mad_logfile=tmp_path / "controller_hessian.log",
             write_tensorboard_logs=False,
         ),
-        initial_knob_strengths=magnet_strengths.copy(),
         true_strengths=magnet_strengths.copy(),
     )
     weight_normaliser = _compute_training_weight_normaliser(ctrl)

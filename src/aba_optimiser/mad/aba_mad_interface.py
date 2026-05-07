@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from pymadng_utils.mad.knob_mad_interface import KnobMadInterface
 
 if TYPE_CHECKING:
-    from aba_optimiser.accelerators import Accelerator
+    from pymadng_utils.accelerators import Accelerator
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +60,24 @@ loaded_sequence['{element_name}'].dknl[{dknl_index}] = {self.py_name}:recv()
         self.mad.send(delta_strength)
 
     def _set_misalignment(self, element_name: str, attr: str, value: float) -> None:
-        """Set a misalignment value, ensuring the misalign attribute is set up to store it."""
-        if not self.mad[f"loaded_sequence['{element_name}'].misalign"]:
+        """Set a misalignment value, preserving other misalignment attributes already set."""
+        # Receive the misalign table as a dict to check whether it has already been
+        # initialised. The plain `if not mad[...]` truthiness test is unreliable here
+        # because pymadng returns a MadRef object even for an unset table, which is
+        # always truthy. If the dict has no keys the table needs to be initialised first.
+        self.mad.send(f"{self.py_name}:send(loaded_sequence['{element_name}'].misalign, true)")
+        misalign_dict = self.mad.recv()
+        if not isinstance(misalign_dict, dict) or len(misalign_dict) == 0:
             self.mad[f"loaded_sequence['{element_name}'].misalign"] = []
         self.mad[f"loaded_sequence['{element_name}'].misalign.{attr}"] = value
 
     def _get_misalignment(self, element_name: str, attr: str) -> float:
         """Get a misalignment value, returning 0.0 if not set."""
-        if not self.mad[f"loaded_sequence['{element_name}'].misalign"]:
+        self.mad.send(f"{self.py_name}:send(loaded_sequence['{element_name}'].misalign, true)")
+        misalign_dict = self.mad.recv()
+        if not isinstance(misalign_dict, dict) or len(misalign_dict) == 0:
             return 0.0
-        return float(self.mad[f"loaded_sequence['{element_name}'].misalign.{attr}"])
+        return float(misalign_dict.get(attr, 0.0))
 
     def _get_effective_element_strength(self, element_name: str, attr: str) -> float:
         """Return the effective element strength, including dknl perturbations."""

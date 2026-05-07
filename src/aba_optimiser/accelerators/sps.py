@@ -28,7 +28,7 @@ class SPS(Accelerator):
     def __init__(
         self,
         sequence_file: Path | str,
-        pc: float = 450.0,
+        kinetic_energy: float = 450.0,
         bpm_pattern: str = BPM_PATTERN,
         optimise_quadrupoles: bool = False,
         optimise_sextupoles: bool = False,
@@ -39,7 +39,7 @@ class SPS(Accelerator):
 
         Args:
             sequence_file: Path to sequence file.
-            pc: Beam momentum in GeV/c.
+            kinetic_energy: Particle kinetic energy in GeV.
             seq_name: Sequence name to use in MAD.
             optimise_quadrupoles: Whether to optimise quadrupole strengths.
             optimise_sextupoles: Whether to optimise sextupole strengths.
@@ -48,7 +48,7 @@ class SPS(Accelerator):
         """
         super().__init__(
             sequence_file=sequence_file,
-            pc=pc,
+            kinetic_energy=kinetic_energy,
             bpm_pattern=bpm_pattern,
             optimise_energy=optimise_energy,
             optimise_quadrupoles=optimise_quadrupoles,

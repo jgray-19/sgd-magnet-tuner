@@ -58,47 +58,50 @@ def test_cycle_sequence(loaded_interface: AbaMadInterface) -> None:
 
 
 @pytest.mark.parametrize(
-    "element, marker_name, offset, expected_marker_name, index_check, pos_check",
+    "element_name, marker_name, expected_marker_name",
     [
         (
             "S.DS.L1.B1",
             None,
-            None,
-            "S.DS.L1.B1_marker",
-            lambda m, e: m + 1 == e,
-            lambda m, e: m == e - 1e-10,
+            "S.DS.L1.B1",
         ),
         (
             "S.DS.L1.B1",
             "MyMarker",
-            5e-6,
             "MyMarker",
-            lambda m, e: m - 1 == e,
-            lambda m, e: m == e + 5e-6,
         ),
     ],
     ids=["default_marker", "custom_marker"],
 )
 def test_install_marker(
     loaded_interface: AbaMadInterface,
-    element,
+    element_name,
     marker_name,
-    offset,
     expected_marker_name,
-    index_check,
-    pos_check,
 ) -> None:
     """Test installing a marker element."""
     interface = loaded_interface
-    if marker_name and offset is not None:
-        ret_name = interface.install_marker(element, marker_name=marker_name, offset=offset)
-    else:
-        ret_name = interface.install_marker(element)
-    marker_position, marker_index, elem_position, elem_index = get_marker_and_element_positions(
-        interface, expected_marker_name, element
+    marker_position_before, marker_index_before, elem_position_before, elem_index_before = (
+        get_marker_and_element_positions(interface, expected_marker_name, element_name)
     )
-    assert index_check(marker_index, elem_index)
-    assert pos_check(marker_position, elem_position)
+    ret_name = interface.install_marker(element_name, marker_name)
+    marker_position_after, marker_index_after, elem_position_after, elem_index_after = (
+        get_marker_and_element_positions(interface, expected_marker_name, element_name)
+    )
+    if element_name != expected_marker_name:
+        # Check marker doesn't exist before
+        assert marker_position_before is None
+        assert marker_index_before is None
+
+        # Check element doesn't exist after
+        assert elem_position_after is None
+        assert elem_index_after is None
+    else:
+        assert marker_position_before == elem_position_before
+        assert marker_index_before == elem_index_before
+
+    assert marker_index_after == elem_index_before
+    assert marker_position_after == elem_position_before
     assert ret_name == expected_marker_name
 
 
@@ -163,7 +166,7 @@ def test_twiss(loaded_interface: AbaMadInterface):
     assert abs(twiss_df.headers["q2"] - 60.31) < 3e-7, f"Unexpected Qy: {twiss_df.headers['q2']}"
 
     # Now observe BPMs
-    interface.observe_elements("BPM")
+    interface.observe("BPM")
     twiss_df = interface.run_twiss()
     # There should only be BPMs observed
     assert len(twiss_df) == 563, f"Expected 563 twiss entries, got {len(twiss_df)}"

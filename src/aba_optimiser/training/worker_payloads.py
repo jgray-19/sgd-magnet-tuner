@@ -14,7 +14,11 @@ import numpy as np
 
 from aba_optimiser.config import PROTON_MASS
 from aba_optimiser.physics.deltap import dp2pt
-from aba_optimiser.workers import PrecomputedTrackingWeights, TrackingData, WeightProcessor
+from aba_optimiser.workers import (
+    PrecomputedTrackingWeights,
+    TrackingData,
+    WeightProcessor,
+)
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -39,16 +43,18 @@ class WorkerPayloadBuilder:
         self,
         accelerator: Accelerator,
         all_bpms: list[str],
-        pc: float,
+        kinetic_energy: float,
     ) -> None:
         self.accelerator = accelerator
         self.all_bpms = all_bpms
-        self.pc = pc
+        self.kinetic_energy = kinetic_energy
         self._pos_cache: dict[int, dict[tuple[int, str], int]] = {}
+        self._layout_cache: dict[int, tuple[dict[int, int], dict[str, int], int]] = {}
 
     def compute_pt(self, file_idx: int, machine_deltaps: list[float]) -> float:
         """Compute transverse momentum based on file index."""
-        return dp2pt(machine_deltaps[file_idx], PROTON_MASS, self.pc)
+        total_energy = self.kinetic_energy + PROTON_MASS
+        return dp2pt(machine_deltaps[file_idx], PROTON_MASS, energy=total_energy)
 
     @staticmethod
     def freeze_payload_arrays(*arrays: np.ndarray) -> None:
@@ -112,9 +118,26 @@ class WorkerPayloadBuilder:
         key = (turn, bpm)
         pos = bucket.get(key)
         if pos is None:
-            pos = int(df.index.get_loc((turn, bpm)))
+            turn_offsets, bpm_offsets, row_stride = self._layout_cache.get(df_id, ({}, {}, 0))
+            if not turn_offsets:
+                turn_offsets, bpm_offsets, row_stride = self._build_layout_cache(df)
+                self._layout_cache[df_id] = (turn_offsets, bpm_offsets, row_stride)
+            try:
+                pos = turn_offsets[turn] + bpm_offsets[bpm]
+            except KeyError:
+                pos = int(df.index.get_loc((turn, bpm)))
             bucket[key] = pos
         return pos
+
+    @staticmethod
+    def _build_layout_cache(df: pd.DataFrame) -> tuple[dict[int, int], dict[str, int], int]:
+        """Return row-offset caches for a turn-major full MultiIndex grid."""
+        turns = list(dict.fromkeys(df.index.get_level_values("turn")))
+        bpms = list(dict.fromkeys(df.index.get_level_values("name")))
+        row_stride = len(bpms)
+        turn_offsets = {int(turn): idx * row_stride for idx, turn in enumerate(turns)}
+        bpm_offsets = {str(bpm): idx for idx, bpm in enumerate(bpms)}
+        return turn_offsets, bpm_offsets, row_stride
 
     def get_turn(self, df: pd.DataFrame, pos: int) -> int:
         """Get the turn number from a DataFrame position."""
@@ -136,16 +159,32 @@ class WorkerPayloadBuilder:
         repeated_bpm_names = bpm_names * n_run_turns
         observation_turn = turn
         previous_idx = bpm_indices[repeated_bpm_names[0]]
+        previous_bpm = repeated_bpm_names[0]
         positions = [self._get_pos(df, observation_turn, repeated_bpm_names[0])]
 
         for bpm in repeated_bpm_names[1:]:
             bpm_idx = bpm_indices[bpm]
             if sdir == 1 and bpm_idx < previous_idx:
+                LOGGER.debug(
+                    "Turn wrap forward: %s(turn=%d) -> %s(turn=%d)",
+                    previous_bpm,
+                    observation_turn,
+                    bpm,
+                    observation_turn + 1,
+                )
                 observation_turn += 1
             elif sdir == -1 and bpm_idx > previous_idx:
+                LOGGER.debug(
+                    "Turn wrap backward: %s(turn=%d) -> %s(turn=%d)",
+                    previous_bpm,
+                    observation_turn,
+                    bpm,
+                    observation_turn - 1,
+                )
                 observation_turn -= 1
 
             positions.append(self._get_pos(df, observation_turn, bpm))
+            previous_bpm = bpm
             previous_idx = bpm_idx
 
         return np.asarray(positions, dtype=np.int64)
@@ -294,13 +333,26 @@ class WorkerPayloadBuilder:
     def attach_global_weights(
         payloads: list[tuple[TrackingData, WorkerConfig, int]],
         num_batches: int,
+        *,
+        optimise_momenta: bool = True,
     ) -> list[tuple[TrackingData, WorkerConfig, int]]:
         """Precompute globally normalised weights for all tracking workers."""
         if not payloads:
             return payloads
 
-        payload_data: list[tuple[TrackingData, int, list[np.ndarray]]] = []
-        for data, _config, file_idx in payloads:
+        def active_observables(config: WorkerConfig) -> tuple[str, ...]:
+            kick_plane = getattr(config.kick_plane, "value", config.kick_plane)
+            if kick_plane == "x":
+                return ("x", "px") if optimise_momenta else ("x",)
+            if kick_plane == "y":
+                return ("y", "py") if optimise_momenta else ("y",)
+            if kick_plane == "xy":
+                return ("x", "y", "px", "py") if optimise_momenta else ("x", "y")
+            raise ValueError(f"Unsupported kick plane {config.kick_plane!r}")
+
+        observable_arrays = ("x", "y", "px", "py")
+        payload_data: list[tuple[TrackingData, int, list[np.ndarray], tuple[str, ...]]] = []
+        for data, config, file_idx in payloads:
             n_init = len(data.init_coords)
             if n_init <= 0:
                 raise ValueError(
@@ -312,36 +364,43 @@ class WorkerPayloadBuilder:
                 data.momentum_variances[:n_init, :, 0],
                 data.momentum_variances[:n_init, :, 1],
             ]
-            payload_data.append((data, file_idx, var_slices))
+            payload_data.append((data, file_idx, var_slices, active_observables(config)))
 
-        all_variances = [[var_slices[i] for _, _, var_slices in payload_data] for i in range(4)]
+        all_variances = [
+            [var_slices[i] for _, _, var_slices, active in payload_data if observable in active]
+            for i, observable in enumerate(observable_arrays)
+        ]
         floors = [
             WeightProcessor.compute_variance_floor(
                 np.concatenate([values.reshape(-1) for values in dim_vars])
             )
+            if dim_vars
+            else None
             for dim_vars in all_variances
         ]
 
-        weight_cache: list[tuple[TrackingData, int, list[np.ndarray]]] = []
+        weight_cache: list[tuple[TrackingData, int, list[np.ndarray], tuple[str, ...]]] = []
         global_max = 0.0
-        for data, file_idx, var_slices in payload_data:
+        for data, file_idx, var_slices, active in payload_data:
             raw_weights = [
                 WeightProcessor.variance_to_weight(
                     WeightProcessor.floor_variances(var_slice, floor_value=floor)
                 )
                 for var_slice, floor in zip(var_slices, floors, strict=True)
             ]
-            global_max = max(
-                global_max,
-                max((np.max(weights) if weights.size else 0.0) for weights in raw_weights),
-            )
-            weight_cache.append((data, file_idx, raw_weights))
+            active_maxima = [
+                np.max(raw_weights[i]) if raw_weights[i].size else 0.0
+                for i, observable in enumerate(observable_arrays)
+                if observable in active
+            ]
+            global_max = max(global_max, max(active_maxima, default=0.0))
+            weight_cache.append((data, file_idx, raw_weights, active))
 
         normaliser = global_max if global_max > 0.0 else 1.0
         if global_max == 0.0:
             LOGGER.warning("All computed weights are zero; skipping global normalisation")
 
-        for data, file_idx, raw_weights in weight_cache:
+        for data, file_idx, raw_weights, _active in weight_cache:
             normalised = [weights / normaliser for weights in raw_weights]
             data.precomputed_weights = PrecomputedTrackingWeights(
                 x=normalised[0],

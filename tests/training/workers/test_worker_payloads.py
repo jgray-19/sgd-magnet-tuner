@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -11,16 +11,19 @@ from aba_optimiser.training.worker_payloads import WorkerPayloadBuilder
 from aba_optimiser.training.worker_setup import WorkerObservationPlan, WorkerRangeSpec
 from aba_optimiser.workers.common import TrackingData, WorkerConfig
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 def _make_builder(tmp_path: Path, all_bpms: list[str] | None = None) -> WorkerPayloadBuilder:
     seq_file = tmp_path / "sps.seq"
     seq_file.write_text("! Dummy SPS sequence file\n")
-    accelerator = SPS(sequence_file=seq_file, pc=450.0)
+    accelerator = SPS(sequence_file=seq_file, kinetic_energy=450.0)
     accelerator.infer_monitor_plane = lambda bpm: "H" if "BPH" in bpm else "V"  # type: ignore[method-assign]
     return WorkerPayloadBuilder(
         accelerator=accelerator,
         all_bpms=all_bpms or ["BPH.13208", "BPV.13308"],
-        pc=450.0,
+        kinetic_energy=450.0,
     )
 
 
@@ -143,6 +146,43 @@ def test_attach_global_weights_normalises_all_observables(tmp_path: Path) -> Non
     assert np.allclose(weights.py, [[0.4]])
 
 
+def test_attach_global_weights_ignores_unused_momentum_channels_for_position_only(
+    tmp_path: Path,
+) -> None:
+    builder = _make_builder(tmp_path, all_bpms=["BPH.13208", "BPV.13308"])
+    data = TrackingData(
+        position_comparisons=np.zeros((1, 1, 2), dtype=np.float64),
+        momentum_comparisons=np.zeros((1, 1, 2), dtype=np.float64),
+        position_variances=np.array([[[1e-8, 1e-8]]], dtype=np.float64),
+        momentum_variances=np.array([[[1e-12, 1e-12]]], dtype=np.float64),
+        init_coords=np.array([[1.0, 0.1, 1.0, 0.1, 0.0, 0.01]], dtype=np.float64),
+        init_pts=np.array([0.01], dtype=np.float64),
+        precomputed_weights=None,
+    )
+    config = WorkerConfig(
+        accelerator=builder.accelerator,
+        start_bpm="BPH.13208",
+        end_bpm="BPV.13308",
+        magnet_range="$start/$end",
+        corrector_strengths=None,
+        tune_knobs_file=None,
+        kick_plane="xy",
+    )
+
+    payloads = builder.attach_global_weights(
+        [(data, config, 0)],
+        num_batches=1,
+        optimise_momenta=False,
+    )
+    weights = payloads[0][0].precomputed_weights
+
+    assert weights is not None
+    assert np.allclose(weights.x, [[1.0]])
+    assert np.allclose(weights.y, [[1.0]])
+    assert np.allclose(weights.px, [[1e4]])
+    assert np.allclose(weights.py, [[1e4]])
+
+
 def test_make_tracking_data_freezes_arrays(tmp_path: Path) -> None:
     builder = _make_builder(tmp_path)
     df = pd.DataFrame(
@@ -179,3 +219,31 @@ def test_make_tracking_data_freezes_arrays(tmp_path: Path) -> None:
 
     assert not data.position_comparisons.flags.writeable
     assert not data.momentum_comparisons.flags.writeable
+
+
+def test_get_observation_positions_uses_full_grid_offsets(tmp_path: Path) -> None:
+    builder = _make_builder(tmp_path, all_bpms=["BPH.1", "BPH.2", "BPH.3"])
+    df = pd.DataFrame(
+        {
+            "turn": [1, 1, 1, 2, 2, 2],
+            "name": ["BPH.1", "BPH.2", "BPH.3", "BPH.1", "BPH.2", "BPH.3"],
+            "x": [0.0] * 6,
+            "y": [0.0] * 6,
+            "px": [0.0] * 6,
+            "py": [0.0] * 6,
+            "var_x": [1.0] * 6,
+            "var_y": [1.0] * 6,
+            "var_px": [1.0] * 6,
+            "var_py": [1.0] * 6,
+        }
+    ).set_index(["turn", "name"])
+
+    positions = builder.get_observation_positions(
+        df=df,
+        bpm_names=["BPH.2", "BPH.3", "BPH.1"],
+        sdir=1,
+        turn=1,
+        n_run_turns=1,
+    )
+
+    assert positions.tolist() == [1, 2, 3]

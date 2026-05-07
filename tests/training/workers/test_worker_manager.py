@@ -70,7 +70,7 @@ class _SerialFakeConn:
 def _make_sps(tmp_path: Path) -> SPS:
     seq_file = tmp_path / "sps.seq"
     seq_file.write_text("! Dummy SPS sequence file\n")
-    return SPS(sequence_file=seq_file, pc=450.0)
+    return SPS(sequence_file=seq_file, kinetic_energy=450.0)
 
 
 def _make_manager(
@@ -366,6 +366,7 @@ def test_build_bpm_masks_from_diagnostics_aggregates_multi_turn_losses(tmp_path:
     manager.worker_metadata = [
         WorkerRuntimeMetadata(
             worker_id=0,
+            file_idx=0,
             start_bpm="BPH.13208",
             end_bpm="BPV.20108",
             sdir=1,
@@ -397,6 +398,7 @@ def test_apply_screening_actions_expands_masks_across_turns(tmp_path: Path) -> N
     manager.worker_metadata = [
         WorkerRuntimeMetadata(
             worker_id=0,
+            file_idx=0,
             start_bpm="BPH.13208",
             end_bpm="BPV.20108",
             sdir=1,
@@ -406,6 +408,7 @@ def test_apply_screening_actions_expands_masks_across_turns(tmp_path: Path) -> N
         ),
         WorkerRuntimeMetadata(
             worker_id=1,
+            file_idx=1,
             start_bpm="BPV.13308",
             end_bpm="BPV.20108",
             sdir=1,
@@ -435,12 +438,12 @@ def test_apply_screening_actions_expands_masks_across_turns(tmp_path: Path) -> N
         }
     ]
 
-
 def test_summarise_screening_losses_logs_pre_and_projected_loss(tmp_path: Path, caplog) -> None:
     manager = _make_manager(tmp_path)
     manager.worker_metadata = [
         WorkerRuntimeMetadata(
             worker_id=0,
+            file_idx=0,
             start_bpm="BPH.13208",
             end_bpm="BPV.20108",
             sdir=1,
@@ -526,20 +529,6 @@ def test_split_validation_payloads_covers_multiple_ranges_when_available(
     validation_tracks = sum(payload_track_count(payload) for payload in validation_payloads)
     training_tracks = sum(payload_track_count(payload) for payload in training_payloads)
     assert validation_tracks * 10 >= training_tracks
-
-
-def test_compute_validation_loss_uses_single_looping_validation_worker(tmp_path: Path) -> None:
-    manager = _make_manager(tmp_path)
-    manager.validation_channels = _FakeChannels(
-        responses=[
-            {"worker_id": 10, "loss": 2.5, "payloads": 4, "tracks": 40},
-        ]
-    )  # ty:ignore[assignment]
-    manager.validation_loss_weights = [40.0]
-
-    loss = manager.compute_validation_loss({"kq": 0.0})
-
-    assert loss == pytest.approx(2.5)
 
 
 def test_split_validation_payloads_pairs_opposite_directions_with_mixed_planes(

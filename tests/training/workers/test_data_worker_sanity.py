@@ -18,7 +18,8 @@ def test_distribute_target_batches_spreads_across_files() -> None:
     target_batches_by_file, _use_balanced, effective = _distribute_target_batches_by_file(
         turns_by_file=turns_by_file,
         tracks_per_worker=10,
-        num_batches=4,
+        num_turn_batches=4,
+        per_worker_batches=1,
     )
 
     assert effective == 4

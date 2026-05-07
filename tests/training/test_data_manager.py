@@ -120,14 +120,12 @@ def test_prepare_turn_batches_keeps_partial_batches_per_file(
     )
 
 
-def test_prepare_turn_batches_respects_worker_cap_when_capacity_is_higher(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        "aba_optimiser.training.data_manager.random.shuffle",
-        lambda turns: None,
-    )
+def test_prepare_turn_batches_caps_at_num_workers_when_capacity_exceeds_it() -> None:
+    """When turn capacity > num_workers, exactly num_workers workers are planned.
 
+    num_workers=60 with range_specs_per_batch=2 needs 30 turn batches.
+    Batch sizes are rounded down to a multiple of num_batches for MAD.
+    """
     total_turns = 302
     data_manager = DataManager(
         bpms_in_range=["BPM.1"],
@@ -154,21 +152,24 @@ def test_prepare_turn_batches_respects_worker_cap_when_capacity_is_higher(
         )  # ty:ignore[invalid-argument-type]
     )
 
-    assert len(data_manager.turn_batches) == 30
-    assert all(len(batch) <= 5 for batch in data_manager.turn_batches)
-    assert len(data_manager.turn_batches) * 2 == 60
-
-
-
-
-def test_prepare_turn_batches_num_batches_does_not_inflate_worker_groups(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        "aba_optimiser.training.data_manager.random.shuffle",
-        lambda turns: None,
+    range_specs_per_batch, _ = _get_range_spec_plan(
+        run_arc_by_arc=False,
+        use_fixed_bpm=False,
+        num_starts=1,
+        num_ends=0,
     )
+    assert len(data_manager.turn_batches) == 60 // range_specs_per_batch
+    assert all(len(batch) <= 5 for batch in data_manager.turn_batches)
+    assert all(len(batch) % 2 == 0 or len(batch) < 2 for batch in data_manager.turn_batches)
 
+
+def test_prepare_turn_batches_num_batches_does_not_inflate_worker_groups() -> None:
+    """num_batches (MAD sub-batching) must not affect the number of workers.
+
+    With num_workers=60 and range_specs_per_batch=2, we always expect 30 turn
+    batches regardless of num_batches.  When tracks_per_worker < num_batches the
+    rounding step is a no-op and the worker reduces its own num_batches internally.
+    """
     data_manager = DataManager(
         bpms_in_range=["BPM.1"],
         all_bpms=["BPM.1"],
@@ -195,14 +196,14 @@ def test_prepare_turn_batches_num_batches_does_not_inflate_worker_groups(
         )  # ty:ignore[invalid-argument-type]
     )
 
-    assert len(data_manager.turn_batches) == 30
-    assert all(len(batch) <= 5 for batch in data_manager.turn_batches)
     range_specs_per_batch, _ = _get_range_spec_plan(
         run_arc_by_arc=True,
         use_fixed_bpm=True,
         num_starts=2,
         num_ends=0,
     )
+    assert len(data_manager.turn_batches) == 60 // range_specs_per_batch
+    assert all(len(batch) <= 5 for batch in data_manager.turn_batches)
     assert len(data_manager.turn_batches) * range_specs_per_batch == 60
 
 def test_get_total_turns_uses_real_batch_sizes() -> None:
@@ -264,6 +265,7 @@ def test_distribute_target_batches_by_file_balances_when_needed() -> None:
         turns_by_file,
         tracks_per_worker=5,
         num_turn_batches=6,
+        per_worker_batches=1,
     )
 
     assert use_balanced is True

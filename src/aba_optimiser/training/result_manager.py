@@ -8,12 +8,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from aba_optimiser.io.utils import save_results, scientific_notation
-from aba_optimiser.plotting.strengths import (
-    plot_deltap_comparison,
-    plot_strengths_comparison,
-    plot_strengths_vs_position,
-)
-from aba_optimiser.plotting.utils import show_plots
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -32,13 +26,9 @@ class ResultManager:
         knob_names: list[str],
         elem_spos: list[float],
         accelerator: Accelerator,
-        show_plots: bool = True,
         output_knobs_path: Path | None = None,
         knob_table_path: Path | None = None,
-        plots_dir: Path | None = None,
         include_uncertainty: bool = True,
-        plot_real_values: bool = False,
-        save_prefix: str = "",
     ):
         """Initialise result manager.
 
@@ -46,35 +36,16 @@ class ResultManager:
             knob_names: List of knob names
             elem_spos: Element s-positions
             accelerator: Accelerator instance for machine-specific info
-            show_plots: Whether to display plots
-            output_knobs_path: Path to save final knobs (defaults to PROJECT_ROOT/data/final_knobs.txt)
-            knob_table_path: Path to save knob table (defaults to PROJECT_ROOT/data/knob_strengths_table.txt)
-            plots_dir: Directory to save plots (defaults to plots/)
-            include_uncertainty: Whether to show uncertainty error bars on plots
-            plot_real_values: Whether to plot absolute values instead of relative values
-            save_prefix: Prefix prepended to generated plot filenames
+            output_knobs_path: Path to save final knobs
+            knob_table_path: Path to save knob table
+            include_uncertainty: Whether to include uncertainty error bars
         """
         self.knob_names = knob_names
         self.elem_spos = elem_spos
-        self.show_plots = show_plots
         self.accelerator = accelerator
-
-        # Lazy import defaults if not provided
-        # if output_knobs_path is None or knob_table_path is None:
-        #     from aba_optimiser.config import KNOB_TABLE, OUTPUT_KNOBS
-
-        #     self.output_knobs_path = output_knobs_path or OUTPUT_KNOBS
-        #     self.knob_table_path = knob_table_path or KNOB_TABLE
-        # else:
         self.output_knobs_path = output_knobs_path
         self.knob_table_path = knob_table_path
         self.include_uncertainty = include_uncertainty
-        self.plot_real_values = plot_real_values
-        self.save_prefix = save_prefix
-
-        # Set plots directory with default
-        from pathlib import Path
-        self.plots_dir = Path(plots_dir) if plots_dir is not None else Path("plots")
 
     def save_results(
         self,
@@ -127,67 +98,3 @@ class ResultManager:
                     )
             LOGGER.info("Results saved successfully.")
 
-    def generate_plots(
-        self,
-        current_knobs: dict[str, float],
-        initial_strengths: np.ndarray,
-        true_strengths: dict[str, float],
-        uncertainties: np.ndarray,
-    ) -> None:
-        """Generate all plotting results using the plotting module."""
-        LOGGER.info("Generating plots...")
-        quad_unc = uncertainties.copy()
-        knob_names = self.knob_names.copy()
-        if self.accelerator.optimise_energy:
-            knob_names.remove("deltap")
-            quad_unc = quad_unc[:-1]  # Remove uncertainty for deltap
-
-        magnet_names = [knob[:-3] for knob in knob_names]
-        initial_vals = np.array([initial_strengths[i] for i in range(len(knob_names))])
-        final_vals = np.array([current_knobs[k] for k in knob_names])
-        true_vals = np.array([true_strengths.get(k, np.nan) for k in knob_names])
-
-        # Ensure plots directory exists
-        self.plots_dir.mkdir(parents=True, exist_ok=True)
-        save_dir = f"{self.plots_dir}/"
-        mode_label = "real_values" if self.plot_real_values else "relative_difference"
-        show_errorbars = self.include_uncertainty
-
-        if len(knob_names) > 0:
-            plot_strengths_comparison(
-                magnet_names,
-                final_vals,
-                true_vals,
-                quad_unc,
-                initial_vals=initial_vals,
-                show_errorbars=show_errorbars,
-                plot_real=self.plot_real_values,
-                save_path=f"{save_dir}{self.save_prefix}{mode_label}_comparison.png",
-                accelerator=self.accelerator,
-                unit="$m^{-1}$",
-            )
-
-            plot_strengths_vs_position(
-                self.elem_spos,
-                final_vals,
-                true_vals,
-                quad_unc,
-                initial_vals=initial_vals,
-                show_errorbars=show_errorbars,
-                plot_real=self.plot_real_values,
-                save_path=f"{save_dir}{self.save_prefix}{mode_label}_vs_position_comparison.png",
-                accelerator=self.accelerator,
-                magnet_names=magnet_names,
-            )
-
-        if "deltap" in current_knobs:  # Energy knob was optimised
-            plot_deltap_comparison(
-                true_strengths.get("deltap", 0),
-                current_knobs["deltap"],
-                uncertainties[-1] if self.include_uncertainty else 0.0,
-                save_path=f"{save_dir}{self.save_prefix}deltap_comparison.png",
-            )
-        LOGGER.info(f"Plots saved to {self.plots_dir.resolve()}")
-
-        if self.show_plots:
-            show_plots()

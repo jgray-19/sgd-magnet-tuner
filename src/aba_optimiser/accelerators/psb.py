@@ -5,8 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from aba_optimiser.accelerators.base import Accelerator
-from aba_optimiser.config import PROTON_MASS
-from aba_optimiser.physics.deltap import kinetic_to_total_energy
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -14,11 +12,7 @@ if TYPE_CHECKING:
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 
-PSB_FLAT_BOTTOM_MOMENTUM_GEV = 0.160
-PSB_FLAT_BOTTOM_TOTAL_ENERGY_GEV = kinetic_to_total_energy(
-    PSB_FLAT_BOTTOM_MOMENTUM_GEV,
-    PROTON_MASS,
-)
+PSB_FLAT_BOTTOM_KINETIC_ENERGY_GEV = 0.160
 
 
 class PSB(Accelerator):
@@ -26,21 +20,25 @@ class PSB(Accelerator):
 
     PATTERN_SBENDS = r"^BR%.BHZ%d+$"
     PATTERN_RBENDS = r"^BR%.BSW%d+L%d+%.%d+$"
-    PATTERN_QUADRUPOLE = r"^BR%.Q[FD][OE]%d+$"
-    QUAD_PERTURBATION_PATTERN = r"^BR\.Q"
-    BPM_PATTERN_TEMPLATE = r"^BR{ring}%.BPM"
+    PATTERN_QUADRUPOLE = "^BR%.Q[FD][OE]%d+$"
+    PATTERN_SEXTUPOLE = r"^BR%d+%.XNO[49].*"
+    PATTERN_CORRECTOR_H = r"^B[RE]%d+%.DHZ%d+L%d+$"
+    PATTERN_CORRECTOR_V = r"^B[RE]%d+%.DVT%d+L%d+$"
+    QUAD_PERTURBATION_PATTERN = r"^BR\.Q(?:FO\d+|DE\d+)$"
+    BPM_PATTERN_TEMPLATE = "^BR{ring}%.BPM"
 
     def __init__(
         self,
         ring: int,
         sequence_file: Path | str,
-        pc: float = PSB_FLAT_BOTTOM_MOMENTUM_GEV,
-        kinetic_energy: float | None = None,
+        kinetic_energy: float = PSB_FLAT_BOTTOM_KINETIC_ENERGY_GEV,
         bpm_pattern: str | None = None,
         optimise_bends: bool = False,
         optimise_quadrupoles: bool = False,
         optimise_quad_dy: bool = False,
+        optimise_quad_dx: bool = False,
         optimise_sextupoles: bool = False,
+        optimise_correctors: bool = False,
         optimise_energy: bool = False,
         custom_knobs_to_optimise: list[str] | None = None,
     ):
@@ -49,25 +47,23 @@ class PSB(Accelerator):
             raise ValueError(f"PSB ring must be 1, 2, 3, or 4, got {ring}")
 
         self.ring = ring
-        if kinetic_energy is not None:
-            pc = kinetic_energy
-        self.kinetic_energy = float(pc)
-
         super().__init__(
             sequence_file=sequence_file,
-            pc=pc,
+            kinetic_energy=kinetic_energy,
             bpm_pattern=bpm_pattern or self.BPM_PATTERN_TEMPLATE.format(ring=ring),
             optimise_energy=optimise_energy,
             optimise_quadrupoles=optimise_quadrupoles,
             optimise_sextupoles=optimise_sextupoles,
             optimise_quad_dy=optimise_quad_dy,
+            optimise_quad_dx=optimise_quad_dx,
             custom_knobs_to_optimise=custom_knobs_to_optimise,
         )
         self.optimise_bends = optimise_bends
+        self.optimise_correctors = optimise_correctors
 
     def has_any_optimisation(self) -> bool:
         """Check if any optimisation is enabled."""
-        return super().has_any_optimisation() or self.optimise_bends
+        return super().has_any_optimisation() or self.optimise_bends or self.optimise_correctors
 
     @property
     def seq_name(self) -> str:
@@ -81,23 +77,37 @@ class PSB(Accelerator):
             List of (kind, attribute, pattern, nonzero_attr, optimise_flag) tuples defining
             all possible knobs that can be created for this accelerator.
         """
-        #fmt: off
+        # fmt: off
         return [
             ("quadrupole", "k1", self.PATTERN_QUADRUPOLE, "k1", self.optimise_quadrupoles),
             ("sbend", "k0", self.PATTERN_SBENDS, "k0", self.optimise_bends),
             ("rbend", "k0", self.PATTERN_RBENDS, "k0", self.optimise_bends),
-            *[
-                ("quadrupole", attr, pattern, "k1", getattr(self, f"optimise_quad_{attr}"))
-                for attr, patterns in self.quadrupole_misalignment_patterns.items()
-                for pattern in patterns
-            ],
+            ("multipole", "knl[3]", self.PATTERN_SEXTUPOLE, None, self.optimise_sextupoles),
+            ("hkicker", "kick", self.PATTERN_CORRECTOR_H, None, self.optimise_correctors),
+            ("vkicker", "kick", self.PATTERN_CORRECTOR_V, None, self.optimise_correctors),
+            ("quadrupole", "dy", self.PATTERN_QUADRUPOLE, "k1", self.optimise_quad_dy),
+            ("quadrupole", "dx", self.PATTERN_QUADRUPOLE, "k1", self.optimise_quad_dx),
         ]
-        #fmt: on
+        # fmt: on
+
+    def get_mad_attr_specs(self) -> dict[str, dict[str, str]]:
+        """Return PSB-specific knob naming overrides for MAD knob creation."""
+        return {
+            "multipole": {
+                "name_expr": 'e.name .. ".dk2l"',
+            },
+        }
+
+    def format_result_knob_names(self, knob_names: list[str]) -> list[str]:
+        """Map PSB internal multipole knob names back to the public dk2l form."""
+        formatted = super().format_result_knob_names(knob_names)
+        return [name.replace(".knl[3]", ".dk2l") for name in formatted]
 
     @property
     def quadrupole_misalignment_patterns(self) -> dict[str, tuple[str, ...]]:
         """Return PSB quadrupole patterns eligible for misalignment knobs."""
         return {
+            "dx": (self.PATTERN_QUADRUPOLE,),
             "dy": (self.PATTERN_QUADRUPOLE,),
         }
 
@@ -105,7 +115,7 @@ class PSB(Accelerator):
         """Return perturbation metadata for PSB quadrupoles."""
         return {
             "q": {
-                "default_rel_std": 0,
+                "default_rel_std": 2e-4,
                 "pattern": self.QUAD_PERTURBATION_PATTERN,
             },
         }
@@ -116,11 +126,13 @@ class PSB(Accelerator):
 
     @staticmethod
     def infer_monitor_plane(bpm_name: str) -> str:
-        del bpm_name
-        return "HV"
+        local = bpm_name.split(".", 1)[-1]
+        if local.upper().startswith("B"):
+            return "HV"
+        raise ValueError(f"Unsupported PSB monitor name: {bpm_name}")
 
     def get_ac_dipole_marker(self) -> str:
-        raise "HACMAP"  # "VACMAP" is also valid, there is an assumption that this is at the same place.
+        return "HACMAP"  # "VACMAP" is also valid
 
     @property
     def ac_dipole_location(self) -> tuple[str, float]:

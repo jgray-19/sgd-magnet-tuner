@@ -298,21 +298,11 @@ class Controller(BaseController):
         output_knob_names = self.result_manager.knob_names
         if "deltap" in output_knob_names and "deltap" not in initial_knobs_abs:
             initial_knobs_abs = {**initial_knobs_abs, "deltap": initial_knobs_abs["pt"]}
-        initial_strengths_abs = np.array(
-            [initial_knobs_abs[name] for name in output_knob_names], dtype=np.float64
-        )
 
-        # Save and plot using the final knobs
         self.result_manager.save_results(
             self.final_knobs,
             uncertainties_abs,
             self.filtered_true_strengths,
-        )
-        self.result_manager.generate_plots(
-            self.final_knobs,
-            initial_strengths_abs,
-            self.filtered_true_strengths,
-            uncertainties_abs,
         )
 
         logger.info("Optimisation complete.")
@@ -432,12 +422,8 @@ class Controller(BaseController):
         self.result_manager = ResultManager(
             deltap_knob_names,
             self.config_manager.elem_spos,
-            show_plots=self.show_plots,
             accelerator=self.accelerator,
             include_uncertainty=self.output_config.include_uncertainty,
-            plot_real_values=self.output_config.plot_real_values,
-            save_prefix=self.output_config.save_prefix,
-            plots_dir=self.output_config.plots_dir,
         )
 
     def _get_controller_mad_setup_kwargs(self) -> dict:

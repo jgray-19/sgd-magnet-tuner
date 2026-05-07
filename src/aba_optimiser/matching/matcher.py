@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from aba_optimiser.accelerators import LHC, SPS
-from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
+from aba_optimiser.mad.optimising_mad_interface import GradientDescentMadInterface
 
 if TYPE_CHECKING:
     import tfs
@@ -41,7 +41,6 @@ class BetaMatcher:
     def __init__(
         self,
         config: MatcherConfig,
-        show_plots: bool = True,
     ):
         """
         Initialise the BetaMatcher with configuration.
@@ -53,12 +52,10 @@ class BetaMatcher:
                 - knobs_file: Path to JSON listing knobs to adjust
                 - sequence_file_path: Path to MAD-NG sequence file
                 - magnet_range: Range of magnets for matching
-                - pc: Beam energy in GeV
+                - kinetic_energy: Beam energy in GeV
                 - output_dir: Directory to save results
-            show_plots: Whether to display plots during matching
         """
         self.config = config
-        self.show_plots = show_plots
 
         # Validate configuration
         self.config.validate()
@@ -508,15 +505,14 @@ end
 
         logger.info("Initialising MAD-NG interface for beta matching")
 
-        # AbaMadInterface eagerly loads sequence and sets up beam from accelerator.
-        self.mad_interface = AbaMadInterface(accelerator=self.accelerator)
+        self.mad_interface = GradientDescentMadInterface(accelerator=self.accelerator)
 
         # Observe the bpms
-        self.mad_interface.observe_elements()
+        self.mad_interface.observe()
 
         # Apply estimated quadrupole strengths
         logger.info(f"Applying {len(self.estimated_strengths)} estimated quadrupole strengths")
-        self.mad_interface.set_magnet_strengths(self.estimated_strengths)
+        self.mad_interface.update_knob_values(self.estimated_strengths)
         self.mad_interface.set_madx_variables(**self.tune_knobs)
 
         # Compute twiss to get target tunes after applying estimated strengths
@@ -535,19 +531,21 @@ end
         """Build an accelerator instance from matcher configuration."""
         seq_name = str(getattr(self.config, "seq_name", "") or "").lower()
         seq_file = self.config.sequence_file_path
-        pc = self.config.pc
+        kinetic_energy = self.config.kinetic_energy
 
         if "sps" in seq_name or "sps" in seq_file.stem.lower():
             return SPS(
                 sequence_file=seq_file,
-                pc=pc,
+                kinetic_energy=kinetic_energy,
+                custom_knobs_to_optimise=list(self.estimated_strengths),
             )
 
         beam = 2 if "b2" in seq_name else 1
         return LHC(
             beam=beam,
             sequence_file=seq_file,
-            pc=pc,
+            kinetic_energy=kinetic_energy,
+            custom_knobs_to_optimise=list(self.estimated_strengths),
         )
 
     def _get_bpm_list(self) -> list[str]:

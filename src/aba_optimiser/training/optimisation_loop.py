@@ -55,8 +55,6 @@ class OptimisationLoop:
         self.smoothed_grad_norm: float = 0.0
         self.smoothed_loss_change: float = 0.0
         self.grad_norm_alpha = optimiser_config.grad_norm_alpha
-        self.expected_rel_error_opt = optimiser_config.expected_rel_error
-        self.max_clipping_ratio: float = 0.0  # Track max clipping ratio per epoch
 
         # Track best knobs and loss for rejection logic
         self.best_loss: float = float("inf")
@@ -81,10 +79,6 @@ class OptimisationLoop:
         )
         self.num_batches = simulation_config.num_batches
 
-        # Convert total expected relative error into a per-step trust-region bound
-        self.trust_region_safety = 3.0  # allow errors a few times worse than typical
-        self.absolute_param_floor = 1e-6
-
         if abs_offsets is None:
             self.abs_offsets = np.zeros_like(initial_strengths, dtype=np.float64)
         else:
@@ -103,34 +97,6 @@ class OptimisationLoop:
             raise ValueError("dabs_dopt contains zero entries, cannot map trust region")
 
         self.dopt_dabs = 1.0 / self.dabs_dopt
-
-        self.expected_rel_error = self.expected_rel_error_opt
-
-        # Per-parameter floor in optimisation space to avoid vanishing limits near zero.
-        # Use a stable baseline in optimisation space, not only current delta values.
-        baseline_opt_scale = np.maximum(
-            np.abs(self.abs_offsets * self.dopt_dabs),
-            np.abs(self.dopt_dabs) * self.absolute_param_floor,
-        )
-        self.optimisation_floor_vec = np.maximum(
-            np.abs(initial_strengths),
-            baseline_opt_scale,
-        )
-
-        self.total_steps = max(1, self.max_epochs * self.num_batches)
-        if self.expected_rel_error > 0:
-            self.rel_sigma_step = (
-                self.trust_region_safety * self.expected_rel_error / np.sqrt(self.total_steps)
-            )
-            LOGGER.info(
-                "Per-parameter trust region enabled: "
-                f"rel_sigma_total_opt={self.expected_rel_error:.3e}, "
-                f"rel_sigma_step={self.rel_sigma_step:.3e}, "
-                f"steps={self.total_steps}, safety={self.trust_region_safety:g}"
-            )
-        else:
-            LOGGER.info("Per-parameter trust region disabled")
-            self.rel_sigma_step = 0.0
 
     def _init_optimiser(self, shape: tuple[int, ...], optimiser_type: str) -> None:
         """Initialise the optimiser based on type."""
@@ -273,7 +239,6 @@ class OptimisationLoop:
 
         last_completed_epoch = start_epoch - 1
         for epoch in range(start_epoch, self.max_epochs):
-            self.max_clipping_ratio = 0.0  # Reset once per epoch
             epoch_start = time.time()
 
             epoch_loss = 0.0
@@ -343,7 +308,6 @@ class OptimisationLoop:
                 epoch_start,
                 run_start,
                 current_knobs,
-                self.max_clipping_ratio,
                 sum_true_diff,
                 new_best,
                 saved_checkpoint,
@@ -391,7 +355,6 @@ class OptimisationLoop:
             "prev_loss": None if prev_loss is None else float(prev_loss),
             "smoothed_grad_norm": float(self.smoothed_grad_norm),
             "smoothed_loss_change": float(self.smoothed_loss_change),
-            "max_clipping_ratio": float(self.max_clipping_ratio),
             "optimiser_class": self.optimiser.__class__.__name__,
             "optimiser_state": self.optimiser.state_to_dict(),
         }
@@ -600,7 +563,6 @@ class OptimisationLoop:
         self.best_loss = float(payload.get("best_loss", float("inf")))
         self.smoothed_grad_norm = float(payload.get("smoothed_grad_norm", 0.0))
         self.smoothed_loss_change = float(payload.get("smoothed_loss_change", 0.0))
-        self.max_clipping_ratio = float(payload.get("max_clipping_ratio", 0.0))
 
         optimiser_state = payload.get("optimiser_state", {})
         if optimiser_state:
@@ -658,78 +620,10 @@ class OptimisationLoop:
     def _update_knobs(
         self, current_knobs: dict[str, float], agg_grad: np.ndarray, lr: float
     ) -> dict[str, float]:
-        """Update knob values using the optimiser with per-parameter trust region.
-
-        First applies the optimizer step, then constrains the update magnitude
-        using a per-parameter box trust region based on expected_rel_error.
-        """
+        """Update knob values using the optimiser."""
         param_vec = np.array([current_knobs[k] for k in self.knob_names])
-
-        # Let the optimizer propose the step (no gradient scaling)
         new_vec = self.optimiser.step(param_vec, agg_grad, lr)
-
-        # Apply per-parameter trust region in optimisation space using the
-        # transformed internal tolerance.
-        if self.rel_sigma_step > 0:
-            sigma_abs_opt = self.rel_sigma_step * np.maximum(
-                np.abs(param_vec),
-                self.optimisation_floor_vec,
-            )
-            new_vec = self._apply_trust_region_box(
-                params=param_vec,
-                proposed=new_vec,
-                sigma_abs=sigma_abs_opt,
-                k=1.0,
-            )
-
         return dict(zip(self.knob_names, new_vec))
-
-    def _apply_trust_region_box(
-        self,
-        params: np.ndarray,
-        proposed: np.ndarray,
-        *,
-        sigma_abs: np.ndarray | None = None,
-        rel_sigma: float | None = None,
-        param_floor: float = 0.0,
-        k: float = 1.0,
-    ) -> np.ndarray:
-        """Per-parameter (box) trust region: |Δp_i| <= k * sigma_i
-
-        Constrains the update step for each parameter independently.
-        Use either sigma_abs (absolute std per parameter) OR rel_sigma (relative std).
-
-        Args:
-            params: Current parameter values
-            proposed: Proposed new parameter values from optimizer
-            sigma_abs: Per-parameter absolute std (if using absolute mode)
-            rel_sigma: Relative std (if using relative mode)
-            param_floor: Minimum magnitude for relative calculation
-            k: Trust region scale factor (default 1.0 = 1-sigma)
-
-        Returns:
-            Clipped parameter values respecting the trust region
-        """
-        delta = proposed - params
-
-        if sigma_abs is not None:
-            if sigma_abs.shape != params.shape:
-                raise ValueError("sigma_abs must have same shape as params")
-            limit = k * sigma_abs
-        elif rel_sigma is not None:
-            limit = k * rel_sigma * np.maximum(np.abs(params), param_floor)
-        else:
-            raise ValueError("Provide sigma_abs or rel_sigma")
-
-        # Track clipping ratio: max(|delta_i| / limit_i) before clipping
-        with np.errstate(divide="ignore", invalid="ignore"):
-            clipping_ratio = np.abs(delta) / (limit + 1e-30)
-            clipping_ratio = np.nan_to_num(clipping_ratio, nan=0.0, posinf=1e30)
-        self.max_clipping_ratio = float(np.max(clipping_ratio)) if clipping_ratio.size > 0 else 0.0
-
-        # Clip the delta to the trust region
-        delta = np.clip(delta, -limit, +limit)
-        return params + delta
 
     def _update_smoothed_grad_norm(self, grad_norm: float) -> None:
         """Update the exponential moving average of the gradient norm."""
@@ -764,7 +658,6 @@ class OptimisationLoop:
         epoch_start: float,
         run_start: float,
         current_knobs: dict[str, float],
-        clipping_ratio: float = 0.0,
         sum_true_diff: float = 0.0,
         new_best: bool = False,
         saved_checkpoint: bool = False,
@@ -783,14 +676,6 @@ class OptimisationLoop:
                 "learning_rate": lr,
                 "sum_true_diff": sum_true_diff,
             }
-            if self.rel_sigma_step > 0:
-                scalars.update(
-                    {
-                        "trust_region_clipping_ratio": clipping_ratio,
-                        "trust_region_rel_sigma_step": self.rel_sigma_step,
-                    }
-                )
-
             for key, value in scalars.items():
                 writer.add_scalar(key, value, epoch)
             writer.flush()
@@ -804,8 +689,6 @@ class OptimisationLoop:
         if validation_loss is not None:
             parts.append(f"val={validation_loss:.3e}")
         parts.append(f"g={grad_norm:.3e}")
-        if self.rel_sigma_step > 0:
-            parts.append(f"clip={clipping_ratio:.2e}")
         parts.append(f"td={sum_true_diff:.3e}")
         parts.append(f"lr={lr:.2e}, et={epoch_time:.1f}s, tt={total_time:.1f}s")
         message = ", ".join(parts)

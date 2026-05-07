@@ -76,7 +76,6 @@ class BaseController(ABC):
         self.accelerator = accelerator
         self.debug = debug
         self.output_config = output_config if output_config is not None else OutputConfig()
-        self.show_plots = self.output_config.show_plots
         self.mad_logfile: Path | None = self.output_config.mad_logfile
         self.python_logfile: Path | None = self.output_config.python_logfile
 
@@ -159,12 +158,8 @@ class BaseController(ABC):
         self.result_manager = ResultManager(
             output_knob_names,
             self.config_manager.elem_spos,
-            show_plots=self.show_plots,
             accelerator=self.accelerator,
             include_uncertainty=self.output_config.include_uncertainty,
-            plot_real_values=self.output_config.plot_real_values,
-            save_prefix=self.output_config.save_prefix,
-            plots_dir=self.output_config.plots_dir,
         )
 
     def _validate_knob_initialisation(self) -> None:

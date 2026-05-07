@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import tfs
 
+import numpy as np
+
 if TYPE_CHECKING:
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
@@ -45,14 +47,18 @@ def check_sequence_loaded(interface: AbaMadInterface, seq_name: str = "lhcb1") -
 def check_beam_setup(
     interface: AbaMadInterface,
     particle: str = "proton",
-    pc: float | None = None,
+    kinetic_energy: float | None = None,
     charge: int = 1,
     spin: float = 0.5,
 ) -> None:
     """Check beam setup properties."""
     assert particle == interface.mad.loaded_sequence.beam.particle
-    if pc is not None:
-        assert pc == interface.mad.loaded_sequence.beam.pc
+    if kinetic_energy is not None:
+        assert np.isclose(
+            kinetic_energy,
+            interface.mad.loaded_sequence.beam.energy - interface.mad.loaded_sequence.beam.mass,
+            rtol=1e-10,
+        )
     assert charge == interface.mad.loaded_sequence.beam.charge
     assert spin == interface.mad.loaded_sequence.beam.spin
 

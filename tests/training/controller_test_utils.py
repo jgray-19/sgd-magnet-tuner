@@ -256,7 +256,6 @@ def _run_energy_optimisation_case(
         bpm_start_points,
         bpm_end_points,
         output_config=OutputConfig(
-            show_plots=False,
             mad_logfile=tmp_path / mad_log_name,
             write_tensorboard_logs=False,
         ),
@@ -272,7 +271,6 @@ def _make_optimiser_config_quad() -> OptimiserConfig:
         max_lr=1e-6,
         min_lr=1e-6,
         gradient_converged_value=5e-14,
-        expected_rel_error=18e-4,
     )
 
 

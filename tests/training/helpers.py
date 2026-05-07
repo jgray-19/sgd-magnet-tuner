@@ -35,6 +35,32 @@ TRACK_COLUMNS = (
 LOGGER = logging.getLogger(__name__)
 
 
+def _correct_xsuite_integrated_strength_deltas(
+    env: xt.Environment,
+    magnet_strengths: dict[str, float],
+) -> None:
+    """Rewrite dk*l perturbations as k* deltas for xsuite elements.
+
+    ``initialise_env`` currently applies ``dk0l/dk1l/dk2l`` directly onto
+    ``k0/k1/k2``. In MAD-NG the optimiser knobs are integrated strengths, while
+    xsuite element ``k*`` fields are per-metre strengths, so we need to divide
+    by the element length before writing the final xsuite lattice.
+    """
+    dknl_to_base = {"dk0l": "k0", "dk1l": "k1", "dk2l": "k2"}
+    for strength_name, integrated_delta in magnet_strengths.items():
+        magnet_name, attr = strength_name.rsplit(".", 1)
+        base_attr = dknl_to_base.get(attr)
+        if base_attr is None:
+            continue
+
+        element = env[magnet_name.lower()]
+        length = getattr(element, "length", 0.0) or 0.0
+        scale = length if abs(length) > 0.0 else 1.0
+        current = getattr(element, base_attr)
+        corrected = current - integrated_delta + integrated_delta / scale
+        env.set(magnet_name.lower(), **{base_attr: corrected})
+
+
 def convert_rbends_to_true_rbends(mad: AbaMadInterface) -> None:
     """Convert all rbends in the sequence to true rbends for correct tracking."""
     mad.mad.send("""
@@ -167,9 +193,10 @@ def generate_xsuite_env_with_errors(
         corrector_table=corrector_table,
         sequence_file=accel.sequence_file,
         seq_name=accel.seq_name,
-        pc=accel.pc,
+        kinetic_energy=accel.kinetic_energy,
         strict_set=False,
     )
+    _correct_xsuite_integrated_strength_deltas(env, magnet_strengths)
     return env, magnet_strengths, matched_tunes, corrector_table
 
 

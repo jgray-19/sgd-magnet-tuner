@@ -67,7 +67,7 @@ def test_base_controller_raises_when_no_knobs_created(
 
     accelerator = LHC(
         beam=1,
-        pc=6800,
+        kinetic_energy=6800,
         sequence_file=seq_b1,
         optimise_quadrupoles=True,
     )
@@ -93,5 +93,5 @@ def test_base_controller_raises_when_no_knobs_created(
             sequence_config=SequenceConfig("BPM.9R1.B1/BPM.9L2.B1"),
             bpm_start_points=["BPM.9R1.B1"],
             bpm_end_points=["BPM.9L2.B1"],
-            output_config=OutputConfig(show_plots=False, write_tensorboard_logs=False),
+            output_config=OutputConfig(write_tensorboard_logs=False),
         )

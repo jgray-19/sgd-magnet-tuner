@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -12,7 +11,6 @@ from aba_optimiser.mad import GradientDescentMadInterface
 from aba_optimiser.mad.scripts import (
     build_validation_init_script,
     build_validation_script,
-    dump_debug_script,
 )
 from aba_optimiser.workers.abstract_worker import AbstractWorker
 from aba_optimiser.workers.common import TrackingData, WorkerConfig, split_array_to_batches
@@ -29,31 +27,8 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 
-@dataclass
-class _ValidationTask:
-    """Prepared validation workload for one file/range/direction payload."""
-
-    task_id: int
-    file_idx: int
-    config: WorkerConfig
-    observables: tuple[str, ...]
-    comparisons: dict[str, list[np.ndarray]]
-    weights: dict[str, list[np.ndarray]]
-    init_coords: list[list[list[float]]]
-    init_pts: list[list[float]]
-    batch_size: int
-    num_batches: int
-    normalisation_points: int
-    keep_bpm_mask: np.ndarray
-    run_track_init_text: str
-    run_track_script: str
-    track_count: int
-    mad: MAD | None = None
-    nbpms: int | None = None
-
-
 class ValidationTrackingWorker(TrackingWorker):
-    """Single-process validation worker that loops through multiple payloads."""
+    """Validation worker for one payload."""
 
     def __init__(
         self,
@@ -65,13 +40,14 @@ class ValidationTrackingWorker(TrackingWorker):
     ) -> None:
         if mode not in ("multi-turn", "arc-by-arc"):
             raise ValueError(f"Invalid mode '{mode}'. Must be 'multi-turn' or 'arc-by-arc'")
-        if not payloads:
-            raise ValueError("ValidationTrackingWorker requires at least one payload")
+        if len(payloads) != 1:
+            raise ValueError(
+                f"ValidationTrackingWorker requires exactly one payload, got {len(payloads)}"
+            )
 
         self.mode = mode
-        self.validation_payloads = payloads
-        placeholder_config = payloads[0][1]
-        AbstractWorker.__init__(self, conn, worker_id, payloads, placeholder_config, simulation_config)
+        self.file_idx = payloads[0][2]
+        AbstractWorker.__init__(self, conn, worker_id, payloads[0][0], payloads[0][1], simulation_config)
 
     @staticmethod
     def _resolve_observables_for_config(
@@ -87,14 +63,17 @@ class ValidationTrackingWorker(TrackingWorker):
             return ("y", "py") if include_momentum else ("y",)
         raise ValueError(f"Unsupported kick plane {kick_plane!r}")
 
-    @staticmethod
-    def _batch_observables(
-        data: TrackingData,
-        observables: tuple[str, ...],
-        n_init: int,
-        num_batches: int,
-    ) -> tuple[dict[str, list[np.ndarray]], dict[str, list[np.ndarray]]]:
-        """Return batched comparison and weight arrays for the active observables."""
+    def prepare_data(self, data: TrackingData) -> None:
+        """Prepare one validation payload."""
+        observables = self._resolve_observables_for_config(self.config, self.include_momentum)
+        num_batches = min(self.simulation_config.num_batches, len(data.init_coords))
+        if num_batches <= 0:
+            raise ValueError(f"Worker {self.worker_id}: No initial coordinates available")
+
+        n_init = len(data.init_coords)
+        init_coords = data.init_coords
+        if np.isnan(init_coords).any():
+            raise ValueError(f"Worker {self.worker_id}: NaNs found in initial coordinates")
         if data.precomputed_weights is None:
             raise ValueError("Precomputed weights must be provided for ValidationTrackingWorker")
 
@@ -106,100 +85,29 @@ class ValidationTrackingWorker(TrackingWorker):
             comparison_arrays[observable] = source[:, :, plane_idx]
             weight_arrays[observable] = getattr(data.precomputed_weights, observable)[:n_init]
 
-        comparisons = {
+        self.observables = observables
+        self.comparisons = {
             observable: split_array_to_batches(values, num_batches)
             for observable, values in comparison_arrays.items()
         }
-        weights = {
+        self.weights = {
             observable: split_array_to_batches(values, num_batches)
             for observable, values in weight_arrays.items()
         }
-        return comparisons, weights
-
-    @staticmethod
-    def _task_script_suffix(task: _ValidationTask) -> str:
-        start = task.config.start_bpm.replace('.', '_')
-        end = task.config.end_bpm.replace('.', '_')
-        return f"task_{task.task_id}_{start}_{end}_sdir_{task.config.sdir}"
-
-    def _dump_debug_scripts_for_task(self, task: _ValidationTask) -> None:
-        """Write generated MAD scripts to disk when debugging is enabled."""
-        suffix = self._task_script_suffix(task)
-        dump_debug_script(
-            f"run_val_init_{suffix}",
-            task.run_track_init_text,
-            debug=task.config.debug,
-            mad_logfile=task.config.mad_logfile,
-            worker_id=self.worker_id,
-        )
-        dump_debug_script(
-            f"run_val_{suffix}",
-            task.run_track_script,
-            debug=task.config.debug,
-            mad_logfile=task.config.mad_logfile,
-            worker_id=self.worker_id,
-        )
-
-    def prepare_data(self, payloads: list[tuple[TrackingData, WorkerConfig, int]]) -> None:
-        """Prepare all validation payloads for sequential evaluation in one process."""
-        tasks: list[_ValidationTask] = []
-        for task_id, (data, config, file_idx) in enumerate(payloads):
-            observables = self._resolve_observables_for_config(config, self.include_momentum)
-            num_batches = min(self.simulation_config.num_batches, len(data.init_coords))
-            if num_batches <= 0:
-                raise ValueError(f"Worker {self.worker_id}: No initial coordinates available")
-
-            n_init = len(data.init_coords)
-            init_coords = data.init_coords
-            if np.isnan(init_coords).any():
-                raise ValueError(f"Worker {self.worker_id}: NaNs found in initial coordinates")
-
-            comparisons, weights = self._batch_observables(data, observables, n_init, num_batches)
-            init_coords_batches = split_array_to_batches(init_coords, num_batches)
-            init_pts_batches = split_array_to_batches(data.init_pts[:n_init], num_batches)
-
-            task = _ValidationTask(
-                task_id=task_id,
-                file_idx=file_idx,
-                config=config,
-                observables=observables,
-                comparisons=comparisons,
-                weights=weights,
-                init_coords=[batch.tolist() for batch in init_coords_batches],
-                init_pts=[batch.tolist() for batch in init_pts_batches],
-                batch_size=len(init_coords_batches[0]),
-                num_batches=num_batches,
-                normalisation_points=comparisons[observables[0]][0].shape[1],
-                keep_bpm_mask=np.ones(comparisons[observables[0]][0].shape[1], dtype=bool),
-                run_track_init_text=build_validation_init_script(observables),
-                run_track_script=build_validation_script(observables),
-                track_count=int(n_init),
-            )
-            self._dump_debug_scripts_for_task(task)
-            tasks.append(task)
-
-        self.validation_tasks = tasks
-        self._activate_task(tasks[0])
-
-    def _activate_task(self, task: _ValidationTask) -> None:
-        """Load one prepared task into the inherited TrackingWorker helpers."""
-        self.config = task.config
-        self.bpm_range = f"{task.config.start_bpm}/{task.config.end_bpm}"
-        self.tracking_range = self.bpm_range
-        if task.config.sdir < 0:
-            self.tracking_range = f"{task.config.end_bpm}/{task.config.start_bpm}"
-
-        self.observables = task.observables
-        self.comparisons = task.comparisons
-        self.weights = task.weights
-        self.init_coords = task.init_coords
-        self.init_pts = task.init_pts
-        self.batch_size = task.batch_size
-        self.num_batches = task.num_batches
-        self.normalisation_points = task.normalisation_points
-        self.keep_bpm_mask = task.keep_bpm_mask
-        self.run_track_init_text = task.run_track_init_text
-        self.run_track_script = task.run_track_script
+        self.init_coords = [
+            batch.tolist() for batch in split_array_to_batches(init_coords, num_batches)
+        ]
+        self.init_pts = [
+            batch.tolist()
+            for batch in split_array_to_batches(data.init_pts[:n_init], num_batches)
+        ]
+        self.batch_size = len(self.init_coords[0])
+        self.num_batches = num_batches
+        self.track_count = int(n_init)
+        self.normalisation_points = self.comparisons[observables[0]][0].shape[1]
+        self.keep_bpm_mask = np.ones(self.normalisation_points, dtype=bool)
+        self.run_track_init_text = build_validation_init_script(observables)
+        self.run_track_script = build_validation_script(observables)
 
     def _setup_da_maps(self, mad: MAD) -> None:
         """Create only the coordinate DA state needed for numeric tracking."""
@@ -207,7 +115,7 @@ class ValidationTrackingWorker(TrackingWorker):
         mad.send("da_x0_base = damap{nv=#coord_names, np=0, mo=1, po=1, vn=coord_names}")
 
     def setup_mad_interface(self, init_knobs: dict[str, float]) -> tuple[MAD, int]:
-        """Set up a non-gradient MAD interface using the active validation task."""
+        """Set up a non-gradient MAD interface."""
         del init_knobs
         LOGGER.debug("Worker %s: Setting up validation MAD interface", self.worker_id)
         LOGGER.debug("Worker %s: Using BPM range %s", self.worker_id, self.bpm_range)
@@ -254,7 +162,9 @@ class ValidationTrackingWorker(TrackingWorker):
         machine_pt = knob_updates.get("pt", 0.0)
 
         update_commands = [
-            f"loaded_sequence['{name}'] = {val:.15e}" for name, val in knob_updates.items() if name != "pt"
+            f"loaded_sequence['{name}'] = {val:.15e}"
+            for name, val in knob_updates.items()
+            if name != "pt"
         ]
         if update_commands:
             mad.send("\n".join(update_commands))
@@ -282,22 +192,26 @@ end
             total_loss += batch_loss / self.normalisation_points
         return total_loss / max(1, self.num_batches)
 
-    def _compute_weighted_validation_loss(self, knob_updates: dict[str, float]) -> float:
-        """Aggregate all validation payloads inside this single process."""
-        weighted_loss = 0.0
-        total_tracks = 0.0
-        for task in self.validation_tasks:
-            if task.mad is None:
-                raise RuntimeError(
-                    f"Worker {self.worker_id}: validation task {task.task_id} was not initialised"
-                )
-            self._activate_task(task)
-            task_loss = self.compute_validation_loss(task.mad, knob_updates)
-            weighted_loss += task.track_count * task_loss
-            total_tracks += task.track_count
-        if total_tracks <= 0.0:
-            return 0.0
-        return weighted_loss / total_tracks
+    def _replace_validation_payloads(
+        self,
+        payloads: list[tuple[TrackingData, WorkerConfig, int]],
+    ) -> None:
+        """Replace the single validation payload while preserving the MAD session."""
+        if len(payloads) != 1:
+            raise ValueError(
+                f"Worker {self.worker_id}: expected exactly one validation payload, got {len(payloads)}"
+            )
+
+        mad = getattr(self, "mad", None)
+        nbpms = getattr(self, "nbpms", None)
+        data, config, file_idx = payloads[0]
+        self.config = config
+        self.file_idx = file_idx
+        self.prepare_data(data)
+        self.mad = mad
+        self.nbpms = nbpms
+        if self.mad is not None:
+            self.send_initial_conditions(self.mad)
 
     @staticmethod
     def _parse_knobs(command: dict[str, object], worker_id: int) -> dict[str, float]:
@@ -324,31 +238,19 @@ end
             if knob_values is None:
                 return
 
-            total_tracks = 0
-            for task in self.validation_tasks:
-                self._activate_task(task)
-                task.mad, task.nbpms = self.setup_mad_interface(knob_values)
-                self.send_initial_conditions(task.mad)
-                self._initialise_mad_computation(task.mad)
-                total_tracks += task.track_count
-                LOGGER.debug(
-                    "Worker %s validation task %d: file=%d, range=%s/%s, sdir=%d, kick_plane=%s, tracks=%d, bpms=%d",
-                    self.worker_id,
-                    task.task_id,
-                    task.file_idx,
-                    task.config.start_bpm,
-                    task.config.end_bpm,
-                    task.config.sdir,
-                    task.config.kick_plane,
-                    task.track_count,
-                    task.nbpms,
-                )
-
+            self.mad, self.nbpms = self.setup_mad_interface(knob_values)
+            self.send_initial_conditions(self.mad)
+            self._initialise_mad_computation(self.mad)
             LOGGER.debug(
-                "Worker %s: Ready for validation with %d payloads and %d tracks",
+                "Worker %s: Ready for validation file=%d range=%s/%s sdir=%d kick_plane=%s tracks=%d bpms=%d",
                 self.worker_id,
-                len(self.validation_tasks),
-                total_tracks,
+                self.file_idx,
+                self.config.start_bpm,
+                self.config.end_bpm,
+                self.config.sdir,
+                self.config.kick_plane,
+                self.track_count,
+                self.nbpms,
             )
 
             while True:
@@ -368,27 +270,36 @@ end
                     )
 
                 cmd = message.get("cmd")
+                if cmd == "replace_validation_payloads":
+                    raw_payloads = message.get("payloads")
+                    if not isinstance(raw_payloads, list):
+                        raise ValueError(
+                            f"Worker {self.worker_id}: replace_validation_payloads missing payload list"
+                        )
+                    self._replace_validation_payloads(raw_payloads)
+                    self.conn.send({"worker_id": self.worker_id, "status": "ok"})
+                    continue
+
                 if cmd != "validate":
                     raise ValueError(f"Worker {self.worker_id}: unknown command {cmd}")
 
                 parsed_knobs = self._parse_knobs(message, self.worker_id)
-                loss = self._compute_weighted_validation_loss(parsed_knobs)
+                loss = self.compute_validation_loss(self.mad, parsed_knobs)
                 self.conn.send(
                     {
                         "worker_id": self.worker_id,
                         "loss": loss,
-                        "payloads": len(self.validation_tasks),
-                        "tracks": total_tracks,
+                        "payloads": 1,
+                        "tracks": self.track_count,
                     }
                 )
         except Exception as exc:  # noqa: BLE001
             self.send_error_payload(exc, phase="validation")
         finally:
             LOGGER.debug("Worker %s: Terminating", self.worker_id)
-            for task in getattr(self, "validation_tasks", []):
-                if task.mad is not None:
-                    task.mad.send("shush()")
-                    task.mad = None
+            if getattr(self, "mad", None) is not None:
+                self.mad.send("shush()")
+                self.mad = None
 
 
 class PositionOnlyValidationTrackingWorker(ValidationTrackingWorker):

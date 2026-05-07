@@ -28,7 +28,7 @@ class Accelerator(BaseAccelerator, ABC):
     def __init__(
         self,
         sequence_file: Path | str,
-        pc: float,
+        kinetic_energy: float,
         bpm_pattern: str,
         optimise_energy: bool = False,
         optimise_quadrupoles: bool = False,
@@ -41,17 +41,32 @@ class Accelerator(BaseAccelerator, ABC):
 
         Args:
             sequence_file: Path to the sequence file
-            pc: Particle momentum in GeV/c
+            kinetic_energy: Particle kinetic energy in GeV
             bpm_pattern: Pattern for identifying BPMs in the sequence
         """
-        # Call to super() now
-        super().__init__(sequence_file=sequence_file, pc=pc, bpm_pattern=bpm_pattern)
+        super().__init__(
+            sequence_file=sequence_file,
+            kinetic_energy=kinetic_energy,
+            bpm_pattern=bpm_pattern,
+        )
+        self.pc = self.energy  # total energy alias for downstream code
         self.optimise_energy = optimise_energy
         self.optimise_quadrupoles = optimise_quadrupoles
         self.optimise_sextupoles = optimise_sextupoles
         self.optimise_quad_dx = optimise_quad_dx
         self.optimise_quad_dy = optimise_quad_dy
         self.custom_knobs_to_optimise = custom_knobs_to_optimise
+        if self.custom_knobs_to_optimise is not None:
+            legacy = [
+                knob
+                for knob in self.custom_knobs_to_optimise
+                if knob.endswith(".dk0") or knob.endswith(".dk1") or knob.endswith(".dk2")
+            ]
+            if legacy:
+                raise ValueError(
+                    "Legacy dknl knob names are not supported; use '.dk0l', '.dk1l', or '.dk2l': "
+                    + ", ".join(legacy)
+                )
         # Accelerator-owned state populated during model setup (if applicable).
         self.bend_lengths: dict[str, float] | None = None
 

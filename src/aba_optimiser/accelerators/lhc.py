@@ -51,7 +51,7 @@ class LHC(Accelerator):
         self,
         beam: int,
         sequence_file: Path | str,
-        pc: float = 6800.0,
+        kinetic_energy: float = 6800.0,
         bpm_pattern: str = BPM_PATTERN,
         optimise_quadrupoles: bool = False,
         optimise_sextupoles: bool = False,
@@ -70,7 +70,7 @@ class LHC(Accelerator):
         Args:
             beam: Beam number (1 or 2)
             sequence_file: Path to sequence file
-            pc: Beam momentum in GeV/c
+            kinetic_energy: Particle kinetic energy in GeV
             optimise_quadrupoles: Whether to optimise quadrupoles
             optimise_sextupoles: Whether to optimise sextupoles
             bpm_pattern: Pattern for identifying BPMs in the sequence
@@ -99,7 +99,7 @@ class LHC(Accelerator):
         # Initialise base Accelerator
         super().__init__(
             sequence_file=sequence_file,
-            pc=pc,
+            kinetic_energy=kinetic_energy,
             bpm_pattern=bpm_pattern,
             optimise_energy=optimise_energy,
             optimise_quadrupoles=optimise_quadrupoles,

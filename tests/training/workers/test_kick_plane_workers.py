@@ -14,7 +14,7 @@ from aba_optimiser.workers.tracking_position_only import PositionOnlyTrackingWor
 def _make_sps(tmp_path) -> SPS:
     seq_file = tmp_path / "sps.seq"
     seq_file.write_text("! Dummy SPS sequence file\n")
-    return SPS(sequence_file=seq_file, pc=450.0)
+    return SPS(sequence_file=seq_file, kinetic_energy=450.0)
 
 
 def _make_manager(tmp_path, *, file_kick_planes: dict[int, str] | None = None) -> WorkerManager:

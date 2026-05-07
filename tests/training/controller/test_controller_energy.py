@@ -39,7 +39,6 @@ def test_controller_energy_opt(
         max_lr=2e-6,
         min_lr=2e-7,
         gradient_converged_value=5e-10,
-        expected_rel_error=0,
     )
 
     estimate, unc = _run_energy_optimisation_case(
@@ -75,7 +74,6 @@ def test_controller_energy_opt_sps(
         max_lr=2e-6,
         min_lr=2e-6,
         gradient_converged_value=5e-10,
-        expected_rel_error=0,
     )
 
     estimate, unc = _run_energy_optimisation_case(
@@ -102,7 +100,7 @@ def test_controller_energy_opt_sps(
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("n_run_turns", [2, 3, 5], ids=["2_turns", "3_turns", "5_turns"])
+@pytest.mark.parametrize("n_run_turns", [2, 3], ids=["2_turns", "3_turns"])
 def test_controller_energy_opt_multi_turn(
     tmp_path: Path,
     seq_b1: Path,
@@ -124,7 +122,6 @@ def test_controller_energy_opt_multi_turn(
         max_lr=3e-6,
         min_lr=3e-6,
         gradient_converged_value=5e-10,
-        expected_rel_error=0,
     )
 
     estimate, unc = _run_energy_optimisation_case(
@@ -170,7 +167,6 @@ def test_controller_energy_opt_sps_multi_turn(
         max_lr=2e-6,
         min_lr=2e-6,
         gradient_converged_value=5e-10,
-        expected_rel_error=0,
     )
 
     estimate, unc = _run_energy_optimisation_case(

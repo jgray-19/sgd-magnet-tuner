@@ -82,7 +82,7 @@ class WorkerManager:
         self.all_bpms = all_bpms
         self.file_kick_planes = file_kick_planes or {}
         self.use_fixed_bpm = use_fixed_bpm
-        self.pc = accelerator.pc
+        self.kinetic_energy = accelerator.kinetic_energy
         self.flattop_turns = flattop_turns
         self.num_tracks = num_tracks
         self.debug = debug
@@ -96,6 +96,13 @@ class WorkerManager:
         self.validation_metadata: list[WorkerRuntimeMetadata] = []
         self.validation_loss_weights: list[float] = []
         self.channels: WorkerChannels | None = None
+        self.track_data: dict[int, pd.DataFrame] = {}
+        self.turn_batches: list[list[int]] = []
+        self.file_turn_map: dict[int, int] = {}
+        self.start_bpms: list[str] = []
+        self.end_bpms: list[str] = []
+        self.simulation_config: SimulationConfig | None = None
+        self.machine_deltaps: list[float] = []
 
         self.setup_helper = WorkerSetupHelper(
             accelerator=accelerator,
@@ -115,7 +122,7 @@ class WorkerManager:
         self.payload_builder = WorkerPayloadBuilder(
             accelerator=accelerator,
             all_bpms=all_bpms,
-            pc=self.pc,
+            kinetic_energy=self.kinetic_energy,
         )
 
     def _sync_helpers(self) -> None:
@@ -266,6 +273,33 @@ class WorkerManager:
         self._summarise_file_usage(payloads, len(self.corrector_strengths_files))
         return payloads
 
+    def _build_payload_split(
+        self,
+        track_data: dict[int, pd.DataFrame],
+        turn_batches: list[list[int]],
+        file_turn_map: dict[int, int],
+        start_bpms: list[str],
+        end_bpms: list[str],
+        simulation_config: SimulationConfig,
+        machine_deltaps: list[float],
+    ):
+        """Build weighted training/validation payloads from current track data."""
+        payloads = self.create_worker_payloads(
+            track_data,
+            turn_batches,
+            file_turn_map,
+            start_bpms,
+            end_bpms,
+            simulation_config,
+            machine_deltaps,
+        )
+        payloads = self.payload_builder.attach_global_weights(
+            payloads,
+            simulation_config.num_batches,
+            optimise_momenta=simulation_config.optimise_momenta,
+        )
+        return split_validation_payloads(payloads, LOGGER)
+
     def start_workers(
         self,
         track_data: dict[int, pd.DataFrame],
@@ -278,18 +312,24 @@ class WorkerManager:
         initial_knobs: dict[str, float],
     ) -> None:
         """Start training workers plus one separate validation worker."""
-        payloads = self.create_worker_payloads(
+        self.track_data = {}
+        self.turn_batches = turn_batches
+        self.file_turn_map = file_turn_map
+        self.start_bpms = start_bpms
+        self.end_bpms = end_bpms
+        self.simulation_config = simulation_config
+        self.machine_deltaps = machine_deltaps
+
+        validation_split = self._build_payload_split(
             track_data,
-            turn_batches,
-            file_turn_map,
-            start_bpms,
-            end_bpms,
+            self.turn_batches,
+            self.file_turn_map,
+            self.start_bpms,
+            self.end_bpms,
             simulation_config,
-            machine_deltaps,
+            self.machine_deltaps,
         )
         n_run_turns = 1 if simulation_config.run_arc_by_arc else simulation_config.n_run_turns
-        payloads = self.payload_builder.attach_global_weights(payloads, simulation_config.num_batches)
-        validation_split = split_validation_payloads(payloads, LOGGER)
         training_payloads = validation_split.training_payloads
         validation_payloads = validation_split.validation_payloads
         duplicated_validation_payload = validation_split.duplicated_validation_payload
@@ -303,7 +343,7 @@ class WorkerManager:
         LOGGER.info(
             "Starting %d trn worker(s) + %d val worker(s)",
             len(training_payloads),
-            1 if validation_payloads else 0,
+            len(validation_payloads),
         )
         if duplicated_validation_payload:
             LOGGER.warning(
@@ -348,6 +388,7 @@ class WorkerManager:
             self.worker_metadata.append(
                 self.setup_helper.make_runtime_metadata(
                     worker_id=worker_id,
+                    file_idx=file_idx,
                     config=config,
                     bpm_names=bpm_names,
                     n_run_turns=n_run_turns,
@@ -365,30 +406,28 @@ class WorkerManager:
             )
 
         if validation_payloads:
-            val_worker_id = len(training_payloads)
-            val_parent, val_child = mp.Pipe()
-            first_val_config = validation_payloads[0][1]
-            validation_class = self._select_worker_class(
-                first_val_config.kick_plane,
-                simulation_config.optimise_momenta,
-                validation=True,
-            )
-            val_worker = validation_class(
-                val_child,
-                val_worker_id,
-                validation_payloads,
-                simulation_config,
-                mode=worker_mode,
-            )
-            val_worker.start()
-            val_parent.send((initial_knobs, -1))
-
-            total_val_tracks = 0
             covered_ranges: set[tuple[int, str, str]] = set()
-            self.validation_parent_conns.append(val_parent)
-            self.validation_workers.append(val_worker)
+            for val_offset, validation_payload in enumerate(validation_payloads):
+                val_worker_id = len(training_payloads) + val_offset
+                val_parent, val_child = mp.Pipe()
+                val_data, val_config, val_file_idx = validation_payload
+                validation_class = self._select_worker_class(
+                    val_config.kick_plane,
+                    simulation_config.optimise_momenta,
+                    validation=True,
+                )
+                val_worker = validation_class(
+                    val_child,
+                    val_worker_id,
+                    [validation_payload],
+                    simulation_config,
+                    mode=worker_mode,
+                )
+                val_worker.start()
+                val_parent.send((initial_knobs, -1))
+                self.validation_parent_conns.append(val_parent)
+                self.validation_workers.append(val_worker)
 
-            for val_data, val_config, val_file_idx in validation_payloads:
                 val_bpm_names = self.setup_helper.get_worker_bpm_names(
                     val_config.start_bpm,
                     val_config.end_bpm,
@@ -399,16 +438,18 @@ class WorkerManager:
                 self.validation_metadata.append(
                     self.setup_helper.make_runtime_metadata(
                         worker_id=val_worker_id,
+                        file_idx=val_file_idx,
                         config=val_config,
                         bpm_names=val_bpm_names,
                         n_run_turns=n_run_turns,
                     )
                 )
-                val_tracks = payload_track_count((val_data, val_config, val_file_idx))
-                total_val_tracks += val_tracks
+                val_tracks = payload_track_count(validation_payload)
+                self.validation_loss_weights.append(float(val_tracks))
                 covered_ranges.add((val_file_idx, val_config.start_bpm, val_config.end_bpm))
                 LOGGER.debug(
-                    "Val payload: file=%d, range=%s/%s, sdir=%d, kick_plane=%s, observed_bpms=%d, tracks=%d",
+                    "Val worker %d: file=%d, range=%s/%s, sdir=%d, kick_plane=%s, observed_bpms=%d, tracks=%d",
+                    val_worker_id,
                     val_file_idx,
                     val_config.start_bpm,
                     val_config.end_bpm,
@@ -418,13 +459,11 @@ class WorkerManager:
                     val_tracks,
                 )
 
-            self.validation_loss_weights.append(float(total_val_tracks))
             LOGGER.info(
-                "Val worker %d: payloads=%d, covered_ranges=%d, tracks=%d",
-                val_worker_id,
+                "Validation setup: payloads=%d, covered_ranges=%d, tracks=%d",
                 len(validation_payloads),
                 len(covered_ranges),
-                total_val_tracks,
+                int(sum(self.validation_loss_weights)),
             )
 
         self.channels = WorkerChannels(self.parent_conns, self.workers)
@@ -604,6 +643,59 @@ class WorkerManager:
             ack_dict = cast("dict[object, object]", ack) if isinstance(ack, dict) else None
             if ack_dict is None or ack_dict.get("status") != "ok":
                 raise RuntimeError(f"Failed to apply worker mask settings: {ack}")
+
+    @staticmethod
+    def _assert_control_ack(response: object, *, command: str) -> None:
+        response_dict = cast("dict[object, object]", response) if isinstance(response, dict) else None
+        if response_dict is None or response_dict.get("status") != "ok":
+            raise RuntimeError(f"Unexpected worker ack for {command} command: {response!r}")
+
+    @staticmethod
+    def _plane_value(kick_plane: object) -> str:
+        """Return the string value for enum or string kick-plane fields."""
+        return str(getattr(kick_plane, "value", kick_plane))
+
+    @classmethod
+    def _payload_key(
+        cls,
+        payload: tuple[TrackingData, WorkerConfig, int],
+    ) -> tuple[int, str, str, int, str]:
+        """Return stable identity fields for matching refreshed payloads."""
+        _data, config, file_idx = payload
+        return (
+            file_idx,
+            config.start_bpm,
+            config.end_bpm,
+            config.sdir,
+            cls._plane_value(config.kick_plane),
+        )
+
+    def _assert_payload_keys_match(
+        self,
+        payloads: list[tuple[TrackingData, WorkerConfig, int]],
+        metadata: list[WorkerRuntimeMetadata],
+        *,
+        label: str,
+    ) -> None:
+        """Ensure reconstructed payloads still correspond to the live workers."""
+        if len(payloads) != len(metadata):
+            raise RuntimeError(
+                f"Cannot replace {label} tracking data: payload count changed "
+                f"from {len(metadata)} to {len(payloads)}"
+            )
+        payload_keys = [self._payload_key(payload) for payload in payloads]
+        metadata_keys = [
+            (
+                meta.file_idx,
+                meta.start_bpm,
+                meta.end_bpm,
+                meta.sdir,
+                self._plane_value(meta.kick_plane),
+            )
+            for meta in metadata
+        ]
+        if payload_keys != metadata_keys:
+            raise RuntimeError(f"Cannot replace {label} tracking data: worker layout changed")
 
     def screen_initial_outliers(
         self,

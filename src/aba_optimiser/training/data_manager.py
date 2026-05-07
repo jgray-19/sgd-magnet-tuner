@@ -72,7 +72,7 @@ def _distribute_target_batches_by_file(
         effective_num_batches: achievable total batch count from the targets
     """
     file_ids = sorted(turns_by_file.keys())
-    target_batches_by_file = {file_idx: 0 for file_idx in file_ids}
+    target_batches_by_file = dict.fromkeys(file_ids, 0)
 
     if per_worker_batches <= 0:
         raise ValueError(f"per_worker_batches must be positive, got {per_worker_batches}")
@@ -144,6 +144,7 @@ class DataManager:
 
         # Track data per measurement file (indexed by file index)
         self.track_data: dict[int, pd.DataFrame]
+        self.boundary_turns_by_file: dict[int, set[int]]
         self.file_map: dict[int, int]  # {turn -> file_index}
         self.file_kick_planes: dict[int, str]
 
@@ -224,6 +225,21 @@ class DataManager:
             return "x" if x_span > y_span else "y"
         return "xy"
 
+    @staticmethod
+    def _fill_missing_coordinates(df: pd.DataFrame) -> None:
+        """Replace missing coordinates with zero-weight values in-place."""
+        coord_to_var = {
+            "x": "var_x",
+            "y": "var_y",
+            "px": "var_px",
+            "py": "var_py",
+        }
+        for coord_col, var_col in coord_to_var.items():
+            nan_mask = df[coord_col].isna()
+            if nan_mask.any():
+                df.loc[nan_mask, var_col] = float("inf")
+                df.loc[nan_mask, coord_col] = 0.0
+
     # ---------- Public API ----------
 
     def _filter_boundary_turns(self) -> None:
@@ -233,6 +249,7 @@ class DataManager:
         )
         boundary_margin = max(1, turns_per_sample)
         turns_to_remove = set()
+        boundary_turns_by_file: dict[int, set[int]] = {}
 
         for file_idx, df in self.track_data.items():
             file_turns = sorted(df.index.get_level_values("turn").unique())
@@ -240,8 +257,11 @@ class DataManager:
 
             for track_idx in range(0, len(file_turns), self.flattop_turns):
                 track_turns = file_turns[track_idx : track_idx + self.flattop_turns]
-                turns_to_remove.update(_boundary_turns_for_track(track_turns, boundary_margin))
+                boundary_turns = _boundary_turns_for_track(track_turns, boundary_margin)
+                boundary_turns_by_file.setdefault(file_idx, set()).update(boundary_turns)
+                turns_to_remove.update(boundary_turns)
 
+        self.boundary_turns_by_file = boundary_turns_by_file
         self.available_turns = [t for t in self.available_turns if t not in turns_to_remove]
         LOGGER.info(
             "Removed %d boundary turns (margin=%d, n_run_turns=%d), %d available",
@@ -320,6 +340,13 @@ class DataManager:
             else:
                 batch_size = min(max_turns_per_batch, (turns_left // per_worker_batches) * per_worker_batches)
 
+            # Round down to a multiple of num_batches so MAD can split evenly.
+            # Only apply when batch_size >= num_batches; smaller batches cause the
+            # worker to reduce num_batches to match, which is safe.
+            mad_num_batches = self.simulation_config.num_batches
+            if batch_size >= mad_num_batches:
+                batch_size = (batch_size // mad_num_batches) * mad_num_batches
+
             batch = turns_by_file[file_idx][:batch_size]
             turns_by_file[file_idx] = turns_by_file[file_idx][batch_size:]
             target_batches_by_file[file_idx] -= 1
@@ -360,12 +387,13 @@ class DataManager:
         # Load and reduce
         file_tracks: dict[int, pd.DataFrame] = {}
         file_kick_planes: dict[int, str] = {}
+        LOGGER.info(f"Loading {len(sources)} measurement file(s)...")
         for file_idx, source in enumerate(sources):
-            LOGGER.info(f"Loading file {file_idx}: {source}")
+            LOGGER.debug(f"Loading file {file_idx}: {source}")
             df = self._read_parquet(source, needed_turns, offsets[file_idx])
             file_tracks[file_idx] = self._reduce_dataframe(df)
             file_kick_planes[file_idx] = self.infer_kick_plane(file_tracks[file_idx])
-            LOGGER.info(
+            LOGGER.debug(
                 "File %d kick-plane classification: %s",
                 file_idx,
                 file_kick_planes[file_idx],
@@ -374,41 +402,8 @@ class DataManager:
         # Handle NaN values in track data coordinate-by-coordinate.
         # This is important for single-plane BPMs where one plane is intentionally missing:
         # mark only that coordinate as zero-weight (variance=inf), not the whole row.
-        coord_to_var = {
-            "x": "var_x",
-            "y": "var_y",
-            "px": "var_px",
-            "py": "var_py",
-        }
         for file_idx, df in file_tracks.items():
-            nan_info = {col: df[col].isna().sum() for col in coord_to_var}
-            # Inspect a representative SPS BPM before the MultiIndex is applied.
-            if file_idx == 0:
-                bpm_mask = df["name"] == "BPV.13108"
-                if bpm_mask.any():
-                    bpm_nan_info = {col: df.loc[bpm_mask, col].isna().sum() for col in coord_to_var}
-                    LOGGER.info(f"BPV.13108 NaN counts in file {file_idx}: {bpm_nan_info}")
-                    LOGGER.info(
-                        "BPV.13108 coordinate sample:\n%s",
-                        df.loc[bpm_mask, ["x", "px", "y", "py"]].head(),
-                    )
-            for coord_col, var_col in coord_to_var.items():
-                nan_mask = df[coord_col].isna()
-                if nan_mask.any():
-                    df.loc[nan_mask, var_col] = float("inf")
-                    df.loc[nan_mask, coord_col] = 0.0
-
-            if file_idx == 0:
-                bpm_mask = df["name"] == "BPV.13108"
-                if bpm_mask.any():
-                    bpm_nan_info = {col: df.loc[bpm_mask, col].isna().sum() for col in coord_to_var}
-                    LOGGER.info(f"BPV.13108 NaN counts in file {file_idx}: {bpm_nan_info}")
-                    LOGGER.info(
-                        "BPV.13108 coordinate sample:\n%s",
-                        df.loc[bpm_mask, ["x", "px", "y", "py"]].head(),
-                    )
-
-            LOGGER.info(f"File {file_idx} loaded with {len(df)} rows, NaN counts: {nan_info}")
+            self._fill_missing_coordinates(df)
 
         self.track_data = file_tracks
         self.file_kick_planes = file_kick_planes
@@ -466,9 +461,6 @@ class DataManager:
         tracks_per_worker = self.simulation_config.tracks_per_worker
 
         num_workers = self.simulation_config.num_workers
-        num_batches = self.simulation_config.num_batches
-        if num_batches <= 0:
-            raise ValueError(f"num_batches must be positive, got {num_batches}")
         num_files = len(self.track_data)
         num_starts = len(config_manager.start_bpms)
         num_ends = len(config_manager.end_bpms)
@@ -478,58 +470,48 @@ class DataManager:
             num_starts=num_starts,
             num_ends=num_ends,
         )
-        worker_budget_batches = max(1, num_workers // max(1, range_specs_per_batch))
+        worker_turn_batches = max(1, num_workers // max(1, range_specs_per_batch))
         max_batches_by_turn_capacity = sum(
             _ceil_div(len(turns), tracks_per_worker) for turns in turns_by_file.values()
         )
-        num_turn_batches = worker_budget_batches
-        max_feasible_batches = sum(len(turns) // num_batches for turns in turns_by_file.values())
-        if num_turn_batches > max_feasible_batches:
-            LOGGER.warning(
-                "Requested %d worker turn batches but only %d batches of at least %d turns are available. Using %d batches.",
-                num_turn_batches,
-                max_feasible_batches,
-                num_batches,
-                max_feasible_batches,
-            )
-            num_turn_batches = max_feasible_batches
+        num_turn_batches = min(worker_turn_batches, max_batches_by_turn_capacity)
 
         planned_workers = num_turn_batches * range_specs_per_batch
+        limiting_factor = "data capacity" if max_batches_by_turn_capacity < worker_turn_batches else "num_workers cap"
         LOGGER.info(
-            "Worker planning: requested=%d workers, starts=%d, ends=%d, range_specs_per_batch=%d (%s)",
+            "Worker planning: requested=%d workers, range_specs_per_batch=%d (%s), starts=%d, ends=%d",
             num_workers,
-            num_starts,
-            num_ends,
             range_specs_per_batch,
             range_specs_desc,
+            num_starts,
+            num_ends,
         )
         LOGGER.info(
-            "Turn-batch planning: worker_turn_batches=%d, per_worker_batches=%d, turn_capacity_batches=%d, selected_turn_batches=%d, tracks_per_worker(max)=%d, files=%d",
-            worker_budget_batches,
-            self.simulation_config.num_batches,
+            "Turn-batch planning: "
+            "num_workers_cap→%d batches, "
+            "data_capacity→%d batches (%d files x up to ceil(turns/%d) each), "
+            "selected=%d batches [limited by %s]",
+            worker_turn_batches,
             max_batches_by_turn_capacity,
-            num_turn_batches,
-            tracks_per_worker,
             num_files,
+            tracks_per_worker,
+            num_turn_batches,
+            limiting_factor,
         )
-        if worker_budget_batches < max_batches_by_turn_capacity:
-            LOGGER.info(
-                "Worker cap active: limiting worker turn batches to %d (turn-capacity would allow %d); some turns will remain unused.",
-                worker_budget_batches,
-                max_batches_by_turn_capacity,
-            )
         LOGGER.info(
-            "Planned workers from turn batches: %d batches x %d range specs = %d workers",
+            "Planned workers: %d turn batches x %d range specs = %d workers "
+            "(num_batches=%d is MAD-internal sub-batching, does not affect worker count)",
             num_turn_batches,
             range_specs_per_batch,
             planned_workers,
+            self.simulation_config.num_batches,
         )
 
         self.turn_batches = self._build_turn_batches(
             turns_by_file,
             num_turn_batches,
             tracks_per_worker,
-            num_batches,
+            per_worker_batches=1,
         )
 
         if len(self.turn_batches) == 0:

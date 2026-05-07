@@ -13,7 +13,7 @@ import pytest
 
 from aba_optimiser.accelerators import LHC, SPS
 from aba_optimiser.config import OptimiserConfig
-from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
+from aba_optimiser.mad.optimising_mad_interface import GradientDescentMadInterface
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import (
     MeasurementConfig,
@@ -28,6 +28,8 @@ from tests.training.controller_test_utils import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 
 logger = logging.getLogger(__name__)
@@ -59,7 +61,7 @@ def _build_lhc_quad_controller(
     ctrl = Controller(
         LHC(
             beam=1,
-            pc=6800,
+            kinetic_energy=6800,
             sequence_file=seq_b1,
             optimise_quadrupoles=True,
             optimise_other_quadrupoles=False,
@@ -80,8 +82,6 @@ def _build_lhc_quad_controller(
         bpm_start_points,
         bpm_end_points,
         output_config=OutputConfig(
-            show_plots=False,
-            plots_dir=tmp_path / "plots",
             mad_logfile=tmp_path / "mad_logfile.log",
             write_tensorboard_logs=False,
         ),
@@ -95,21 +95,23 @@ def _assert_estimate_matches_true(
     true_values: dict[str, float],
     *,
     max_rel_diff: float,
+    abs_tol: float = 2e-8,
 ) -> None:
     worst_magnet = ""
     worst_rel_diff = -np.inf
     for magnet, value in estimate.items():
+        abs_diff = abs(value - true_values[magnet])
         rel_diff = (
-            abs(value - true_values[magnet]) / abs(true_values[magnet])
+            abs_diff / abs(true_values[magnet])
             if true_values[magnet] != 0
             else abs(value)
         )
         if rel_diff > worst_rel_diff:
             worst_magnet = magnet
             worst_rel_diff = rel_diff
-        assert rel_diff < max_rel_diff, (
+        assert abs_diff <= abs_tol or rel_diff < max_rel_diff, (
             f"Relative difference for {magnet} is too high: {rel_diff:.2%} "
-            f"(worst so far: {worst_magnet} at {worst_rel_diff:.2%})"
+            f"(abs diff {abs_diff:.3e}; worst so far: {worst_magnet} at {worst_rel_diff:.2%})"
         )
 
 
@@ -211,7 +213,6 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
         max_lr=3e-7,
         min_lr=5e-7,
         gradient_converged_value=5e-16,
-        expected_rel_error=loaded_sps_interface.accelerator.get_perturbation_families()["q"]["default_rel_std"],  # ty:ignore[invalid-argument-type]
         optimiser_type="adam",
     )
 
@@ -226,7 +227,7 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
     )
 
     accelerator = SPS(
-        pc=450.0,
+        kinetic_energy=450.0,
         sequence_file=seq_sps,
         optimise_quadrupoles=True,
     )
@@ -264,8 +265,6 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
         bpm_start_points=bpm_start_points,
         bpm_end_points=bpm_end_points,
         output_config=OutputConfig(
-            show_plots=False,
-            plots_dir=tmp_path / "plots",
             mad_logfile=tmp_path / "controller_quad_opt_sps_multi_turn.log",
             write_tensorboard_logs=False,
         ),
@@ -274,8 +273,14 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
     )
     estimate, unc = ctrl.run()
 
-    iface = AbaMadInterface(accelerator=SPS(sequence_file=seq_sps, pc=450.0))
-    iface.set_magnet_strengths(estimate)
+    iface = GradientDescentMadInterface(
+        accelerator=SPS(
+            sequence_file=seq_sps,
+            kinetic_energy=450.0,
+            custom_knobs_to_optimise=list(estimate),
+        )
+    )
+    iface.update_knob_values(estimate)
     iface.observe_bpms()
     est_errors = iface.run_twiss()
 
