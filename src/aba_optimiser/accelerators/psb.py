@@ -21,7 +21,8 @@ class PSB(Accelerator):
     PATTERN_SBENDS = r"^BR%.BHZ%d+$"
     PATTERN_RBENDS = r"^BR%.BSW%d+L%d+%.%d+$"
     PATTERN_QUADRUPOLE = "^BR%.Q[FD][OE]%d+$"
-    PATTERN_SEXTUPOLE = r"^BR%d+%.XNO[49].*"
+    PATTERN_SEXTUPOLE = r"^BR%d+%.XNO[49]L1$"
+    PATTERN_SKEW_SEXTUPOLE = r"^BR%d+%.XSK[26]L4$"
     PATTERN_CORRECTOR_H = r"^B[RE]%d+%.DHZ%d+L%d+$"
     PATTERN_CORRECTOR_V = r"^B[RE]%d+%.DVT%d+L%d+$"
     QUAD_PERTURBATION_PATTERN = r"^BR\.Q(?:FO\d+|DE\d+)$"
@@ -80,11 +81,20 @@ class PSB(Accelerator):
         # fmt: off
         return [
             ("quadrupole", "k1", self.PATTERN_QUADRUPOLE, "k1", self.optimise_quadrupoles),
+
+            # Bends
             ("sbend", "k0", self.PATTERN_SBENDS, "k0", self.optimise_bends),
             ("rbend", "k0", self.PATTERN_RBENDS, "k0", self.optimise_bends),
+
+            # Sextupoles
             ("multipole", "knl[3]", self.PATTERN_SEXTUPOLE, None, self.optimise_sextupoles),
+            ("multipole", "ksl[3]", self.PATTERN_SKEW_SEXTUPOLE, None, self.optimise_sextupoles),
+
+            # Correctors
             ("hkicker", "kick", self.PATTERN_CORRECTOR_H, None, self.optimise_correctors),
             ("vkicker", "kick", self.PATTERN_CORRECTOR_V, None, self.optimise_correctors),
+
+            # Quadrupole misalignments
             ("quadrupole", "dy", self.PATTERN_QUADRUPOLE, "k1", self.optimise_quad_dy),
             ("quadrupole", "dx", self.PATTERN_QUADRUPOLE, "k1", self.optimise_quad_dx),
         ]
