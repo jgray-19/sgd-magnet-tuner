@@ -19,6 +19,7 @@ from .aba_mad_interface import (
     MAX_MULTIPOLE,
     MULTIPOLE_ATTRS,
     AbaMadInterface,
+    indexed_multipole_attr_info,
 )
 
 if TYPE_CHECKING:
@@ -345,7 +346,7 @@ class GradientDescentMadInterface(GenericMadInterface):
 
         for kind, attr, condition in attr_conditions:
             spec = attr_specs.get(kind, {})
-            mp = MULTIPOLE_ATTRS.get(attr)
+            mp = MULTIPOLE_ATTRS.get(attr) or indexed_multipole_attr_info(attr)
 
             # The knob variable name in MAD (e.g. "MQXA.1R1.dk1l")
             default_name_expr = (

@@ -6,6 +6,7 @@ This module builds on shared classes from ``pymadng-utils``:
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, NamedTuple
 
 from pymadng_utils.mad.knob_mad_interface import KnobMadInterface
@@ -53,6 +54,24 @@ _MAGNET_STRENGTH_SUFFIXES = (
 
 # Re-exported for use in optimising_mad_interface.py
 MULTIPOLE_ATTRS = _MULTIPOLE_ATTRS
+
+_INDEXED_MULTIPOLE_RE = re.compile(r"^(knl|ksl)\[(\d+)\]$")
+
+
+def indexed_multipole_attr_info(attr: str) -> _MultipoleInfo | None:
+    """Return multipole metadata for indexed MAD attrs such as ``knl[3]`` or ``ksl[3]``."""
+    match = _INDEXED_MULTIPOLE_RE.fullmatch(attr)
+    if match is None:
+        return None
+
+    base_table, index_str = match.groups()
+    index = int(index_str)
+    if index < 1 or index > MAX_MULTIPOLE:
+        return None
+
+    order = index - 1
+    base_attr = f"k{order}" if base_table == "knl" else f"k{order}s"
+    return _MULTIPOLE_ATTRS[base_attr]
 
 
 class AbaMadInterface(KnobMadInterface):

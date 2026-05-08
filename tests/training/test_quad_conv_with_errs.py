@@ -134,8 +134,8 @@ def _make_optimiser_config_bend() -> OptimiserConfig:
 
 
 @pytest.mark.skipif(
-    os.cpu_count() is not None and (os.cpu_count() < 8),  # ty:ignore[unsupported-operator]
-    reason="Requires at least 8 CPU cores for parallel processing",
+    os.cpu_count() is not None and (os.cpu_count() < 32),  # ty:ignore[unsupported-operator]
+    reason="Requires at least 32 CPU cores for parallel processing",
 )
 @pytest.mark.slow
 def test_controller_bend_opt_simple(

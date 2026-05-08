@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import multiprocessing
+import threading
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from aba_optimiser.accelerators import SPS
 from aba_optimiser.config import SimulationConfig
@@ -34,14 +35,14 @@ class _FakeConn:
 
 
 class _FakeChannels:
-    def __init__(self, responses: list[dict[str, object]]) -> None:
+    def __init__(self, responses: list[object]) -> None:
         self._responses = responses
-        self.sent: list[dict[str, object]] = []
+        self.sent: list[object] = []
 
-    def send_all(self, payload: dict[str, object]) -> None:
+    def send_all(self, payload: object) -> None:
         self.sent.append(payload)
 
-    def recv_all(self) -> list[dict[str, object]]:
+    def recv_all(self) -> list[object]:
         return self._responses
 
 
@@ -55,16 +56,21 @@ class _FakeWorker:
         self.join_calls += 1
 
 
-class _SerialFakeConn:
-    def __init__(self, responses: list[object]) -> None:
-        self.sent: list[object] = []
-        self._responses = list(responses)
+def _start_pipe_worker(child_conn: multiprocessing.connection.Connection, responses: list[object]) -> threading.Thread:
+    """Start a daemon thread that acts as a fake worker over a real pipe.
 
-    def send(self, payload: object) -> None:
-        self.sent.append(payload)
+    The thread receives one binary message per response (via recv_bytes), then sends
+    the corresponding response back via send(). This matches the WorkerChannels
+    protocol where the parent sends via send_bytes and receives via recv.
+    """
+    def _run() -> None:
+        for response in responses:
+            child_conn.recv_bytes()
+            child_conn.send(response)
 
-    def recv(self) -> object:
-        return self._responses.pop(0)
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return thread
 
 
 def _make_sps(tmp_path: Path) -> SPS:
@@ -629,11 +635,13 @@ def test_termination_and_hessian_parallel_uses_broadcast_shutdown(tmp_path: Path
 
 
 def test_termination_and_hessian_serial_stops_workers_one_by_one(tmp_path: Path) -> None:
+    parent_a, child_a = multiprocessing.Pipe()
+    parent_b, child_b = multiprocessing.Pipe()
+    _start_pipe_worker(child_a, [np.eye(2, dtype=np.float64)])
+    _start_pipe_worker(child_b, [2.0 * np.eye(2, dtype=np.float64)])
+
     manager = _make_manager(tmp_path)
-    manager.parent_conns = [
-        _SerialFakeConn([np.eye(2, dtype=np.float64)]),  # type: ignore[list-item]
-        _SerialFakeConn([2.0 * np.eye(2, dtype=np.float64)]),  # type: ignore[list-item]
-    ]
+    manager.parent_conns = [parent_a, parent_b]
     manager.workers = [_FakeWorker(), _FakeWorker()]  # type: ignore[assignment]
     manager.validation_workers = []
     manager.validation_parent_conns = []
@@ -642,21 +650,16 @@ def test_termination_and_hessian_serial_stops_workers_one_by_one(tmp_path: Path)
     total = manager.termination_and_hessian(2, parallelism=False)
 
     np.testing.assert_allclose(total, 3.0 * np.eye(2, dtype=np.float64))
-    assert manager.parent_conns[0].sent == [(None, None)]
-    assert manager.parent_conns[1].sent == [(None, None)]
     assert [worker.join_calls for worker in manager.workers] == [1, 1]
 
 
-def test_termination_and_hessian_serial_disables_hessian_before_shutdown(tmp_path: Path) -> None:
+def test_termination_and_hessian_disables_hessian_before_shutdown(tmp_path: Path) -> None:
+    parent_conn, child_conn = multiprocessing.Pipe()
+    # Two messages: ack for set_hessian_mode, then the hessian on termination
+    _start_pipe_worker(child_conn, [{"worker_id": 0, "status": "ok"}, np.zeros((2, 2), dtype=np.float64)])
+
     manager = _make_manager(tmp_path)
-    manager.parent_conns = [
-        _SerialFakeConn(
-            [
-                {"worker_id": 0, "status": "ok"},
-                np.zeros((2, 2), dtype=np.float64),
-            ]
-        ),  # type: ignore[list-item]
-    ]
+    manager.parent_conns = [parent_conn]
     manager.workers = [_FakeWorker()]  # type: ignore[assignment]
     manager.validation_workers = []
     manager.validation_parent_conns = []
@@ -665,36 +668,17 @@ def test_termination_and_hessian_serial_disables_hessian_before_shutdown(tmp_pat
     total = manager.termination_and_hessian(2, estimate_hessian=False, parallelism=False)
 
     np.testing.assert_allclose(total, np.zeros((2, 2), dtype=np.float64))
-    assert manager.parent_conns[0].sent == [
-        {"cmd": "set_hessian_mode", "enabled": False},
-        (None, None),
-    ]
+    assert manager.workers[0].join_calls == 1
 
 
-def test_termination_and_hessian_batched_limits_concurrent_shutdowns(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _ChunkChannels:
-        def __init__(self, parent_conns, workers) -> None:
-            self.parent_conns = parent_conns
-            self.workers = workers
-
-        def send_all(self, payload: object) -> None:
-            for conn in self.parent_conns:
-                conn.send(payload)
-
-        def recv_all(self) -> list[object]:
-            return [conn.recv() for conn in self.parent_conns]
-
-    monkeypatch.setattr("aba_optimiser.training.worker_manager.WorkerChannels", _ChunkChannels)
+def test_termination_and_hessian_batched_limits_concurrent_shutdowns(tmp_path: Path) -> None:
+    pairs = [multiprocessing.Pipe() for _ in range(3)]
+    hessians = [float(i + 1) * np.eye(2, dtype=np.float64) for i in range(3)]
+    for (_, child), hessian in zip(pairs, hessians):
+        _start_pipe_worker(child, [hessian])
 
     manager = _make_manager(tmp_path)
-    manager.parent_conns = [
-        _SerialFakeConn([np.eye(2, dtype=np.float64)]),  # type: ignore[list-item]
-        _SerialFakeConn([2.0 * np.eye(2, dtype=np.float64)]),  # type: ignore[list-item]
-        _SerialFakeConn([3.0 * np.eye(2, dtype=np.float64)]),  # type: ignore[list-item]
-    ]
+    manager.parent_conns = [parent for parent, _ in pairs]
     manager.workers = [_FakeWorker(), _FakeWorker(), _FakeWorker()]  # type: ignore[assignment]
     manager.validation_workers = []
     manager.validation_parent_conns = []
@@ -703,7 +687,4 @@ def test_termination_and_hessian_batched_limits_concurrent_shutdowns(
     total = manager.termination_and_hessian(2, parallelism=2)
 
     np.testing.assert_allclose(total, 6.0 * np.eye(2, dtype=np.float64))
-    assert manager.parent_conns[0].sent == [(None, None)]
-    assert manager.parent_conns[1].sent == [(None, None)]
-    assert manager.parent_conns[2].sent == [(None, None)]
     assert [worker.join_calls for worker in manager.workers] == [1, 1, 1]

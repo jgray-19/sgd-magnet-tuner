@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 from pymadng_utils.accelerators.base import Accelerator as BaseAccelerator
 
 LOGGER = logging.getLogger(__name__)
+_INDEXED_RESULT_MULTIPOLE_RE = re.compile(r"\.(knl|ksl)\[(\d+)\]$")
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -150,10 +152,19 @@ class Accelerator(BaseAccelerator, ABC):
         Returns:
             Knob names adjusted for reporting (default: unchanged)
         """
-        if not self.optimise_energy:
-            return list(knob_names)
+        formatted = []
+        for knob_name in knob_names:
+            match = _INDEXED_RESULT_MULTIPOLE_RE.search(knob_name)
+            if match is not None:
+                table, index_str = match.groups()
+                order = int(index_str) - 1
+                suffix = f".dk{order}l" if table == "knl" else f".dk{order}sl"
+                knob_name = _INDEXED_RESULT_MULTIPOLE_RE.sub(suffix, knob_name)
+            formatted.append(knob_name)
 
-        formatted = list(knob_names)
+        if not self.optimise_energy:
+            return formatted
+
         if "pt" in formatted:
             formatted.remove("pt")
             formatted.append("deltap")

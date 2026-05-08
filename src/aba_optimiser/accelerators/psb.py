@@ -100,19 +100,6 @@ class PSB(Accelerator):
         ]
         # fmt: on
 
-    def get_mad_attr_specs(self) -> dict[str, dict[str, str]]:
-        """Return PSB-specific knob naming overrides for MAD knob creation."""
-        return {
-            "multipole": {
-                "name_expr": 'e.name .. ".dk2l"',
-            },
-        }
-
-    def format_result_knob_names(self, knob_names: list[str]) -> list[str]:
-        """Map PSB internal multipole knob names back to the public dk2l form."""
-        formatted = super().format_result_knob_names(knob_names)
-        return [name.replace(".knl[3]", ".dk2l") for name in formatted]
-
     @property
     def quadrupole_misalignment_patterns(self) -> dict[str, tuple[str, ...]]:
         """Return PSB quadrupole patterns eligible for misalignment knobs."""

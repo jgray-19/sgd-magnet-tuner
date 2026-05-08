@@ -17,7 +17,7 @@ import pandas as pd
 import tfs
 from omc3.model.constants import TWISS_ELEMENTS_DAT
 from omc3.optics_measurements.constants import BETA_NAME, DISPERSION_NAME, EXT
-from pymadng_utils.mad import CoreMadInterface
+from pymadng_utils.mad import AcceleratorMadInterface
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -189,7 +189,7 @@ def _process_corrector_worker(
         Tuple of (corrector_name, list_of_estimates)
     """
     # Create MAD instance for this worker
-    mad_interface = CoreMadInterface()
+    mad_interface = AcceleratorMadInterface()
     mad_interface.mad.MADX[f"b{beam}_re_ip7_knob"] = 0.0  # To avoid warnings
     mad_interface.mad.MADX[f"b{beam}_im_ip7_knob"] = 0.0  # To avoid warnings
     mad_interface.load_sequence(sequence_file, seq_name)
