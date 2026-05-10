@@ -32,6 +32,7 @@ version = release
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
+    "sphinx.ext.githubpages",
     "sphinx.ext.napoleon",
     "sphinx.ext.intersphinx",
     "sphinx.ext.todo",
@@ -41,6 +42,8 @@ extensions = [
 ]
 
 autosummary_generate = True
+autosummary_generate_overwrite = True
+autosummary_imported_members = False
 autodoc_member_order = "bysource"
 autodoc_default_options = {
     "members": True,
@@ -48,23 +51,31 @@ autodoc_default_options = {
     "show-inheritance": True,
 }
 autodoc_typehints = "description"
+autodoc_preserve_defaults = True
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True
 napoleon_use_param = False
 napoleon_use_rtype = False
+autodoc_mock_imports = [
+    "matplotlib",
+    "nxcals",
+    "numpy",
+    "omc3",
+    "pandas",
+    "pymadng",
+    "pymadng_utils",
+    "tensorboardX",
+    "tfs",
+    "tmom_recon",
+    "turn_by_turn",
+    "uncertainties",
+]
 
 templates_path = ["_templates"]
 exclude_patterns: list[str] = [
     "_build",
     "Thumbs.db",
     ".DS_Store",
-    "_autosummary/aba_optimiser.rst",
-    "_autosummary/aba_optimiser.accelerators.rst",
-    "_autosummary/aba_optimiser.mad.rst",
-    "_autosummary/aba_optimiser.optimisers.rst",
-    "_autosummary/aba_optimiser.training.rst",
-    "_autosummary/aba_optimiser.training_optics.rst",
-    "_autosummary/aba_optimiser.workers.rst",
 ]
 
 todo_include_todos = True
