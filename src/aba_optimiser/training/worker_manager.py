@@ -793,6 +793,18 @@ class WorkerManager:
             return float(np.mean(np.asarray(losses, dtype=np.float64)))
         return float(np.average(np.asarray(losses, dtype=np.float64), weights=weights))
 
+    def _stop_validation_workers(self) -> None:
+        """Send termination signal to validation workers and wait for them to finish."""
+        if self.validation_channels is not None:
+            with contextlib.suppress(BrokenPipeError, EOFError):
+                self.validation_channels.send_all((None, None))
+        else:
+            for conn in self.validation_parent_conns:
+                with contextlib.suppress(BrokenPipeError, EOFError):
+                    conn.send((None, None))
+        for worker in self.validation_workers:
+            worker.join()
+
     def terminate_workers(self) -> None:
         """Terminate training and validation workers and clean up processes."""
         LOGGER.info("Terminating workers...")
@@ -804,18 +816,9 @@ class WorkerManager:
                 with contextlib.suppress(BrokenPipeError, EOFError):
                     conn.send((None, None))
 
-        if self.validation_channels is not None:
-            with contextlib.suppress(BrokenPipeError, EOFError):
-                self.validation_channels.send_all((None, None))
-        else:
-            for conn in self.validation_parent_conns:
-                with contextlib.suppress(BrokenPipeError, EOFError):
-                    conn.send((None, None))
-
         for worker in self.workers:
             worker.join()
-        for worker in self.validation_workers:
-            worker.join()
+        self._stop_validation_workers()
 
     def termination_and_hessian(
         self,
@@ -825,82 +828,43 @@ class WorkerManager:
     ) -> np.ndarray:
         """Terminate training workers, collect Hessians, then stop validation."""
         LOGGER.info("Terminating workers...")
-        del n_knobs
         hessians = self._collect_hessians(estimate_hessian, parallelism)
-
-        if self.validation_channels is not None:
-            with contextlib.suppress(BrokenPipeError, EOFError):
-                self.validation_channels.send_all((None, None))
-        else:
-            for conn in self.validation_parent_conns:
-                with contextlib.suppress(BrokenPipeError, EOFError):
-                    conn.send((None, None))
-        for worker in self.validation_workers:
-            worker.join()
-        return sum(hessians)
-
-    @staticmethod
-    def _assert_hessian_mode_ack(response: object) -> None:
-        response_dict = cast("dict[object, object]", response) if isinstance(response, dict) else None
-        if response_dict is None or response_dict.get("status") != "ok":
-            raise RuntimeError(f"Unexpected worker ack for hessian mode command: {response!r}")
+        self._stop_validation_workers()
+        return np.add.reduce(hessians) if hessians else np.zeros((n_knobs, n_knobs))
 
     def _collect_hessians(self, estimate_hessian: bool, parallelism: bool | int) -> list[np.ndarray]:
-        """Collect worker Hessians with a bounded shutdown concurrency."""
+        """Collect worker Hessians and shut workers down with bounded concurrency.
+
+        When max_parallel >= n_workers (parallelism=True), all workers are shut down in a
+        single broadcast using the pre-built self.channels. Otherwise workers are stopped in
+        consecutive chunks of max_parallel; parallelism=False gives chunk size 1 (serial).
+        """
         max_parallel = self._normalise_hessian_parallelism(parallelism)
-        if max_parallel == 1:
-            return self._collect_hessians_serial(estimate_hessian)
+
+        def _drain(channels: WorkerChannels, workers: list) -> list[np.ndarray]:
+            if not estimate_hessian:
+                channels.send_all({"cmd": "set_hessian_mode", "enabled": False})
+                for response in channels.recv_all():
+                    self._assert_control_ack(response, command="set_hessian_mode")
+            channels.send_all((None, None))
+            hessians = []
+            for hessian in channels.recv_all():
+                if not isinstance(hessian, np.ndarray):
+                    raise RuntimeError(f"Unexpected Hessian payload from worker: {hessian!r}")
+                hessians.append(hessian)
+            for worker in workers:
+                worker.join()
+            return hessians
+
         if max_parallel >= len(self.workers):
-            return self._collect_hessians_parallel(estimate_hessian)
+            channels = self.channels if self.channels is not None else WorkerChannels(self.parent_conns, self.workers)
+            return _drain(channels, self.workers)
 
         hessians: list[np.ndarray] = []
         for start in range(0, len(self.workers), max_parallel):
             chunk_conns = self.parent_conns[start : start + max_parallel]
             chunk_workers = self.workers[start : start + max_parallel]
-            channels = WorkerChannels(chunk_conns, chunk_workers)
-            if not estimate_hessian:
-                channels.send_all({"cmd": "set_hessian_mode", "enabled": False})
-                for response in channels.recv_all():
-                    self._assert_hessian_mode_ack(response)
-            channels.send_all((None, None))
-            for hessian in channels.recv_all():
-                if not isinstance(hessian, np.ndarray):
-                    raise RuntimeError(f"Unexpected Hessian payload from worker: {hessian!r}")
-                hessians.append(hessian)
-            for worker in chunk_workers:
-                worker.join()
-        return hessians
-
-    def _collect_hessians_parallel(self, estimate_hessian: bool) -> list[np.ndarray]:
-        """Collect worker Hessians by shutting down all workers concurrently."""
-        channels = self._channels()
-        if not estimate_hessian:
-            channels.send_all({"cmd": "set_hessian_mode", "enabled": False})
-            for response in channels.recv_all():
-                self._assert_hessian_mode_ack(response)
-        channels.send_all((None, None))
-        hessians: list[np.ndarray] = []
-        for hessian in channels.recv_all():
-            if not isinstance(hessian, np.ndarray):
-                raise RuntimeError(f"Unexpected Hessian payload from worker: {hessian!r}")
-            hessians.append(hessian)
-        for worker in self.workers:
-            worker.join()
-        return hessians
-
-    def _collect_hessians_serial(self, estimate_hessian: bool) -> list[np.ndarray]:
-        """Collect worker Hessians while terminating workers one at a time."""
-        hessians: list[np.ndarray] = []
-        for conn, worker in zip(self.parent_conns, self.workers, strict=True):
-            if not estimate_hessian:
-                conn.send({"cmd": "set_hessian_mode", "enabled": False})
-                self._assert_hessian_mode_ack(WorkerChannels._recv(conn, worker))
-            conn.send((None, None))
-            hessian = WorkerChannels._recv(conn, worker)
-            if not isinstance(hessian, np.ndarray):
-                raise RuntimeError(f"Unexpected Hessian payload from worker: {hessian!r}")
-            hessians.append(hessian)
-            worker.join()
+            hessians.extend(_drain(WorkerChannels(chunk_conns, chunk_workers), chunk_workers))
         return hessians
 
     def _normalise_hessian_parallelism(self, parallelism: bool | int) -> int:

@@ -263,6 +263,18 @@ class TestAcceleratorBase:
         assert result is not original
         assert result == original
 
+    def test_format_result_knob_names_rewrites_indexed_multipoles(
+        self, test_sequence_file: Path
+    ) -> None:
+        """Test indexed knl/ksl knob names are rewritten to public dk forms."""
+        acc = ConcreteAccelerator(
+            sequence_file=test_sequence_file,
+            kinetic_energy=6800.0,
+        )
+        knob_names = ["mq.knl[3]", "ms.ksl[3]"]
+        result = acc.format_result_knob_names(knob_names)
+        assert result == ["mq.dk2l", "ms.dk2sl"]
+
     def test_log_optimisation_targets_none(self, test_sequence_file: Path, caplog) -> None:
         """Test log_optimisation_targets with no optimisations."""
         acc = ConcreteAccelerator(

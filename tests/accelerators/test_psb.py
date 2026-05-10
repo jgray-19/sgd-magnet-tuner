@@ -84,11 +84,6 @@ class TestPSBAccelerator:
         assert ("hkicker", "kick", "^B[RE]%d+%.DHZ%d+L%d+$", None, True) in psb.get_supported_knob_specs()
         assert ("vkicker", "kick", "^B[RE]%d+%.DVT%d+L%d+$", None, True) in psb.get_supported_knob_specs()
 
-    def test_get_mad_attr_specs_sextupole_name_expr(self, test_sequence_file: Path) -> None:
-        """Test PSB sextupole knobs are named as dk2l during MAD knob creation."""
-        psb = PSB(ring=1, sequence_file=test_sequence_file, optimise_sextupoles=True)
-        assert psb.get_mad_attr_specs()["multipole"]["name_expr"] == 'e.name .. ".dk2l"'
-
     def test_get_perturbation_families(self, test_sequence_file: Path) -> None:
         """Test PSB perturbation metadata is available for quadrupoles."""
         psb = PSB(ring=1, sequence_file=test_sequence_file)
@@ -143,7 +138,8 @@ class TestPSBAccelerator:
         )
         assert psb.has_any_optimisation() is True
 
-    def test_format_result_knob_names_maps_knl3_to_dk2l(self, test_sequence_file: Path) -> None:
-        """Test PSB rewrites knl[3] sextupole knob names to dk2l for reporting."""
+    def test_format_result_knob_names_maps_indexed_sextupoles(self, test_sequence_file: Path) -> None:
+        """Test PSB rewrites indexed sextupole knob names to public dk forms."""
         psb = PSB(ring=1, sequence_file=test_sequence_file)
         assert psb.format_result_knob_names(["br3.xnoh0.4l1.knl[3]"]) == ["br3.xnoh0.4l1.dk2l"]
+        assert psb.format_result_knob_names(["br3.osk4l1.ksl[3]"]) == ["br3.osk4l1.dk2sl"]

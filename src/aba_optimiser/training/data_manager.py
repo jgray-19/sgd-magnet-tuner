@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from aba_optimiser.training.configuration_manager import ConfigurationManager
 
 LOGGER = logging.getLogger(__name__)
-cols_to_read = FILE_COLUMNS
 
 
 def _ceil_div(numerator: int, denominator: int) -> int:
@@ -163,14 +162,14 @@ class DataManager:
         if needed_turns:
             filtered_turns = [t - offset for t in needed_turns]
             filters = [("turn", "in", filtered_turns), ("name", "in", self.bpms_in_range)]
-            df = pd.read_parquet(source, columns=cols_to_read, filters=filters)
+            df = pd.read_parquet(source, columns=FILE_COLUMNS, filters=filters)
         else:
-            df = pd.read_parquet(source, columns=cols_to_read)
+            df = pd.read_parquet(source, columns=FILE_COLUMNS)
 
         # Always apply offset to create global turn IDs
         df["turn"] = df["turn"] + offset
 
-        missing = [c for c in cols_to_read if c not in df.columns]
+        missing = [c for c in FILE_COLUMNS if c not in df.columns]
         if missing:
             raise ValueError(f"Missing columns in track data: {missing}")
         return df
