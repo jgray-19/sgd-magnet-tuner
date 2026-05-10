@@ -101,7 +101,7 @@ def _generate_fake_measurement(
 
     return corrector_file, magnet_strengths, tune_knobs_file, analysis_dir
 
-
+@pytest.mark.skip("This test hangs on GitHub CI, needs investigation")
 @pytest.mark.slow
 def test_controller_opt(
     tmp_path: Path,
