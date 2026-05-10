@@ -1,22 +1,12 @@
 aba_optimiser documentation
 ===========================
 
-The ``aba_optimiser`` package provides components for stochastic optimisation of
-accelerator magnet knobs, along with supporting tooling for simulation, data handling,
-and analysis.
+This site intentionally documents the tested API surface of ``aba_optimiser``.
+Narrative pages and lightly validated script workflows are omitted until they
+have stronger automated coverage.
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents
+   :caption: API
 
-   getting_started
-   modules
    api_reference
-
-
-Indices and tables
-------------------
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
