@@ -28,6 +28,15 @@ them before running the end-to-end workflows:
 
 - xtrack_tools: https://github.com/jgray-19/xtrack_tools
 - tmom-recon:  https://github.com/jgray-19/tmom-recon
+- pymadng-utils: https://github.com/jgray-19/pymadng-utils
+
+Companion documentation for this stack is published under the same GitHub Pages
+account with repository-name paths:
+
+- sgd-magnet-tuner: https://jgray-19.github.io/sgd-magnet-tuner/
+- pymadng-utils: https://jgray-19.github.io/pymadng-utils/
+- tmom-recon: https://jgray-19.github.io/tmom-recon/
+- xtrack_tools: https://jgray-19.github.io/xtrack_tools/
 
 Install via pip from GitHub, for example::
 
