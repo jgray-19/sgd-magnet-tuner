@@ -89,12 +89,9 @@ def setup(app):  # type: ignore[override]
 
 # -- Options for HTML output -------------------------------------------------
 
-html_theme = "furo"
+html_theme = "shibuya"
 html_static_path = ["_static"]
 html_title = "aba_optimiser documentation"
-html_theme_options = {
-    "sidebar_hide_name": True,
-}
 
 # -- Intersphinx configuration ----------------------------------------------
 
