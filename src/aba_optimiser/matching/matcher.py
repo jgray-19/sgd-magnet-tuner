@@ -787,20 +787,3 @@ end
         This method is not used in the current MAD-NG based matching approach.
         """
         raise NotImplementedError("Using MAD-NG match command instead of external optimisation")
-
-    def _save_results(
-        self,
-        final_knobs: dict[str, float],
-        uncertainties: dict[str, float],
-    ) -> None:
-        """Save matching results to output directory.
-
-        Args:
-            final_knobs: Optimised knob values.
-            uncertainties: Uncertainties on knob values.
-        """
-        # TODO: Save results
-        # - Write JSON file with final knob values
-        # - Write JSON file with uncertainties
-        # - Generate and save comparison plots
-        raise NotImplementedError

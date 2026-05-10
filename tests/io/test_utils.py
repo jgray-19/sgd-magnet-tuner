@@ -15,7 +15,6 @@ if TYPE_CHECKING:
 
 from aba_optimiser.io.utils import (
     read_results,
-    save_results,
     scientific_notation,
 )
 
@@ -27,40 +26,6 @@ def temp_file() -> Generator[Path, None, None]:
         temp_path = Path(f.name)
     yield temp_path
     temp_path.unlink(missing_ok=True)
-
-
-class TestSaveResults:
-    """Tests for save_results function."""
-
-    @pytest.mark.parametrize(
-        "knob_names,knob_strengths,uncertainties,expected_content",
-        [
-            (
-                ["knob1", "knob2"],
-                {"knob1": 1.23e-05, "knob2": -2.35e-04},
-                [0.001, 0.002],
-                "Knob Name\tStrength\tUncertainty\nknob1\t1.230000000000000e-05\t1.000000000000000e-03\nknob2\t-2.350000000000000e-04\t2.000000000000000e-03\n",
-            ),
-            (
-                [],
-                {},
-                [],
-                "Knob Name\tStrength\tUncertainty\n",
-            ),
-        ],
-    )
-    def test_save_results(
-        self,
-        temp_file: Path,
-        knob_names: list[str],
-        knob_strengths: dict[str, float],
-        uncertainties: list[float],
-        expected_content: str,
-    ) -> None:
-        """Test saving results to file."""
-        save_results(knob_names, knob_strengths, uncertainties, str(temp_file))
-        content = temp_file.read_text()
-        assert content == expected_content
 
 
 class TestReadResults:

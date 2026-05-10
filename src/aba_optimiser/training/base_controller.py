@@ -12,7 +12,6 @@ from tensorboardX import SummaryWriter
 from aba_optimiser.training.configuration_manager import ConfigurationManager
 from aba_optimiser.training.controller_config import OutputConfig
 from aba_optimiser.training.optimisation_loop import OptimisationLoop
-from aba_optimiser.training.result_manager import ResultManager
 from aba_optimiser.training.utils import filter_bad_bpms, normalise_true_strengths
 
 if TYPE_CHECKING:
@@ -155,12 +154,7 @@ class BaseController(ABC):
             self.config_manager.knob_names
         )
 
-        self.result_manager = ResultManager(
-            output_knob_names,
-            self.config_manager.elem_spos,
-            accelerator=self.accelerator,
-            include_uncertainty=self.output_config.include_uncertainty,
-        )
+        self.output_knob_names = output_knob_names
 
     def _validate_knob_initialisation(self) -> None:
         """Validate that controller setup produced a usable knob set."""

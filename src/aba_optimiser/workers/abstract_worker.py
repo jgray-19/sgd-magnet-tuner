@@ -252,7 +252,6 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         worker_logfile = self._resolve_per_worker_logfile(self.config.mad_logfile)
 
         # Use accelerator factory to create MAD interface
-        init_bpm = self.config.start_bpm if self.config.sdir > 0 else self.config.end_bpm
         mad_iface = GradientDescentMadInterface(
             accelerator=self.config.accelerator,
             magnet_range=self.config.magnet_range,
@@ -263,7 +262,6 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             debug=self.config.debug,
             mad_logfile=worker_logfile,
             py_name="python",
-            start_bpm=init_bpm,  # Workers use hardcoded "python" in their MAD scripts
         )
 
         knob_names = mad_iface.knob_names

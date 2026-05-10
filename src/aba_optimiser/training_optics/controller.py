@@ -158,7 +158,7 @@ class OpticsController(BaseController):
             worker_manager.terminate_workers()
             initial_knobs_abs = self._deltas_to_abs()
 
-        uncertainties = self._save_results(initial_knobs_abs, writer)
+        uncertainties = self._finalise_results(initial_knobs_abs, writer)
         return self.final_knobs, dict(zip(self.final_knobs.keys(), uncertainties, strict=False))
 
     def _deltas_to_abs(self) -> dict[str, float]:
@@ -177,7 +177,7 @@ class OpticsController(BaseController):
         self.filtered_true_strengths = self.filtered_true_strengths.copy()
         return initial_knobs_delta
 
-    def _save_results(
+    def _finalise_results(
         self,
         initial_knobs_abs: dict[str, float],
         writer,
@@ -187,22 +187,6 @@ class OpticsController(BaseController):
             writer.close()
 
         uncertainties_abs = np.zeros(len(self.config_manager.knob_names), dtype=np.float64)
-        output_knob_names = self.result_manager.knob_names
-        initial_strengths_abs = np.array(
-            [initial_knobs_abs[name] for name in output_knob_names], dtype=np.float64
-        )
-
-        self.result_manager.save_results(
-            self.final_knobs,
-            uncertainties_abs,
-            self.filtered_true_strengths,
-        )
-        self.result_manager.generate_plots(
-            self.final_knobs,
-            initial_strengths_abs,
-            self.filtered_true_strengths,
-            uncertainties_abs,
-        )
         logger.info("Optics optimisation complete.")
         return uncertainties_abs
 

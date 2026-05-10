@@ -643,7 +643,6 @@ def process_single_config(
         min_lr=1e0,
         gradient_converged_value=1e-9,
         optimiser_type="lbfgs",
-        expected_rel_error=0,
     )
     simulation_config = SimulationConfig(
         # For pre trimmed data

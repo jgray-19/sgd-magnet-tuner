@@ -100,7 +100,6 @@ class OutputConfig:
     parallel_hessian: bool | int = True
     mad_logfile: Path | None = None
     python_logfile: Path | None = None
-
     def __post_init__(self) -> None:
         """Normalise Hessian parallelism settings."""
         if isinstance(self.parallel_hessian, bool):

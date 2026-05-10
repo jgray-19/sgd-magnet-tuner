@@ -101,8 +101,12 @@ def _generate_fake_measurement(
 
     return corrector_file, magnet_strengths, tune_knobs_file, analysis_dir
 
-@pytest.mark.skip("This test hangs on GitHub CI, needs investigation")
 @pytest.mark.slow
+@pytest.mark.timeout(210)
+@pytest.mark.xfail(
+    strict=False,
+    reason="Optics controller no longer hangs, but convergence is still under investigation",
+)
 def test_controller_opt(
     tmp_path: Path,
     seq_b1: Path,

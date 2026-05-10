@@ -1013,9 +1013,6 @@ def optimise_arc(
     checkpoint_dir = base_checkpoint_config.checkpoint_path
     output_cfg = OutputConfig(
         include_uncertainty=True,
-        plot_real_values=True,
-        show_plots=False,
-        plots_dir=temp_analysis_dir,
         mad_logfile=temp_analysis_dir / "mad_log.txt",
         python_logfile=temp_analysis_dir / "python_worker_log.txt",
         parallel_hessian=hessian_parallelism,
@@ -1048,12 +1045,11 @@ def optimise_arc(
             min_lr=1e0,
             gradient_converged_value=1e-6,
             optimiser_type="lbfgs",  # 'adam' or 'lbfgs'
-            expected_rel_error=1,
         )
 
         accelerator_bends = LHC(
             beam=beam,
-            pc=energy,
+            kinetic_energy=energy,
             sequence_file=sequence_path,
             b2_errors=b2_errors,
             optimise_quadrupoles=False,
@@ -1090,12 +1086,11 @@ def optimise_arc(
         # min_lr=1,
         gradient_converged_value=1e-7,
         optimiser_type="adam",  # 'adam' or 'lbfgs'
-        expected_rel_error=1e-1,
     )
 
     opt_quads = LHC(
         beam=beam,
-        pc=energy,
+        kinetic_energy=energy,
         sequence_file=sequence_path,
         b2_errors=b2_errors,
         optimise_energy=False,
@@ -1231,7 +1226,7 @@ def process_measurements_fresh(
     analysis_dir = get_analysis_dir(beam, squeeze_step)
     accelerator = LHC(
         beam=beam,
-        pc=energy,
+        kinetic_energy=energy,
         sequence_file=sequence_path,
         b2_errors=b2_errors,
     )

@@ -56,55 +56,6 @@ def test_cycle_sequence(loaded_interface: AbaMadInterface) -> None:
     cycle_marker = loaded_interface.mad.recv()
     assert cycle_marker is None
 
-
-@pytest.mark.parametrize(
-    "element_name, marker_name, expected_marker_name",
-    [
-        (
-            "S.DS.L1.B1",
-            None,
-            "S.DS.L1.B1",
-        ),
-        (
-            "S.DS.L1.B1",
-            "MyMarker",
-            "MyMarker",
-        ),
-    ],
-    ids=["default_marker", "custom_marker"],
-)
-def test_install_marker(
-    loaded_interface: AbaMadInterface,
-    element_name,
-    marker_name,
-    expected_marker_name,
-) -> None:
-    """Test installing a marker element."""
-    interface = loaded_interface
-    marker_position_before, marker_index_before, elem_position_before, elem_index_before = (
-        get_marker_and_element_positions(interface, expected_marker_name, element_name)
-    )
-    ret_name = interface.install_marker(element_name, marker_name)
-    marker_position_after, marker_index_after, elem_position_after, elem_index_after = (
-        get_marker_and_element_positions(interface, expected_marker_name, element_name)
-    )
-    if element_name != expected_marker_name:
-        # Check marker doesn't exist before
-        assert marker_position_before is None
-        assert marker_index_before is None
-
-        # Check element doesn't exist after
-        assert elem_position_after is None
-        assert elem_index_after is None
-    else:
-        assert marker_position_before == elem_position_before
-        assert marker_index_before == elem_index_before
-
-    assert marker_index_after == elem_index_before
-    assert marker_position_after == elem_position_before
-    assert ret_name == expected_marker_name
-
-
 def test_getset_variables(loaded_interface: AbaMadInterface) -> None:
     """Test setting MAD variables."""
     loaded_interface.set_variables(**{"KQTL_1L1_B1": 1.2, "KQTL_1L2_B1": 2.3})

@@ -159,8 +159,18 @@ class Controller(BaseController):
             measurement_config.flattop_turns,
             measurement_config.bunches_per_file,
         )
-        # Re-initialize managers with tracking-specific configurations
-        self._init_managers_with_tracking_config()
+        # Initialize OptimisationLoop and ResultManager now that _init_data_manager
+        # has finalised simulation_config.num_batches.
+        BaseController._init_managers(self)
+
+    def _init_managers(self) -> None:
+        """Deferred to after _init_data_manager finalises simulation_config.num_batches.
+
+        BaseController.__init__ calls this via super().__init__, but for Controller we
+        must not initialise OptimisationLoop until simulation_config is final.  The real
+        initialisation is triggered explicitly by BaseController._init_managers(self)
+        at the bottom of Controller.__init__.
+        """
 
     def run(self) -> tuple[dict[str, float], dict[str, float]]:
         """Execute the optimisation process.
@@ -228,7 +238,7 @@ class Controller(BaseController):
         finally:
             initial_knobs_abs = self._deltas_to_abs()
 
-        uncertainties = self._save_results(initial_knobs_abs, total_hessian, writer)
+        uncertainties = self._finalise_results(initial_knobs_abs, total_hessian, writer)
         uncertainties = dict(zip(self.final_knobs.keys(), uncertainties))
 
         return self.final_knobs, uncertainties
@@ -256,7 +266,7 @@ class Controller(BaseController):
                 self.config_manager.mad_iface.pt2dp(uncertainty_by_knob.pop("pt"))
             )
         return np.array(
-            [uncertainty_by_knob[name] for name in self.result_manager.knob_names],
+            [uncertainty_by_knob[name] for name in self.output_knob_names],
             dtype=np.float64,
         )
 
@@ -276,7 +286,7 @@ class Controller(BaseController):
         self.filtered_true_strengths = self._format_result_knobs(self.filtered_true_strengths)
         return self._format_result_knobs(initial_knobs_delta)
 
-    def _save_results(
+    def _finalise_results(
         self,
         initial_knobs_abs: dict[str, float],
         total_hessian: np.ndarray | None,
@@ -295,15 +305,8 @@ class Controller(BaseController):
 
         uncertainties_abs = self._format_result_uncertainties(uncertainties)
 
-        output_knob_names = self.result_manager.knob_names
-        if "deltap" in output_knob_names and "deltap" not in initial_knobs_abs:
+        if "deltap" in self.output_knob_names and "deltap" not in initial_knobs_abs:
             initial_knobs_abs = {**initial_knobs_abs, "deltap": initial_knobs_abs["pt"]}
-
-        self.result_manager.save_results(
-            self.final_knobs,
-            uncertainties_abs,
-            self.filtered_true_strengths,
-        )
 
         logger.info("Optimisation complete.")
         return uncertainties_abs
@@ -401,30 +404,6 @@ class Controller(BaseController):
             )
 
         return initial_knob_strengths
-
-    def _init_managers_with_tracking_config(self) -> None:
-        """Re-initialize optimisation and result managers with tracking-specific config."""
-        from aba_optimiser.training.optimisation_loop import OptimisationLoop
-        from aba_optimiser.training.result_manager import ResultManager
-
-        self.optimisation_loop = OptimisationLoop(
-            self.config_manager.initial_strengths,
-            self.config_manager.knob_names,
-            self.filtered_true_strengths,
-            self.optimiser_config,
-            self.simulation_config,
-        )
-
-        deltap_knob_names = self.accelerator.format_result_knob_names(
-            self.config_manager.knob_names
-        )
-
-        self.result_manager = ResultManager(
-            deltap_knob_names,
-            self.config_manager.elem_spos,
-            accelerator=self.accelerator,
-            include_uncertainty=self.output_config.include_uncertainty,
-        )
 
     def _get_controller_mad_setup_kwargs(self) -> dict:
         """Mirror the worker MAD setup when building the expected knob list."""

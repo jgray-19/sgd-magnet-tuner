@@ -121,7 +121,6 @@ class ValidationTrackingWorker(TrackingWorker):
         LOGGER.debug("Worker %s: Using BPM range %s", self.worker_id, self.bpm_range)
 
         worker_logfile = self._resolve_per_worker_logfile(self.config.mad_logfile)
-        init_bpm = self.config.start_bpm if self.config.sdir > 0 else self.config.end_bpm
         mad_iface = GradientDescentMadInterface(
             accelerator=self.config.accelerator,
             magnet_range=self.config.magnet_range,
@@ -132,7 +131,6 @@ class ValidationTrackingWorker(TrackingWorker):
             debug=self.config.debug,
             mad_logfile=worker_logfile,
             py_name="python",
-            start_bpm=init_bpm,
         )
 
         mad = mad_iface.mad

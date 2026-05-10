@@ -376,8 +376,9 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
                 nbpms,
             )
 
+            message: tuple[dict[str, float] | None, int | None] = (knob_values, batch)
+
             while True:
-                message = self.conn.recv()
                 if not isinstance(message, tuple) or len(message) != 2:
                     raise ValueError(
                         f"Worker {self.worker_id}: unexpected optics payload {type(message)}"
@@ -401,6 +402,7 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
                         loss / self.normalisation_points,
                     )
                 )
+                message = self.conn.recv()
         except Exception as exc:  # noqa: BLE001
             self.send_error_payload(exc, phase="startup")
         finally:

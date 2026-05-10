@@ -22,6 +22,7 @@ import pandas as pd
 import tfs
 from omc3.hole_in_one import hole_in_one_entrypoint
 from pymadng_utils.io.utils import save_knobs
+from pymadng_utils.model_creator.madng_utils import update_model_with_madng
 from tmom_recon import ACDipoleConfig, calculate_pz_measurement
 from tmom_recon.acd.madng_driver import ACDipoleMadDriver
 from tmom_recon.svd import svd_clean_measurements
@@ -40,7 +41,6 @@ from aba_optimiser.measurements.squeeze_helpers import (
     extract_tunes_from_job_file,
     get_or_make_sequence,
 )
-from pymadng_utils.model_creator.madng_utils import update_model_with_madng
 from aba_optimiser.noise import assign_bpm_variances
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import MeasurementConfig, OutputConfig, SequenceConfig
@@ -317,7 +317,7 @@ def process_single_dataframe(
         include_errors=True,
         include_optics_errors=True,
         reverse_meas_tws=beam == 2,
-        dpp_override=machine_deltap,
+        dpp_override=machine_deltap if machine_deltap is not None else 0.0,
         ac_dipole_config=ac_dipole_config,
     )
 
@@ -568,10 +568,11 @@ def process_measurements(
         if cfg is not None:
             return cfg
 
+        acd_accelerator = LHC(
+            beam=beam, sequence_file=sequence_for_acd, kinetic_energy=accelerator.kinetic_energy
+        )
         model = ACDipoleMadDriver(
-            sequence_file=sequence_for_acd,
-            beam=beam,
-            pc=accelerator.pc,
+            accelerator=acd_accelerator,
             deltap=machine_deltap if machine_deltap is not None else 0.0,
             observed_elements=ac_dipole_marker,
             tune_knobs_file=tune_knobs_file,
@@ -814,7 +815,7 @@ if __name__ == "__main__":
 
     accelerator = LHC(
         beam=1,
-        pc=6800,
+        kinetic_energy=6800,
         sequence_file=get_or_make_sequence(1, Path(model_dir)),
     )
     pzs_dict, bad_bpms, _, _ = process_measurements(
@@ -860,7 +861,7 @@ if __name__ == "__main__":
             bpm_end_points=BPM_END_POINTS[arc],
             initial_knob_strengths=None,
             true_strengths=None,
-            output_config=OutputConfig(show_plots=False),
+            output_config=None,
         )
         final_knobs, uncs = controller.run()
         results.append(final_knobs["deltap"])

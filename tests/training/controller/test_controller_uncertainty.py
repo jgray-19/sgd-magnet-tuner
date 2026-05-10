@@ -26,7 +26,7 @@ def test_estimate_uncertainties_from_hessian_handles_negative_mode() -> None:
     assert np.isclose(uncertainties[1], 1e4)
 
 
-def test_save_results_uses_finite_non_negative_uncertainties_for_indefinite_hessian() -> None:
+def test_finalise_results_uses_finite_non_negative_uncertainties_for_indefinite_hessian() -> None:
     ctrl = Controller.__new__(Controller)
     ctrl.output_config = OutputConfig(include_uncertainty=True)
     ctrl.final_knobs = {"kq1": 1.0, "kq2": 2.0}
@@ -41,12 +41,9 @@ def test_save_results_uses_finite_non_negative_uncertainties_for_indefinite_hess
             )
         ),
     )
-    ctrl.result_manager = SimpleNamespace(
-        knob_names=["kq1", "kq2"],
-        save_results=lambda *args, **kwargs: None,
-    )
+    ctrl.output_knob_names = ["kq1", "kq2"]
 
-    uncertainties = ctrl._save_results(
+    uncertainties = ctrl._finalise_results(
         {"kq1": 0.9, "kq2": 1.9},
         np.array([[4.0, 0.0], [0.0, -1e-12]], dtype=np.float64),
         writer=None,

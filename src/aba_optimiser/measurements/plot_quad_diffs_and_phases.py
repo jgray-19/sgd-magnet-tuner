@@ -111,12 +111,12 @@ def prepare_plot_context(
             else:
                 raise FileNotFoundError(f"Estimates file not found: {estimates_file}")
 
-    pc, deltap, b2_errors = load_model_metadata(beam, squeeze_step)
-    print(f"Beam energy set to: {pc} GeV")
+    kinetic_energy, deltap, b2_errors = load_model_metadata(beam, squeeze_step)
+    print(f"Beam energy set to: {kinetic_energy} GeV")
 
     design_accelerator = LHC(
         beam=beam,
-        pc=pc,
+        kinetic_energy=kinetic_energy,
         sequence_file=seq_file,
         optimise_bends=True,
         optimise_quadrupoles=True,
@@ -128,7 +128,7 @@ def prepare_plot_context(
     )
     accelerator = LHC(
         beam=beam,
-        pc=pc,
+        kinetic_energy=kinetic_energy,
         sequence_file=seq_file,
         b2_errors=b2_errors,
         optimise_bends=True,
@@ -314,7 +314,6 @@ def get_twiss_without_errors(
     )
     if estimated_magnets is not None:
         mad.update_knob_values(estimated_magnets)
-        # mad.set_magnet_strengths(estimated_magnets)
     return mad.run_twiss(deltap=deltap, observe=int(just_bpms), chrom=True)
 
 
@@ -354,17 +353,9 @@ def convert_estimates_to_optimisation_space(
     tune_knobs_file: Path,
     corrector_file: Path | None = None,
 ) -> dict[str, dict[str, float]]:
-    """Convert saved result values back to optimisation-space knob coordinates.
-
-    The controller writes result files using its own configuration MAD interface,
-    which does not load tune-knob or corrector files when mapping optimisation
-    knobs back to user-facing absolute strengths. To invert that mapping here,
-    use the same plain interface; otherwise tune-sensitive families pick up a
-    fixed offset when the 0 Hz tune knobs are loaded during readback.
-    """
-    del tune_knobs_file, corrector_file
-    mad = GradientDescentMadInterface(accelerator)
-    return {arc: mad.absolute_to_optimisation_knobs(mags) for arc, mags in estimates.items()}
+    """Return saved result values unchanged because outputs are already in optimisation space."""
+    del accelerator, tune_knobs_file, corrector_file
+    return {arc: mags.copy() for arc, mags in estimates.items()}
 
 
 def convert_uncertainties_to_optimisation_space(
@@ -373,25 +364,9 @@ def convert_uncertainties_to_optimisation_space(
     tune_knobs_file: Path,
     corrector_file: Path | None = None,
 ) -> dict[str, dict[str, float]]:
-    """Convert absolute-space uncertainties to optimisation-space knob coordinates."""
-    mad = GradientDescentMadInterface(
-        accelerator,
-        tune_knobs_file=tune_knobs_file,
-        corrector_strengths=corrector_file,
-    )
-    converted: dict[str, dict[str, float]] = {}
-    for arc, mags in uncertainties.items():
-        converted_arc: dict[str, float] = {}
-        for name, uncertainty in mags.items():
-            dknl_name = mad.knob_transform.absolute_to_dknl_knob.get(name)
-            if dknl_name is None or dknl_name not in mad.knob_name_set:
-                converted_arc[name] = float(uncertainty)
-                continue
-            converted_arc[dknl_name] = (
-                float(uncertainty) * mad.knob_transform.dknl_knob_length[dknl_name]
-            )
-        converted[arc] = converted_arc
-    return converted
+    """Return saved uncertainties unchanged because outputs are already in optimisation space."""
+    del accelerator, tune_knobs_file, corrector_file
+    return {arc: mags.copy() for arc, mags in uncertainties.items()}
 
 
 def filter_estimates_by_max_uncertainty(
@@ -843,7 +818,7 @@ def get_arc_ranges(beam: int) -> dict[int, tuple[str, str]]:
 def get_ip_positions(accelerator: LHC) -> dict[str, float]:
     """Get longitudinal positions for IP1..IP8 from a model twiss."""
     mad_iface = GradientDescentMadInterface(accelerator)
-    mad_iface.observe_elements(pattern="IP[1-8]$")
+    mad_iface.observe(pattern="IP[1-8]$")
     tws = mad_iface.run_twiss()
     return {f"IP{ip}": float(tws.loc[f"IP{ip}", "s"]) for ip in range(1, 9)}
 

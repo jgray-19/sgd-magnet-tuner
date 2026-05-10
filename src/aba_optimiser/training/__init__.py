@@ -17,7 +17,6 @@ from aba_optimiser.training.controller_helpers import (
 )
 from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.optimisation_loop import OptimisationLoop
-from aba_optimiser.training.result_manager import ResultManager
 from aba_optimiser.training.scheduler import LRScheduler
 from aba_optimiser.training.utils import (
     extract_bpm_range_names,
@@ -39,7 +38,6 @@ __all__ = [
     "create_arc_measurement_config",
     "DataManager",
     "OptimisationLoop",
-    "ResultManager",
     "LRScheduler",
     "WorkerLifecycleManager",
     "WorkerManager",
