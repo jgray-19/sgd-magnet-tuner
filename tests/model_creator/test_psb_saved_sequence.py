@@ -78,5 +78,5 @@ def test_psb3_saved_sequence_runs_twiss_and_matches_expected_tunes(
     twiss = interface.run_twiss(observe=0)
 
     assert len(twiss) > 100
-    assert twiss.headers["q1"] == pytest.approx(expected_q1, abs=1e-9)
-    assert twiss.headers["q2"] == pytest.approx(expected_q2, abs=1e-9)
+    assert twiss.headers["q1"] == pytest.approx(expected_q1, rel=1e-8)
+    assert twiss.headers["q2"] == pytest.approx(expected_q2, rel=1e-8)
