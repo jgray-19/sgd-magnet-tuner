@@ -147,7 +147,7 @@ class PSB(Accelerator):
     @property
     def tune_variables(self) -> tuple[str, str]:
         """Return PSB tune variable names."""
-        return "kBRQF", "kBRQD"
+        return "kbrqf", "kbrqd"
 
     @property
     def tune_integers(self) -> tuple[int, int]:

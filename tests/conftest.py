@@ -57,7 +57,7 @@ def seq_sps(data_dir: Path) -> Path:
 @pytest.fixture(scope="session")
 def seq_psb(data_dir: Path) -> Path:
     """Path to a PSB sequence file for integration tests."""
-    return data_dir / "sequences" / "psb1.seq"
+    return data_dir / "sequences" / "psb3_saved.seq"
 
 
 @pytest.fixture(scope="session")
@@ -130,8 +130,8 @@ def loaded_sps_interface(seq_sps: Path) -> Generator[AbaMadInterface, None, None
 
 @pytest.fixture(scope="function")
 def loaded_psb_interface(seq_psb: Path) -> Generator[AbaMadInterface, None, None]:
-    """Fixture that returns an interface with PSB ring 1 loaded and beam set up."""
-    iface = AbaMadInterface(accelerator=PSB(ring=1, sequence_file=seq_psb))
+    """Fixture that returns an interface with PSB ring 3 loaded and beam set up."""
+    iface = AbaMadInterface(accelerator=PSB(ring=3, sequence_file=seq_psb))
     yield iface
     with contextlib.suppress(Exception):
         del iface

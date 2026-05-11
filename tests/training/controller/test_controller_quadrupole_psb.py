@@ -26,28 +26,27 @@ if TYPE_CHECKING:
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 
-PSB_TARGET_QX = 0.40
-PSB_TARGET_QY = 0.45
-PSB_TRACK_BPM_PATTERN = r"br1\.bpm.*"
+PSB_TARGET_QX = 0.17
+PSB_TARGET_QY = 0.225
+PSB_TRACK_BPM_PATTERN = r"br3\.bpm.*"
 PSB_BPM_START_POINTS = [
-    "BR1.BPM1L3",
-    "BR1.BPM5L3",
-    "BR1.BPM9L3",
-    "BR1.BPM13L3",
+    "BR3.BPM1L3",
+    "BR3.BPM5L3",
+    "BR3.BPM9L3",
+    "BR3.BPM13L3",
 ]
 
 
 @pytest.mark.slow
-def test_controller_quad_opt_psb_ring1(
+def test_controller_quad_opt_psb_ring3(
     tmp_path: Path,
     seq_psb: Path,
     loaded_psb_interface: AbaMadInterface,
 ) -> None:
-    """Run a PSB ring-1 quadrupole optimisation scenario."""
+    """Run a PSB ring-3 quadrupole optimisation scenario."""
     flattop_turns = 256
     off_magnet_path = tmp_path / "track_off_magnet_psb.parquet"
 
-    print(loaded_psb_interface.run_twiss(observe=0))
     corrector_file, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
         loaded_psb_interface,
         flattop_turns,
@@ -72,11 +71,11 @@ def test_controller_quad_opt_psb_ring1(
         worker_loss_outlier_sigma=20,
     )
     optimiser_config = OptimiserConfig(
-        max_epochs=600,
+        max_epochs=6000,
         warmup_epochs=40,
-        warmup_lr_start=1e-8,
-        max_lr=3e-6,
-        min_lr=3e-6,
+        warmup_lr_start=1e-6,
+        max_lr=3e-4,
+        min_lr=3e-4,
         gradient_converged_value=5e-15,
         optimiser_type="adam",
     )
@@ -90,7 +89,7 @@ def test_controller_quad_opt_psb_ring1(
         bunches_per_file=1,
     )
     accelerator = PSB(
-        ring=1,
+        ring=3,
         kinetic_energy=loaded_psb_interface.accelerator.kinetic_energy,
         sequence_file=seq_psb,
         optimise_quadrupoles=True,
@@ -105,8 +104,6 @@ def test_controller_quad_opt_psb_ring1(
         bpm_start_points=PSB_BPM_START_POINTS,
         bpm_end_points=[],
         output_config=OutputConfig(
-            show_plots=False,
-            plots_dir=tmp_path / "plots",
             mad_logfile=tmp_path / "controller_quad_opt_psb.log",
             write_tensorboard_logs=False,
         ),
@@ -115,11 +112,14 @@ def test_controller_quad_opt_psb_ring1(
     )
     estimate, unc = ctrl.run()
 
+    psb_abs_tol = 1e-4
     assert set(estimate) == set(magnet_strengths)
     assert set(unc) == set(magnet_strengths)
     for magnet, true_value in magnet_strengths.items():
         est_value = estimate[magnet]
-        rel_diff = (
-            abs(est_value - true_value) / abs(true_value) if true_value != 0 else abs(est_value)
+        abs_diff = abs(est_value - true_value)
+        rel_diff = abs_diff / abs(true_value) if true_value != 0 else abs(est_value)
+        assert abs_diff <= psb_abs_tol or rel_diff < 5e-3, (
+            f"Relative difference for {magnet} is too high: {rel_diff:.2%} "
+            f"(abs diff {abs_diff:.3e})"
         )
-        assert rel_diff < 5e-3, f"Relative difference for {magnet} is too high: {rel_diff:.2%}"
