@@ -17,7 +17,9 @@ import pandas as pd
 import tfs
 from omc3.model.constants import TWISS_ELEMENTS_DAT
 from omc3.optics_measurements.constants import BETA_NAME, DISPERSION_NAME, EXT
-from pymadng_utils.mad import AcceleratorMadInterface
+
+from aba_optimiser.accelerators.lhc import LHC
+from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -189,11 +191,10 @@ def _process_corrector_worker(
         Tuple of (corrector_name, list_of_estimates)
     """
     # Create MAD instance for this worker
-    mad_interface = AcceleratorMadInterface()
+    lhc = LHC(beam=beam, sequence_file=sequence_file, kinetic_energy=pc_gev)
+    mad_interface = AbaMadInterface(accelerator=lhc)
     mad_interface.mad.MADX[f"b{beam}_re_ip7_knob"] = 0.0  # To avoid warnings
     mad_interface.mad.MADX[f"b{beam}_im_ip7_knob"] = 0.0  # To avoid warnings
-    mad_interface.load_sequence(sequence_file, seq_name)
-    mad_interface.setup_beam(pc=pc_gev, particle=particle)
 
     mad = mad_interface.mad
     mad.send("""
