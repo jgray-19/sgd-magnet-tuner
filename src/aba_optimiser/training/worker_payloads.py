@@ -152,42 +152,52 @@ class WorkerPayloadBuilder:
         n_run_turns: int,
     ) -> np.ndarray:
         """Return explicit row positions for the observed BPM list across tracking turns."""
+        return self.get_observation_positions_batch(df, bpm_names, sdir, [turn], n_run_turns)[0]
+
+    def get_observation_positions_batch(
+        self,
+        df: pd.DataFrame,
+        bpm_names: list[str],
+        sdir: int,
+        turns: list[int],
+        n_run_turns: int,
+    ) -> np.ndarray:
+        """Return row positions for multiple starting turns at once.
+
+        Returns shape ``(len(turns), len(bpm_names) * n_run_turns)``.  The
+        per-turn offset is computed as a single outer sum over precomputed
+        *fixed_offsets*, so the cost is O(n_turns + n_data) rather than the
+        O(n_turns * n_data) Python loop that the single-turn helper used.
+        """
         if not bpm_names:
             raise ValueError("No BPMs available for observation")
 
-        bpm_indices = {bpm: idx for idx, bpm in enumerate(self.all_bpms)}
-        repeated_bpm_names = bpm_names * n_run_turns
-        observation_turn = turn
-        previous_idx = bpm_indices[repeated_bpm_names[0]]
-        previous_bpm = repeated_bpm_names[0]
-        positions = [self._get_pos(df, observation_turn, repeated_bpm_names[0])]
+        turn_offsets, bpm_offsets, row_stride = self._layout_cache.get(id(df), ({}, {}, 0))
+        if not turn_offsets:
+            turn_offsets, bpm_offsets, row_stride = self._build_layout_cache(df)
+            self._layout_cache[id(df)] = (turn_offsets, bpm_offsets, row_stride)
 
-        for bpm in repeated_bpm_names[1:]:
-            bpm_idx = bpm_indices[bpm]
-            if sdir == 1 and bpm_idx < previous_idx:
-                LOGGER.debug(
-                    "Turn wrap forward: %s(turn=%d) -> %s(turn=%d)",
-                    previous_bpm,
-                    observation_turn,
-                    bpm,
-                    observation_turn + 1,
-                )
-                observation_turn += 1
-            elif sdir == -1 and bpm_idx > previous_idx:
-                LOGGER.debug(
-                    "Turn wrap backward: %s(turn=%d) -> %s(turn=%d)",
-                    previous_bpm,
-                    observation_turn,
-                    bpm,
-                    observation_turn - 1,
-                )
-                observation_turn -= 1
+        # Column offsets for the full repeated BPM sequence
+        repeated = bpm_names * n_run_turns
+        col_offsets = np.array([bpm_offsets[b] for b in repeated], dtype=np.int64)
 
-            positions.append(self._get_pos(df, observation_turn, bpm))
-            previous_bpm = bpm
-            previous_idx = bpm_idx
+        # Detect turn wraps: for sdir=+1 a backward jump in column index means
+        # the sequence crossed the end of the ring and entered the next turn.
+        diff = np.diff(col_offsets)
+        if sdir == 1:
+            wrap = np.concatenate([[0], (diff < 0).astype(np.int64)])
+        else:
+            wrap = np.concatenate([[0], (diff > 0).astype(np.int64)])
+        turn_delta = np.cumsum(wrap) * sdir  # shape (n_data,)
 
-        return np.asarray(positions, dtype=np.int64)
+        # fixed_offsets is the same for every starting turn; shape (n_data,)
+        fixed_offsets = turn_delta * row_stride + col_offsets
+
+        # Per-starting-turn base offsets; shape (n_turns,)
+        starting_offsets = np.array([turn_offsets[t] for t in turns], dtype=np.int64)
+
+        # Outer sum → shape (n_turns, n_data)
+        return (starting_offsets[:, None] + fixed_offsets[None, :]).astype(np.int64)
 
     def get_measured_start_planes(self, init_bpm: str, kick_plane: str) -> tuple[bool, bool]:
         """Return which coordinates should be used for the initial condition."""
@@ -226,71 +236,81 @@ class WorkerPayloadBuilder:
         pts = np.empty((n_turns,), dtype="float64")
         init_bpm = start_bpm if sdir == 1 else end_bpm
         self.validate_worker_bpm_names(bpm_names, kick_plane)
+        has_x, has_y = self.get_measured_start_planes(init_bpm, kick_plane)
 
+        # Group turns by file so we can do vectorised fancy-indexing per file.
+        from collections import defaultdict
+
+        turns_by_file: dict[int, list[int]] = defaultdict(list)
+        indices_by_file: dict[int, list[int]] = defaultdict(list)
         for i, turn in enumerate(turn_batch):
-            file_idx = file_turn_map[turn]
+            fi = file_turn_map[turn]
+            turns_by_file[fi].append(turn)
+            indices_by_file[fi].append(i)
+            pts[i] = self.compute_pt(fi, machine_deltaps)
+
+        for file_idx, file_turns in turns_by_file.items():
+            idxs = indices_by_file[file_idx]
             cache = arrays_cache[file_idx]
             df = track_data[file_idx]
-            base_x, base_y, base_px, base_py = cache["x"], cache["y"], cache["px"], cache["py"]
-            base_vx, base_vy, base_vpx, base_vpy = (
-                cache["var_x"],
-                cache["var_y"],
-                cache["var_px"],
-                cache["var_py"],
-            )
+            base_x, base_y = cache["x"], cache["y"]
+            base_px, base_py = cache["px"], cache["py"]
+            base_vx, base_vy = cache["var_x"], cache["var_y"]
+            base_vpx, base_vpy = cache["var_px"], cache["var_py"]
 
-            pts[i] = self.compute_pt(file_idx, machine_deltaps)
-            positions = self.get_observation_positions(
+            # All positions at once: shape (n_file_turns, n_data_points)
+            all_pos = self.get_observation_positions_batch(
                 df=df,
                 bpm_names=bpm_names,
                 sdir=sdir,
-                turn=turn,
+                turns=file_turns,
                 n_run_turns=n_run_turns,
             )
 
-            init_pos = int(positions[0])
-            has_x, has_y = self.get_measured_start_planes(init_bpm, kick_plane)
-            x_val = base_x[init_pos] if has_x else 0.0
-            px_val = base_px[init_pos] if has_x else 0.0
-            y_val = base_y[init_pos] if has_y else 0.0
-            py_val = base_py[init_pos] if has_y else 0.0
+            # Initial coords from the first observation position of each turn
+            init_pos = all_pos[:, 0]  # shape (n_file_turns,)
+            if has_x:
+                init_coords[idxs, 0] = base_x[init_pos]
+                init_coords[idxs, 1] = base_px[init_pos]
+            else:
+                init_coords[idxs, 0] = 0.0
+                init_coords[idxs, 1] = 0.0
+            if has_y:
+                init_coords[idxs, 2] = base_y[init_pos]
+                init_coords[idxs, 3] = base_py[init_pos]
+            else:
+                init_coords[idxs, 2] = 0.0
+                init_coords[idxs, 3] = 0.0
+            init_coords[idxs, 4] = 0.0
+            init_coords[idxs, 5] = pts[idxs]
 
-            init_coords[i, :] = [x_val, px_val, y_val, py_val, 0.0, pts[i]]
-            if all(init_coords[i, :] == 0.0):
-                raise ValueError(
-                    f"Initial coordinates for turn {turn} at BPM {init_bpm} are all zero"
-                )
+            for local_i, global_i in enumerate(idxs):
+                if np.all(init_coords[global_i, :] == 0.0):
+                    raise ValueError(
+                        f"Initial coordinates for turn {file_turns[local_i]} at BPM {init_bpm} are all zero"
+                    )
 
-            x_values = base_x[positions]
-            y_values = base_y[positions]
-            px_values = base_px[positions]
-            py_values = base_py[positions]
-            vx_values = base_vx[positions]
-            vy_values = base_vy[positions]
-            vpx_values = base_vpx[positions]
-            vpy_values = base_vpy[positions]
-
+            # Vectorised observable extraction: shape (n_file_turns, n_data_points)
+            p = all_pos  # alias
             if kick_plane == "x":
-                pos[i, :, 0] = x_values
-                mom[i, :, 0] = px_values
-                pos_var[i, :, 0] = vx_values
-                mom_var[i, :, 0] = vpx_values
-                continue
-            if kick_plane == "y":
-                pos[i, :, 1] = y_values
-                mom[i, :, 1] = py_values
-                pos_var[i, :, 1] = vy_values
-                mom_var[i, :, 1] = vpy_values
-                continue
-
-            pos[i, :, 0] = x_values
-            pos[i, :, 1] = y_values
-            mom[i, :, 0] = px_values
-            mom[i, :, 1] = py_values
-            pos_var[i, :, 0] = vx_values
-            pos_var[i, :, 1] = vy_values
-            mom_var[i, :, 0] = vpx_values
-            mom_var[i, :, 1] = vpy_values
+                pos[idxs, :, 0] = base_x[p]
+                mom[idxs, :, 0] = base_px[p]
+                pos_var[idxs, :, 0] = base_vx[p]
+                mom_var[idxs, :, 0] = base_vpx[p]
+            elif kick_plane == "y":
+                pos[idxs, :, 1] = base_y[p]
+                mom[idxs, :, 1] = base_py[p]
+                pos_var[idxs, :, 1] = base_vy[p]
+                mom_var[idxs, :, 1] = base_vpy[p]
+            else:
+                pos[idxs, :, 0] = base_x[p]
+                pos[idxs, :, 1] = base_y[p]
+                mom[idxs, :, 0] = base_px[p]
+                mom[idxs, :, 1] = base_py[p]
+                pos_var[idxs, :, 0] = base_vx[p]
+                pos_var[idxs, :, 1] = base_vy[p]
+                mom_var[idxs, :, 0] = base_vpx[p]
+                mom_var[idxs, :, 1] = base_vpy[p]
 
         return pos, mom, pos_var, mom_var, init_coords, pts
 

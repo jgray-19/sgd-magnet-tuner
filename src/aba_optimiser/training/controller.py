@@ -17,6 +17,7 @@ from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.worker_manager import WorkerManager
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from tensorboardX import SummaryWriter
@@ -93,6 +94,7 @@ class Controller(BaseController):
         optimise_knobs: list[str] | None = None,
         output_config: OutputConfig | None = None,
         checkpoint_config: CheckpointConfig | None = None,
+        initial_conditions_callback: Callable[[dict[str, float]], np.ndarray] | None = None,
     ):
         """
         Initialise the controller with all required managers.
@@ -131,6 +133,7 @@ class Controller(BaseController):
         self.num_configs = len(self.measurement_files)
         self.output_config = output_config if output_config is not None else OutputConfig()
         self.checkpoint_config = checkpoint_config
+        self.initial_conditions_callback = initial_conditions_callback
 
         # BaseController will normalise the optimisation-space inputs and handle
         # tracking-specific energy parameter conversions in this subclass.
@@ -209,6 +212,7 @@ class Controller(BaseController):
             if channels is None:
                 raise RuntimeError("Worker channels are not initialised")
 
+            epoch_end_hook = self._make_epoch_end_hook()
             self.final_knobs = self.optimisation_loop.run_optimisation(
                 self.initial_knobs,
                 channels,
@@ -217,6 +221,7 @@ class Controller(BaseController):
                 total_turns,
                 checkpoint_config=self.checkpoint_config,
                 validation_loss_fn=self.worker_manager.compute_validation_loss,
+                epoch_end_hook=epoch_end_hook,
             )
 
             total_hessian = self.worker_manager.termination_and_hessian(
@@ -242,6 +247,21 @@ class Controller(BaseController):
         uncertainties = dict(zip(self.final_knobs.keys(), uncertainties))
 
         return self.final_knobs, uncertainties
+
+    def _make_epoch_end_hook(self):
+        """Return an epoch-end callable that updates worker initial conditions, or None."""
+        if self.initial_conditions_callback is None:
+            return None
+
+        worker_manager = self.worker_manager
+
+        def hook(current_knobs: dict[str, float]) -> None:
+            new_px_py = self.initial_conditions_callback(current_knobs)
+            if new_px_py is None:
+                return
+            worker_manager.send_init_condition_updates(new_px_py)
+
+        return hook
 
     def _cleanup_memory(self) -> None:
         """Clean up memory after worker initialisation."""

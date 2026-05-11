@@ -203,6 +203,10 @@ class TrackingWorker(AbstractWorker[TrackingData]):
             init_pts: Initial transverse momentum values
             num_batches: Number of batches to create
         """
+        # Keep flat numpy copies for fast update transfers
+        self._init_coords_np = np.ascontiguousarray(init_coords, dtype=np.float64)
+        self._init_pts_np = np.ascontiguousarray(init_pts, dtype=np.float64)
+
         # Split initial conditions
         init_coords_batches = split_array_to_batches(init_coords, num_batches)
         init_pts_batches = split_array_to_batches(init_pts, num_batches)
@@ -420,6 +424,33 @@ end
         self.keep_bpm_mask = keep_bpm_mask.astype(bool, copy=True)
         self.normalisation_points = int(np.count_nonzero(self.keep_bpm_mask))
 
+    def _send_init_condition_update(self, mad: MAD, new_px: np.ndarray, new_py: np.ndarray) -> None:
+        """Push updated px/py into the MAD-NG DAMAP objects for all particles.
+
+        Only the constant parts of the px and py TPSA variables are touched;
+        all other coordinates (x, y, pt, …) and all DA coefficients are left
+        unchanged. The arrays are sent as binary column matrices, which is the
+        fastest serialisation path in pymadng.
+        """
+        # pymadng requires 2-D arrays for the binary matrix protocol.
+        mad.send("""
+new_px = python:recv()
+new_py = python:recv()
+local particle = 0
+for i=1,num_batches do
+    for j=1,#da_x0_c[i] do
+        particle = particle + 1
+        da_x0_c[i][j].px:set0(new_px[particle][1])
+        da_x0_c[i][j].py:set0(new_py[particle][1])
+    end
+end
+""")
+        mad.send(new_px.reshape(-1, 1)).send(new_py.reshape(-1, 1))
+
+        # Mirror in Python so _init_coords_np stays consistent
+        self._init_coords_np[:, 1] = new_px
+        self._init_coords_np[:, 3] = new_py
+
     def _handle_control_command(self, mad: MAD, command: dict[str, object]) -> None:
         """Handle control-plane commands from parent process."""
         cmd = command.get("cmd")
@@ -461,6 +492,13 @@ end
 
         if cmd == "set_hessian_mode":
             self.compute_hessian_on_exit = bool(command.get("enabled", True))
+            self.conn.send({"worker_id": self.worker_id, "status": "ok"})
+            return
+
+        if cmd == "update_init_coords":
+            new_px = np.asarray(command["px"], dtype=np.float64)
+            new_py = np.asarray(command["py"], dtype=np.float64)
+            self._send_init_condition_update(mad, new_px, new_py)
             self.conn.send({"worker_id": self.worker_id, "status": "ok"})
             return
 

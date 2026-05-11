@@ -138,12 +138,12 @@ def loaded_psb_interface(seq_psb: Path) -> Generator[AbaMadInterface, None, None
 
 
 @pytest.fixture(scope="function")
-def beam2_interface(interface: AbaMadInterface, seq_b2: Path) -> AbaMadInterface:
-    """Fixture that returns an interface with the example sequence loaded and beam set up."""
-    interface.accelerator = LHC(beam=2, sequence_file=seq_b2)
-    interface.load_sequence(seq_b2, "lhcb2")
-    interface.setup_beam(particle="proton", pc=6800.0)
-    return interface
+def beam2_interface(seq_b2: Path) -> Generator[AbaMadInterface, None, None]:
+    """Create a fresh AbaMadInterface for beam 2 tests."""
+    iface = AbaMadInterface(accelerator=LHC(beam=2, sequence_file=seq_b2, kinetic_energy=6800.0))
+    yield iface
+    with contextlib.suppress(Exception):
+        del iface
 
 
 @pytest.fixture(scope="session")

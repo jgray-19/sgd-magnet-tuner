@@ -358,6 +358,7 @@ class WorkerManager:
         self.validation_channels = None
         self.validation_metadata = []
         self.validation_loss_weights = []
+        self._worker_particle_counts: list[int] = []
 
         for worker_id, (data, config, file_idx) in enumerate(training_payloads):
             parent, child = mp.Pipe()
@@ -377,6 +378,7 @@ class WorkerManager:
             worker.start()
             self.parent_conns.append(parent)
             self.workers.append(worker)
+            self._worker_particle_counts.append(len(data.init_coords))
             parent.send((initial_knobs, -1))
             bpm_names = self.setup_helper.get_worker_bpm_names(
                 config.start_bpm,
@@ -758,6 +760,32 @@ class WorkerManager:
             total_loss += loss
 
         return total_loss / total_turns, agg_grad
+
+    def send_init_condition_updates(self, new_px_py: np.ndarray) -> None:
+        """Push updated initial px/py to every training worker.
+
+        ``new_px_py`` must be a float64 array of shape ``(n_total_particles, 2)``
+        where the rows are ordered to match the training workers in creation order
+        and, within each worker, in particle order.  The total number of rows must
+        equal ``sum(self._worker_particle_counts)``.
+
+        Workers handle the update before processing the next gradient batch, so
+        this method is safe to call between epochs (from the epoch_end_hook).
+        """
+        expected = sum(self._worker_particle_counts)
+        if new_px_py.shape != (expected, 2):
+            raise ValueError(
+                f"new_px_py must have shape ({expected}, 2), got {new_px_py.shape}"
+            )
+        channels = self._channels()
+        offset = 0
+        for conn, n in zip(channels.parent_conns, self._worker_particle_counts):
+            chunk = new_px_py[offset : offset + n]
+            conn.send({"cmd": "update_init_coords", "px": chunk[:, 0], "py": chunk[:, 1]})
+            offset += n
+        # Collect acknowledgements
+        for conn, worker in zip(channels.parent_conns, channels.workers):
+            WorkerChannels._recv(conn, worker)
 
     def compute_validation_loss(self, current_knobs: dict[str, float]) -> float | None:
         """Evaluate the held-out validation worker at the current knobs."""

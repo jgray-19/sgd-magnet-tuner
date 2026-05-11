@@ -9,7 +9,7 @@ import pytest
 from aba_optimiser.accelerators import SPS
 from aba_optimiser.training.worker_payloads import WorkerPayloadBuilder
 from aba_optimiser.training.worker_setup import WorkerObservationPlan, WorkerRangeSpec
-from aba_optimiser.workers.common import TrackingData, WorkerConfig
+from aba_optimiser.workers.common import KickPlane, TrackingData, WorkerConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -166,7 +166,7 @@ def test_attach_global_weights_ignores_unused_momentum_channels_for_position_onl
         magnet_range="$start/$end",
         corrector_strengths=None,
         tune_knobs_file=None,
-        kick_plane="xy",
+        kick_plane=KickPlane.XY,
     )
 
     payloads = builder.attach_global_weights(
@@ -202,7 +202,7 @@ def test_make_tracking_data_freezes_arrays(tmp_path: Path) -> None:
     plan = WorkerObservationPlan(
         range_spec=WorkerRangeSpec(start_bpm="BPH.13208", end_bpm="BPH.13208", sdir=1),
         file_idx=0,
-        kick_plane="x",
+        kick_plane=KickPlane.X,
         bpm_names=["BPH.13208"],
         bad_bpms=None,
     )
@@ -247,3 +247,143 @@ def test_get_observation_positions_uses_full_grid_offsets(tmp_path: Path) -> Non
     )
 
     assert positions.tolist() == [1, 2, 3]
+
+
+def _make_multi_turn_df(n_turns: int = 4) -> pd.DataFrame:
+    bpms = ["BPH.1", "BPH.2", "BPH.3"]
+    rows = [(t, b) for t in range(1, n_turns + 1) for b in bpms]
+    turns, names = zip(*rows)
+    return pd.DataFrame(
+        {
+            "turn": list(turns),
+            "name": list(names),
+            "x": list(range(len(rows))),
+            "y": [0.0] * len(rows),
+            "px": [0.0] * len(rows),
+            "py": [0.0] * len(rows),
+            "var_x": [1.0] * len(rows),
+            "var_y": [1.0] * len(rows),
+            "var_px": [1.0] * len(rows),
+            "var_py": [1.0] * len(rows),
+        }
+    ).set_index(["turn", "name"])
+
+
+def test_get_observation_positions_batch_matches_single_turn_calls(tmp_path: Path) -> None:
+    """Batch method must return the same positions as repeated single-turn calls."""
+    builder = _make_builder(tmp_path, all_bpms=["BPH.1", "BPH.2", "BPH.3"])
+    df = _make_multi_turn_df()
+    bpm_names = ["BPH.2", "BPH.3", "BPH.1"]
+    turns = [1, 2, 3, 4]
+
+    batch_positions = builder.get_observation_positions_batch(
+        df=df, bpm_names=bpm_names, sdir=1, turns=turns, n_run_turns=1
+    )
+
+    for i, turn in enumerate(turns):
+        single = builder.get_observation_positions(
+            df=df, bpm_names=bpm_names, sdir=1, turn=turn, n_run_turns=1
+        )
+        assert batch_positions[i].tolist() == single.tolist(), f"Mismatch at turn={turn}"
+
+
+def test_get_observation_positions_batch_multi_run_turns_matches_single(tmp_path: Path) -> None:
+    """Batch method must handle n_run_turns > 1 correctly."""
+    builder = _make_builder(tmp_path, all_bpms=["BPH.1", "BPH.2", "BPH.3"])
+    df = _make_multi_turn_df(n_turns=4)
+    bpm_names = ["BPH.1", "BPH.2", "BPH.3"]
+    turns = [1, 2]
+
+    batch_positions = builder.get_observation_positions_batch(
+        df=df, bpm_names=bpm_names, sdir=1, turns=turns, n_run_turns=2
+    )
+
+    for i, turn in enumerate(turns):
+        single = builder.get_observation_positions(
+            df=df, bpm_names=bpm_names, sdir=1, turn=turn, n_run_turns=2
+        )
+        assert batch_positions[i].tolist() == single.tolist(), f"Mismatch at turn={turn}"
+
+
+def test_get_observation_positions_batch_backward_direction(tmp_path: Path) -> None:
+    """sdir=-1 batch results must match per-turn single calls."""
+    builder = _make_builder(tmp_path, all_bpms=["BPH.1", "BPH.2", "BPH.3"])
+    # For sdir=-1 we need enough turns in the dataframe that turn-1 exists.
+    df = _make_multi_turn_df(n_turns=4)
+    bpm_names = ["BPH.3", "BPH.2", "BPH.1"]  # reversed for backward traversal
+    turns = [2, 3, 4]
+
+    batch_positions = builder.get_observation_positions_batch(
+        df=df, bpm_names=bpm_names, sdir=-1, turns=turns, n_run_turns=1
+    )
+
+    for i, turn in enumerate(turns):
+        single = builder.get_observation_positions(
+            df=df, bpm_names=bpm_names, sdir=-1, turn=turn, n_run_turns=1
+        )
+        assert batch_positions[i].tolist() == single.tolist(), f"Mismatch at turn={turn}"
+
+
+def test_make_worker_payload_multi_turn_batch_matches_single_turn_calls(tmp_path: Path) -> None:
+    """Vectorised make_worker_payload must return same arrays as repeated single-turn calls."""
+    all_bpms = ["BPH.1", "BPH.2", "BPH.3"]
+    builder = _make_builder(tmp_path, all_bpms=all_bpms)
+    # All values start at 1 so no row is all-zero (which would trigger validation).
+    df = pd.DataFrame(
+        {
+            "turn": [1, 1, 1, 2, 2, 2, 3, 3, 3],
+            "name": all_bpms * 3,
+            "x": [float(i + 1) for i in range(9)],
+            "y": [float(i + 1) * 0.1 for i in range(9)],
+            "px": [float(i + 1) * 0.01 for i in range(9)],
+            "py": [float(i + 1) * 0.001 for i in range(9)],
+            "var_x": [1.0] * 9,
+            "var_y": [2.0] * 9,
+            "var_px": [3.0] * 9,
+            "var_py": [4.0] * 9,
+        }
+    ).set_index(["turn", "name"])
+
+    file_turn_map = {1: 0, 2: 0, 3: 0}
+    start_bpm = "BPH.1"
+    end_bpm = "BPH.3"
+    sdir = 1
+    bpm_names = ["BPH.1", "BPH.2", "BPH.3"]
+    kick_plane = KickPlane.X
+    machine_deltaps = [0.0]
+    arrays_cache = {0: builder.extract_arrays(df)}
+    track_data = {0: df}
+    n_run_turns = 1
+
+    pos_batch, mom_batch, pv_batch, mv_batch, ic_batch, pts_batch = builder.make_worker_payload(
+        turn_batch=[1, 2, 3],
+        file_turn_map=file_turn_map,
+        start_bpm=start_bpm,
+        end_bpm=end_bpm,
+        sdir=sdir,
+        bpm_names=bpm_names,
+        kick_plane=kick_plane,
+        machine_deltaps=machine_deltaps,
+        arrays_cache=arrays_cache,
+        track_data=track_data,
+        n_run_turns=n_run_turns,
+    )
+
+    for i, turn in enumerate([1, 2, 3]):
+        pos_s, mom_s, pv_s, mv_s, ic_s, pts_s = builder.make_worker_payload(
+            turn_batch=[turn],
+            file_turn_map=file_turn_map,
+            start_bpm=start_bpm,
+            end_bpm=end_bpm,
+            sdir=sdir,
+            bpm_names=bpm_names,
+            kick_plane=kick_plane,
+            machine_deltaps=machine_deltaps,
+            arrays_cache=arrays_cache,
+            track_data=track_data,
+            n_run_turns=n_run_turns,
+        )
+        assert np.allclose(pos_batch[i], pos_s[0]), f"pos mismatch at turn {turn}"
+        assert np.allclose(mom_batch[i], mom_s[0]), f"mom mismatch at turn {turn}"
+        assert np.allclose(ic_batch[i], ic_s[0]), f"init_coords mismatch at turn {turn}"
+        assert np.allclose(pts_batch[i], pts_s[0]), f"pts mismatch at turn {turn}"

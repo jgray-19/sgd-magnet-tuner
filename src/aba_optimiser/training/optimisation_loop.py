@@ -209,6 +209,7 @@ class OptimisationLoop:
         total_turns: int,
         checkpoint_config: CheckpointConfig | None = None,
         validation_loss_fn: Callable[[dict[str, float]], float | None] | None = None,
+        epoch_end_hook: Callable[[dict[str, float]], None] | None = None,
     ) -> dict[str, float]:
         """Run the main optimisation loop."""
         checkpoint_path, checkpoint_every_n_epochs, restore_from_checkpoint = (
@@ -264,6 +265,9 @@ class OptimisationLoop:
 
             # Calculate relative differences for rejection logic
             sum_true_diff = self._calculate_diff(current_knobs)
+
+            if epoch_end_hook is not None:
+                epoch_end_hook(current_knobs)
 
             validation_loss = (
                 validation_loss_fn(current_knobs) if validation_loss_fn is not None else None
