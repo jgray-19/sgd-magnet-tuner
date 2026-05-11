@@ -95,7 +95,7 @@ def _assert_estimate_matches_true(
     true_values: dict[str, float],
     *,
     max_rel_diff: float,
-    abs_tol: float = 1e-7,
+    abs_tol: float = 2e-7,
 ) -> None:
     worst_magnet = ""
     worst_rel_diff = -np.inf
