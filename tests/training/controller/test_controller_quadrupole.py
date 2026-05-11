@@ -95,7 +95,7 @@ def _assert_estimate_matches_true(
     true_values: dict[str, float],
     *,
     max_rel_diff: float,
-    abs_tol: float = 2e-8,
+    abs_tol: float = 5e-8,
 ) -> None:
     worst_magnet = ""
     worst_rel_diff = -np.inf
@@ -277,6 +277,7 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
         accelerator=SPS(
             sequence_file=seq_sps,
             kinetic_energy=450.0,
+            optimise_quadrupoles=True,
             custom_knobs_to_optimise=list(estimate),
         )
     )

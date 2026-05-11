@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import pytest
+from pymadng_utils.accelerators.base import PROTON_MASS_GEV
 
 from aba_optimiser.accelerators import LHC
-from pymadng_utils.accelerators.base import PROTON_MASS_GEV
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -201,7 +202,8 @@ class TestLHCAccelerator:
             kinetic_energy=6800.0,
             sequence_file=str(test_sequence_file),
         )
-        lhc.log_optimisation_targets()
+        with caplog.at_level(logging.INFO):
+            lhc.log_optimisation_targets()
         assert "No optimisation targets set" in caplog.text
 
     def test_log_optimisation_targets_all(self, test_sequence_file: Path, caplog) -> None:
@@ -216,7 +218,8 @@ class TestLHCAccelerator:
             optimise_sextupoles=True,
             optimise_correctors=True,
         )
-        lhc.log_optimisation_targets()
+        with caplog.at_level(logging.INFO):
+            lhc.log_optimisation_targets()
         assert "bends" in caplog.text
         assert "quadrupoles" in caplog.text
         assert "sextupoles" in caplog.text
