@@ -17,8 +17,8 @@ def normalise_lhcbend_magnets(
     - rbends: MB<RXWAL><...>.[A-G]<number><LR><1-8>...k0 - Only combined if same sign
     """
     patterns = [
-        (r"(MB\.)([ABCD])([0-9]+[LR][1-8]\.B[12])\.k0", "sbend"),
-        (r"(MB[RXWAL]\w*\.)([A-G]?)([0-9]+[LR][1-8].*)\.k0", "rbend"),
+        (r"(MB\.)([ABCD])([0-9]+[LR][1-8]\.B[12])\.dk0l", "sbend"),
+        (r"(MB[RXWAL]\w*\.)([A-G]?)([0-9]+[LR][1-8].*)\.dk0l", "rbend"),
     ]
 
     normalised = {}
@@ -28,12 +28,12 @@ def normalise_lhcbend_magnets(
         matched = False
         for pattern, bend_type in patterns:
             if match := re.match(pattern, key):
-                base_key = f"{match.group(1)}{match.group(3)}.k0"
+                base_key = f"{match.group(1)}{match.group(3)}.dk0l"
 
                 # For rbends, separate by sign (positive/negative)
                 if bend_type == "rbend":
                     sign_suffix = "_p" if value >= 0 else "_n"
-                    new_key = base_key.replace(".k0", f"{sign_suffix}.k0")
+                    new_key = base_key.replace(".dk0l", f"{sign_suffix}.dk0l")
                 else:
                     # sbends are combined regardless of sign
                     new_key = base_key

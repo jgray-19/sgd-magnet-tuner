@@ -258,9 +258,9 @@ class TestLHCAccelerator:
             optimise_bends=True,
             normalise_bends=True,
         )
-        lhc.bend_lengths = {"MB.A1.k0": 2.0, "MB.A2.k0": 2.0}
+        lhc.bend_lengths = {"MB.A1.dk0l": 2.0, "MB.A2.dk0l": 2.0}
         result = lhc.get_bend_lengths()
-        assert result == {"MB.A1.k0": 2.0, "MB.A2.k0": 2.0}
+        assert result == {"MB.A1.dk0l": 2.0, "MB.A2.dk0l": 2.0}
 
     def test_get_bend_lengths_handles_missing_state(self, test_sequence_file: Path) -> None:
         """Test get_bend_lengths handles missing accelerator bend_lengths."""
@@ -294,7 +294,7 @@ class TestLHCAccelerator:
             sequence_file=str(test_sequence_file),
             optimise_bends=True,
         )
-        test_strengths = {"MB.k0": 1.0}
+        test_strengths = {"MB.dk0l": 1.0}
         result = lhc.normalise_true_strengths(test_strengths, None)
         assert result == test_strengths
 
@@ -311,12 +311,12 @@ class TestLHCAccelerator:
         )
         # These would be the actual bend strengths from the sequence
         test_strengths = {
-            "MB.A1[ABCD]1L1.B1.k0": 1.0,
-            "MB.A1[ABCD]1L2.B1.k0": 1.0,
+            "MB.A1[ABCD]1L1.B1.dk0l": 1.0,
+            "MB.A1[ABCD]1L2.B1.dk0l": 1.0,
         }
         bend_lengths = {
-            "MB.A1[ABCD]1L1.B1.k0": 14.2,
-            "MB.A1[ABCD]1L2.B1.k0": 14.2,
+            "MB.A1[ABCD]1L1.B1.dk0l": 14.2,
+            "MB.A1[ABCD]1L2.B1.dk0l": 14.2,
         }
         result = lhc.normalise_true_strengths(test_strengths, bend_lengths)
         # The result should be a dict (we're not testing the actual normalisation logic here)

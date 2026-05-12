@@ -117,7 +117,7 @@ class GenericMadInterface(AbaMadInterface):
 
         self.observe_bpms(bad_bpms=bad_bpms)
         all_bpms, _ = self.get_bpm_list(self.bpm_range)
-        self.replace_monitors_with_markers(all_bpms)
+        self.make_all_monitors_thin(all_bpms)
         self.unobserve_all_elements()
 
         if start_bpm is not None:
@@ -164,14 +164,13 @@ class GenericMadInterface(AbaMadInterface):
         LOGGER.info(f"Counted {len(bpms_in_range)} BPMs in range: {bpm_range}")
         return bpms_in_range, len(bpms_in_range), all_bpms
 
-    def replace_monitors_with_markers(self, monitors: list[str]) -> None:
+    def make_all_monitors_thin(self, monitors: list[str]) -> None:
         """Replace monitor elements with markers in the specified BPM range."""
         for bpm in monitors:
-            if self.mad.MADX[bpm].kind != "marker":
-                assert "monitor" in self.mad.MADX[bpm].kind, (
-                    f"Element {bpm} is not a monitor, cannot replace with marker"
-                )
-                self.replace_with_marker(bpm)
+            assert "monitor" in self.mad.MADX[bpm].kind, (
+                f"Element {bpm} is not a monitor, cannot be made thin"
+            )
+            self.make_element_thin(bpm)
         LOGGER.info(
             f"Replaced {len(monitors)} monitor BPMs with markers in range: {self.bpm_range}"
         )

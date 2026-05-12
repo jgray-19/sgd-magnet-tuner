@@ -217,8 +217,8 @@ class LHC(Accelerator):
             bend_lengths = {{}}
             for i, e in loaded_sequence:siter(magnet_range) do
                 if (e.kind == "sbend" or e.kind == "rbend") and e.k0 ~= 0 then
-                    bend_dict[e.name .. ".k0"] = e.k0
-                    bend_lengths[e.name .. ".k0"] = e.l
+                    bend_dict[e.name .. ".dk0l"] = e.k0
+                    bend_lengths[e.name .. ".dk0l"] = e.l
                 end
             end
             {mad_iface.py_name}:send(bend_dict, true)
@@ -288,11 +288,11 @@ loaded_sequence:update()
             return {}
         return {
             "sbend": {
-                "name_expr": 'string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".k0"',
+                "name_expr": 'string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".dk0l"',
                 "mad_value": "bend_dict[k_str_name]",
             },
             "rbend": {
-                "name_expr": 'string.gsub(e.name, "(MB[RXWAL]%w*%.)([A-G]?)([0-9]+[LR][1-8].*)", "%1%3") .. (e.k0 >= 0 and "_p" or "_n") .. ".k0"',
+                "name_expr": 'string.gsub(e.name, "(MB[RXWAL]%w*%.)([A-G]?)([0-9]+[LR][1-8].*)", "%1%3") .. (e.k0 >= 0 and "_p" or "_n") .. ".dk0l"',
                 "mad_value": "bend_dict[k_str_name]",
             },
         }
