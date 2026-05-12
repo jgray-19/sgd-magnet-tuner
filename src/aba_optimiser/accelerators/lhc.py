@@ -64,6 +64,7 @@ class LHC(Accelerator):
         optimise_quad_dx: bool = False,
         optimise_quad_dy: bool = False,
         b2_errors: Path | str | None = None,
+        custom_knobs_to_optimise: list[str] | None = None,
     ):
         """Initialise LHC accelerator for a specific beam.
 
@@ -106,6 +107,7 @@ class LHC(Accelerator):
             optimise_sextupoles=optimise_sextupoles,
             optimise_quad_dx=optimise_quad_dx,
             optimise_quad_dy=optimise_quad_dy,
+            custom_knobs_to_optimise=custom_knobs_to_optimise,
         )
 
     @property
