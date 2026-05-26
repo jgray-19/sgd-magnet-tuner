@@ -5,13 +5,20 @@ from types import SimpleNamespace
 import pandas as pd
 
 from aba_optimiser.config import SimulationConfig
-from aba_optimiser.training.data_manager import (
-    DataManager,
+from aba_optimiser.training.data_manager import DataManager
+from aba_optimiser.training.tracking_mode import (
+    ArcByArcTrackingPlan,
     _boundary_turns_for_track,
+)
+from aba_optimiser.training.worker_turn_planner import (
     _distribute_target_batches_by_file,
     _get_range_spec_plan,
-    _group_turns_by_file,
 )
+from aba_optimiser.training.worker_turn_planner import (
+    group_turns_by_file as _group_turns_by_file,
+)
+
+_DEFAULT_TRACKING_PLAN = ArcByArcTrackingPlan()
 
 
 def _make_track_df(turns: list[int], bpm_name: str = "BPM.1") -> pd.DataFrame:
@@ -35,7 +42,7 @@ def test_prepare_turn_batches_treats_tracks_per_worker_as_a_max(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "aba_optimiser.training.data_manager.random.shuffle",
+        "aba_optimiser.training.worker_turn_planner.random.shuffle",
         lambda turns: None,
     )
 
@@ -52,6 +59,7 @@ def test_prepare_turn_batches_treats_tracks_per_worker_as_a_max(
         measurement_files=["file0.parquet"],
         num_bunches=1,
         flattop_turns=12,
+        tracking_plan=_DEFAULT_TRACKING_PLAN,
     )
     data_manager.track_data = {0: _make_track_df(list(range(12)))}
     data_manager.available_turns = list(range(12))
@@ -73,7 +81,7 @@ def test_prepare_turn_batches_keeps_partial_batches_per_file(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "aba_optimiser.training.data_manager.random.shuffle",
+        "aba_optimiser.training.worker_turn_planner.random.shuffle",
         lambda turns: None,
     )
 
@@ -92,6 +100,7 @@ def test_prepare_turn_batches_keeps_partial_batches_per_file(
         measurement_files=["file0.parquet", "file1.parquet"],
         num_bunches=1,
         flattop_turns=7,
+        tracking_plan=_DEFAULT_TRACKING_PLAN,
     )
     data_manager.track_data = {
         0: _make_track_df(file0_turns),
@@ -140,6 +149,7 @@ def test_prepare_turn_batches_caps_at_num_workers_when_capacity_exceeds_it() -> 
         measurement_files=["file0.parquet"],
         num_bunches=1,
         flattop_turns=total_turns,
+        tracking_plan=_DEFAULT_TRACKING_PLAN,
     )
     data_manager.track_data = {0: _make_track_df(list(range(total_turns)))}
     data_manager.available_turns = list(range(total_turns))
@@ -184,6 +194,7 @@ def test_prepare_turn_batches_num_batches_does_not_inflate_worker_groups() -> No
         measurement_files=["file0.parquet"],
         num_bunches=1,
         flattop_turns=400,
+        tracking_plan=_DEFAULT_TRACKING_PLAN,
     )
     data_manager.track_data = {0: _make_track_df(list(range(400)))}
     data_manager.available_turns = list(range(400))
@@ -218,6 +229,7 @@ def test_get_total_turns_uses_real_batch_sizes() -> None:
         measurement_files=["file0.parquet"],
         num_bunches=1,
         flattop_turns=10,
+        tracking_plan=_DEFAULT_TRACKING_PLAN,
     )
     data_manager.turn_batches = [[1, 2, 3, 4, 5], [6, 7]]
 

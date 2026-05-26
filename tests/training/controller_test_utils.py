@@ -4,21 +4,28 @@ Shared utilities for controller integration tests.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 import pytest
+import xtrack as xt
 
 pytest.importorskip("tmom_recon")
 pytest.importorskip("xtrack_tools")
 from pymadng_utils.io.utils import save_knobs
 from xtrack_tools.coordinates import create_initial_conditions
-from xtrack_tools.monitors import line_to_dataframes
-from xtrack_tools.tracking import run_tracking_without_ac_dipole
+from xtrack_tools.kicker import _insert_exciter_at, _knl_ksl
+from xtrack_tools.monitors import (
+    get_monitor_names_at_pattern,
+    line_to_dataframes,
+    process_tracking_data,
+)
+from xtrack_tools.tracking import run_tracking, run_tracking_without_ac_dipole
 
-from aba_optimiser.accelerators import instantiate_accelerator_from
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
+from aba_optimiser.physics.deltap import dp2pt
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import (
@@ -197,6 +204,156 @@ def _generate_nonoise_track(
     return corrector_file, magnet_strengths, tune_knobs_file
 
 
+def _select_kicker_element(line: xt.Line) -> str | None:
+    patterns = [r"^mk", r"kick", r"^mcb", r"^mke", r"^mki", r"\.ksw", r"\.dhz", r"\.dvt"]
+    for pattern in patterns:
+        for name in line.element_names:
+            if re.search(pattern, name, flags=re.IGNORECASE):
+                return name
+    return None
+
+
+def _strip_inline_flags(pattern: str) -> str:
+    if pattern.startswith("(?i)"):
+        return pattern[4:]
+    return pattern
+
+
+def _realign_kicker_turns(
+    tracking_df: pd.DataFrame,
+    *,
+    kicker_name: str,
+    logical_turns: int,
+) -> pd.DataFrame:
+    """Realign tracked turns so each logical turn starts immediately after the kicker.
+
+    Xsuite tracking rows are grouped by physical revolution, which means BPMs that
+    appear before the kicker in ring order are written at the start of each turn.
+    The controller's kicker mode instead expects each turn to begin just after the
+    kicker, so those pre-kicker BPM rows belong to the previous logical turn.
+
+    We therefore shift all rows that appear before the kicker marker within a
+    physical turn back by one turn, drop the incomplete turn 0, and keep exactly
+    ``logical_turns`` complete kicker-started turns.
+    """
+    parts: list[pd.DataFrame] = []
+    marker_name = kicker_name.upper()
+
+    for _turn, turn_df in tracking_df.groupby("turn", sort=False):
+        turn_names = turn_df["name"].astype(str).str.upper().to_numpy()
+        marker_rows = np.flatnonzero(turn_names == marker_name)
+        if marker_rows.size == 0:
+            parts.append(turn_df)
+            continue
+
+        marker_idx = int(marker_rows[0])
+        if marker_idx > 0:
+            before = turn_df.iloc[:marker_idx].copy()
+            before["turn"] = before["turn"] - 1
+            parts.append(before)
+        parts.append(turn_df.iloc[marker_idx:].copy())
+
+    realigned = pd.concat(parts, ignore_index=True)
+    realigned = realigned.loc[
+        (realigned["turn"] >= 1) & (realigned["turn"] <= logical_turns)
+    ].copy()
+    return realigned
+
+
+def _generate_kicker_track(
+    interface_with_beam: AbaMadInterface,
+    flattop_turns: int,
+    destination: Path,
+    dpp_value: float,
+    kick_strength: float = 2e-5,
+    kick_plane: str = "diagonal",
+    kick_turn: int = 0,
+    bpm_pattern: str = r"(?i)bpm.*",
+    apply_orbit_correction: bool = True,
+    target_qx: float = 0.28,
+    target_qy: float = 0.31,
+) -> tuple[Path | None, dict[str, float], Path | None, str]:
+    """Generate a parquet file containing kicker tracking data with x/px/y/py."""
+    corrector_file: Path | None = None
+    tune_knobs_file: Path | None = None
+    if apply_orbit_correction:
+        corrector_file = destination.parent / f"corrector_{destination.stem}.tfs"
+    tune_knobs_file = destination.parent / f"tune_knobs_{destination.stem}.txt"
+
+    env, magnet_strengths, matched_tunes, _ = generate_xsuite_env_with_errors(
+        interface_with_beam,
+        dpp_value=dpp_value,
+        corrector_file=corrector_file,
+        perturb_quads=True,
+        apply_orbit_correction=apply_orbit_correction,
+        target_qx=target_qx,
+        target_qy=target_qy,
+    )
+    save_knobs(matched_tunes, tune_knobs_file)
+
+    seq_name = interface_with_beam.accelerator.seq_name.lower()
+    line: xt.Line = env[seq_name]
+    kicker_name = _select_kicker_element(line)
+    if kicker_name is None:
+        pytest.skip("No kicker-like element found in sequence for test")
+
+    tws = line.twiss(method="4d")
+    frev = float(1.0 / tws.t_rev0)
+    s_kicker = float(line.get_s_position(kicker_name))
+    knl, ksl = _knl_ksl(kick_strength, kick_plane)
+
+    kicked_line = line.copy()
+    _insert_exciter_at(
+        kicked_line,
+        name="single_turn_kicker",
+        s=s_kicker,
+        knl=knl,
+        ksl=ksl,
+        frev=frev,
+        start_turn=kick_turn,
+    )
+
+    bpm_pattern_clean = _strip_inline_flags(bpm_pattern)
+    monitor_pattern = rf"(?i:{bpm_pattern_clean})|{re.escape(kicker_name)}"
+    monitor_names = get_monitor_names_at_pattern(kicked_line, monitor_pattern)
+    start_elem = kicked_line.element_names[0].upper()
+    co_row = tws.rows[start_elem] if start_elem in tws.name else tws.rows[0]
+    particles: xt.Particles = kicked_line.build_particles(
+        x=float(co_row["x"][0]),
+        px=float(co_row["px"][0]),
+        y=float(co_row["y"][0]),
+        py=float(co_row["py"][0]),
+        delta=dpp_value,
+    )
+
+    monitored_line = run_tracking(
+        line=kicked_line,
+        particles=particles,
+        # Track one extra physical turn so we can recover the BPMs that lie
+        # just before the kicker for the final logical post-kicker turn.
+        nturns=flattop_turns + 1,
+        monitor_names=monitor_names,
+    )
+    tracking_df = process_tracking_data(
+        monitored_line,
+        ramp_turns=0,
+        flattop_turns=flattop_turns + 1,
+        add_variance_columns=True,
+    )
+    tracking_df = tracking_df.loc[:, TRACK_COLUMNS].copy()
+    tracking_df["name"] = tracking_df["name"].astype(str)
+    tracking_df = _realign_kicker_turns(
+        tracking_df,
+        kicker_name=kicker_name,
+        logical_turns=flattop_turns,
+    )
+    if kicker_name.upper() not in set(tracking_df["name"]):
+        raise ValueError(f"Kicker marker {kicker_name} missing from tracking output")
+    tracking_df.to_parquet(destination, index=False)
+
+    return corrector_file, magnet_strengths, tune_knobs_file, kicker_name.upper()
+
+
 DPP_VALUE = 1.25e-4
 FLATTOP_TURNS = 256
 def _make_simulation_config_energy(optimise_momenta: bool = True) -> SimulationConfig:
@@ -208,7 +365,7 @@ def _make_simulation_config_energy(optimise_momenta: bool = True) -> SimulationC
     )
 
 
-def _run_energy_optimisation_case(
+def _build_energy_optimisation_case(
     *,
     tmp_path: Path,
     loaded_interface: AbaMadInterface,
@@ -223,8 +380,8 @@ def _run_energy_optimisation_case(
     target_qx: float = 0.28,
     target_qy: float = 0.31,
     dpp_value: float = DPP_VALUE,
-) -> tuple[dict[str, float], dict[str, float]]:
-    """Run one energy optimisation scenario and return estimate/uncertainty dictionaries."""
+) -> tuple[Controller, dict[str, float]]:
+    """Build one energy optimisation controller and its true internal knob values."""
     off_dpp_path = tmp_path / "track_off_dpp.parquet"
     corrector_file, _, tune_knobs_file = _generate_nonoise_track(
         loaded_interface,
@@ -246,7 +403,7 @@ def _run_energy_optimisation_case(
         bunches_per_file=1,
     )
 
-    accel = instantiate_accelerator_from(loaded_interface.accelerator, optimise_energy=True)
+    accel = loaded_interface.accelerator.copy_with(optimise_energy=True)
     ctrl = Controller(
         accel,
         optimiser_config,
@@ -259,6 +416,46 @@ def _run_energy_optimisation_case(
             mad_logfile=tmp_path / mad_log_name,
             write_tensorboard_logs=False,
         ),
+    )
+    true_knobs = {
+        "pt": dp2pt(
+            dpp_value, PROTON_MASS, energy=loaded_interface.accelerator.kinetic_energy + PROTON_MASS
+        )
+    }
+    return ctrl, true_knobs
+
+
+def _run_energy_optimisation_case(
+    *,
+    tmp_path: Path,
+    loaded_interface: AbaMadInterface,
+    simulation_config: SimulationConfig,
+    optimiser_config: OptimiserConfig,
+    bpm_start_points: list[str],
+    bpm_end_points: list[str],
+    magnet_range: str,
+    mad_log_name: str,
+    bpm_pattern: str = "bpm.*[^k]",
+    apply_orbit_correction: bool = True,
+    target_qx: float = 0.28,
+    target_qy: float = 0.31,
+    dpp_value: float = DPP_VALUE,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Run one energy optimisation scenario and return estimate/uncertainty dictionaries."""
+    ctrl, _true_knobs = _build_energy_optimisation_case(
+        tmp_path=tmp_path,
+        loaded_interface=loaded_interface,
+        simulation_config=simulation_config,
+        optimiser_config=optimiser_config,
+        bpm_start_points=bpm_start_points,
+        bpm_end_points=bpm_end_points,
+        magnet_range=magnet_range,
+        mad_log_name=mad_log_name,
+        bpm_pattern=bpm_pattern,
+        apply_orbit_correction=apply_orbit_correction,
+        target_qx=target_qx,
+        target_qy=target_qy,
+        dpp_value=dpp_value,
     )
     return ctrl.run()
 
@@ -281,6 +478,26 @@ def _make_simulation_config_quad() -> SimulationConfig:
         num_batches=2,
         bpm_loss_outlier_sigma=4,
     )
+
+
+def evaluate_controller_worker_loss(ctrl: Controller, knobs: dict[str, float]) -> float:
+    """Return the mean worker diagnostic loss at one knob setting."""
+    ctrl.worker_manager.start_workers(
+        ctrl.data_manager.track_data,
+        ctrl.data_manager.turn_batches,
+        ctrl.data_manager.file_map,
+        ctrl.config_manager.start_bpms,
+        ctrl.config_manager.end_bpms,
+        ctrl.simulation_config,
+        ctrl.machine_deltaps,
+        ctrl.initial_knobs,
+        enable_validation=ctrl.tracking_plan.enable_validation,
+    )
+    try:
+        diag = ctrl.worker_manager._request_worker_diagnostics(knobs)[0]
+    finally:
+        ctrl.worker_manager.terminate_workers()
+    return float(diag["total_loss"])
 
 
 def run_madng_tracking(

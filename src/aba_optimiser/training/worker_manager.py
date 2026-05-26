@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
+from aba_optimiser.training.tracking_mode import ArcByArcTrackingPlan, TrackingPlan
 from aba_optimiser.training.validation_selection import (
     payload_track_count,
     split_validation_payloads,
@@ -29,6 +30,15 @@ from aba_optimiser.workers import (
 )
 from aba_optimiser.workers.protocol import WorkerChannels, raise_for_worker_error_payload
 from aba_optimiser.workers.tracking_position_only import PositionOnlyTrackingWorker
+
+# Maps (optimise_momenta, validation) -> worker class.
+# Add new worker types here without touching WorkerManager.
+_WORKER_CLASS_REGISTRY: dict[tuple[bool, bool], type] = {
+    (True, False): TrackingWorker,
+    (False, False): PositionOnlyTrackingWorker,
+    (True, True): ValidationTrackingWorker,
+    (False, True): PositionOnlyValidationTrackingWorker,
+}
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -66,6 +76,7 @@ class WorkerManager:
         mad_logfile: Path | None = None,
         python_logfile: Path | None = None,
         optimise_knobs: list[str] | None = None,
+        tracking_plan: TrackingPlan | None = None,
     ) -> None:
         # `n_data_points` is kept for constructor compatibility with existing callers.
         self.n_data_points = n_data_points
@@ -89,6 +100,7 @@ class WorkerManager:
         self.mad_logfile = mad_logfile
         self.python_logfile = python_logfile
         self.optimise_knobs = optimise_knobs
+        self.tracking_plan = tracking_plan if tracking_plan is not None else ArcByArcTrackingPlan()
         self.worker_metadata: list[WorkerRuntimeMetadata] = []
         self.validation_parent_conns: list[Connection] = []
         self.validation_workers: list[mp.Process] = []
@@ -118,11 +130,11 @@ class WorkerManager:
             debug=debug,
             mad_logfile=mad_logfile,
             python_logfile=python_logfile,
+            tracking_plan=self.tracking_plan,
         )
         self.payload_builder = WorkerPayloadBuilder(
             accelerator=accelerator,
             all_bpms=all_bpms,
-            kinetic_energy=self.kinetic_energy,
         )
 
     def _sync_helpers(self) -> None:
@@ -131,6 +143,7 @@ class WorkerManager:
         self.setup_helper.file_kick_planes = self.file_kick_planes
         self.setup_helper.corrector_strengths_files = self.corrector_strengths_files
         self.setup_helper.tune_knobs_files = self.tune_knobs_files
+        self.setup_helper.tracking_plan = self.tracking_plan
         self.payload_builder.all_bpms = self.all_bpms
 
     def _channels(self) -> WorkerChannels:
@@ -155,13 +168,12 @@ class WorkerManager:
         """Select the worker implementation for a payload."""
         if kick_plane not in {"xy", "x", "y"}:
             raise ValueError(f"Unsupported kick plane {kick_plane!r}")
-        if validation:
-            return (
-                ValidationTrackingWorker
-                if optimise_momenta
-                else PositionOnlyValidationTrackingWorker
+        worker_class = _WORKER_CLASS_REGISTRY.get((optimise_momenta, validation))
+        if worker_class is None:
+            raise ValueError(
+                f"No worker class registered for optimise_momenta={optimise_momenta}, validation={validation}"
             )
-        return TrackingWorker if optimise_momenta else PositionOnlyTrackingWorker
+        return worker_class
 
     @staticmethod
     def _summarise_file_usage(
@@ -310,6 +322,7 @@ class WorkerManager:
         simulation_config: SimulationConfig,
         machine_deltaps: list[float],
         initial_knobs: dict[str, float],
+        enable_validation: bool = True,
     ) -> None:
         """Start training workers plus one separate validation worker."""
         self.track_data = {}
@@ -320,19 +333,41 @@ class WorkerManager:
         self.simulation_config = simulation_config
         self.machine_deltaps = machine_deltaps
 
-        validation_split = self._build_payload_split(
-            track_data,
-            self.turn_batches,
-            self.file_turn_map,
-            self.start_bpms,
-            self.end_bpms,
-            simulation_config,
-            self.machine_deltaps,
+        validation_split = (
+            self._build_payload_split(
+                track_data,
+                self.turn_batches,
+                self.file_turn_map,
+                self.start_bpms,
+                self.end_bpms,
+                simulation_config,
+                self.machine_deltaps,
+            )
+            if enable_validation
+            else None
         )
         n_run_turns = 1 if simulation_config.run_arc_by_arc else simulation_config.n_run_turns
-        training_payloads = validation_split.training_payloads
-        validation_payloads = validation_split.validation_payloads
-        duplicated_validation_payload = validation_split.duplicated_validation_payload
+        if validation_split is None:
+            training_payloads = self.create_worker_payloads(
+                track_data,
+                self.turn_batches,
+                self.file_turn_map,
+                self.start_bpms,
+                self.end_bpms,
+                simulation_config,
+                self.machine_deltaps,
+            )
+            training_payloads = self.payload_builder.attach_global_weights(
+                training_payloads,
+                simulation_config.num_batches,
+                optimise_momenta=simulation_config.optimise_momenta,
+            )
+            validation_payloads = []
+            duplicated_validation_payload = False
+        else:
+            training_payloads = validation_split.training_payloads
+            validation_payloads = validation_split.validation_payloads
+            duplicated_validation_payload = validation_split.duplicated_validation_payload
 
         worker_mode = "arc-by-arc" if simulation_config.run_arc_by_arc else "multi-turn"
         LOGGER.info(
@@ -381,8 +416,8 @@ class WorkerManager:
             self._worker_particle_counts.append(len(data.init_coords))
             parent.send((initial_knobs, -1))
             bpm_names = self.setup_helper.get_worker_bpm_names(
-                config.start_bpm,
-                config.end_bpm,
+                config.tracking_start_bpm,
+                config.tracking_end_bpm,
                 config.sdir,
                 config.kick_plane,
                 config.bad_bpms,
@@ -400,8 +435,8 @@ class WorkerManager:
                 "Trn worker %d: file=%d, range=%s/%s, sdir=%d, kick_plane=%s, observed_bpms=%d",
                 worker_id,
                 file_idx,
-                config.start_bpm,
-                config.end_bpm,
+                config.tracking_start_bpm,
+                config.tracking_end_bpm,
                 config.sdir,
                 config.kick_plane,
                 len(bpm_names),
@@ -431,8 +466,8 @@ class WorkerManager:
                 self.validation_workers.append(val_worker)
 
                 val_bpm_names = self.setup_helper.get_worker_bpm_names(
-                    val_config.start_bpm,
-                    val_config.end_bpm,
+                    val_config.tracking_start_bpm,
+                    val_config.tracking_end_bpm,
                     val_config.sdir,
                     val_config.kick_plane,
                     val_config.bad_bpms,
@@ -448,13 +483,19 @@ class WorkerManager:
                 )
                 val_tracks = payload_track_count(validation_payload)
                 self.validation_loss_weights.append(float(val_tracks))
-                covered_ranges.add((val_file_idx, val_config.start_bpm, val_config.end_bpm))
+                covered_ranges.add(
+                    (
+                        val_file_idx,
+                        val_config.tracking_start_bpm,
+                        val_config.tracking_end_bpm,
+                    )
+                )
                 LOGGER.debug(
                     "Val worker %d: file=%d, range=%s/%s, sdir=%d, kick_plane=%s, observed_bpms=%d, tracks=%d",
                     val_worker_id,
                     val_file_idx,
-                    val_config.start_bpm,
-                    val_config.end_bpm,
+                    val_config.tracking_start_bpm,
+                    val_config.tracking_end_bpm,
                     val_config.sdir,
                     val_config.kick_plane,
                     len(val_bpm_names),
@@ -666,8 +707,8 @@ class WorkerManager:
         _data, config, file_idx = payload
         return (
             file_idx,
-            config.start_bpm,
-            config.end_bpm,
+            config.tracking_start_bpm,
+            config.tracking_end_bpm,
             config.sdir,
             cls._plane_value(config.kick_plane),
         )

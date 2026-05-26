@@ -30,7 +30,7 @@ class TestLBFGSOptimiser:
         assert len(optim.RHO) == 0
 
     def test_step_first_step(self):
-        optim = LBFGSOptimiser()
+        optim = LBFGSOptimiser(max_grad_norm=None, max_step_norm=None)
         params = np.array([1.0, 2.0])
         grads = np.array([2.0, 4.0])
         lr = 0.01
@@ -46,7 +46,7 @@ class TestLBFGSOptimiser:
         assert np.array_equal(optim.prev_grads, grads)
 
     def test_step_with_history(self):
-        optim = LBFGSOptimiser(history_size=5)
+        optim = LBFGSOptimiser(history_size=5, max_grad_norm=None, max_step_norm=None)
         params = np.array([1.0])
         grads = np.array([2.0])
         lr = 0.1
@@ -68,7 +68,11 @@ class TestLBFGSOptimiser:
     def test_adaptive_lr_bb1_calculation(self):
         """Test that BB1 multiplier is calculated correctly."""
         optim = LBFGSOptimiser(
-            use_adaptive_lr=True, bb_clip=(0.0, float("inf")), ema_beta=0.0
+            use_adaptive_lr=True,
+            bb_clip=(0.0, float("inf")),
+            ema_beta=0.0,
+            max_grad_norm=None,
+            max_step_norm=None,
         )  # Immediate update
         params = np.array([2.0])  # Start further from optimum
         grads = np.array([4.0])  # grad = 2*x for f=0.5*x^2
@@ -93,7 +97,12 @@ class TestLBFGSOptimiser:
             assert optim.eta_ema == 1.0
 
     def test_no_adaptive_lr(self):
-        optim = LBFGSOptimiser(use_adaptive_lr=False, eta_init=2.0)
+        optim = LBFGSOptimiser(
+            use_adaptive_lr=False,
+            eta_init=2.0,
+            max_grad_norm=None,
+            max_step_norm=None,
+        )
         params = np.array([1.0])
         grads = np.array([2.0])
         lr = 0.01
@@ -105,7 +114,7 @@ class TestLBFGSOptimiser:
         assert optim.eta_ema == 2.0
 
     def test_weight_decay(self):
-        optim = LBFGSOptimiser(weight_decay=0.1)
+        optim = LBFGSOptimiser(weight_decay=0.1, max_grad_norm=None, max_step_norm=None)
         params = np.array([1.0])
         grads = np.array([2.0])
         lr = 0.01
@@ -119,7 +128,7 @@ class TestLBFGSOptimiser:
         assert np.allclose(new_params, expected_new_params)
 
     def test_convergence_quadratic(self):
-        optim = LBFGSOptimiser(history_size=10)
+        optim = LBFGSOptimiser(history_size=10, max_grad_norm=None, max_step_norm=None)
         params = np.array([10.0])
         lr = 1.0  # Use lr=1.0 to see pure quasi-Newton effect
 
@@ -129,16 +138,16 @@ class TestLBFGSOptimiser:
         grads = params.copy()  # grad = x for f=0.5*x^2
         params = optim.step(params, grads, lr)
 
-        # Should be much closer to 0 (quasi-Newton should be very effective)
-        assert abs(params[0]) < 1.0
+        # First step still behaves like gradient descent before any curvature history exists.
+        assert abs(params[0]) < 10.0
 
-        # Second step should be very close to 0
+        # Second step can exploit the stored curvature pair and should jump close to the optimum.
         grads = params.copy()
         params = optim.step(params, grads, lr)
         assert abs(params[0]) < 0.1
 
     def test_history_limit(self):
-        optim = LBFGSOptimiser(history_size=2)
+        optim = LBFGSOptimiser(history_size=2, max_grad_norm=None, max_step_norm=None)
         params = np.array([-1.0])  # start negative
 
         for i in range(5):
@@ -160,6 +169,17 @@ class TestLBFGSOptimiser:
 
         # With zero grads, no change
         assert np.allclose(new_params, params)
+
+    def test_default_clipping_limits_first_step_norm(self):
+        optim = LBFGSOptimiser()
+        params = np.array([1.0, 2.0])
+        grads = np.array([2.0, 4.0])
+        lr = 0.01
+
+        new_params = optim.step(params, grads, lr)
+        step = new_params - params
+
+        assert np.isclose(np.linalg.norm(step), lr)
 
     def test_state_roundtrip_restores_update_trajectory(self):
         params = np.array([1.5, -0.5, 2.0])

@@ -12,34 +12,34 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
-from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 import tfs
 from omc3.hole_in_one import hole_in_one_entrypoint
-from pymadng_utils.io.utils import save_knobs
 from pymadng_utils.model_creator.madng_utils import update_model_with_madng
 from tmom_recon import ACDipoleConfig, calculate_pz_measurement
 from tmom_recon.acd.madng_driver import ACDipoleMadDriver
 from tmom_recon.svd import svd_clean_measurements
-from turn_by_turn import TbtData, read_tbt
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import (
-    CORRECTOR_STRENGTHS,
     DPP_OPTIMISER_CONFIG,
     DPP_SIMULATION_CONFIG,
     PROJECT_ROOT,
-    TUNE_KNOBS_FILE,
 )
 from aba_optimiser.mad import GenericMadInterface
+from aba_optimiser.measurements.online_knobs import build_dict_from_nxcal_result, save_online_knobs
 from aba_optimiser.measurements.squeeze_helpers import (
     extract_tunes_from_job_file,
     get_or_make_sequence,
+)
+from aba_optimiser.measurements.tbt_io import (
+    _build_dataframe_file_indices,
+    convert_measurements,
+    load_files,
 )
 from aba_optimiser.noise import assign_bpm_variances
 from aba_optimiser.training.controller import Controller
@@ -47,8 +47,6 @@ from aba_optimiser.training.controller_config import MeasurementConfig, OutputCo
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from aba_optimiser.measurements.knob_extraction import NXCALSResult
 
 LOGGER = logging.getLogger(__name__)
 
@@ -68,75 +66,6 @@ class ACDipoleReconstructionConfig:
     n_bpms_each_side: int = 1
     tune_knobs_files: list[Path | None] | None = None
     corrector_knobs_files: list[Path | None] | None = None
-
-
-def _build_dataframe_file_indices(measurements: list[TbtData]) -> list[int]:
-    """Map each converted dataframe back to the source measurement-file index."""
-    file_indices: list[int] = []
-    for file_idx, meas in enumerate(measurements):
-        file_indices.extend([file_idx] * len(meas.matrices))
-    return file_indices
-
-
-def load_files(files: list[Path]) -> list[TbtData]:
-    """Load and concatenate multiple Parquet files into a single DataFrame."""
-    measurements: list[TbtData] = []
-    for file in files:
-        LOGGER.info("Loading data from %s", file)
-        meas_tbt = read_tbt(file, datatype="lhc")
-        measurements.append(meas_tbt)
-
-    return measurements
-
-
-def convert_measurements(
-    measurements: list[TbtData], bad_bpms: list[str] = [], combine_measurements: bool = True
-) -> list[pd.DataFrame]:
-    """Combine multiple TbtData objects into a single DataFrame.
-
-    In each turn by turn object, there exists a list stored in the `matrices` attribute.
-    Each element of this list is a TransverseData object, which contains the data per bunch.
-    Each TransverseData object has an X and Y attribute, which are DataFrames containing the
-    measurement data for each plane.
-    The DataFrame has an index which is the BPM name, and columns which are the turn numbers.
-    The turn numbers start from 0, so we need to offset them by the number of turns (+1) in previous
-    TransverseData objects to ensure unique turn numbers across all bunches and all files.
-
-    The final combined DataFrame will have no index, and columns: ['name', 'turn', 'x', 'y'] (x and y in metres).
-    The name column should be a category dtype for efficiency.
-    """
-    all_data: list[pd.DataFrame] = []
-    turn_offset = 1
-    for meas in measurements:
-        if not combine_measurements:
-            turn_offset = 1
-        for bunch in meas.matrices:
-            df_x = bunch.X.copy()
-            df_y = bunch.Y.copy()
-            df_x.index.name = "name"
-            df_y.index.name = "name"
-            df_x.columns = df_x.columns + turn_offset
-            df_y.columns = df_y.columns + turn_offset
-            df_combined = df_x.reset_index().melt(id_vars="name", var_name="turn", value_name="x")
-            df_combined["y"] = df_y.reset_index().melt(
-                id_vars="name", var_name="turn", value_name="y"
-            )["y"]
-            # Convert from mm to metres
-            df_combined["x"] = df_combined["x"] / 1000
-            df_combined["y"] = df_combined["y"] / 1000
-
-            # Reorder the rows based on BPM names to match the original order
-            original_order = df_x.index.tolist()
-            assert df_y.index.tolist() == original_order, "BPM order mismatch between X and Y data"
-            df_combined["name"] = pd.Categorical(df_combined["name"], categories=original_order)
-            # Delete bad bpms from the combined dataframe
-            if bad_bpms:
-                df_combined = df_combined[~df_combined["name"].isin(bad_bpms)]
-            df_combined = df_combined.sort_values(["turn", "name"]).reset_index(drop=True)
-
-            all_data.append(df_combined)
-            turn_offset += df_x.shape[1]  # Number of turns is number of columns
-    return all_data
 
 
 def compute_uniform_vars(
@@ -254,11 +183,6 @@ def run_analysis(
     return bad_bpms
 
 
-def build_dict_from_nxcal_result(result: list[NXCALSResult]) -> dict[str, float]:
-    """Convert NXCALSResult to a dictionary of magnet strengths."""
-    return {res.name: res.value for res in result}
-
-
 def copy_ac_dipole_attrs(source: pd.DataFrame, target: pd.DataFrame) -> None:
     """Copy AC-dipole metadata attrs from source dataframe to target."""
     for key in AC_DIPOLE_ATTR_KEYS:
@@ -331,57 +255,6 @@ def process_single_dataframe(
         df = df.dropna(subset=["px", "py"])
 
     return i, df
-
-
-def save_online_knobs(
-    meas_time: datetime,
-    beam: int,
-    tune_knobs_file: Path | None = None,
-    corrector_knobs_file: Path | None = None,
-    energy: float | None = None,
-) -> float:
-    """Load and save knob data from NXCal."""
-    try:
-        from nxcals.spark_session_builder import get_or_create
-        from omc3.machine_data_extraction.mqt_extraction import get_mqt_vals
-        from omc3.machine_data_extraction.nxcals_knobs import get_energy
-
-        from aba_optimiser.measurements import knob_extraction
-    except ImportError as e:
-        raise ImportError(
-            "nxcals is required for save_online_knobs but is not installed."
-        ) from e
-
-    spark = get_or_create()
-    if energy is None:
-        energy, _ = get_energy(spark, meas_time)
-
-    mq_results = knob_extraction.get_mq_vals(spark, meas_time, beam, energy=energy)
-    mqt_results = get_mqt_vals(spark, meas_time, beam, energy=energy)
-    ms_results = knob_extraction.get_ms_vals(spark, meas_time, beam, energy=energy)
-    mb_results = knob_extraction.get_mb_vals(spark, meas_time, beam, energy=energy)
-    corrector_results = knob_extraction.get_mcb_vals(spark, meas_time, beam, energy=energy)
-    # Stop Spark context to avoid conflicts with multiprocessing
-    # Spark signal handlers interfere with ProcessPoolExecutor shutdown
-    spark.stop()
-    del spark
-
-    mqt_knobs = build_dict_from_nxcal_result(mqt_results)
-    ms_knobs = build_dict_from_nxcal_result(ms_results)
-    mb_knobs = build_dict_from_nxcal_result(mb_results)
-    mq_knobs = build_dict_from_nxcal_result(mq_results)
-    corrector_knobs = build_dict_from_nxcal_result(corrector_results)
-
-    if tune_knobs_file is None:
-        tune_knobs_file = TUNE_KNOBS_FILE
-    if corrector_knobs_file is None:
-        corrector_knobs_file = CORRECTOR_STRENGTHS
-
-    main_magnet_knobs = {**mqt_knobs, **ms_knobs, **mb_knobs, **mq_knobs}
-    save_knobs(main_magnet_knobs, tune_knobs_file)
-    save_knobs(corrector_knobs, corrector_knobs_file)
-
-    return energy
 
 
 def detect_bad_bpms(
@@ -777,107 +650,3 @@ def process_measurements(
         output_paths = dict.fromkeys(pzs_dict, output_dir)
 
     return pzs_dict, bad_bpms, output_paths, tws
-
-
-if __name__ == "__main__":
-    # set logging level to debug
-    logging.basicConfig(level=logging.INFO)
-    # analysis_dir = PROJECT_ROOT / "analysis"
-    analysis_dir = PROJECT_ROOT / "analysis_trim"
-    model_dir = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Models/b1_flat_60_18cm"
-
-    MAGNET_RANGES = [f"BPM.9R{s}.B1/BPM.9L{s % 8 + 1}.B1" for s in range(1, 9)]
-
-    BPM_STARTS = [[f"BPM.{i}R{s}.B1" for i in [9, 10, 11, 12, 13]] for s in range(1, 9)]
-    BPM_END_POINTS = [[f"BPM.{i}L{s % 8 + 1}.B1" for i in [9, 10, 11, 12, 13]] for s in range(1, 9)]
-
-    files = [
-        # Before the trim
-        # "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Measurements/Beam1@BunchTurn@2025_04_09@18_47_22_071/Beam1@BunchTurn@2025_04_09@18_47_22_071.sdds",
-        # "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Measurements/Beam1@BunchTurn@2025_04_09@18_48_27_464/Beam1@BunchTurn@2025_04_09@18_48_27_464.sdds",
-        # "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Measurements/Beam1@BunchTurn@2025_04_09@18_51_14_983/Beam1@BunchTurn@2025_04_09@18_51_14_983.sdds",
-        # "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB1/Measurements/Beam1@BunchTurn@2025_04_09@18_52_18_410/Beam1@BunchTurn@2025_04_09@18_52_18_410.sdds",
-        # After the trim
-        "/nfs/cs-ccr-nfs4/lhc_data/OP_DATA/FILL_DATA/10423/BPM/Beam1@BunchTurn@2025_04_09@19_05_01_818.sdds",
-        "/nfs/cs-ccr-nfs4/lhc_data/OP_DATA/FILL_DATA/10423/BPM/Beam1@BunchTurn@2025_04_09@19_06_06_407.sdds",
-        "/nfs/cs-ccr-nfs4/lhc_data/OP_DATA/FILL_DATA/10423/BPM/Beam1@BunchTurn@2025_04_09@19_07_10_507.sdds",
-    ]
-    files = [Path(f) for f in files]
-
-    # start_str = "2025-04-09 18:46:50"
-    start_str = "2025-04-09 19:04:50"
-    tz = ZoneInfo("UTC")
-    meas_time = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz)
-    save_online_knobs(meas_time, beam=1)
-    measurement_filename = "pz_data.parquet"
-    measurement_file = analysis_dir / measurement_filename
-    bad_bpms_file = analysis_dir / "bad_bpms.txt"
-
-    accelerator = LHC(
-        beam=1,
-        kinetic_energy=6800,
-        sequence_file=get_or_make_sequence(1, Path(model_dir)),
-    )
-    pzs_dict, bad_bpms, _, _ = process_measurements(
-        files,
-        analysis_dir,
-        model_dir,
-        accelerator=accelerator,
-        filename=measurement_filename,
-    )
-    pzs = pzs_dict["combined"]
-
-    # save the bad bpms to a file
-    with bad_bpms_file.open("w") as f:
-        for bpm in bad_bpms:
-            f.write(f"{bpm}\n")
-
-    # read the bad bpms from the file
-    with bad_bpms_file.open("r") as f:
-        bad_bpms = [line.strip() for line in f.readlines()]
-
-    # Write the results to a file
-    results_file = analysis_dir / "deltap_results.txt"
-    with results_file.open("w") as f:
-        f.write("Arc\tDeltap\n")
-
-    results = []
-    measurement_config = MeasurementConfig(measurement_files=[measurement_file])
-
-    for arc in range(8):
-        LOGGER.info(f"Starting optimisation for arc {arc + 1}/8")
-
-        sequence_config = SequenceConfig(
-            magnet_range=MAGNET_RANGES[arc], bad_bpms=bad_bpms, first_bpm="BPM.33L2.B1"
-        )
-
-        controller = Controller(
-            accelerator=accelerator,
-            optimiser_config=DPP_OPTIMISER_CONFIG,
-            simulation_config=DPP_SIMULATION_CONFIG,
-            sequence_config=sequence_config,
-            measurement_config=measurement_config,
-            bpm_start_points=BPM_STARTS[arc],
-            bpm_end_points=BPM_END_POINTS[arc],
-            initial_knob_strengths=None,
-            true_strengths=None,
-            output_config=None,
-        )
-        final_knobs, uncs = controller.run()
-        results.append(final_knobs["deltap"])
-        with results_file.open("a") as f:
-            f.write(f"{arc + 1}\t{results[-1]}\n")
-        LOGGER.info(f"Arc {arc + 1}: deltap = {results[-1]}")
-        LOGGER.info(f"Finished optimisation for arc {arc + 1}/8")
-
-    LOGGER.info("All arc optimisations complete.")
-    LOGGER.info("Final deltaps for each arc:")
-    for i, dp in enumerate(results):
-        LOGGER.info(f"Arc {i + 1}: deltap = {dp}")
-
-    LOGGER.info(f"Mean deltap: {np.mean(results)}")
-    LOGGER.info(f"Std dev of deltap: {np.std(results)}")
-
-    with results_file.open("a") as f:
-        f.write(f"Mean\t{np.mean(results)}\n")
-        f.write(f"StdDev\t{np.std(results)}\n")

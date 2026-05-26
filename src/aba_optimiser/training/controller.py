@@ -12,8 +12,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from aba_optimiser.training.base_controller import BaseController
-from aba_optimiser.training.controller_config import OutputConfig
+from aba_optimiser.training.controller_config import KickerConfig, OutputConfig
 from aba_optimiser.training.data_manager import DataManager
+from aba_optimiser.training.tracking_mode import build_tracking_plan
 from aba_optimiser.training.worker_manager import WorkerManager
 
 if TYPE_CHECKING:
@@ -79,6 +80,8 @@ class Controller(BaseController):
     internal algorithms, and reported results use the same knob coordinates.
     """
 
+    _defer_managers = True
+
     def __init__(
         self,
         accelerator: Accelerator,
@@ -95,6 +98,7 @@ class Controller(BaseController):
         output_config: OutputConfig | None = None,
         checkpoint_config: CheckpointConfig | None = None,
         initial_conditions_callback: Callable[[dict[str, float]], np.ndarray] | None = None,
+        kicker_config: KickerConfig | None = None,
     ):
         """
         Initialise the controller with all required managers.
@@ -123,6 +127,29 @@ class Controller(BaseController):
         else:
             logger.info("Using position-only optimisation (x, y only)")
 
+        if kicker_config is not None:
+            kicker_config.log_state()
+            sequence_config = dataclasses.replace(
+                sequence_config,
+                first_bpm=sequence_config.first_bpm or kicker_config.kicker_name,
+            )
+            simulation_config = dataclasses.replace(
+                simulation_config,
+                tracks_per_worker=1,
+                num_workers=1,
+                num_batches=1,
+                run_arc_by_arc=False,
+                n_run_turns=kicker_config.turns_after_kicker,
+                different_turns_per_range=False,
+            )
+            bpm_start_points = [kicker_config.kicker_name]
+            bpm_end_points = []
+            logger.info(
+                "Kicker mode enabled: start=%s, turns=%d",
+                kicker_config.kicker_name,
+                kicker_config.turns_after_kicker,
+            )
+
         # Normalize and validate multi-config inputs
         measurement_config = measurement_config.expanded_for_measurements()
         self.measurement_config = measurement_config
@@ -134,6 +161,11 @@ class Controller(BaseController):
         self.output_config = output_config if output_config is not None else OutputConfig()
         self.checkpoint_config = checkpoint_config
         self.initial_conditions_callback = initial_conditions_callback
+        self.kicker_config = kicker_config
+        self.tracking_plan = build_tracking_plan(
+            kicker_config=kicker_config,
+            simulation_config=simulation_config,
+        )
 
         # BaseController will normalise the optimisation-space inputs and handle
         # tracking-specific energy parameter conversions in this subclass.
@@ -166,15 +198,6 @@ class Controller(BaseController):
         # has finalised simulation_config.num_batches.
         BaseController._init_managers(self)
 
-    def _init_managers(self) -> None:
-        """Deferred to after _init_data_manager finalises simulation_config.num_batches.
-
-        BaseController.__init__ calls this via super().__init__, but for Controller we
-        must not initialise OptimisationLoop until simulation_config is final.  The real
-        initialisation is triggered explicitly by BaseController._init_managers(self)
-        at the bottom of Controller.__init__.
-        """
-
     def run(self) -> tuple[dict[str, float], dict[str, float]]:
         """Execute the optimisation process.
 
@@ -196,6 +219,7 @@ class Controller(BaseController):
                 self.simulation_config,
                 self.machine_deltaps,
                 self.initial_knobs,
+                enable_validation=self.tracking_plan.enable_validation,
             )
 
             # Pre-loop diagnostics: mask BPM and worker outliers before optimisation
@@ -315,13 +339,19 @@ class Controller(BaseController):
 
     def _init_data_manager(self, num_tracks: int, flattop_turns: int) -> None:
         """Initialize data manager and load track data."""
-        self.data_manager = DataManager(
+        observed_bpms = self.tracking_plan.observed_bpms(
             self.config_manager.bpms_in_range,
+            self.config_manager.all_bpms,
+        )
+        self.data_manager = DataManager(
+            observed_bpms,
             self.config_manager.all_bpms,
             self.simulation_config,
             self.measurement_files,
             num_bunches=num_tracks,
             flattop_turns=flattop_turns,
+            tracking_plan=self.tracking_plan,
+            extra_markers=self.tracking_plan.extra_markers(),
         )
 
         # Load track data and prepare batches
@@ -369,28 +399,8 @@ class Controller(BaseController):
             debug=self.debug,
             mad_logfile=self.mad_logfile,
             python_logfile=self.python_logfile,
+            tracking_plan=self.tracking_plan,
         )
-
-    def _convert_true_strengths_to_delta(
-        self, true_strengths: dict[str, float]
-    ) -> dict[str, float]:
-        """Handle tracking-specific energy parameter conversion only."""
-        if not true_strengths:
-            return {}
-
-        true_strengths = true_strengths.copy()
-        if "deltap" in true_strengths:
-            if len(self.measurement_files) > 1:
-                logger.warning(
-                    "Ignoring provided 'deltap' in true strengths (differs per measurement file), setting to 0.0"
-                )
-                true_strengths["pt"] = 0.0
-            else:
-                true_strengths["pt"] = self.config_manager.mad_iface.dp2pt(
-                    true_strengths.pop("deltap")
-                )
-
-        return self.accelerator.normalise_true_strengths(true_strengths)
 
     def _get_controller_mad_setup_kwargs(self) -> dict:
         """Mirror the worker MAD setup when building the expected knob list."""
@@ -398,3 +408,7 @@ class Controller(BaseController):
             "corrector_strengths": next((p for p in self.corrector_files if p is not None), None),
             "tune_knobs_file": next((p for p in self.tune_knobs_files if p is not None), None),
         }
+
+    def _get_configuration_manager_kwargs(self) -> dict:
+        """Pass kicker-mode planning information into configuration setup."""
+        return {"tracking_plan": self.tracking_plan}

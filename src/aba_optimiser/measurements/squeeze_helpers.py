@@ -8,12 +8,23 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import tfs
 from pymadng_utils.madx import make_madx_sequence
+from tmom_recon.acd.madng_driver import ACDipoleMadDriver
+from tmom_recon.acd.reconstruction import calculate_ac_dipole_momentum
+from tmom_recon.physics.dpp_calculation import estimate_dpp_from_model
+from tmom_recon.svd import svd_clean_measurements, weighted_svd_clean_measurements
+from turn_by_turn import read_tbt
 
+from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT
+from aba_optimiser.mad import AbaMadInterface
+from aba_optimiser.noise import assign_bpm_variances
 
 logger = logging.getLogger(__name__)
 
@@ -102,12 +113,12 @@ def get_measurement_date(squeeze_step: str) -> str:
     return MEASUREMENT_DATES.get(squeeze_step, DEFAULT_MEASUREMENT_DATE)
 
 
-def get_or_make_sequence(beam: int, model_dir: Path, time: str | None = None) -> Path:
+def get_or_make_sequence(beam: int, madng_model_dir: Path, time: str | None = None) -> Path:
     """Get cached sequence or generate a new one.
 
     Args:
         beam: Beam number (1 or 2)
-        model_dir: Path to model directory
+        madng_model_dir: Path to MAD-NG model directory
         time: Optional machine-settings extraction time. When provided, a
             machine-settings knobs file is generated and applied after the
             optics modifiers during sequence creation.
@@ -115,32 +126,18 @@ def get_or_make_sequence(beam: int, model_dir: Path, time: str | None = None) ->
     Returns:
         Path to sequence file
     """
-    sequences_dir = PROJECT_ROOT / "sequences_from_models"
-    sequences_dir.mkdir(exist_ok=True)
-
-    knobs_dir = sequences_dir / "knobs_files"
-    knobs_dir.mkdir(exist_ok=True)
-
-    regenerate = False
     if time is None:
         knobs_file = None
     else:
-        knobs_file = knobs_dir / f"{model_dir.name}_{time}.madx"
+        knobs_file = madng_model_dir / f"machine_settings_{time}.madx"
         if not knobs_file.exists():
-            make_machine_settings_knobs_file(knobs_dir / f"{model_dir.name}_{time}.madx", time)
-            regenerate = True
+            make_machine_settings_knobs_file(knobs_file, time)
         knobs_file = [Path(knobs_file)]
-
-    seq_path = sequences_dir / f"{model_dir.name}.seq"
-    if seq_path.exists() and not regenerate:
-        logger.info(f"Using cached sequence: {seq_path}")
-        return seq_path
-
-    logger.info(f"Generating new sequence: {seq_path}")
-    make_madx_sequence(model_dir, seq_outdir=sequences_dir, post_optics_madx_files=knobs_file)
-    generated = sequences_dir / f"lhcb{beam}_saved.seq"
-    generated.rename(seq_path)
-    return seq_path
+    expected_sequence_file = madng_model_dir / f"lhcb{beam}_saved.seq"
+    if expected_sequence_file.exists():
+        logger.info(f"Found existing sequence file for beam {beam} at {expected_sequence_file}")
+        return expected_sequence_file
+    return make_madx_sequence(madng_model_dir, post_optics_madx_files=knobs_file)
 
 def load_estimates_and_uncertainties(
     estimates_file: Path,
@@ -369,3 +366,185 @@ def extract_tunes_from_job_file(job_file_path: Path) -> tuple[float, float, floa
         f"Extracted tunes from {job_file_path}: nat_x={nat_x}, nat_y={nat_y}, drv_x={drv_x}, drv_y={drv_y}"
     )
     return nat_x, nat_y, drv_x, drv_y
+
+
+class _LHCACDipoleMadDriver(ACDipoleMadDriver, AbaMadInterface):
+    """AC-dipole MAD driver with generic magnet setters for LHC squeeze measurements."""
+
+    def __init__(self, **kwargs):
+        ACDipoleMadDriver.__init__(self, **kwargs)
+
+
+def _tbt_frames_to_dataframe(x_frame: pd.DataFrame, y_frame: pd.DataFrame) -> pd.DataFrame:
+    """Convert TBT X/Y frames to a long-form (name, turn, x, y) DataFrame."""
+    if list(x_frame.index) != list(y_frame.index):
+        raise ValueError("X and Y frames have different BPM ordering")
+    bpm_names = [str(n) for n in x_frame.index]
+    n_turns = min(x_frame.shape[1], y_frame.shape[1])
+    n_bpms = len(bpm_names)
+    x_arr = x_frame.to_numpy(dtype=float)[:, :n_turns] / 1000.0  # mm -> m
+    y_arr = y_frame.to_numpy(dtype=float)[:, :n_turns] / 1000.0
+    return pd.DataFrame(
+        {
+            "name": np.repeat(bpm_names, n_turns),
+            "turn": np.tile(np.arange(n_turns), n_bpms),
+            "x": x_arr.ravel(),
+            "y": y_arr.ravel(),
+        }
+    )
+
+
+def _fill_acd_momenta(bpm_table: pd.DataFrame, reconstructed: pd.DataFrame) -> pd.DataFrame:
+    """Write reconstructed px/py into the two AC-dipole adjacent BPMs."""
+    turn_lookup = reconstructed.set_index("turn")
+    for bpm_name, px_col, py_col in (
+        (
+            str(reconstructed.attrs["bpm_upstream"]),
+            "px_bpm_upstream_cleaned",
+            "py_bpm_upstream_cleaned",
+        ),
+        (
+            str(reconstructed.attrs["bpm_downstream"]),
+            "px_bpm_downstream_cleaned",
+            "py_bpm_downstream_cleaned",
+        ),
+    ):
+        mask = bpm_table["name"] == bpm_name
+        turns = bpm_table.loc[mask, "turn"]
+        bpm_table.loc[mask, "px"] = turns.map(turn_lookup[px_col]).to_numpy(dtype=float)
+        bpm_table.loc[mask, "py"] = turns.map(turn_lookup[py_col]).to_numpy(dtype=float)
+    return bpm_table
+
+
+def reconstruct_ac_dipole_measurements(
+    measurement_files: list[Path],
+    model_dir: Path,
+    sequence_path: Path,
+    beam: int,
+    energy: float,
+    use_weighted_svd: bool = True,
+    tune_knobs_files: list[Path | None] | None = None,
+    magnet_strengths: dict[str, float] | None = None,
+    num_workers: int = 8,
+) -> dict[str, pd.DataFrame]:
+    """Reconstruct AC-dipole momentum from raw LHC turn-by-turn measurement files.
+
+    Returns a dict mapping each measurement file stem to a reconstructed DataFrame
+    with columns (name, turn, x, y, var_x, var_y, px, py) and attrs
+    DPP_EST, ac_dipole_marker, ac_dipole_bpm_upstream, ac_dipole_bpm_downstream.
+    """
+    model_twiss_file = model_dir / "twiss.dat"
+    if not model_twiss_file.exists():
+        raise FileNotFoundError(f"Model twiss not found: {model_twiss_file}")
+    if not sequence_path.exists():
+        raise FileNotFoundError(f"Sequence file not found: {sequence_path}")
+
+    model_twiss = tfs.read(model_twiss_file, index="name")
+    lhc_accel = LHC(beam=beam, kinetic_energy=energy, sequence_file=sequence_path)
+    ac_dipole_marker = lhc_accel.get_ac_dipole_marker()
+    svd_clean = weighted_svd_clean_measurements if use_weighted_svd else svd_clean_measurements
+
+    def process_single_measurement(
+        file_idx: int,
+        measurement_file: Path,
+    ) -> tuple[str, pd.DataFrame]:
+        logger.info(f"Processing {measurement_file.name}")
+
+        if measurement_file.stat().st_size == 0:
+            raise ValueError(f"Empty measurement file: {measurement_file}")
+
+        try:
+            tbt_data = read_tbt(measurement_file, datatype="lhc")
+        except Exception as e:
+            raise ValueError(f"Failed to read TBT data from {measurement_file}: {e}") from e
+
+        if not getattr(tbt_data, "matrices", None):
+            raise ValueError(f"No TBT matrices found in {measurement_file}")
+
+        x_frame = tbt_data.matrices[0].X
+        y_frame = tbt_data.matrices[0].Y
+        if x_frame.empty or y_frame.empty:
+            raise ValueError(f"Empty X or Y frame in {measurement_file}")
+
+        orig_data = assign_bpm_variances(_tbt_frames_to_dataframe(x_frame, y_frame), "lhc")
+        orig_data = svd_clean(orig_data)
+
+        lattice_names = set(model_twiss.index.str.upper())
+        unknown_bpms = set(orig_data["name"].str.upper().unique()) - lattice_names
+        if unknown_bpms:
+            logger.warning(
+                "%s: dropping %d BPM(s) not in model twiss: %s",
+                measurement_file.name,
+                len(unknown_bpms),
+                sorted(unknown_bpms),
+            )
+            orig_data = orig_data[~orig_data["name"].str.upper().isin(unknown_bpms)].copy()
+
+        dpp_est = float(estimate_dpp_from_model(orig_data.copy(deep=True), model_twiss))
+        tune_knobs_file = tune_knobs_files[file_idx] if tune_knobs_files else None
+
+        model = None
+        try:
+            model = _LHCACDipoleMadDriver(
+                accelerator=lhc_accel,
+                deltap=dpp_est,
+                observed_elements=ac_dipole_marker,
+                discard_mad_output=True,
+                tune_knobs_file=tune_knobs_file,
+            )
+            if magnet_strengths:
+                model.set_magnet_strengths(magnet_strengths)
+
+            reconstructed = calculate_ac_dipole_momentum(
+                orig_data,
+                model_twiss,
+                ac_dipole_marker=ac_dipole_marker,
+                model=model,
+                inject_noise=False,
+                use_immediate_neighbors_for_bpms=True,
+            )
+        finally:
+            if model is not None and hasattr(model, "close"):
+                model.close()
+
+        bpm_table = orig_data.copy(deep=True)
+        bpm_table["px"] = 0.0
+        bpm_table["py"] = 0.0
+        bpm_table["var_px"] = 1.0
+        bpm_table["var_py"] = 1.0
+        bpm_table = _fill_acd_momenta(bpm_table, reconstructed)
+        bpm_table = bpm_table.reset_index(drop=True)
+
+        upstream_name = str(reconstructed.attrs["bpm_upstream"])
+        downstream_name = str(reconstructed.attrs["bpm_downstream"])
+        bpm_table.attrs.update(
+            {
+                "DPP_EST": dpp_est,
+                "ac_dipole_marker": ac_dipole_marker,
+                "ac_dipole_bpm_upstream": upstream_name,
+                "ac_dipole_bpm_downstream": downstream_name,
+            }
+        )
+
+        logger.info(f"Reconstructed {measurement_file.name}: DPP_EST={dpp_est:.6f}")
+        return measurement_file.stem, bpm_table
+
+    results: dict[str, pd.DataFrame] = {}
+    logger.info(f"Processing {len(measurement_files)} measurement files with {num_workers} workers")
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {
+            executor.submit(process_single_measurement, idx, mfile): idx
+            for idx, mfile in enumerate(measurement_files)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                stem, result_df = future.result()
+                results[stem] = result_df
+            except Exception as e:
+                logger.error(f"Failed to process measurement {idx}: {e}")
+                raise
+
+    logger.info(f"Successfully reconstructed {len(results)} measurements")
+    return results

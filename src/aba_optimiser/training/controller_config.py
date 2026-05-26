@@ -113,6 +113,27 @@ class OutputConfig:
 
 
 @dataclass
+class KickerConfig:
+    """Configuration for kicker-only tracking runs.
+
+    Attributes:
+        kicker_name: Element name used as the initial-condition marker.
+        turns_after_kicker: Number of turns to track after the kicker.
+    """
+
+    kicker_name: str
+    turns_after_kicker: int
+
+    def __post_init__(self) -> None:
+        if self.turns_after_kicker < 1:
+            raise ValueError("turns_after_kicker must be >= 1")
+
+    def log_state(self) -> None:
+        """Log the current kicker config settings."""
+        logger.info("KickerConfig: %s", self)
+
+
+@dataclass
 class CheckpointConfig:
     """Checkpoint save/restore behaviour for optimisation runs."""
 

@@ -97,7 +97,7 @@ def _build_validation_groups(
 
     for idx, payload in enumerate(payloads):
         _data, config, file_idx = payload
-        key = (file_idx, config.start_bpm, config.end_bpm)
+        key = (file_idx, config.tracking_start_bpm, config.tracking_end_bpm)
         grouped.setdefault(key, {}).setdefault(int(config.sdir), []).append(idx)
 
     groups: list[_ValidationGroup] = []
@@ -214,7 +214,11 @@ def split_validation_payloads(
 
     if logger is not None:
         selected_ranges = {
-            (payloads[idx][2], payloads[idx][1].start_bpm, payloads[idx][1].end_bpm)
+            (
+                payloads[idx][2],
+                payloads[idx][1].tracking_start_bpm,
+                payloads[idx][1].tracking_end_bpm,
+            )
             for idx in selected_indices
         }
         logger.info(

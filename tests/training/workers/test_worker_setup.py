@@ -4,6 +4,7 @@ from pathlib import Path
 
 from aba_optimiser.accelerators import SPS
 from aba_optimiser.config import SimulationConfig
+from aba_optimiser.training.tracking_mode import FullRingBpmTrackingPlan
 from aba_optimiser.training.worker_setup import WorkerRangeSpec, WorkerSetupHelper
 
 
@@ -26,6 +27,7 @@ def _make_helper(tmp_path: Path) -> WorkerSetupHelper:
         debug=False,
         mad_logfile=None,
         python_logfile=None,
+        tracking_plan=FullRingBpmTrackingPlan(),
     )
 
 

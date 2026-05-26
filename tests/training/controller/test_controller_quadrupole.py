@@ -21,6 +21,7 @@ from aba_optimiser.training.controller_config import (
     SequenceConfig,
 )
 from tests.training.controller_test_utils import (
+    evaluate_controller_worker_loss,
     _generate_nonoise_track,
     _make_optimiser_config_quad,
     _make_simulation_config_quad,
@@ -122,6 +123,7 @@ def test_controller_quad_opt_simple(
     seq_b1: Path,
     start_marker: str,
     loaded_interface: AbaMadInterface,
+    controller_test_mode: str,
 ) -> None:
     ctrl, true_values = _build_lhc_quad_controller(
         tmp_path=tmp_path,
@@ -130,6 +132,11 @@ def test_controller_quad_opt_simple(
         start_marker=start_marker,
     )
     logger.info("Starting controller with logfile at %s", tmp_path / "mad_logfile.log")
+    if controller_test_mode == "loss_regression":
+        initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
+        true_loss = evaluate_controller_worker_loss(ctrl, true_values)
+        assert true_loss < initial_loss * 1e-6
+        return
     estimate, _unc = ctrl.run()
     _assert_estimate_matches_true(estimate, true_values, max_rel_diff=1e-5)
 
@@ -139,6 +146,7 @@ def test_controller_quad_opt_simple_without_early_stopping_reaches_truth(
     tmp_path: Path,
     seq_b1: Path,
     loaded_interface: AbaMadInterface,
+    controller_test_mode: str,
 ) -> None:
     ctrl, true_values = _build_lhc_quad_controller(
         tmp_path=tmp_path,
@@ -146,6 +154,11 @@ def test_controller_quad_opt_simple_without_early_stopping_reaches_truth(
         loaded_interface=loaded_interface,
         start_marker="MSIA.EXIT.B1",
     )
+    if controller_test_mode == "loss_regression":
+        initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
+        true_loss = evaluate_controller_worker_loss(ctrl, true_values)
+        assert true_loss < initial_loss * 1e-6
+        return
 
     ctrl.optimisation_loop._should_stop_for_loss_change = (  # type: ignore[method-assign]
         lambda epoch, epoch_loss, prev_loss: False
@@ -163,6 +176,7 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
     seq_sps: Path,
     loaded_sps_interface: AbaMadInterface,
     use_diagonal_kicks: bool,
+    controller_test_mode: str,
 ) -> None:
     """SPS quadrupole optimisation using separate horizontal and vertical files."""
     flattop_turns = 256
@@ -271,6 +285,11 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
         true_strengths=magnet_strengths,
         debug=False,
     )
+    if controller_test_mode == "loss_regression":
+        initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
+        true_loss = evaluate_controller_worker_loss(ctrl, magnet_strengths)
+        assert true_loss < initial_loss * 1e-3
+        return
     estimate, unc = ctrl.run()
 
     iface = GradientDescentMadInterface(

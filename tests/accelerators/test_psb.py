@@ -24,10 +24,10 @@ class TestPSBAccelerator:
         """Test basic PSB initialisation."""
         psb = PSB(ring=1, sequence_file=test_sequence_file)
 
-        expected_energy = 0.160 + 0.9382720813  # kinetic + proton mass = total energy
         assert psb.ring == 1
         assert psb.sequence_file == test_sequence_file
-        assert psb.kinetic_energy == pytest.approx(expected_energy)
+        assert psb.kinetic_energy == pytest.approx(0.160)
+        assert psb.energy == pytest.approx(0.160 + 0.9382720813)
         assert psb.bpm_pattern == "^BR1%.BPM"
         assert psb.optimise_quadrupoles is False
         assert psb.optimise_correctors is False
@@ -115,7 +115,7 @@ class TestPSBAccelerator:
     def test_tune_configuration(self, test_sequence_file: Path) -> None:
         """Test PSB tune variable names and integer tunes."""
         psb = PSB(ring=1, sequence_file=test_sequence_file)
-        assert psb.tune_variables == ("kbrqf", "kbrqd")
+        assert psb.tune_variables == ("kBRQF", "kBRQD")
         assert psb.tune_integers == (4, 4)
 
     def test_has_any_optimisation(self, test_sequence_file: Path) -> None:

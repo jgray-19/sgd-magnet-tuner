@@ -36,7 +36,14 @@ class BaseController(ABC):
 
     Design: optimisation-space only end-to-end. User inputs, internal state, and
     reported results all use the same knob coordinates.
+
+    Subclasses that need to complete their own setup before ``_init_managers`` is
+    called should set ``_defer_managers = True`` as a class attribute.  They are
+    then responsible for calling ``BaseController._init_managers(self)`` explicitly
+    once their setup is complete.
     """
+
+    _defer_managers: bool = False
 
     def __init__(
         self,
@@ -100,6 +107,7 @@ class BaseController(ABC):
             bpm_start_points,
             bpm_end_points,
             optimise_knobs,
+            **self._get_configuration_manager_kwargs(),
         )
         mad_setup_kwargs = self._get_controller_mad_setup_kwargs()
         self.config_manager.setup_mad_interface(
@@ -123,8 +131,9 @@ class BaseController(ABC):
         if not true_strengths_delta:
             self.filtered_true_strengths = self.initial_knobs.copy()
 
-        # Initialize managers
-        self._init_managers()
+        # Initialize managers (may be deferred by subclasses via _defer_managers)
+        if not self._defer_managers:
+            self._init_managers()
 
     def convert_deltap_to_pt(
         self, initial_knob_strengths: dict[str, float] | None
@@ -182,6 +191,10 @@ class BaseController(ABC):
 
     def _get_controller_mad_setup_kwargs(self) -> dict:
         """Return extra kwargs for controller-side MAD interface setup."""
+        return {}
+
+    def _get_configuration_manager_kwargs(self) -> dict:
+        """Return extra kwargs for configuration manager construction."""
         return {}
 
     def setup_logging(self, log_suffix: str = "opt") -> SummaryWriter | None:

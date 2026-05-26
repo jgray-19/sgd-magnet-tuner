@@ -14,6 +14,7 @@ import numpy as np
 
 from aba_optimiser.config import PROTON_MASS
 from aba_optimiser.physics.deltap import dp2pt
+from aba_optimiser.training.utils import bpm_supports_both_planes, bpm_supports_plane
 from aba_optimiser.workers import (
     PrecomputedTrackingWeights,
     TrackingData,
@@ -43,18 +44,22 @@ class WorkerPayloadBuilder:
         self,
         accelerator: Accelerator,
         all_bpms: list[str],
-        kinetic_energy: float,
     ) -> None:
         self.accelerator = accelerator
         self.all_bpms = all_bpms
-        self.kinetic_energy = kinetic_energy
-        self._pos_cache: dict[int, dict[tuple[int, str], int]] = {}
-        self._layout_cache: dict[int, tuple[dict[int, int], dict[str, int], int]] = {}
+        self._pos_cache: dict[tuple, dict[tuple[int, str], int]] = {}
+        self._layout_cache: dict[tuple, tuple[dict[int, int], dict[str, int], int]] = {}
+
+    @staticmethod
+    def _df_cache_key(df: pd.DataFrame) -> tuple:
+        """Return a stable cache key derived from the DataFrame's MultiIndex structure."""
+        turns = tuple(dict.fromkeys(df.index.get_level_values("turn")))
+        bpms = tuple(dict.fromkeys(df.index.get_level_values("name")))
+        return (turns, bpms)
 
     def compute_pt(self, file_idx: int, machine_deltaps: list[float]) -> float:
         """Compute transverse momentum based on file index."""
-        total_energy = self.kinetic_energy + PROTON_MASS
-        return dp2pt(machine_deltaps[file_idx], PROTON_MASS, energy=total_energy)
+        return dp2pt(machine_deltaps[file_idx], PROTON_MASS, energy=self.accelerator.energy)
 
     @staticmethod
     def freeze_payload_arrays(*arrays: np.ndarray) -> None:
@@ -64,18 +69,11 @@ class WorkerPayloadBuilder:
 
     def bpm_supports_plane(self, bpm: str, kick_plane: str) -> bool:
         """Return whether `bpm` can measure the requested kick plane."""
-        plane = self.accelerator.infer_monitor_plane(bpm)
-        if kick_plane == "x":
-            return "H" in plane
-        if kick_plane == "y":
-            return "V" in plane
-        if kick_plane == "xy":
-            return ("H" in plane) or ("V" in plane)
-        raise ValueError(f"Unsupported kick plane {kick_plane!r}")
+        return bpm_supports_plane(self.accelerator, bpm, kick_plane)
 
     def bpm_supports_both_planes(self, bpm: str) -> bool:
         """Return whether `bpm` can measure both transverse planes."""
-        return self.bpm_supports_plane(bpm, "x") and self.bpm_supports_plane(bpm, "y")
+        return bpm_supports_both_planes(self.accelerator, bpm)
 
     def validate_worker_bpm_names(self, bpm_names: list[str], kick_plane: str) -> None:
         """Validate that a worker only receives BPMs compatible with its plane."""
@@ -113,15 +111,15 @@ class WorkerPayloadBuilder:
 
     def _get_pos(self, df: pd.DataFrame, turn: int, bpm: str) -> int:
         """Fast integer index position for MultiIndex (turn, bpm) with caching."""
-        df_id = id(df)
-        bucket = self._pos_cache.setdefault(df_id, {})
+        cache_key = self._df_cache_key(df)
+        bucket = self._pos_cache.setdefault(cache_key, {})
         key = (turn, bpm)
         pos = bucket.get(key)
         if pos is None:
-            turn_offsets, bpm_offsets, row_stride = self._layout_cache.get(df_id, ({}, {}, 0))
+            turn_offsets, bpm_offsets, row_stride = self._layout_cache.get(cache_key, ({}, {}, 0))
             if not turn_offsets:
                 turn_offsets, bpm_offsets, row_stride = self._build_layout_cache(df)
-                self._layout_cache[df_id] = (turn_offsets, bpm_offsets, row_stride)
+                self._layout_cache[cache_key] = (turn_offsets, bpm_offsets, row_stride)
             try:
                 pos = turn_offsets[turn] + bpm_offsets[bpm]
             except KeyError:
@@ -172,10 +170,11 @@ class WorkerPayloadBuilder:
         if not bpm_names:
             raise ValueError("No BPMs available for observation")
 
-        turn_offsets, bpm_offsets, row_stride = self._layout_cache.get(id(df), ({}, {}, 0))
+        cache_key = self._df_cache_key(df)
+        turn_offsets, bpm_offsets, row_stride = self._layout_cache.get(cache_key, ({}, {}, 0))
         if not turn_offsets:
             turn_offsets, bpm_offsets, row_stride = self._build_layout_cache(df)
-            self._layout_cache[id(df)] = (turn_offsets, bpm_offsets, row_stride)
+            self._layout_cache[cache_key] = (turn_offsets, bpm_offsets, row_stride)
 
         # Column offsets for the full repeated BPM sequence
         repeated = bpm_names * n_run_turns
@@ -221,6 +220,7 @@ class WorkerPayloadBuilder:
         arrays_cache: dict[int, dict[str, np.ndarray]],
         track_data: dict[int, pd.DataFrame],
         n_run_turns: int,
+        init_marker: str | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Create the raw arrays for one worker payload."""
         n_turns = len(turn_batch)
@@ -235,8 +235,13 @@ class WorkerPayloadBuilder:
         init_coords = np.empty((n_turns, 6), dtype="float64")
         pts = np.empty((n_turns,), dtype="float64")
         init_bpm = start_bpm if sdir == 1 else end_bpm
+        init_marker = init_marker or init_bpm
         self.validate_worker_bpm_names(bpm_names, kick_plane)
-        has_x, has_y = self.get_measured_start_planes(init_bpm, kick_plane)
+        if init_marker not in self.all_bpms:
+            has_x = kick_plane in ("x", "xy")
+            has_y = kick_plane in ("y", "xy")
+        else:
+            has_x, has_y = self.get_measured_start_planes(init_bpm, kick_plane)
 
         # Group turns by file so we can do vectorised fancy-indexing per file.
         from collections import defaultdict
@@ -253,6 +258,15 @@ class WorkerPayloadBuilder:
             idxs = indices_by_file[file_idx]
             cache = arrays_cache[file_idx]
             df = track_data[file_idx]
+            df_cache_key = self._df_cache_key(df)
+            turn_offsets, bpm_offsets, _row_stride = self._layout_cache.get(df_cache_key, ({}, {}, 0))
+            if not bpm_offsets:
+                turn_offsets, bpm_offsets, _row_stride = self._build_layout_cache(df)
+                self._layout_cache[df_cache_key] = (turn_offsets, bpm_offsets, _row_stride)
+            if init_marker not in bpm_offsets:
+                raise ValueError(
+                    f"Init marker '{init_marker}' not found in tracking data for file {file_idx}"
+                )
             base_x, base_y = cache["x"], cache["y"]
             base_px, base_py = cache["px"], cache["py"]
             base_vx, base_vy = cache["var_x"], cache["var_y"]
@@ -267,8 +281,14 @@ class WorkerPayloadBuilder:
                 n_run_turns=n_run_turns,
             )
 
-            # Initial coords from the first observation position of each turn
-            init_pos = all_pos[:, 0]  # shape (n_file_turns,)
+            init_positions = self.get_observation_positions_batch(
+                df=df,
+                bpm_names=[init_marker],
+                sdir=1,
+                turns=file_turns,
+                n_run_turns=1,
+            )
+            init_pos = init_positions[:, 0]
             if has_x:
                 init_coords[idxs, 0] = base_x[init_pos]
                 init_coords[idxs, 1] = base_px[init_pos]
@@ -333,6 +353,7 @@ class WorkerPayloadBuilder:
             sdir=plan.range_spec.sdir,
             bpm_names=plan.bpm_names,
             kick_plane=plan.kick_plane,
+            init_marker=plan.init_marker,
             machine_deltaps=machine_deltaps,
             arrays_cache=arrays_cache,
             track_data=track_data,

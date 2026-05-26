@@ -39,6 +39,27 @@ _CORRECTOR_ATTRS_BY_KIND: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 
+def _ensure_cycleable_start_element(
+    iface: GenericMadInterface,
+    start_bpm: str,
+    observed_bpms: list[str],
+) -> None:
+    """Replace a non-BPM start element with a same-name marker for MAD cycling."""
+    if start_bpm in observed_bpms:
+        return
+    iface.mad.send(f"""
+correct_elm = MADX['{start_bpm}']
+local new_elm = MAD.element.marker ('{start_bpm}') {{ at=loaded_sequence:upos(correct_elm) }}
+local replaced = loaded_sequence:replace({{new_elm}}, '{start_bpm}')
+MADX['{start_bpm}'] = new_elm
+{iface.py_name}:send(replaced and #replaced or 0)
+correct_elm = nil
+    """)
+    if iface.mad.recv() != 1:
+        raise ValueError(f"Failed to replace start element {start_bpm} with a marker")
+    LOGGER.info("Replaced non-BPM start element with cycle marker: %s", start_bpm)
+
+
 def _absolute_name_from_dk_knob(knob_name: str) -> str | None:
     """Map a dknl/dksl perturbation knob name back to its absolute strength attribute."""
     for abs_attr, mp in MULTIPOLE_ATTRS.items():
@@ -121,6 +142,7 @@ class GenericMadInterface(AbaMadInterface):
         self.unobserve_all_elements()
 
         if start_bpm is not None:
+            _ensure_cycleable_start_element(self, start_bpm, all_bpms)
             self.cycle_sequence(marker_name=start_bpm)
             LOGGER.info(f"Cycled sequence to start at BPM: {start_bpm}")
         else:
@@ -129,6 +151,13 @@ class GenericMadInterface(AbaMadInterface):
         # Setup observation and ranges
         self.observe_bpms(bad_bpms=bad_bpms)
         self.bpms_in_range, self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
+        observe_set = (
+            self.all_bpms
+            if start_bpm is not None and start_bpm not in self.bpms_in_range
+            else self.bpms_in_range
+        )
+        self.observe_elements(observe_set)
+        LOGGER.info("Restricted active observation set to %d BPMs", len(observe_set))
 
         # Apply corrector strengths if provided
         if corrector_strengths is not None:

@@ -32,14 +32,21 @@ class WorkerConfig:
     The accelerator object bundles machine-specific setup, while the remaining
     fields describe the local BPM range, tracking direction, and optional input
     files needed by the worker.
+
+    Note:
+        The old `start_bpm` / `end_bpm` / `observation_start_bpm` /
+        `init_marker` names were removed in favour of explicit tracking and
+        initial-condition terminology.
     """
 
     accelerator: Accelerator
-    start_bpm: str
-    end_bpm: str
+    tracking_start_bpm: str
+    tracking_end_bpm: str
     magnet_range: str
     corrector_strengths: Path | None
     tune_knobs_file: Path | None
+    observation_range_start_bpm: str | None = None
+    initial_condition_marker: str | None = None
     sdir: int = 1
     kick_plane: KickPlane = KickPlane.XY
     bad_bpms: list[str] | None = None

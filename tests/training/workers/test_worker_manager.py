@@ -142,8 +142,8 @@ def _make_payload(
     )
     config = WorkerConfig(
         accelerator=accelerator,
-        start_bpm=start_bpm,
-        end_bpm=end_bpm,
+        tracking_start_bpm=start_bpm,
+        tracking_end_bpm=end_bpm,
         magnet_range="$start/$end",
         corrector_strengths=None,
         tune_knobs_file=None,
@@ -209,7 +209,12 @@ def test_create_worker_payloads_multi_turn_creates_forward_and_backward_workers(
 
     assert len(payloads) == 2
     assert [
-        (config.start_bpm, config.end_bpm, config.sdir, config.kick_plane)
+        (
+            config.tracking_start_bpm,
+            config.tracking_end_bpm,
+            config.sdir,
+            config.kick_plane,
+        )
         for _, config, _ in payloads
     ] == [
         ("BPH.13208", "BPV.13108", 1, "x"),
@@ -258,7 +263,7 @@ def test_create_worker_payloads_multi_turn_supports_mixed_start_planes(tmp_path:
     assert len(payloads) == 4
 
     payload_by_key = {
-        (config.start_bpm, config.end_bpm, config.sdir): (data, config)
+        (config.tracking_start_bpm, config.tracking_end_bpm, config.sdir): (data, config)
         for data, config, _ in payloads
     }
     forward_h, forward_h_config = payload_by_key[("BPH.13208", "BPV.13108", 1)]
@@ -310,7 +315,12 @@ def test_create_worker_payloads_arc_by_arc_uses_configured_fixed_pairs(tmp_path:
     )
 
     assert [
-        (config.start_bpm, config.end_bpm, config.sdir, config.kick_plane)
+        (
+            config.tracking_start_bpm,
+            config.tracking_end_bpm,
+            config.sdir,
+            config.kick_plane,
+        )
         for _, config, _ in payloads
     ] == [
         ("BPH.13208", "BPV.20108", 1, "x"),
@@ -525,7 +535,9 @@ def test_split_validation_payloads_covers_multiple_ranges_when_available(
     duplicated = split.duplicated_validation_payload
 
     assert duplicated is False
-    assert {(p[1].start_bpm, p[1].end_bpm) for p in validation_payloads} == {
+    assert {
+        (p[1].tracking_start_bpm, p[1].tracking_end_bpm) for p in validation_payloads
+    } == {
         ("BPH.13008", "BPH.13408"),
         ("BPH.14008", "BPH.14408"),
     }
@@ -581,7 +593,10 @@ def test_split_validation_payloads_pairs_opposite_directions_with_mixed_planes(
         (1, "x"),
         (-1, "y"),
     }
-    assert {(p[1].start_bpm, p[1].end_bpm) for p in split.validation_payloads} == {
+    assert {
+        (p[1].tracking_start_bpm, p[1].tracking_end_bpm)
+        for p in split.validation_payloads
+    } == {
         ("BPH.13208", "BPV.13108"),
         ("BPH.14008", "BPV.13908"),
     }
@@ -606,7 +621,10 @@ def test_split_validation_payloads_spreads_across_sorted_range_groups(
 
     split = split_validation_payloads(payloads)
 
-    assert {(p[1].start_bpm, p[1].end_bpm) for p in split.validation_payloads} == {
+    assert {
+        (p[1].tracking_start_bpm, p[1].tracking_end_bpm)
+        for p in split.validation_payloads
+    } == {
         ("BPH.10008", "BPH.10408"),
         ("BPH.12008", "BPH.12408"),
         ("BPH.14008", "BPH.14408"),

@@ -127,7 +127,7 @@ def test_create_worker_payloads_skips_single_plane_file_for_mismatched_start_pla
         machine_deltaps=[0.0],
     )
 
-    assert [(config.start_bpm, config.kick_plane) for _, config, _ in payloads] == [
+    assert [(config.tracking_start_bpm, config.kick_plane) for _, config, _ in payloads] == [
         ("BPH.13208", "x"),
     ]
 
@@ -177,7 +177,7 @@ def test_create_worker_payloads_keeps_single_plane_file_for_dual_plane_bpm(tmp_p
         machine_deltaps=[0.0],
     )
 
-    assert [(config.start_bpm, config.kick_plane) for _, config, _ in payloads] == [
+    assert [(config.tracking_start_bpm, config.kick_plane) for _, config, _ in payloads] == [
         ("BPH.13208", "x"),
         ("BPH.13208", "x"),
     ]

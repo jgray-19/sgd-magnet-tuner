@@ -71,6 +71,7 @@ def extract_bpm_range_names(
     start_bpm: str,
     end_bpm: str,
     sdir: int,
+    allow_missing_start: bool = False,
 ) -> list[str]:
     """Extract BPM names between start and end BPMs, handling circular wrapping.
 
@@ -83,7 +84,19 @@ def extract_bpm_range_names(
     Returns:
         List of BPM names in the range
     """
-    start_pos = all_bpms.index(start_bpm)
+    if start_bpm in all_bpms:
+        start_pos = all_bpms.index(start_bpm)
+    elif allow_missing_start:
+        if sdir == -1:
+            raise ValueError(
+                f"Start marker '{start_bpm}' is not in BPM list for reverse tracking"
+            )
+        start_pos = 0
+    else:
+        raise ValueError(f"Start BPM '{start_bpm}' not found in BPM list")
+
+    if end_bpm not in all_bpms:
+        raise ValueError(f"End BPM '{end_bpm}' not found in BPM list")
     end_pos = all_bpms.index(end_bpm) + 1
 
     if end_pos <= start_pos:
@@ -153,6 +166,23 @@ def load_tfs_files(
             loaded[key] = tfs.read(file_path, index="NAME")
 
     return loaded
+
+
+def bpm_supports_plane(accelerator, bpm: str, kick_plane: str) -> bool:
+    """Return whether ``bpm`` can measure the requested kick plane."""
+    plane = accelerator.infer_monitor_plane(bpm)
+    if kick_plane in ("x", "X"):
+        return "H" in plane
+    if kick_plane in ("y", "Y"):
+        return "V" in plane
+    if kick_plane in ("xy", "XY"):
+        return ("H" in plane) or ("V" in plane)
+    raise ValueError(f"Unsupported kick plane {kick_plane!r}")
+
+
+def bpm_supports_both_planes(accelerator, bpm: str) -> bool:
+    """Return whether ``bpm`` can measure both transverse planes."""
+    return bpm_supports_plane(accelerator, bpm, "x") and bpm_supports_plane(accelerator, bpm, "y")
 
 
 def create_bpm_range_specs(

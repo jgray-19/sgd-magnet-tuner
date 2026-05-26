@@ -135,7 +135,10 @@ class TrackingWorker(AbstractWorker[TrackingData]):
         self.normalisation_points = self.comparisons[self.observables[0]][0].shape[1]
         self.keep_bpm_mask = np.ones(self.normalisation_points, dtype=bool)
 
-        self.run_track_init_text = build_tracking_init_script(self.observables)
+        self.run_track_init_text = build_tracking_init_script(
+            self.observables,
+            start_on_first_turn=self.config.initial_condition_marker is not None,
+        )
         self.run_track_script = build_tracking_script(self.observables)
         self.hessian_script_text = build_tracking_hessian_script(self.observables)
         self._dump_debug_scripts()

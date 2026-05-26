@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from aba_optimiser.mad import GradientDescentMadInterface
-from aba_optimiser.workers import TrackingWorker
+from aba_optimiser.training.tracking_mode import ArcByArcTrackingPlan, TrackingPlan
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -31,6 +31,7 @@ class ConfigurationManager:
         bpm_start_points: list[str],
         bpm_end_points: list[str],
         optimise_knobs: list[str] | None = None,
+        tracking_plan: TrackingPlan | None = None,
     ):
         self.mad_iface: GradientDescentMadInterface = None
         self.knob_names: list[str] = []
@@ -47,6 +48,7 @@ class ConfigurationManager:
         self.magnet_range = sequence_config.magnet_range
         self.simulation_config = simulation_config
         self.optimise_knobs = optimise_knobs
+        self.tracking_plan = tracking_plan if tracking_plan is not None else ArcByArcTrackingPlan()
 
     def setup_mad_interface(
         self,
@@ -75,7 +77,10 @@ class ConfigurationManager:
         self.bpms_in_range = self.mad_iface.bpms_in_range
         LOGGER.info(f"Total BPMs in model: {len(self.all_bpms)}, BPMs in specified range {self.magnet_range}: {len(self.bpms_in_range)}")
 
-        self.start_bpms = [bpm for bpm in self.start_bpms if bpm in self.bpms_in_range]
+        allowed_starts = {self.sequence_config.first_bpm} if self.sequence_config.first_bpm else set()
+        self.start_bpms = [
+            bpm for bpm in self.start_bpms if bpm in self.bpms_in_range or bpm in allowed_starts
+        ]
         self.end_bpms = [bpm for bpm in self.end_bpms if bpm in self.bpms_in_range]
 
         # When use_fixed_bpm is True we derive a fixed BPM window from magnet_range and
@@ -113,15 +118,17 @@ class ConfigurationManager:
         When use_fixed_bpm is False, creates all combinations (Cartesian product)
         of start_bpms with end_bpms (every start with every end).
         """
-        if not self.simulation_config.run_arc_by_arc:
-            return [(start, self._bpm_behind(start)) for start in self.start_bpms]
-
-        if self.simulation_config.use_fixed_bpm:
-            return [(s, self.fixed_end) for s in self.start_bpms] + [
-                (self.fixed_start, e) for e in self.end_bpms
-            ]
-        # Cartesian product: every start with every end
-        return [(s, e) for s in self.start_bpms for e in self.end_bpms]
+        if self.tracking_plan is None:
+            raise ValueError("Tracking plan must be configured before requesting BPM pairs")
+        return self.tracking_plan.bpm_pairs(
+            start_bpms=self.start_bpms,
+            end_bpms=self.end_bpms,
+            all_bpms=self.all_bpms,
+            run_arc_by_arc=self.simulation_config.run_arc_by_arc,
+            use_fixed_bpm=self.simulation_config.use_fixed_bpm,
+            fixed_start=self.fixed_start,
+            fixed_end=self.fixed_end,
+        )
 
     def _bpm_behind(self, bpm: str) -> str:
         """Return the BPM immediately behind `bpm` in ring order."""
@@ -187,11 +194,18 @@ class ConfigurationManager:
         """Calculate number of data points for each BPM pair."""
         n_data_points = {}
         n_turns = 1 if self.simulation_config.run_arc_by_arc else self.simulation_config.n_run_turns
-        for start, end in self.bpm_pairs:
-            _, n_bpms, _ = self.mad_iface.count_bpms(f"{start}/{end}")
-            n_data_points[(start, end)] = TrackingWorker.get_n_data_points(n_bpms, n_turns=n_turns)
+        if self.tracking_plan is None:
+            raise ValueError("Tracking plan must be configured before counting data points")
+        n_data_points = self.tracking_plan.n_data_points(
+            all_bpms=self.all_bpms,
+            mad_iface=self.mad_iface,
+            bpm_pairs=self.bpm_pairs,
+            n_turns=n_turns,
+        )
+        for (start, end), count in n_data_points.items():
+            n_bpms = count // n_turns
             LOGGER.info(
-                f"{start}/{end}: {n_data_points[(start, end)]} data points "
+                f"{start}/{end}: {count} data points "
                 f"({n_bpms} BPMs x {n_turns} turn(s))"
             )
         return n_data_points

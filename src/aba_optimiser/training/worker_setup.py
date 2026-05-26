@@ -11,7 +11,8 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from aba_optimiser.training.utils import create_bpm_range_specs, extract_bpm_range_names
+from aba_optimiser.training.tracking_mode import TrackingPlan, WorkerRangeSpec
+from aba_optimiser.training.utils import bpm_supports_both_planes, bpm_supports_plane
 from aba_optimiser.workers import WorkerConfig
 from aba_optimiser.workers.common import KickPlane
 
@@ -26,20 +27,6 @@ LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class WorkerRangeSpec:
-    """Logical BPM range assigned to a worker before file-specific filtering."""
-
-    start_bpm: str
-    end_bpm: str
-    sdir: int
-
-    @property
-    def init_bpm(self) -> str:
-        """Return the BPM used to initialise tracking for this direction."""
-        return self.start_bpm if self.sdir > 0 else self.end_bpm
-
-
-@dataclass(frozen=True)
 class WorkerObservationPlan:
     """Per-file observation settings after kick-plane filtering."""
 
@@ -48,11 +35,12 @@ class WorkerObservationPlan:
     kick_plane: KickPlane
     bpm_names: list[str]
     bad_bpms: list[str] | None
+    init_marker: str | None = None
 
     @property
     def init_bpm(self) -> str:
         """Return the BPM used to initialise tracking for this plan."""
-        return self.range_spec.init_bpm
+        return self.init_marker or self.range_spec.init_bpm
 
 
 @dataclass(frozen=True)
@@ -94,6 +82,7 @@ class WorkerSetupHelper:
         debug: bool,
         mad_logfile: Path | None,
         python_logfile: Path | None,
+        tracking_plan: TrackingPlan,
     ) -> None:
         self.accelerator = accelerator
         self.all_bpms = all_bpms
@@ -108,6 +97,7 @@ class WorkerSetupHelper:
         self.debug = debug
         self.mad_logfile = mad_logfile
         self.python_logfile = python_logfile
+        self.tracking_plan = tracking_plan
 
     @staticmethod
     def merge_bad_bpms(*bad_bpm_lists: list[str] | None) -> list[str] | None:
@@ -123,20 +113,11 @@ class WorkerSetupHelper:
 
     def bpm_supports_plane(self, bpm: str, kick_plane: KickPlane) -> bool:
         """Return whether `bpm` can measure the requested kick plane."""
-        plane = self.accelerator.infer_monitor_plane(bpm)
-        if kick_plane == KickPlane.X:
-            return "H" in plane
-        if kick_plane == KickPlane.Y:
-            return "V" in plane
-        if kick_plane == KickPlane.XY:
-            return ("H" in plane) or ("V" in plane)
-        raise ValueError(f"Unsupported kick plane {kick_plane!r}")
+        return bpm_supports_plane(self.accelerator, bpm, kick_plane.value)
 
     def bpm_supports_both_planes(self, bpm: str) -> bool:
         """Return whether `bpm` can measure both transverse planes."""
-        return self.bpm_supports_plane(bpm, KickPlane.X) and self.bpm_supports_plane(
-            bpm, KickPlane.Y
-        )
+        return bpm_supports_both_planes(self.accelerator, bpm)
 
     def get_range_bpm_names(
         self,
@@ -146,9 +127,13 @@ class WorkerSetupHelper:
         bad_bpms: list[str] | None = None,
     ) -> list[str]:
         """Return the raw BPM range after applying explicit exclusions."""
-        bpm_names = extract_bpm_range_names(self.all_bpms, start_bpm, end_bpm, sdir)
-        excluded = set(bad_bpms or [])
-        return [bpm for bpm in bpm_names if bpm not in excluded]
+        return self.tracking_plan.get_range_bpm_names(
+            all_bpms=self.all_bpms,
+            start_bpm=start_bpm,
+            end_bpm=end_bpm,
+            sdir=sdir,
+            bad_bpms=bad_bpms,
+        )
 
     def get_worker_bpm_names(
         self,
@@ -188,27 +173,15 @@ class WorkerSetupHelper:
         simulation_config: SimulationConfig,
     ) -> list[WorkerRangeSpec]:
         """Return logical worker ranges before file-specific plane filtering."""
-        if simulation_config.run_arc_by_arc:
-            return [
-                WorkerRangeSpec(start_bpm, end_bpm, sdir)
-                for start_bpm, end_bpm, sdir in create_bpm_range_specs(
-                    start_bpms,
-                    end_bpms,
-                    self.use_fixed_bpm,
-                    self.fixed_start,
-                    self.fixed_end,
-                )
-            ]
-
-        return [
-            WorkerRangeSpec(
-                start_bpm=start_bpm,
-                end_bpm=self.all_bpms[self.all_bpms.index(start_bpm) - 1],
-                sdir=sdir,
-            )
-            for start_bpm in start_bpms
-            for sdir in (1, -1)
-        ]
+        return self.tracking_plan.build_range_specs(
+            start_bpms=start_bpms,
+            end_bpms=end_bpms,
+            all_bpms=self.all_bpms,
+            simulation_config=simulation_config,
+            use_fixed_bpm=self.use_fixed_bpm,
+            fixed_start=self.fixed_start,
+            fixed_end=self.fixed_end,
+        )
 
     @staticmethod
     def get_primary_file_idx(turn_batch: list[int], file_turn_map: dict[int, int]) -> int:
@@ -251,6 +224,7 @@ class WorkerSetupHelper:
             worker_plane,
             bad_bpms,
         )
+        init_marker = self.tracking_plan.init_marker
         if available_bpms is not None:
             missing_bpms = [bpm for bpm in bpm_names if bpm not in available_bpms]
             if missing_bpms:
@@ -264,7 +238,20 @@ class WorkerSetupHelper:
                 )
                 bad_bpms = self.merge_bad_bpms(bad_bpms, missing_bpms)
                 bpm_names = [bpm for bpm in bpm_names if bpm in available_bpms]
-        if not bpm_names or range_spec.init_bpm not in bpm_names:
+            if init_marker is not None and init_marker not in available_bpms:
+                LOGGER.warning(
+                    "File %d range %s/%s sdir=%d: init marker %s missing from measurement data",
+                    file_idx,
+                    range_spec.start_bpm,
+                    range_spec.end_bpm,
+                    range_spec.sdir,
+                    init_marker,
+                )
+                return None
+
+        if init_marker is None and range_spec.init_bpm not in bpm_names:
+            return None
+        if not bpm_names:
             return None
         return WorkerObservationPlan(
             range_spec=range_spec,
@@ -272,6 +259,7 @@ class WorkerSetupHelper:
             kick_plane=worker_plane,
             bpm_names=bpm_names,
             bad_bpms=bad_bpms,
+            init_marker=init_marker,
         )
 
     def build_observation_plans(
@@ -315,11 +303,13 @@ class WorkerSetupHelper:
         """Build the worker configuration object for one plan."""
         return WorkerConfig(
             accelerator=self.accelerator,
-            start_bpm=plan.range_spec.start_bpm,
-            end_bpm=plan.range_spec.end_bpm,
+            tracking_start_bpm=plan.range_spec.start_bpm,
+            tracking_end_bpm=plan.range_spec.end_bpm,
             magnet_range=self.magnet_range,
             corrector_strengths=self.corrector_strengths_files[plan.file_idx],
             tune_knobs_file=self.tune_knobs_files[plan.file_idx],
+            observation_range_start_bpm=self.tracking_plan.observation_start_bpm(self.all_bpms),
+            initial_condition_marker=plan.init_marker,
             sdir=plan.range_spec.sdir,
             kick_plane=plan.kick_plane,
             bad_bpms=plan.bad_bpms,
@@ -340,8 +330,8 @@ class WorkerSetupHelper:
         return WorkerRuntimeMetadata(
             worker_id=worker_id,
             file_idx=file_idx,
-            start_bpm=config.start_bpm,
-            end_bpm=config.end_bpm,
+            start_bpm=config.tracking_start_bpm,
+            end_bpm=config.tracking_end_bpm,
             sdir=config.sdir,
             kick_plane=config.kick_plane,
             n_run_turns=n_run_turns,

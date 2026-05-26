@@ -66,7 +66,6 @@ class Accelerator(BaseAccelerator, ABC):
             particle=particle,
             **kwargs,
         )
-        self.kinetic_energy = self.energy  # total energy alias for downstream code
         self.optimise_energy = optimise_energy
         self.optimise_quadrupoles = optimise_quadrupoles
         self.optimise_sextupoles = optimise_sextupoles

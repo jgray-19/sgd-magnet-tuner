@@ -86,6 +86,27 @@ py:send("PASS")""")
     assert interface.mad.recv() == "PASS"
 
 
+def check_element_observations_by_names(
+    interface: AbaMadInterface,
+    observed_names: list[str],
+) -> None:
+    """Check that exactly the given elements are observed, no more, no less."""
+    interface.mad.send("observed_set = {}")
+    for name in observed_names:
+        interface.mad.send(f"observed_set['{name}'] = true")
+    interface.mad.send("""
+for _, elm in loaded_sequence:iter() do
+    local expected = observed_set[elm.name] == true
+    if expected then
+        assert(elm:is_observed(), "Missing expected observation: " .. elm.name)
+    else
+        assert(not elm:is_observed(), "Unexpected observation: " .. elm.name)
+    end
+end
+py:send("PASS")""")
+    assert interface.mad.recv() == "PASS"
+
+
 def get_marker_and_element_positions(
     interface: AbaMadInterface, marker_name: str, element_name: str
 ) -> tuple[float, int, float, int]:

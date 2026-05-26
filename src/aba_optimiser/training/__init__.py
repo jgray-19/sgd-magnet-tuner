@@ -19,6 +19,8 @@ from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.optimisation_loop import OptimisationLoop
 from aba_optimiser.training.scheduler import LRScheduler
 from aba_optimiser.training.utils import (
+    bpm_supports_both_planes,
+    bpm_supports_plane,
     extract_bpm_range_names,
     filter_bad_bpms,
     find_common_bpms,
@@ -41,6 +43,8 @@ __all__ = [
     "LRScheduler",
     "WorkerLifecycleManager",
     "WorkerManager",
+    "bpm_supports_both_planes",
+    "bpm_supports_plane",
     "filter_bad_bpms",
     "normalise_true_strengths",
     "extract_bpm_range_names",

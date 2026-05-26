@@ -31,8 +31,8 @@ class TestLHCAccelerator:
             sequence_file=str(test_sequence_file),
         )
         assert lhc.beam == 1
-        assert lhc.kinetic_energy == 6800.0
-        assert lhc.pc == pytest.approx(6800.0 + PROTON_MASS_GEV)
+        assert lhc.kinetic_energy == pytest.approx(6800.0)
+        assert lhc.energy == pytest.approx(6800.0 + PROTON_MASS_GEV)
         assert lhc.optimise_bends is False
         assert lhc.optimise_correctors is False
         assert lhc.normalise_bends is False

@@ -10,8 +10,10 @@ import pytest
 
 from aba_optimiser.config import OptimiserConfig
 from tests.training.controller_test_utils import (
+    _build_energy_optimisation_case,
     _make_simulation_config_energy,
     _run_energy_optimisation_case,
+    evaluate_controller_worker_loss,
 )
 
 if TYPE_CHECKING:
@@ -37,6 +39,7 @@ PSB_BPM_START_POINTS = [
 def test_controller_energy_opt_psb(
     tmp_path: Path,
     loaded_psb_interface: AbaMadInterface,
+    controller_test_mode: str,
 ) -> None:
     """Run a PSB ring-1 energy optimisation scenario."""
     base_config = _make_simulation_config_energy()
@@ -54,6 +57,27 @@ def test_controller_energy_opt_psb(
         min_lr=2e-6,
         gradient_converged_value=5e-11,
     )
+
+    if controller_test_mode == "loss_regression":
+        ctrl, true_knobs = _build_energy_optimisation_case(
+            tmp_path=tmp_path,
+            loaded_interface=loaded_psb_interface,
+            simulation_config=simulation_config,
+            optimiser_config=optimiser_config,
+            bpm_start_points=PSB_BPM_START_POINTS,
+            bpm_end_points=[],
+            magnet_range="$start/$end",
+            mad_log_name="controller_energy_opt_psb.log",
+            bpm_pattern=PSB_TRACK_BPM_PATTERN,
+            apply_orbit_correction=False,
+            target_qx=PSB_TARGET_QX,
+            target_qy=PSB_TARGET_QY,
+            dpp_value=PSB_DPP_VALUE,
+        )
+        initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
+        true_loss = evaluate_controller_worker_loss(ctrl, true_knobs)
+        assert true_loss < initial_loss * 1e-2
+        return
 
     estimate, unc = _run_energy_optimisation_case(
         tmp_path=tmp_path,

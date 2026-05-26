@@ -74,14 +74,18 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         self.conn = conn
         self.config = config
         self.simulation_config = simulation_config
-        self.bpm_range = f"{config.start_bpm}/{config.end_bpm}"
+        bpm_range_start = config.observation_range_start_bpm or config.tracking_start_bpm
+        self.bpm_range = f"{bpm_range_start}/{config.tracking_end_bpm}"
 
         self.tracking_range = self.bpm_range
         if config.sdir < 0:
-            self.tracking_range = f"{config.end_bpm}/{config.start_bpm}"
+            self.tracking_range = f"{config.tracking_end_bpm}/{config.tracking_start_bpm}"
 
         LOGGER.debug(
-            f"Initializing worker {worker_id} for BPM range {config.start_bpm} -> {config.end_bpm}"
+            "Initializing worker %d for BPM range %s -> %s",
+            worker_id,
+            config.tracking_start_bpm,
+            config.tracking_end_bpm,
         )
 
         # Let subclasses process their specific data
@@ -255,6 +259,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         # Use accelerator factory to create MAD interface
         mad_iface = GradientDescentMadInterface(
             accelerator=self.config.accelerator,
+            start_bpm=self.config.initial_condition_marker or self.config.tracking_start_bpm,
             magnet_range=self.config.magnet_range,
             bpm_range=self.bpm_range,
             corrector_strengths=self.config.corrector_strengths,

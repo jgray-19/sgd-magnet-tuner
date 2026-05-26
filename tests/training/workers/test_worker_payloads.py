@@ -129,8 +129,8 @@ def test_attach_global_weights_normalises_all_observables(tmp_path: Path) -> Non
     )
     config = WorkerConfig(
         accelerator=builder.accelerator,
-        start_bpm="BPH.13208",
-        end_bpm="BPH.13208",
+        tracking_start_bpm="BPH.13208",
+        tracking_end_bpm="BPH.13208",
         magnet_range="$start/$end",
         corrector_strengths=None,
         tune_knobs_file=None,
@@ -161,8 +161,8 @@ def test_attach_global_weights_ignores_unused_momentum_channels_for_position_onl
     )
     config = WorkerConfig(
         accelerator=builder.accelerator,
-        start_bpm="BPH.13208",
-        end_bpm="BPV.13308",
+        tracking_start_bpm="BPH.13208",
+        tracking_end_bpm="BPV.13308",
         magnet_range="$start/$end",
         corrector_strengths=None,
         tune_knobs_file=None,

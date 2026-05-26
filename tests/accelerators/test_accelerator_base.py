@@ -29,13 +29,42 @@ class ConcreteAccelerator(Accelerator):
     def get_supported_knob_specs(self) -> list[KnobSpec]:
         """Return a simple knob specification for testing."""
         """Return a list of supported knob specifications."""
-        # return [("quadrupole", "k1", "MQ", "k1", True)]
         return [
-            KnobSpec("quadrupole", "k1", "MQ", "k1", enabled=True, label="quadrupoles"),
+            KnobSpec(
+                "quadrupole",
+                "k1",
+                "MQ",
+                "k1",
+                enabled=self.optimise_quadrupoles,
+                label="quadrupoles",
+            ),
+            KnobSpec(
+                "sextupole",
+                "k2",
+                "MS",
+                "k2",
+                enabled=self.optimise_sextupoles,
+                label="sextupoles",
+            ),
         ]
 
     def ac_dipole_location(self) -> str | None:
         """Return None for ac dipole location in base class."""
+
+    def copy_with(self, **overrides) -> ConcreteAccelerator:
+        """Return a copy with selected constructor parameters overridden."""
+        params = {
+            "sequence_file": self.sequence_file,
+            "kinetic_energy": self.kinetic_energy,
+            "optimise_energy": self.optimise_energy,
+            "optimise_quadrupoles": self.optimise_quadrupoles,
+            "optimise_sextupoles": self.optimise_sextupoles,
+            "optimise_quad_dx": self.optimise_quad_dx,
+            "optimise_quad_dy": self.optimise_quad_dy,
+            "custom_knobs_to_optimise": self.custom_knobs_to_optimise,
+        }
+        params.update(overrides)
+        return type(self)(**params)
 
     # def get_exciter_bpm(self) -> dict[str, float] | None:
     #     """Return None for exciter BPM in base class."""
@@ -76,8 +105,8 @@ class TestAcceleratorBase:
             kinetic_energy=6800.0,
         )
         assert acc.sequence_file == test_sequence_file
-        assert acc.kinetic_energy == 6800.0
-        assert acc.kinetic_energy == pytest.approx(6800.0 + PROTON_MASS_GEV)
+        assert acc.kinetic_energy == pytest.approx(6800.0)
+        assert acc.energy == pytest.approx(6800.0 + PROTON_MASS_GEV)
         assert acc.seq_name == "test_seq"
         assert acc.optimise_energy is False
         assert acc.optimise_quadrupoles is False

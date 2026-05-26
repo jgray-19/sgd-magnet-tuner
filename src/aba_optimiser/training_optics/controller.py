@@ -107,8 +107,8 @@ class OpticsController(BaseController):
         # Create optics-specific worker payloads
         template_config = WorkerConfig(
             accelerator=accelerator,
-            start_bpm="TEMP",
-            end_bpm="TEMP",
+            tracking_start_bpm="TEMP",
+            tracking_end_bpm="TEMP",
             magnet_range=sequence_config.magnet_range,
             corrector_strengths=corrector_file,
             tune_knobs_file=tune_knobs_file,

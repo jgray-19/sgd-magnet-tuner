@@ -13,8 +13,10 @@ import pytest
 from aba_optimiser.config import OptimiserConfig
 from tests.training.controller_test_utils import (
     DPP_VALUE,
+    _build_energy_optimisation_case,
     _make_simulation_config_energy,
     _run_energy_optimisation_case,
+    evaluate_controller_worker_loss,
 )
 
 if TYPE_CHECKING:
@@ -29,7 +31,8 @@ def test_controller_energy_opt(
     tmp_path: Path,
     seq_b1: Path,
     loaded_interface: AbaMadInterface,
-    optimise_momenta: bool
+    optimise_momenta: bool,
+    controller_test_mode: str,
 ) -> None:
     simulation_config = _make_simulation_config_energy(optimise_momenta)
     optimiser_config = OptimiserConfig(
@@ -40,6 +43,22 @@ def test_controller_energy_opt(
         min_lr=2e-7,
         gradient_converged_value=5e-10,
     )
+
+    if controller_test_mode == "loss_regression":
+        ctrl, true_knobs = _build_energy_optimisation_case(
+            tmp_path=tmp_path,
+            loaded_interface=loaded_interface,
+            simulation_config=simulation_config,
+            optimiser_config=optimiser_config,
+            bpm_start_points=["BPM.9R2.B1", "BPM.10R2.B1", "BPM.11R2.B1"],
+            bpm_end_points=["BPM.9L3.B1", "BPM.10L3.B1", "BPM.11L3.B1"],
+            magnet_range="BPM.9R2.B1/BPM.9L3.B1",
+            mad_log_name="controller_energy_opt.log",
+        )
+        initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
+        true_loss = evaluate_controller_worker_loss(ctrl, true_knobs)
+        assert true_loss < initial_loss * 1e-2
+        return
 
     estimate, unc = _run_energy_optimisation_case(
         tmp_path=tmp_path,
@@ -64,6 +83,7 @@ def test_controller_energy_opt_sps(
     tmp_path: Path,
     seq_sps: Path,
     loaded_sps_interface: AbaMadInterface,
+    controller_test_mode: str,
 ) -> None:
     sps_dpp_value = -1.5e-4
     simulation_config = _make_simulation_config_energy()
@@ -75,6 +95,27 @@ def test_controller_energy_opt_sps(
         min_lr=2e-6,
         gradient_converged_value=5e-10,
     )
+
+    if controller_test_mode == "loss_regression":
+        ctrl, true_knobs = _build_energy_optimisation_case(
+            tmp_path=tmp_path,
+            loaded_interface=loaded_sps_interface,
+            simulation_config=simulation_config,
+            optimiser_config=optimiser_config,
+            bpm_start_points=["BPH.13008", "BPH.13208", "BPH.13408"],
+            bpm_end_points=["BPH.13608", "BPH.20208", "BPH.20408"],
+            magnet_range="BPH.13008/BPH.20408",
+            mad_log_name="controller_energy_opt_sps.log",
+            bpm_pattern="bp[hv].*",
+            apply_orbit_correction=True,
+            dpp_value=sps_dpp_value,
+            target_qx=0.13,
+            target_qy=0.18,
+        )
+        initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
+        true_loss = evaluate_controller_worker_loss(ctrl, true_knobs)
+        assert true_loss < initial_loss * 1e-2
+        return
 
     estimate, unc = _run_energy_optimisation_case(
         tmp_path=tmp_path,
@@ -106,6 +147,7 @@ def test_controller_energy_opt_multi_turn(
     seq_b1: Path,
     loaded_interface: AbaMadInterface,
     n_run_turns: int,
+    controller_test_mode: str,
 ) -> None:
     base_config = _make_simulation_config_energy()
     simulation_config = dataclasses.replace(
@@ -123,6 +165,23 @@ def test_controller_energy_opt_multi_turn(
         min_lr=3e-6,
         gradient_converged_value=5e-10,
     )
+
+    if controller_test_mode == "loss_regression":
+        ctrl, true_knobs = _build_energy_optimisation_case(
+            tmp_path=tmp_path,
+            loaded_interface=loaded_interface,
+            simulation_config=simulation_config,
+            optimiser_config=optimiser_config,
+            bpm_start_points=[f"BPM.9R{ip}.B1" for ip in range(1, 8)],
+            bpm_end_points=[],
+            magnet_range="$start/$end",
+            mad_log_name="controller_energy_opt_multi_turn.log",
+            apply_orbit_correction=True,
+        )
+        initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
+        true_loss = evaluate_controller_worker_loss(ctrl, true_knobs)
+        assert true_loss < initial_loss * 1e-2
+        return
 
     estimate, unc = _run_energy_optimisation_case(
         tmp_path=tmp_path,
@@ -150,6 +209,7 @@ def test_controller_energy_opt_sps_multi_turn(
     seq_sps: Path,
     loaded_sps_interface: AbaMadInterface,
     n_run_turns: int,
+    controller_test_mode: str,
 ) -> None:
     sps_dpp_value = -3e-4
     base_config = _make_simulation_config_energy()
@@ -168,6 +228,27 @@ def test_controller_energy_opt_sps_multi_turn(
         min_lr=2e-6,
         gradient_converged_value=5e-10,
     )
+
+    if controller_test_mode == "loss_regression":
+        ctrl, true_knobs = _build_energy_optimisation_case(
+            tmp_path=tmp_path,
+            loaded_interface=loaded_sps_interface,
+            simulation_config=simulation_config,
+            optimiser_config=optimiser_config,
+            bpm_start_points=["BPH.13208", "BPV.13308", "BPH.13608", "BPV.20108"],
+            bpm_end_points=[],
+            magnet_range="$start/$end",
+            mad_log_name="controller_energy_opt_sps_multi_turn.log",
+            bpm_pattern="bp[hv][tc]?.*",
+            apply_orbit_correction=True,
+            dpp_value=sps_dpp_value,
+            target_qx=0.13,
+            target_qy=0.18,
+        )
+        initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
+        true_loss = evaluate_controller_worker_loss(ctrl, true_knobs)
+        assert true_loss < initial_loss * 1e-2
+        return
 
     estimate, unc = _run_energy_optimisation_case(
         tmp_path=tmp_path,

@@ -16,6 +16,7 @@ from aba_optimiser.training.controller_config import (
     SequenceConfig,
 )
 from tests.training.controller_test_utils import (
+    evaluate_controller_worker_loss,
     _generate_nonoise_track,
     _make_simulation_config_quad,
 )
@@ -42,6 +43,7 @@ def test_controller_quad_opt_psb_ring3(
     tmp_path: Path,
     seq_psb: Path,
     loaded_psb_interface: AbaMadInterface,
+    controller_test_mode: str,
 ) -> None:
     """Run a PSB ring-3 quadrupole optimisation scenario."""
     flattop_turns = 256
@@ -110,6 +112,11 @@ def test_controller_quad_opt_psb_ring3(
         true_strengths=magnet_strengths,
         debug=False,
     )
+    if controller_test_mode == "loss_regression":
+        initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
+        true_loss = evaluate_controller_worker_loss(ctrl, magnet_strengths)
+        assert true_loss < initial_loss * 1e-3
+        return
     estimate, unc = ctrl.run()
 
     psb_abs_tol = 1e-4

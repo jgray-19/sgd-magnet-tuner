@@ -43,8 +43,8 @@ def test_finalise_results_uses_finite_non_negative_uncertainties_for_indefinite_
     )
     ctrl.output_knob_names = ["kq1", "kq2"]
 
+    ctrl.final_knobs = {"kq1": 0.9, "kq2": 1.9}
     uncertainties = ctrl._finalise_results(
-        {"kq1": 0.9, "kq2": 1.9},
         np.array([[4.0, 0.0], [0.0, -1e-12]], dtype=np.float64),
         writer=None,
     )

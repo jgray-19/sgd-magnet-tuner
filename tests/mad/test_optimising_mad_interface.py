@@ -21,7 +21,7 @@ from tests.mad.helpers import (
     check_beam_setup,
     check_corrector_strengths,
     check_corrector_strengths_zero,
-    check_element_observations,
+    check_element_observations_by_names,
     check_interface_basic_init,
     check_sequence_loaded,
     cleanup_interface,
@@ -191,8 +191,8 @@ def setup_and_check_interface(
     assert interface.mad["bpm_range"] == bpm_range
     assert len(interface.bpms_in_range) == interface.nbpms
 
-    # Check that BPMs matching the pattern are observed
-    check_element_observations(interface, condition=f"elm.name:match('{accelerator.bpm_pattern}')")
+    # Check that only BPMs in range are observed
+    check_element_observations_by_names(interface, interface.bpms_in_range)
 
     # Run twiss calculation to get BPM data
     twiss_df = interface.run_twiss()
@@ -279,10 +279,8 @@ class TestOptimisationMadInterfaceInit:
         assert interface.mad["bpm_range"] == "$start/$end"
         assert len(interface.bpms_in_range) == interface.nbpms
 
-        # Check that BPMs matching the pattern are observed
-        check_element_observations(
-            interface, condition=f"elm.name:match('{accelerator.bpm_pattern}')"
-        )
+        # Check that only BPMs in range are observed
+        check_element_observations_by_names(interface, interface.bpms_in_range)
 
         # Run twiss calculation to get BPM data
         twiss_df = interface.run_twiss()

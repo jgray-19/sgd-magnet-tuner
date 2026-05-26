@@ -46,7 +46,13 @@ jobs:
       - name: Install package
         run: uv pip install -e '.[test,tracking]'
 
-      - name: Run tests
+      - name: Run non-slow tests first
+        run: pytest -ra -m "not slow" -x
+
+      - name: Run fast controller loss regressions
+        run: pytest -ra tests/training/controller -k loss_regression -x
+
+      - name: Run full test suite
         run: pytest -ra --cov=aba_optimiser --cov-branch --cov-report=xml
 
       - name: Upload coverage reports to Codecov

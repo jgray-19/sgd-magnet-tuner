@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from aba_optimiser.training.data_manager import _distribute_target_batches_by_file
+from aba_optimiser.training.worker_turn_planner import _distribute_target_batches_by_file
 from aba_optimiser.training.worker_payloads import WorkerPayloadBuilder
 
 
