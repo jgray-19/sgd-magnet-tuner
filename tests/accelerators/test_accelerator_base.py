@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 from pymadng_utils.accelerators.base import PROTON_MASS_GEV
 
-from aba_optimiser.accelerators.base import Accelerator
+from aba_optimiser.accelerators.base import Accelerator, KnobSpec
 
 if TYPE_CHECKING:
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
@@ -26,15 +26,19 @@ class ConcreteAccelerator(Accelerator):
         """Return a test sequence name."""
         return "test_seq"
 
-    def get_supported_knob_specs(self) -> list[tuple[str, str, str, str | None, bool]]:
+    def get_supported_knob_specs(self) -> list[KnobSpec]:
+        """Return a simple knob specification for testing."""
         """Return a list of supported knob specifications."""
-        return [("quadrupole", "k1", "MQ", "k1", True)]
+        # return [("quadrupole", "k1", "MQ", "k1", True)]
+        return [
+            KnobSpec("quadrupole", "k1", "MQ", "k1", enabled=True, label="quadrupoles"),
+        ]
 
     def ac_dipole_location(self) -> str | None:
         """Return None for ac dipole location in base class."""
 
-    def get_exciter_bpm(self) -> dict[str, float] | None:
-        """Return None for exciter BPM in base class."""
+    # def get_exciter_bpm(self) -> dict[str, float] | None:
+    #     """Return None for exciter BPM in base class."""
 
     def apply_accelerator_specific_errors(self, mad_iface: AbaMadInterface) -> None:
         """No accelerator-specific errors to apply in base class."""
@@ -73,7 +77,7 @@ class TestAcceleratorBase:
         )
         assert acc.sequence_file == test_sequence_file
         assert acc.kinetic_energy == 6800.0
-        assert acc.pc == pytest.approx(6800.0 + PROTON_MASS_GEV)
+        assert acc.kinetic_energy == pytest.approx(6800.0 + PROTON_MASS_GEV)
         assert acc.seq_name == "test_seq"
         assert acc.optimise_energy is False
         assert acc.optimise_quadrupoles is False

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from pymadng_utils.accelerators.base import Accelerator as BaseAccelerator
 
@@ -17,6 +17,17 @@ if TYPE_CHECKING:
 
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
     from aba_optimiser.mad.optimising_mad_interface import GradientDescentMadInterface
+
+
+class KnobSpec(NamedTuple):
+    """Specification for a single optimisable knob type."""
+
+    kind: str
+    attribute: str
+    pattern: str
+    nonzero_attr: str | None
+    enabled: bool
+    label: str
 
 
 class Accelerator(BaseAccelerator, ABC):
@@ -32,12 +43,14 @@ class Accelerator(BaseAccelerator, ABC):
         sequence_file: Path | str,
         kinetic_energy: float,
         bpm_pattern: str,
+        particle: str = "proton",
         optimise_energy: bool = False,
         optimise_quadrupoles: bool = False,
         optimise_sextupoles: bool = False,
         optimise_quad_dx: bool = False,
         optimise_quad_dy: bool = False,
         custom_knobs_to_optimise: list[str] | None = None,
+        **kwargs,
     ):
         """Initialise base accelerator.
 
@@ -50,8 +63,10 @@ class Accelerator(BaseAccelerator, ABC):
             sequence_file=sequence_file,
             kinetic_energy=kinetic_energy,
             bpm_pattern=bpm_pattern,
+            particle=particle,
+            **kwargs,
         )
-        self.pc = self.energy  # total energy alias for downstream code
+        self.kinetic_energy = self.energy  # total energy alias for downstream code
         self.optimise_energy = optimise_energy
         self.optimise_quadrupoles = optimise_quadrupoles
         self.optimise_sextupoles = optimise_sextupoles
@@ -69,20 +84,13 @@ class Accelerator(BaseAccelerator, ABC):
                     "Legacy dknl knob names are not supported; use '.dk0l', '.dk1l', or '.dk2l': "
                     + ", ".join(legacy)
                 )
-        # Accelerator-owned state populated during model setup (if applicable).
-        self.bend_lengths: dict[str, float] | None = None
 
     def has_any_optimisation(self) -> bool:
         """Check if any optimisation is enabled."""
-        return any(
-            (
-                self.optimise_quadrupoles,
-                self.optimise_sextupoles,
-                self.optimise_energy,
-                self.optimise_quad_dx,
-                self.optimise_quad_dy,
-                bool(self.custom_knobs_to_optimise),
-            )
+        return (
+            any(s.enabled for s in self.get_supported_knob_specs())
+            or self.optimise_energy
+            or bool(self.custom_knobs_to_optimise)
         )
 
     @property
@@ -99,31 +107,28 @@ class Accelerator(BaseAccelerator, ABC):
 
     def log_optimisation_targets(self) -> None:
         """Log the optimisation targets for this accelerator."""
-        targets: list[str] = []
-        if self.optimise_quadrupoles:
-            targets.append("quadrupoles")
-        if self.optimise_sextupoles:
-            targets.append("sextupoles")
+        # Use an ordered-dict trick to deduplicate labels while preserving insertion order.
+        seen: dict[str, None] = {}
+        for spec in self.get_supported_knob_specs():
+            if spec.enabled:
+                seen[spec.label] = None
         if self.optimise_energy:
-            targets.append("beam energy")
-        if self.optimise_quad_dx:
-            targets.append("quadrupole horizontal offsets")
-        if self.optimise_quad_dy:
-            targets.append("quadrupole vertical offsets")
+            seen["beam energy"] = None
         if self.custom_knobs_to_optimise:
-            targets.append(f"custom knobs: {self.custom_knobs_to_optimise}")
-        if targets:
-            LOGGER.info(f"Optimisation targets: {', '.join(targets)}")
+            seen[f"custom knobs: {self.custom_knobs_to_optimise}"] = None
+        if seen:
+            LOGGER.info("Optimisation targets: %s", ", ".join(seen))
         else:
             LOGGER.info("No optimisation targets set.")
 
-    def get_bend_lengths(self) -> dict[str, float] | None:
-        """Return bend lengths required for accelerator-specific normalisation.
+    @abstractmethod
+    def copy_with(self, **overrides) -> Accelerator:
+        """Return a new instance of the same type with selected parameters overridden."""
+        pass
 
-        Returns:
-            Dictionary of bend lengths or None if not applicable
-        """
-        return self.bend_lengths
+    def get_bend_lengths(self) -> dict[str, float] | None:
+        """Return bend lengths required for accelerator-specific normalisation."""
+        return None
 
     def normalise_true_strengths(
         self,
@@ -171,13 +176,8 @@ class Accelerator(BaseAccelerator, ABC):
         return formatted
 
     @abstractmethod
-    def get_supported_knob_specs(self) -> list[tuple[str, str, str, str | None, bool]]:
-        """Return the knob specifications supported by this accelerator.
-
-        Returns:
-            List of (kind, attribute, pattern, nonzero_attr, optimise_flag) tuples defining
-            all possible knobs that can be created for this accelerator.
-        """
+    def get_supported_knob_specs(self) -> list[KnobSpec]:
+        """Return the knob specifications supported by this accelerator."""
         pass
 
     @property

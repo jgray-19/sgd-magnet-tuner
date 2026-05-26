@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import numpy as np
@@ -66,8 +67,9 @@ class OptimisationLoop:
         self.optimiser: BaseOptimiser
 
         # Initialise optimiser
-        opt_type = optimiser_type if optimiser_type is not None else optimiser_config.optimiser_type
-        self._init_optimiser(initial_strengths.shape, opt_type)
+        if optimiser_type is not None:
+            optimiser_config = replace(optimiser_config, optimiser_type=optimiser_type)
+        self._init_optimiser(initial_strengths.shape, optimiser_config)
 
         # Initialise scheduler
         self.scheduler = LRScheduler(
@@ -98,8 +100,9 @@ class OptimisationLoop:
 
         self.dopt_dabs = 1.0 / self.dabs_dopt
 
-    def _init_optimiser(self, shape: tuple[int, ...], optimiser_type: str) -> None:
+    def _init_optimiser(self, shape: tuple[int, ...], optimiser_config: OptimiserConfig) -> None:
         """Initialise the optimiser based on type."""
+        optimiser_type = optimiser_config.optimiser_type
         if optimiser_type in {"adam", "amsgrad"}:
             self.optimiser = BaseOptimiser.create(
                 optimiser_type,
@@ -111,9 +114,12 @@ class OptimisationLoop:
         elif optimiser_type == "lbfgs":
             self.optimiser = BaseOptimiser.create(
                 optimiser_type,
-                history_size=20,
+                history_size=optimiser_config.lbfgs_history_size,
                 eps=1e-12,
                 weight_decay=0,
+                max_grad_norm=optimiser_config.lbfgs_max_grad_norm,
+                max_step_norm=optimiser_config.lbfgs_max_step_norm,
+                powell_damping=optimiser_config.lbfgs_powell_damping,
             )
         else:
             raise ValueError(f"Unknown optimiser type: {optimiser_type}")
@@ -245,16 +251,28 @@ class OptimisationLoop:
             epoch_loss = 0.0
             epoch_grad = np.zeros(len(self.knob_names))
             lr = self.scheduler(epoch)
+            pre_epoch_knobs = current_knobs
+            epoch_had_particle_loss = False
 
             for batch in range(self.num_batches):
                 channels.send_all((current_knobs, batch))
 
-                batch_loss, batch_grad = self._collect_batch_results(channels)
+                batch_loss, batch_grad, had_particle_loss = self._collect_batch_results(channels)
                 epoch_loss += batch_loss
                 epoch_grad += batch_grad
+                epoch_had_particle_loss = epoch_had_particle_loss or had_particle_loss
 
-                # Update knobs after each batch
-                current_knobs = self._update_knobs(current_knobs, batch_grad, lr)
+                # Update knobs after each batch (only when no particle loss this epoch)
+                if not epoch_had_particle_loss:
+                    current_knobs = self._update_knobs(current_knobs, batch_grad, lr)
+
+            if epoch_had_particle_loss:
+                LOGGER.warning(
+                    "Epoch %d: particle loss detected — rejecting knob updates and restoring "
+                    "pre-epoch parameters",
+                    epoch,
+                )
+                current_knobs = pre_epoch_knobs
 
             # Keep training loss on a single-worker scale by averaging over batches.
             epoch_loss /= max(1, self.num_batches)
@@ -589,7 +607,9 @@ class OptimisationLoop:
             ),
         }
 
-    def _collect_batch_results(self, channels: WorkerChannels) -> tuple[float, np.ndarray]:
+    def _collect_batch_results(
+        self, channels: WorkerChannels
+    ) -> tuple[float, np.ndarray, bool]:
         """Collect results from all workers for a batch.
 
         Aggregates gradients using per-knob averaging: each knob's gradient is
@@ -597,9 +617,16 @@ class OptimisationLoop:
         that knob. This prevents magnets at the edges of the BPM range (which
         are only visible to fewer workers) from being under-weighted compared
         to magnets in the middle (which contribute gradients from all workers).
+
+        Returns a third element `had_particle_loss` — True if any worker detected
+        particle loss this batch. The caller should reject the knob update for
+        the enclosing epoch in that case.
         """
+        import math
+
         total_loss = 0.0
         agg_grad = np.zeros(len(self.knob_names), dtype=float)
+        had_particle_loss = False
         results = channels.recv_all()
         n_workers = len(results)
         if n_workers == 0:
@@ -614,12 +641,15 @@ class OptimisationLoop:
                 LOGGER.error("Worker error detected, stopping optimisation immediately.")
                 raise RuntimeError("Worker error detected during optimisation")
 
-            grad_flat = grad.flatten()
+            if math.isnan(float(loss)):
+                had_particle_loss = True
+                continue
 
+            grad_flat = grad.flatten()
             agg_grad += grad_flat
             total_loss += float(loss)
 
-        return total_loss / n_workers, agg_grad
+        return total_loss / n_workers, agg_grad, had_particle_loss
 
     def _update_knobs(
         self, current_knobs: dict[str, float], agg_grad: np.ndarray, lr: float

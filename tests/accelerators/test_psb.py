@@ -27,7 +27,7 @@ class TestPSBAccelerator:
         expected_energy = 0.160 + 0.9382720813  # kinetic + proton mass = total energy
         assert psb.ring == 1
         assert psb.sequence_file == test_sequence_file
-        assert psb.pc == pytest.approx(expected_energy)
+        assert psb.kinetic_energy == pytest.approx(expected_energy)
         assert psb.bpm_pattern == "^BR1%.BPM"
         assert psb.optimise_quadrupoles is False
         assert psb.optimise_correctors is False
@@ -62,7 +62,7 @@ class TestPSBAccelerator:
             optimise_quadrupoles=True,
         )
 
-        assert ("quadrupole", "k1", "^BR%.Q[FD][OE]%d+$", "k1", True) in psb.get_supported_knob_specs()
+        assert ("quadrupole", "k1", "^BR%.Q[FD][OE]%d+$", "k1", True, "quadrupoles") in psb.get_supported_knob_specs()
 
     def test_init_with_optimise_correctors(self, test_sequence_file: Path) -> None:
         """Test initialization with corrector optimization."""
@@ -81,8 +81,8 @@ class TestPSBAccelerator:
             optimise_correctors=True,
         )
 
-        assert ("hkicker", "kick", "^B[RE]%d+%.DHZ%d+L%d+$", None, True) in psb.get_supported_knob_specs()
-        assert ("vkicker", "kick", "^B[RE]%d+%.DVT%d+L%d+$", None, True) in psb.get_supported_knob_specs()
+        assert ("hkicker", "kick", "^B[RE]%d+%.DHZ%d+L%d+$", None, True, "correctors") in psb.get_supported_knob_specs()
+        assert ("vkicker", "kick", "^B[RE]%d+%.DVT%d+L%d+$", None, True, "correctors") in psb.get_supported_knob_specs()
 
     def test_get_perturbation_families(self, test_sequence_file: Path) -> None:
         """Test PSB perturbation metadata is available for quadrupoles."""

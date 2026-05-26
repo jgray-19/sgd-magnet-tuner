@@ -132,7 +132,7 @@ class ConfigurationManager:
 
     def initialise_knob_strengths(
         self,
-        true_strengths: dict[str, float],
+        true_strengths: dict[str, float] | None = None,
         provided_initial_knobs: dict[str, float] | None = None,
     ) -> tuple[dict[str, float], dict[str, float]]:
         """Initialise knob strengths from MAD and filter true strengths.
@@ -166,7 +166,7 @@ class ConfigurationManager:
         current_knobs = dict(zip(self.knob_names, initial_strengths))
 
         # Restrict true strengths to knobs we actually have in model
-        if len(true_strengths) == 0:
+        if true_strengths is None or len(true_strengths) == 0:
             LOGGER.warning("No true strengths provided, skipping filtering")
             filtered_true_strengths = {}
         else:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from aba_optimiser.accelerators.base import Accelerator
+from aba_optimiser.accelerators.base import Accelerator, KnobSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -56,20 +56,45 @@ class SPS(Accelerator):
             custom_knobs_to_optimise=custom_knobs_to_optimise,
         )
 
+    def copy_with(self, **overrides) -> SPS:
+        """Return a new SPS instance with selected parameters overridden."""
+        o = overrides
+        return SPS(
+            sequence_file=o.get("sequence_file", self.sequence_file),
+            kinetic_energy=o.get("kinetic_energy", self.kinetic_energy),
+            bpm_pattern=o.get("bpm_pattern", self.bpm_pattern),
+            optimise_energy=o.get("optimise_energy", self.optimise_energy),
+            optimise_quadrupoles=o.get("optimise_quadrupoles", self.optimise_quadrupoles),
+            optimise_sextupoles=o.get("optimise_sextupoles", self.optimise_sextupoles),
+            custom_knobs_to_optimise=o.get(
+                "custom_knobs_to_optimise", self.custom_knobs_to_optimise
+            ),
+        )
+
     @property
     def seq_name(self) -> str:
         """Return the sequence name for SPS."""
         return "sps"
 
-    def get_supported_knob_specs(self) -> list[tuple[str, str, str, str | None, bool]]:
-        """Return generic SPS knob specifications.
-
-        Returns:
-            List of (kind, attribute, pattern, nonzero_attr, optimise_flag) tuples.
-        """
+    def get_supported_knob_specs(self) -> list[KnobSpec]:
+        """Return generic SPS knob specifications."""
         return [
-            ("quadrupole", "k1", self.PATTERN_QUADRUPOLE, "k1", self.optimise_quadrupoles),
-            ("sextupole", "k2", self.PATTERN_SEXTUPOLE, "k2", self.optimise_sextupoles),
+            KnobSpec(
+                "quadrupole",
+                "k1",
+                self.PATTERN_QUADRUPOLE,
+                "k1",
+                self.optimise_quadrupoles,
+                "quadrupoles",
+            ),
+            KnobSpec(
+                "sextupole",
+                "k2",
+                self.PATTERN_SEXTUPOLE,
+                "k2",
+                self.optimise_sextupoles,
+                "sextupoles",
+            ),
         ]
 
     def get_perturbation_families(self) -> dict[str, dict[str, str | float | dict]]:
@@ -113,14 +138,11 @@ class SPS(Accelerator):
         """SPS does not use the LHC AC-dipole exciter model."""
         raise NotImplementedError("SPS does not define an AC-dipole exciter location")
 
-    def get_exciter_bpm(
-        self,
-        plane: str,
-        common_bpms: list[str] | None = None,
-    ) -> tuple[str, str] | None:
-        """SPS does not define an upstream-style AC-dipole exciter BPM."""
-        del plane, common_bpms
-        raise NotImplementedError("SPS does not define an AC-dipole exciter BPM")
+    # def get_exciter_bpm(
+    #     self,
+    # ) -> tuple[str, str]:
+    #     """SPS does not define an upstream-style AC-dipole exciter BPM."""
+    #     raise NotImplementedError("SPS does not define an AC-dipole exciter BPM")
 
     @property
     def tune_variables(self) -> tuple[str, str]:

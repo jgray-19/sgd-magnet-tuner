@@ -33,9 +33,13 @@ class LBFGSOptimiser(BaseOptimiser):
         weight_decay: float = 0.0,
         # --- adaptive LR knobs ---
         use_adaptive_lr: bool = True,
-        bb_clip: tuple[float, float] = (1e-2, 1e2),  # clip for raw BB1
+        bb_clip: tuple[float, float] = (1e-1, 1e1),  # clip for raw BB1
         ema_beta: float = 0.8,  # smoothing of BB1
         eta_init: float = 1.0,  # initial multiplier
+        # --- stability knobs ---
+        max_grad_norm: float | None = 1.0,   # gradient clipping before two-loop
+        max_step_norm: float | None = 1.0,   # step-vector clipping after two-loop
+        powell_damping: float = 0.2,         # minimum fraction of s^T s for y^T s
     ):
         self.history_size = int(history_size)
         self.eps = float(eps)
@@ -59,11 +63,26 @@ class LBFGSOptimiser(BaseOptimiser):
         self.ema_beta = float(ema_beta)
         self.eta_ema = float(eta_init)
 
+        # Stability
+        self.max_grad_norm = max_grad_norm
+        self.max_step_norm = max_step_norm
+        self.powell_damping = float(powell_damping)
+
     def _push_pair(self, s: np.ndarray, y: np.ndarray) -> None:
+        ss = float(np.dot(s, s))
         ys = float(np.dot(y, s))
         yy = float(np.dot(y, y))
-        # Safeguards against near-singular updates
-        if ys <= 1e-20 or yy <= 1e-20:
+        if ss <= 1e-20 or yy <= 1e-20:
+            return
+        # Powell's damping: if y^T s is too small relative to s^T s the curvature
+        # pair would make H ill-conditioned; blend y towards the steepest-descent
+        # direction so that y^T s >= powell_damping * s^T s.
+        threshold = self.powell_damping * ss
+        if ys < threshold:
+            theta = (1.0 - self.powell_damping) * ss / (ss - ys)
+            y = theta * y + (1.0 - theta) * s
+            ys = float(np.dot(y, s))
+        if ys <= 1e-20:
             return
         if len(self.S) == self.history_size:
             self.S.pop(0)
@@ -133,6 +152,12 @@ class LBFGSOptimiser(BaseOptimiser):
         # Weight decay (L2 regularisation)
         g = grads + (self.weight_decay * params if self.weight_decay != 0 else 0)
 
+        # Gradient clipping — keeps noisy gradients from corrupting the (s,y) history
+        if self.max_grad_norm is not None:
+            g_norm = float(np.linalg.norm(g))
+            if g_norm > self.max_grad_norm:
+                g = g * (self.max_grad_norm / g_norm)
+
         # On k ≥ 1, build (s_{k-1}, y_{k-1}) from the PREVIOUS state
         eta_mult = self.eta_ema
         if self.prev_params is not None and self.prev_grads is not None:
@@ -145,6 +170,12 @@ class LBFGSOptimiser(BaseOptimiser):
         # Compute quasi-Newton direction: d = - H_k * g_k
         Hg = self._two_loop(g)  # noqa: N806
         d = -Hg
+
+        # Step-norm clipping — prevents huge jumps when the Hessian estimate is poor
+        if self.max_step_norm is not None:
+            d_norm = float(np.linalg.norm(d))
+            if d_norm > self.max_step_norm:
+                d = d * (self.max_step_norm / d_norm)
 
         # Take step with adaptive multiplier (no line search)
         lr_eff = lr * eta_mult
@@ -174,6 +205,9 @@ class LBFGSOptimiser(BaseOptimiser):
             "bb_max": float(self.bb_max),
             "ema_beta": float(self.ema_beta),
             "eta_ema": float(self.eta_ema),
+            "max_grad_norm": self.max_grad_norm,
+            "max_step_norm": self.max_step_norm,
+            "powell_damping": float(self.powell_damping),
         }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
@@ -201,3 +235,6 @@ class LBFGSOptimiser(BaseOptimiser):
         self.bb_max = float(state["bb_max"])
         self.ema_beta = float(state["ema_beta"])
         self.eta_ema = float(state["eta_ema"])
+        self.max_grad_norm = state.get("max_grad_norm", 1.0)
+        self.max_step_norm = state.get("max_step_norm", 1.0)
+        self.powell_damping = float(state.get("powell_damping", 0.2))

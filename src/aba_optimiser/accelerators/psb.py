@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from aba_optimiser.accelerators.base import Accelerator
+from pymadng_utils.accelerators.psb import PSB as BasePSB  # noqa: N811
+
+from aba_optimiser.accelerators.base import Accelerator, KnobSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -15,7 +17,7 @@ if TYPE_CHECKING:
 PSB_FLAT_BOTTOM_KINETIC_ENERGY_GEV = 0.160
 
 
-class PSB(Accelerator):
+class PSB(BasePSB, Accelerator):
     """Proton Synchrotron Booster accelerator configuration."""
 
     PATTERN_SBENDS = r"^BR%.BHZ%d+$"
@@ -33,6 +35,7 @@ class PSB(Accelerator):
         ring: int,
         sequence_file: Path | str,
         kinetic_energy: float = PSB_FLAT_BOTTOM_KINETIC_ENERGY_GEV,
+        particle: str = "proton",
         bpm_pattern: str | None = None,
         optimise_bends: bool = False,
         optimise_quadrupoles: bool = False,
@@ -47,56 +50,60 @@ class PSB(Accelerator):
         if ring not in (1, 2, 3, 4):
             raise ValueError(f"PSB ring must be 1, 2, 3, or 4, got {ring}")
 
-        self.ring = ring
         super().__init__(
+            ring=ring,
             sequence_file=sequence_file,
             kinetic_energy=kinetic_energy,
             bpm_pattern=bpm_pattern or self.BPM_PATTERN_TEMPLATE.format(ring=ring),
-            optimise_energy=optimise_energy,
+            particle=particle,
             optimise_quadrupoles=optimise_quadrupoles,
-            optimise_sextupoles=optimise_sextupoles,
             optimise_quad_dy=optimise_quad_dy,
             optimise_quad_dx=optimise_quad_dx,
+            optimise_sextupoles=optimise_sextupoles,
+            optimise_energy=optimise_energy,
             custom_knobs_to_optimise=custom_knobs_to_optimise,
         )
+        # PSB-specific optimisation flags not handled by any parent
         self.optimise_bends = optimise_bends
         self.optimise_correctors = optimise_correctors
 
-    def has_any_optimisation(self) -> bool:
-        """Check if any optimisation is enabled."""
-        return super().has_any_optimisation() or self.optimise_bends or self.optimise_correctors
+    def copy_with(self, **overrides) -> PSB:
+        """Return a new PSB instance with selected parameters overridden."""
+        o = overrides
+        return PSB(
+            ring=o.get("ring", self.ring),
+            sequence_file=o.get("sequence_file", self.sequence_file),
+            kinetic_energy=o.get("kinetic_energy", self.kinetic_energy),
+            particle=o.get("particle", self.particle),
+            bpm_pattern=o.get("bpm_pattern", self.bpm_pattern),
+            optimise_energy=o.get("optimise_energy", self.optimise_energy),
+            optimise_quadrupoles=o.get("optimise_quadrupoles", self.optimise_quadrupoles),
+            optimise_sextupoles=o.get("optimise_sextupoles", self.optimise_sextupoles),
+            optimise_bends=o.get("optimise_bends", self.optimise_bends),
+            optimise_correctors=o.get("optimise_correctors", self.optimise_correctors),
+            optimise_quad_dx=o.get("optimise_quad_dx", self.optimise_quad_dx),
+            optimise_quad_dy=o.get("optimise_quad_dy", self.optimise_quad_dy),
+            custom_knobs_to_optimise=o.get("custom_knobs_to_optimise", self.custom_knobs_to_optimise),
+        )
 
     @property
     def seq_name(self) -> str:
         """Return the sequence name for the selected PSB ring."""
         return f"psb{self.ring}"
 
-    def get_supported_knob_specs(self) -> list[tuple[str, str, str, str | None, bool]]:
-        """Return the PSB knob specifications currently supported.
-
-        Returns:
-            List of (kind, attribute, pattern, nonzero_attr, optimise_flag) tuples defining
-            all possible knobs that can be created for this accelerator.
-        """
+    def get_supported_knob_specs(self) -> list[KnobSpec]:
+        """Return the PSB knob specifications currently supported."""
         # fmt: off
         return [
-            ("quadrupole", "k1", self.PATTERN_QUADRUPOLE, "k1", self.optimise_quadrupoles),
-
-            # Bends
-            ("sbend", "k0", self.PATTERN_SBENDS, "k0", self.optimise_bends),
-            ("rbend", "k0", self.PATTERN_RBENDS, "k0", self.optimise_bends),
-
-            # Sextupoles
-            ("multipole", "knl[3]", self.PATTERN_SEXTUPOLE, None, self.optimise_sextupoles),
-            ("multipole", "ksl[3]", self.PATTERN_SKEW_SEXTUPOLE, None, self.optimise_sextupoles),
-
-            # Correctors
-            ("hkicker", "kick", self.PATTERN_CORRECTOR_H, None, self.optimise_correctors),
-            ("vkicker", "kick", self.PATTERN_CORRECTOR_V, None, self.optimise_correctors),
-
-            # Quadrupole misalignments
-            ("quadrupole", "dy", self.PATTERN_QUADRUPOLE, "k1", self.optimise_quad_dy),
-            ("quadrupole", "dx", self.PATTERN_QUADRUPOLE, "k1", self.optimise_quad_dx),
+            KnobSpec("quadrupole", "k1",      self.PATTERN_QUADRUPOLE,    "k1", self.optimise_quadrupoles, "quadrupoles"),
+            KnobSpec("sbend",      "k0",      self.PATTERN_SBENDS,        "k0", self.optimise_bends,       "bends"),
+            KnobSpec("rbend",      "k0",      self.PATTERN_RBENDS,        "k0", self.optimise_bends,       "bends"),
+            KnobSpec("multipole",  "knl[3]",  self.PATTERN_SEXTUPOLE,     None, self.optimise_sextupoles,  "sextupoles"),
+            KnobSpec("multipole",  "ksl[3]",  self.PATTERN_SKEW_SEXTUPOLE,None, self.optimise_sextupoles,  "skew sextupoles"),
+            KnobSpec("hkicker",    "kick",    self.PATTERN_CORRECTOR_H,   None, self.optimise_correctors,  "correctors"),
+            KnobSpec("vkicker",    "kick",    self.PATTERN_CORRECTOR_V,   None, self.optimise_correctors,  "correctors"),
+            KnobSpec("quadrupole", "dy",      self.PATTERN_QUADRUPOLE,    "k1", self.optimise_quad_dy,     "quadrupole vertical offsets"),
+            KnobSpec("quadrupole", "dx",      self.PATTERN_QUADRUPOLE,    "k1", self.optimise_quad_dx,     "quadrupole horizontal offsets"),
         ]
         # fmt: on
 
@@ -120,36 +127,3 @@ class PSB(Accelerator):
     def apply_accelerator_specific_errors(self, mad_iface: AbaMadInterface) -> None:
         """PSB has no accelerator-specific startup error tables."""
         del mad_iface
-
-    @staticmethod
-    def infer_monitor_plane(bpm_name: str) -> str:
-        local = bpm_name.split(".", 1)[-1]
-        if local.upper().startswith("B"):
-            return "HV"
-        raise ValueError(f"Unsupported PSB monitor name: {bpm_name}")
-
-    def get_ac_dipole_marker(self) -> str:
-        return "HACMAP"  # "VACMAP" is also valid
-
-    @property
-    def ac_dipole_location(self) -> tuple[str, float]:
-        return self.get_ac_dipole_marker(), 0.0
-
-    def get_exciter_bpm(
-        self,
-        plane: str,
-        common_bpms: list[str] | None = None,
-    ) -> tuple[str, str] | None:
-        """Return the two BPMs adjacent to the PSB exciter."""
-        del plane, common_bpms
-        return f"BR{self.ring}.BPM2L3", f"BR{self.ring}.BPM3L3"
-
-    @property
-    def tune_variables(self) -> tuple[str, str]:
-        """Return PSB tune variable names."""
-        return "kbrqf", "kbrqd"
-
-    @property
-    def tune_integers(self) -> tuple[int, int]:
-        """Return PSB integer tunes."""
-        return 4, 4

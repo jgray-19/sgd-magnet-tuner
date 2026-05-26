@@ -9,6 +9,7 @@ import numpy as np
 
 from aba_optimiser.mad import GradientDescentMadInterface
 from aba_optimiser.mad.scripts import (
+    PYTHON_IN_MAD,
     build_validation_init_script,
     build_validation_script,
 )
@@ -130,7 +131,7 @@ class ValidationTrackingWorker(TrackingWorker):
             bad_bpms=self.config.bad_bpms,
             debug=self.config.debug,
             mad_logfile=worker_logfile,
-            py_name="python",
+            py_name=PYTHON_IN_MAD,
         )
 
         mad = mad_iface.mad

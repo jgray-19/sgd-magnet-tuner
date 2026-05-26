@@ -110,8 +110,8 @@ class BaseController(ABC):
 
         # Keep user-space inputs in optimisation space throughout the controller.
         true_strengths_dict = normalise_true_strengths(true_strengths)
-        true_strengths_delta = self._convert_true_strengths_to_delta(true_strengths_dict)
-        initial_knobs_delta = self._convert_initial_knobs_to_delta(initial_knob_strengths)
+        true_strengths_delta = self.convert_deltap_to_pt(true_strengths_dict)
+        initial_knobs_delta = self.convert_deltap_to_pt(initial_knob_strengths)
 
         # Initialize knob strengths in optimisation space
         self.initial_knobs, self.filtered_true_strengths = (
@@ -126,19 +126,25 @@ class BaseController(ABC):
         # Initialize managers
         self._init_managers()
 
-    def _convert_true_strengths_to_delta(
-        self, true_strengths: dict[str, float]
-    ) -> dict[str, float]:
-        """Normalise user-provided true strengths into optimisation space."""
-        return true_strengths.copy()
-
-    def _convert_initial_knobs_to_delta(
+    def convert_deltap_to_pt(
         self, initial_knob_strengths: dict[str, float] | None
     ) -> dict[str, float] | None:
         """Normalise user-provided initial knob strengths into optimisation space."""
         if initial_knob_strengths is None:
             return None
-        return initial_knob_strengths.copy()
+        initial_knob_strengths = initial_knob_strengths.copy()
+        if "deltap" in initial_knob_strengths:
+            initial_knob_strengths["pt"] = self.config_manager.mad_iface.dp2pt(
+                initial_knob_strengths.pop("deltap")
+            )
+        return initial_knob_strengths
+
+    def convert_pt_to_deltap(self, knob_strengths: dict[str, float]) -> dict[str, float]:
+        """Convert knob strengths from optimisation space back to user space."""
+        knob_strengths = knob_strengths.copy()
+        if "pt" in knob_strengths:
+            knob_strengths["deltap"] = self.config_manager.mad_iface.pt2dp(knob_strengths.pop("pt"))
+        return knob_strengths
 
     def _init_managers(self) -> None:
         """Initialize optimisation loop and result manager."""

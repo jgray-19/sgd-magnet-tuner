@@ -14,6 +14,7 @@ TRACK_OPTICS_SCRIPT = MAD_SCRIPTS_DIR / "run_optics_track.mad"
 TRACKING_OBSERVABLES = ("x", "y", "px", "py")
 LOGGER = logging.getLogger(__name__)
 TAB = "\t"
+PYTHON_IN_MAD = "python"
 
 
 def dump_debug_script(
@@ -123,9 +124,9 @@ def _reset_block(observables: tuple[str, ...]) -> str:
 def _send_block(observables: tuple[str, ...]) -> str:
     lines: list[str] = []
     for observable in observables:
-        lines.append(f"python:send({observable}, true)")
+        lines.append(f"{PYTHON_IN_MAD}:send({observable}, true)")
     for observable in observables:
-        lines.append(f"python:send(d{observable}_dk, true)")
+        lines.append(f"{PYTHON_IN_MAD}:send(d{observable}_dk, true)")
     return _join_lines(lines)
 
 
@@ -215,7 +216,7 @@ def build_tracking_script(observables: tuple[str, ...]) -> str:
     observables = _validate_observables(observables)
     return f"""! Generated tracking script
 reset_before_tracking()
-local _, mflw= track{{
+local _, mflw= track {{
     sequence=loaded_sequence,
     X0=da_x0_c[batch],
     nturn=n_run_turns,
@@ -223,8 +224,14 @@ local _, mflw= track{{
     atexit=save_data,
     range=tracking_range,
     dir=sdir,
+    aperture= {{kind='circle', 100}}
 }}
 
+local n_lost = 0
+for i=1,batch_size do
+    if mflw[i] and mflw[i].status == 'lost' then n_lost = n_lost + 1 end
+end
+{PYTHON_IN_MAD}:send({{n_lost=n_lost, n_total=batch_size}}, true)
 {_send_block(observables)}
 """
 
@@ -248,7 +255,7 @@ def build_validation_init_script(observables: tuple[str, ...]) -> str:
 
     return f"""! Generated validation init script
 assert(
-    batch_size and nbpms and n_run_turns and sdir and vector and python,
+    batch_size and nbpms and n_run_turns and sdir and vector and {PYTHON_IN_MAD},
     "Missing required variables for validation initialising"
 )
 
@@ -280,7 +287,9 @@ end
 def build_validation_script(observables: tuple[str, ...]) -> str:
     """Build the validation tracking script without derivative returns."""
     observables = _validate_observables(observables)
-    send_lines = "\n".join(f"python:send({observable}, true)" for observable in observables)
+    send_lines = "\n".join(
+        f"{PYTHON_IN_MAD}:send({observable}, true)" for observable in observables
+    )
     return f"""! Generated validation script
 reset_before_validation()
 local _, mflw= track{{
@@ -304,7 +313,7 @@ def build_tracking_hessian_script(observables: tuple[str, ...]) -> str:
 assert(
     loaded_sequence and batch_size and nbpms and reset_before_tracking and
     knob_names and coord_names and da_x0_c and knob_monomials and
-    {_hessian_asserts(observables)} and vector and matrix and python and n_run_turns,
+    {_hessian_asserts(observables)} and vector and matrix and {PYTHON_IN_MAD} and n_run_turns,
     "Missing required variables for tracking"
 )
 
@@ -330,5 +339,5 @@ for batch=1,num_batches do
 {_hessian_accumulation_block(observables)}
     end
 end
-python:send(Htot, true)
+{PYTHON_IN_MAD}:send(Htot, true)
 """

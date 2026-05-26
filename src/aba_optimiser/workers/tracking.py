@@ -35,6 +35,11 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 
+
+class ParticleLostError(Exception):
+    """Raised when MAD-NG returns non-finite values indicating particle loss."""
+
+
 OBSERVABLE_SPECS: dict[str, tuple[str, int]] = {
     "x": ("position_comparisons", 0),
     "y": ("position_comparisons", 1),
@@ -338,11 +343,19 @@ end
             Dictionary with one result array and one derivative array per active
             observable.
         """
+        loss_info: dict = mad.recv()
+        n_lost: int = loss_info["n_lost"]
+        n_total: int = loss_info["n_total"]
         results: dict[str, np.ndarray] = {}
         for observable in self.observables:
             results[observable] = np.asarray(mad.recv()).squeeze(-1)
         for observable in self.observables:
             results[self._gradient_key(observable)] = np.stack(mad.recv(), axis=0)
+        if n_lost > 0:
+            pct = 100.0 * n_lost / n_total
+            raise ParticleLostError(
+                f"Worker {self.worker_id}: {n_lost}/{n_total} particles lost ({pct:.1f}%) during tracking"
+            )
         return results
 
     def _run_tracking_batch(
@@ -600,6 +613,14 @@ end
                                 loss / normalisation_points,
                             )
                         )
+                except ParticleLostError as exc:
+                    LOGGER.warning(
+                        "Worker %d: %s — sending zero contribution; epoch update will be rejected",
+                        self.worker_id,
+                        exc,
+                    )
+                    # NaN loss signals the aggregator to reject this epoch's knob updates.
+                    self.conn.send((self.worker_id, np.zeros(n_knobs), float("nan")))
                 except Exception as exc:  # noqa: BLE001
                     self.send_error_payload(exc, phase="computation")
                     computation_success = False

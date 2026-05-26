@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
     from pymadng_utils.accelerators import Accelerator as PyMadAccelerator
 
-    from aba_optimiser.accelerators import Accelerator
+    from aba_optimiser.accelerators import Accelerator, KnobSpec
 
 BPM_PATTERN = "^BPM"
 LOGGER = logging.getLogger(__name__)
@@ -307,28 +307,29 @@ class GradientDescentMadInterface(GenericMadInterface):
                 "\nUse GenericMadInterface if no optimisation is required."
             )
 
-    def get_knob_specs(self) -> list[tuple[str, str, str, str | None, bool]]:
+    def get_knob_specs(self) -> list[KnobSpec]:
         """
         Return all knob specifications supported by this accelerator.
 
         Returns:
-            List of (kind, attribute, pattern, nonzero_attr, optimise_flag) tuples:
+            List of KnobSpec named tuples with fields:
             - kind: MAD element kind (e.g., "sbend", "quadrupole", "hkicker")
             - attribute: MAD element attribute (e.g., "k0", "k1", "kick")
             - pattern: Regex pattern to match element names
             - nonzero_attr: Optional MAD attribute that must be nonzero for a knob to be created
-            - optimise_flag: Whether this spec is currently enabled
+            - enabled: Whether this spec is currently enabled
+            - label: Human-readable label for logging
         """
         return self.accelerator.get_supported_knob_specs()
 
     def _filter_knob_specs(
-        self, all_specs: list[tuple[str, str, str, str | None, bool]]
+        self, all_specs: list[KnobSpec]
     ) -> list[tuple[str, str, str, str | None]]:
         """Keep only specs enabled by the accelerator's optimise_* flags."""
         return [
-            (kind, attr, pattern, nonzero_attr)
-            for kind, attr, pattern, nonzero_attr, optimise_flag in all_specs
-            if optimise_flag
+            (spec.kind, spec.attribute, spec.pattern, spec.nonzero_attr)
+            for spec in all_specs
+            if spec.enabled
         ]
 
     def _build_attr_block(self, attr_conditions: list[tuple[str, str, str]]) -> str:

@@ -14,6 +14,7 @@ from multiprocessing import Process
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 from aba_optimiser.mad import GradientDescentMadInterface
+from aba_optimiser.mad.scripts import PYTHON_IN_MAD
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -261,7 +262,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             bad_bpms=self.config.bad_bpms,
             debug=self.config.debug,
             mad_logfile=worker_logfile,
-            py_name="python",
+            py_name=PYTHON_IN_MAD,
         )
 
         knob_names = mad_iface.knob_names
@@ -289,6 +290,15 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
 
         # Setup differential algebra maps
         self._setup_da_maps(mad)
+
+        # Apply initial knob values to the DA objects (constant term = initial value)
+        init_commands = [
+            f"loaded_sequence['{name}']:set0({val:.15e})"
+            for name, val in init_knobs.items()
+            if name != "pt"
+        ]
+        if init_commands:
+            mad.send("\n".join(init_commands))
 
         return mad, mad_iface.nbpms
 

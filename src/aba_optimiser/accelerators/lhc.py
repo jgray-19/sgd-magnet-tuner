@@ -6,7 +6,9 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from aba_optimiser.accelerators.base import Accelerator
+from pymadng_utils.accelerators.lhc import LHC as BaseLHC  # noqa: N811
+
+from aba_optimiser.accelerators.base import Accelerator, KnobSpec
 from aba_optimiser.measurements.b2_errors import read_b2_error_table
 from aba_optimiser.physics.lhc_bends import normalise_lhcbend_magnets
 
@@ -17,7 +19,7 @@ if TYPE_CHECKING:
     from aba_optimiser.mad.optimising_mad_interface import GradientDescentMadInterface
 
 
-class LHC(Accelerator):
+class LHC(BaseLHC, Accelerator):
     """Large Hadron Collider accelerator configuration.
 
     This class encapsulates LHC-specific parameters like beam numbers,
@@ -52,6 +54,7 @@ class LHC(Accelerator):
         beam: int,
         sequence_file: Path | str,
         kinetic_energy: float = 6800.0,
+        particle: str = "proton",
         bpm_pattern: str = BPM_PATTERN,
         optimise_quadrupoles: bool = False,
         optimise_sextupoles: bool = False,
@@ -86,22 +89,12 @@ class LHC(Accelerator):
         if beam not in (1, 2):
             raise ValueError(f"LHC beam must be 1 or 2, got {beam}")
 
-        self.beam = beam
-
-        # Store LHC-specific optimisation flags
-        self.optimise_bends = optimise_bends
-        if normalise_bends is None:
-            normalise_bends = optimise_bends
-        self.normalise_bends = normalise_bends
-        self.optimise_correctors = optimise_correctors
-        self.optimise_other_quadrupoles = optimise_other_quadrupoles
-        self.b2_errors = None if b2_errors is None else Path(b2_errors)
-
-        # Initialise base Accelerator
         super().__init__(
+            beam=beam,
             sequence_file=sequence_file,
             kinetic_energy=kinetic_energy,
             bpm_pattern=bpm_pattern,
+            particle=particle,
             optimise_energy=optimise_energy,
             optimise_quadrupoles=optimise_quadrupoles,
             optimise_sextupoles=optimise_sextupoles,
@@ -109,52 +102,37 @@ class LHC(Accelerator):
             optimise_quad_dy=optimise_quad_dy,
             custom_knobs_to_optimise=custom_knobs_to_optimise,
         )
+        # LHC-specific optimisation flags not handled by any parent
+        self.optimise_bends = optimise_bends
+        if normalise_bends is None:
+            normalise_bends = optimise_bends
+        self.normalise_bends = normalise_bends
+        self.optimise_correctors = optimise_correctors
+        self.optimise_other_quadrupoles = optimise_other_quadrupoles
+        self.b2_errors = None if b2_errors is None else Path(b2_errors)
+        self.bend_lengths: dict[str, float] | None = None
 
-    @property
-    def seq_name(self) -> str:
-        """Return the sequence name for this LHC beam."""
-        return f"lhcb{self.beam}"
-
-    def has_any_optimisation(self) -> bool:
-        """Check if any optimisation is enabled.
-
-        Returns:
-            True if at least one optimisation type is enabled
-        """
-        return (
-            self.optimise_bends
-            or self.optimise_quadrupoles
-            or self.optimise_other_quadrupoles
-            or self.optimise_sextupoles
-            or self.optimise_correctors
-            or self.optimise_energy
-            or self.optimise_quad_dx
-            or self.optimise_quad_dy
+    def copy_with(self, **overrides) -> LHC:
+        """Return a new LHC instance with selected parameters overridden."""
+        o = overrides
+        return LHC(
+            beam=o.get("beam", self.beam),
+            sequence_file=o.get("sequence_file", self.sequence_file),
+            kinetic_energy=o.get("kinetic_energy", self.kinetic_energy),
+            particle=o.get("particle", self.particle),
+            bpm_pattern=o.get("bpm_pattern", self.bpm_pattern),
+            optimise_energy=o.get("optimise_energy", self.optimise_energy),
+            optimise_quadrupoles=o.get("optimise_quadrupoles", self.optimise_quadrupoles),
+            optimise_sextupoles=o.get("optimise_sextupoles", self.optimise_sextupoles),
+            optimise_correctors=o.get("optimise_correctors", self.optimise_correctors),
+            optimise_bends=o.get("optimise_bends", self.optimise_bends),
+            normalise_bends=o.get("normalise_bends", self.normalise_bends),
+            optimise_other_quadrupoles=o.get("optimise_other_quadrupoles", self.optimise_other_quadrupoles),
+            optimise_quad_dx=o.get("optimise_quad_dx", self.optimise_quad_dx),
+            optimise_quad_dy=o.get("optimise_quad_dy", self.optimise_quad_dy),
+            b2_errors=o.get("b2_errors", self.b2_errors),
+            custom_knobs_to_optimise=o.get("custom_knobs_to_optimise", self.custom_knobs_to_optimise),
         )
-
-    def log_optimisation_targets(self) -> None:
-        """Log the optimisation targets for this LHC accelerator."""
-        targets = []
-        if self.optimise_bends:
-            targets.append("bends")
-        if self.optimise_quadrupoles:
-            targets.append("main quadrupoles")
-        if self.optimise_other_quadrupoles:
-            targets.append("other quadrupoles")
-        if self.optimise_sextupoles:
-            targets.append("sextupoles")
-        if self.optimise_correctors:
-            targets.append("correctors")
-        if self.optimise_energy:
-            targets.append("beam energy")
-        if self.optimise_quad_dx:
-            targets.append("quadrupole horizontal offsets")
-        if self.optimise_quad_dy:
-            targets.append("quadrupole vertical offsets")
-        if targets:
-            LOGGER.info(f"Optimisation targets: {', '.join(targets)}")
-        else:
-            LOGGER.info("No optimisation targets set.")
 
     def get_bend_lengths(self) -> dict[str, float] | None:
         """Return LHC bend lengths when bend normalisation is enabled."""
@@ -174,27 +152,24 @@ class LHC(Accelerator):
             return normalise_lhcbend_magnets(true_strengths, bend_lengths)
         return true_strengths
 
-    def get_supported_knob_specs(self) -> list[tuple[str, str, str, str | None, bool]]:
-        """Return LHC-specific knob specifications.
-
-        Returns:
-            List of (kind, attribute, pattern, nonzero_attr, optimise_flag) tuples defining
-            all possible knobs that can be created for LHC optimization.
-        """
-        return [
-            ("sbend", "k0", self.PATTERN_MAIN_BEND, "k0", self.optimise_bends),
-            ("rbend", "k0", self.PATTERN_RBEND, "k0", self.optimise_bends),
-            ("quadrupole", "k1", self.PATTERN_MAIN_QUAD, "k1", self.optimise_quadrupoles),
-            ("quadrupole", "k1", self.PATTERN_QUAD_NON_TUNE, "k1", self.optimise_other_quadrupoles),
-            ("sextupole", "k2", self.PATTERN_SEXTUPOLE, "k2", self.optimise_sextupoles),
-            ("hkicker", "kick", self.PATTERN_CORRECTOR, None, self.optimise_correctors),
-            ("vkicker", "kick", self.PATTERN_CORRECTOR, None, self.optimise_correctors),
-            *[
-                ("quadrupole", attr, pattern, "k1", getattr(self, f"optimise_quad_{attr}"))
-                for attr, patterns in self.quadrupole_misalignment_patterns.items()
-                for pattern in patterns
-            ],
+    def get_supported_knob_specs(self) -> list[KnobSpec]:
+        """Return LHC-specific knob specifications."""
+        # fmt: off
+        specs = [
+            KnobSpec("sbend",      "k0",   self.PATTERN_MAIN_BEND,      "k0", self.optimise_bends,              "bends"),
+            KnobSpec("rbend",      "k0",   self.PATTERN_RBEND,          "k0", self.optimise_bends,              "bends"),
+            KnobSpec("quadrupole", "k1",   self.PATTERN_MAIN_QUAD,      "k1", self.optimise_quadrupoles,        "main quadrupoles"),
+            KnobSpec("quadrupole", "k1",   self.PATTERN_QUAD_NON_TUNE,  "k1", self.optimise_other_quadrupoles,  "other quadrupoles"),
+            KnobSpec("sextupole",  "k2",   self.PATTERN_SEXTUPOLE,      "k2", self.optimise_sextupoles,         "sextupoles"),
+            KnobSpec("hkicker",    "kick", self.PATTERN_CORRECTOR,      None, self.optimise_correctors,         "correctors"),
+            KnobSpec("vkicker",    "kick", self.PATTERN_CORRECTOR,      None, self.optimise_correctors,         "correctors"),
         ]
+        # fmt: on
+        label_map = {"dx": "quadrupole horizontal offsets", "dy": "quadrupole vertical offsets"}
+        for attr, patterns in self.quadrupole_misalignment_patterns.items():
+            for pattern in patterns:
+                specs.append(KnobSpec("quadrupole", attr, pattern, "k1", getattr(self, f"optimise_quad_{attr}"), label_map[attr]))
+        return specs
 
     @property
     def quadrupole_misalignment_patterns(self) -> dict[str, tuple[str, ...]]:
@@ -291,11 +266,13 @@ loaded_sequence:update()
                 "name_expr": 'string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".dk0l"',
                 "mad_value": "bend_dict[k_str_name]",
             },
-            "rbend": {
-                "name_expr": 'string.gsub(e.name, "(MB[RXWAL]%w*%.)([A-G]?)([0-9]+[LR][1-8].*)", "%1%3") .. (e.k0 >= 0 and "_p" or "_n") .. ".dk0l"',
-                "mad_value": "bend_dict[k_str_name]",
-            },
         }
+
+    @staticmethod
+    def infer_monitor_plane(bpm_name: str) -> str:
+        """LHC BPMs measure both planes simultaneously."""
+        del bpm_name
+        return "HV"
 
     def get_perturbation_families(self) -> dict[str, dict[str, float | str | dict]]:
         """Return perturbation-family metadata for LHC."""
@@ -312,37 +289,3 @@ loaded_sequence:update()
                 "pattern": "MS\\.",
             },
         }
-
-    @property
-    def tune_variables(self) -> tuple[str, str]:
-        """Return LHC operational tune knob names."""
-        return f"dqx_b{self.beam}_op", f"dqy_b{self.beam}_op"
-
-    @property
-    def tune_integers(self) -> tuple[int, int]:
-        """Return LHC integer tunes."""
-        return 62, 60
-
-    @staticmethod
-    def infer_monitor_plane(bpm_name: str) -> str:
-        """Infer measurement plane from LHC BPM family name."""
-        del bpm_name
-        return "HV"
-
-    def get_ac_dipole_marker(self) -> str:
-        """Return the LHC AC-dipole exciter marker."""
-        return f"MKQA.6L4.B{self.beam}"
-
-    @property
-    def ac_dipole_location(self) -> tuple[str, float]:
-        """Return the LHC AC-dipole marker and longitudinal offset."""
-        return self.get_ac_dipole_marker(), 1.583 / 2
-
-    def get_exciter_bpm(
-        self,
-        plane: str,
-        common_bpms: list[str] | None = None,
-    ) -> tuple[str, str] | None:
-        """Return the two BPMs adjacent to the LHC AC-dipole."""
-        del plane, common_bpms
-        return f"BPMY{'A' if self.beam == 1 else 'B'}.6L4.B{self.beam}", f"BPM.7L4.B{self.beam}"

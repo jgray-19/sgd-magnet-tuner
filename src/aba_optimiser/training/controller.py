@@ -241,9 +241,13 @@ class Controller(BaseController):
             self.final_knobs = self.optimisation_loop.best_knobs
             total_hessian = None
         finally:
-            initial_knobs_abs = self._deltas_to_abs()
+            if self.final_knobs is None:
+                self.final_knobs = self.optimisation_loop.best_knobs
 
-        uncertainties = self._finalise_results(initial_knobs_abs, total_hessian, writer)
+        self.final_knobs = self._format_result_knobs(self.final_knobs)
+        self.filtered_true_strengths = self._format_result_knobs(self.filtered_true_strengths)
+
+        uncertainties = self._finalise_results(total_hessian, writer)
         uncertainties = dict(zip(self.final_knobs.keys(), uncertainties))
 
         return self.final_knobs, uncertainties
@@ -274,9 +278,7 @@ class Controller(BaseController):
         if not self.accelerator.optimise_energy or "pt" not in formatted:
             return formatted
 
-        pt_value = formatted.pop("pt")
-        formatted["deltap"] = self.config_manager.mad_iface.pt2dp(pt_value)
-        return formatted
+        return self.convert_pt_to_deltap(formatted)
 
     def _format_result_uncertainties(self, uncertainties: np.ndarray) -> np.ndarray:
         """Align uncertainty values with the formatted output knob ordering."""
@@ -290,25 +292,8 @@ class Controller(BaseController):
             dtype=np.float64,
         )
 
-    def _deltas_to_abs(self) -> dict[str, float]:
-        # Keep all results in optimisation space for output.
-        initial_knobs_delta = dict(
-            zip(
-                self.config_manager.knob_names,
-                self.config_manager.initial_strengths,
-                strict=False,
-            )
-        )
-        if self.final_knobs is None:
-            self.final_knobs = self.optimisation_loop.best_knobs
-
-        self.final_knobs = self._format_result_knobs(self.final_knobs)
-        self.filtered_true_strengths = self._format_result_knobs(self.filtered_true_strengths)
-        return self._format_result_knobs(initial_knobs_delta)
-
     def _finalise_results(
         self,
-        initial_knobs_abs: dict[str, float],
         total_hessian: np.ndarray | None,
         writer: SummaryWriter | None,
     ) -> np.ndarray:
@@ -324,9 +309,6 @@ class Controller(BaseController):
             writer.close()
 
         uncertainties_abs = self._format_result_uncertainties(uncertainties)
-
-        if "deltap" in self.output_knob_names and "deltap" not in initial_knobs_abs:
-            initial_knobs_abs = {**initial_knobs_abs, "deltap": initial_knobs_abs["pt"]}
 
         logger.info("Optimisation complete.")
         return uncertainties_abs
@@ -409,21 +391,6 @@ class Controller(BaseController):
                 )
 
         return self.accelerator.normalise_true_strengths(true_strengths)
-
-    def _convert_initial_knobs_to_delta(
-        self, initial_knob_strengths: dict[str, float] | None
-    ) -> dict[str, float] | None:
-        """Handle tracking-specific energy parameter conversion only."""
-        if initial_knob_strengths is None:
-            return None
-
-        initial_knob_strengths = initial_knob_strengths.copy()
-        if "deltap" in initial_knob_strengths:
-            initial_knob_strengths["pt"] = self.config_manager.mad_iface.dp2pt(
-                initial_knob_strengths.pop("deltap")
-            )
-
-        return initial_knob_strengths
 
     def _get_controller_mad_setup_kwargs(self) -> dict:
         """Mirror the worker MAD setup when building the expected knob list."""

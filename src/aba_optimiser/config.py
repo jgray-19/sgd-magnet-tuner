@@ -35,6 +35,12 @@ class OptimiserConfig:
     # Gradient smoothing for loss tracking
     grad_norm_alpha: float = field(default=0.2)
 
+    # L-BFGS-specific parameters (ignored for adam/amsgrad)
+    lbfgs_history_size: int = field(default=10)
+    lbfgs_max_grad_norm: float | None = field(default=1.0)
+    lbfgs_max_step_norm: float | None = field(default=1.0)
+    lbfgs_powell_damping: float = field(default=0.2)
+
     # Computed fields
     decay_epochs: int = field(init=False)
 
