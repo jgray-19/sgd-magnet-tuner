@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import tfs
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.mad.optimising_mad_interface import GenericMadInterface
-from aba_optimiser.measurements import b2_errors as b2_errors_module
 from aba_optimiser.measurements.b2_errors import resolve_b2_error_table
 from tests.mad.helpers import cleanup_interface
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _get_bend_sample(
@@ -96,7 +98,7 @@ error("Could not find untouched LHC bend with knl")
     return str(interface.mad.recv())
 
 
-def test_resolve_b2_error_table_picks_closest_energy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_b2_error_table_picks_closest_energy(tmp_path: Path) -> None:
     beam_root = tmp_path / "Beam2"
     beam_root.mkdir(parents=True)
     for name in (
@@ -106,10 +108,12 @@ def test_resolve_b2_error_table_picks_closest_energy(tmp_path: Path, monkeypatch
     ):
         (beam_root / name).write_text("")
 
-    monkeypatch.setattr(b2_errors_module, "AFS_B2_ERRORS_ROOT", tmp_path)
-
-    assert resolve_b2_error_table(2, 6799.0) == beam_root / "MB2022_6800.0GeV_0133cm.errors"
-    assert resolve_b2_error_table(2, 6510.0) == beam_root / "MB2022_6500.0GeV_0133cm.errors"
+    assert resolve_b2_error_table(2, 6799.0, errors_root=tmp_path) == (
+        beam_root / "MB2022_6800.0GeV_0133cm.errors"
+    )
+    assert resolve_b2_error_table(2, 6510.0, errors_root=tmp_path) == (
+        beam_root / "MB2022_6500.0GeV_0133cm.errors"
+    )
 
 
 @pytest.mark.slow

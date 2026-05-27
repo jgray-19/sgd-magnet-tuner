@@ -12,9 +12,13 @@ from aba_optimiser.dataframes.utils import select_markers
 from aba_optimiser.training.worker_turn_planner import WorkerTurnPlanner
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from aba_optimiser.config import SimulationConfig
     from aba_optimiser.training.configuration_manager import ConfigurationManager
     from aba_optimiser.training.tracking_mode import TrackingPlan
+
+    ShuffleTurns = Callable[[list[int]], None]
 
 LOGGER = logging.getLogger(__name__)
 
@@ -31,7 +35,14 @@ class DataManager:
         flattop_turns: int,
         tracking_plan: TrackingPlan,
         extra_markers: list[str] | None = None,
+        shuffle_turns: ShuffleTurns | None = None,
     ):
+        """Create a data manager for one optimisation run.
+
+        Args:
+            shuffle_turns: Optional in-place turn ordering strategy forwarded to
+                ``WorkerTurnPlanner``. This primarily supports deterministic tests.
+        """
         self.all_bpms = all_bpms
         self.bpms_in_range = bpms_in_range
         self.simulation_config = simulation_config
@@ -40,6 +51,7 @@ class DataManager:
         self.flattop_turns = flattop_turns
         self.tracking_plan = tracking_plan
         self.extra_markers = extra_markers or []
+        self.shuffle_turns = shuffle_turns
 
         # Available turns will be populated after loading track data
         self.available_turns: list[int]
@@ -270,7 +282,11 @@ class DataManager:
                 "No turns available after removing boundary turns. Check that your flattop_turns setting leaves at least one turn per track."
             )
 
-        batch_plan = WorkerTurnPlanner(self.tracking_plan, self.simulation_config).build_turn_batches(
+        batch_plan = WorkerTurnPlanner(
+            self.tracking_plan,
+            self.simulation_config,
+            shuffle_turns=self.shuffle_turns,
+        ).build_turn_batches(
             available_turns=self.available_turns,
             file_map=self.file_map,
             num_files=len(self.track_data),

@@ -15,6 +15,11 @@ import xtrack as xt
 pytest.importorskip("tmom_recon")
 pytest.importorskip("xtrack_tools")
 from pymadng_utils.io.utils import save_knobs
+from tmom_recon.kicker.test_utils import (
+    realign_kicker_turns,
+    select_kicker_element,
+    strip_inline_flags,
+)
 from xtrack_tools.coordinates import create_initial_conditions
 from xtrack_tools.kicker import _insert_exciter_at, _knl_ksl
 from xtrack_tools.monitors import (
@@ -204,62 +209,6 @@ def _generate_nonoise_track(
     return corrector_file, magnet_strengths, tune_knobs_file
 
 
-def _select_kicker_element(line: xt.Line) -> str | None:
-    patterns = [r"^mk", r"kick", r"^mcb", r"^mke", r"^mki", r"\.ksw", r"\.dhz", r"\.dvt"]
-    for pattern in patterns:
-        for name in line.element_names:
-            if re.search(pattern, name, flags=re.IGNORECASE):
-                return name
-    return None
-
-
-def _strip_inline_flags(pattern: str) -> str:
-    if pattern.startswith("(?i)"):
-        return pattern[4:]
-    return pattern
-
-
-def _realign_kicker_turns(
-    tracking_df: pd.DataFrame,
-    *,
-    kicker_name: str,
-    logical_turns: int,
-) -> pd.DataFrame:
-    """Realign tracked turns so each logical turn starts immediately after the kicker.
-
-    Xsuite tracking rows are grouped by physical revolution, which means BPMs that
-    appear before the kicker in ring order are written at the start of each turn.
-    The controller's kicker mode instead expects each turn to begin just after the
-    kicker, so those pre-kicker BPM rows belong to the previous logical turn.
-
-    We therefore shift all rows that appear before the kicker marker within a
-    physical turn back by one turn, drop the incomplete turn 0, and keep exactly
-    ``logical_turns`` complete kicker-started turns.
-    """
-    parts: list[pd.DataFrame] = []
-    marker_name = kicker_name.upper()
-
-    for _turn, turn_df in tracking_df.groupby("turn", sort=False):
-        turn_names = turn_df["name"].astype(str).str.upper().to_numpy()
-        marker_rows = np.flatnonzero(turn_names == marker_name)
-        if marker_rows.size == 0:
-            parts.append(turn_df)
-            continue
-
-        marker_idx = int(marker_rows[0])
-        if marker_idx > 0:
-            before = turn_df.iloc[:marker_idx].copy()
-            before["turn"] = before["turn"] - 1
-            parts.append(before)
-        parts.append(turn_df.iloc[marker_idx:].copy())
-
-    realigned = pd.concat(parts, ignore_index=True)
-    realigned = realigned.loc[
-        (realigned["turn"] >= 1) & (realigned["turn"] <= logical_turns)
-    ].copy()
-    return realigned
-
-
 def _generate_kicker_track(
     interface_with_beam: AbaMadInterface,
     flattop_turns: int,
@@ -293,7 +242,7 @@ def _generate_kicker_track(
 
     seq_name = interface_with_beam.accelerator.seq_name.lower()
     line: xt.Line = env[seq_name]
-    kicker_name = _select_kicker_element(line)
+    kicker_name = select_kicker_element(line)
     if kicker_name is None:
         pytest.skip("No kicker-like element found in sequence for test")
 
@@ -313,7 +262,7 @@ def _generate_kicker_track(
         start_turn=kick_turn,
     )
 
-    bpm_pattern_clean = _strip_inline_flags(bpm_pattern)
+    bpm_pattern_clean = strip_inline_flags(bpm_pattern)
     monitor_pattern = rf"(?i:{bpm_pattern_clean})|{re.escape(kicker_name)}"
     monitor_names = get_monitor_names_at_pattern(kicked_line, monitor_pattern)
     start_elem = kicked_line.element_names[0].upper()
@@ -342,7 +291,7 @@ def _generate_kicker_track(
     )
     tracking_df = tracking_df.loc[:, TRACK_COLUMNS].copy()
     tracking_df["name"] = tracking_df["name"].astype(str)
-    tracking_df = _realign_kicker_turns(
+    tracking_df = realign_kicker_turns(
         tracking_df,
         kicker_name=kicker_name,
         logical_turns=flattop_turns,
@@ -380,12 +329,13 @@ def _build_energy_optimisation_case(
     target_qx: float = 0.28,
     target_qy: float = 0.31,
     dpp_value: float = DPP_VALUE,
+    flattop_turns: int = FLATTOP_TURNS,
 ) -> tuple[Controller, dict[str, float]]:
     """Build one energy optimisation controller and its true internal knob values."""
     off_dpp_path = tmp_path / "track_off_dpp.parquet"
     corrector_file, _, tune_knobs_file = _generate_nonoise_track(
         loaded_interface,
-        FLATTOP_TURNS,
+        flattop_turns,
         off_dpp_path,
         dpp_value,
         bpm_pattern=bpm_pattern,
@@ -399,7 +349,7 @@ def _build_energy_optimisation_case(
         measurement_files=off_dpp_path,
         corrector_files=corrector_file,
         tune_knobs_files=tune_knobs_file,
-        flattop_turns=FLATTOP_TURNS,
+        flattop_turns=flattop_turns,
         bunches_per_file=1,
     )
 
@@ -419,7 +369,9 @@ def _build_energy_optimisation_case(
     )
     true_knobs = {
         "pt": dp2pt(
-            dpp_value, PROTON_MASS, energy=loaded_interface.accelerator.kinetic_energy + PROTON_MASS
+            dpp_value,
+            mass=loaded_interface.accelerator.energy - loaded_interface.accelerator.kinetic_energy,
+            energy=loaded_interface.accelerator.energy,
         )
     }
     return ctrl, true_knobs
@@ -481,7 +433,7 @@ def _make_simulation_config_quad() -> SimulationConfig:
 
 
 def evaluate_controller_worker_loss(ctrl: Controller, knobs: dict[str, float]) -> float:
-    """Return the mean worker diagnostic loss at one knob setting."""
+    """Return the total worker diagnostic loss summed across all workers at one knob setting."""
     ctrl.worker_manager.start_workers(
         ctrl.data_manager.track_data,
         ctrl.data_manager.turn_batches,
@@ -494,10 +446,10 @@ def evaluate_controller_worker_loss(ctrl: Controller, knobs: dict[str, float]) -
         enable_validation=ctrl.tracking_plan.enable_validation,
     )
     try:
-        diag = ctrl.worker_manager._request_worker_diagnostics(knobs)[0]
+        diags = ctrl.worker_manager._request_worker_diagnostics(knobs)
     finally:
         ctrl.worker_manager.terminate_workers()
-    return float(diag["total_loss"])
+    return sum(float(d["total_loss"]) for d in diags)  # type: ignore[arg-type]
 
 
 def run_madng_tracking(

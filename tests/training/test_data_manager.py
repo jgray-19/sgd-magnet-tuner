@@ -39,13 +39,7 @@ def _make_track_df(turns: list[int], bpm_name: str = "BPM.1") -> pd.DataFrame:
 
 
 def test_prepare_turn_batches_treats_tracks_per_worker_as_a_max(
-    monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        "aba_optimiser.training.worker_turn_planner.random.shuffle",
-        lambda turns: None,
-    )
-
     data_manager = DataManager(
         bpms_in_range=["BPM.1"],
         all_bpms=["BPM.1"],
@@ -60,6 +54,7 @@ def test_prepare_turn_batches_treats_tracks_per_worker_as_a_max(
         num_bunches=1,
         flattop_turns=12,
         tracking_plan=_DEFAULT_TRACKING_PLAN,
+        shuffle_turns=lambda turns: None,
     )
     data_manager.track_data = {0: _make_track_df(list(range(12)))}
     data_manager.available_turns = list(range(12))
@@ -78,13 +73,7 @@ def test_prepare_turn_batches_treats_tracks_per_worker_as_a_max(
 
 
 def test_prepare_turn_batches_keeps_partial_batches_per_file(
-    monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        "aba_optimiser.training.worker_turn_planner.random.shuffle",
-        lambda turns: None,
-    )
-
     file0_turns = list(range(7))
     file1_turns = list(range(100, 107))
     data_manager = DataManager(
@@ -101,6 +90,7 @@ def test_prepare_turn_batches_keeps_partial_batches_per_file(
         num_bunches=1,
         flattop_turns=7,
         tracking_plan=_DEFAULT_TRACKING_PLAN,
+        shuffle_turns=lambda turns: None,
     )
     data_manager.track_data = {
         0: _make_track_df(file0_turns),

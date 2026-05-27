@@ -6,8 +6,14 @@ import logging
 import random
 from collections import deque
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from aba_optimiser.training.tracking_mode import TrackingPlan
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from aba_optimiser.training.tracking_mode import TrackingPlan
+
+    ShuffleTurns = Callable[[list[int]], None]
 
 LOGGER = logging.getLogger(__name__)
 
@@ -114,9 +120,24 @@ class WorkerTurnBatchPlan:
 class WorkerTurnPlanner:
     """Compute worker turn batches from available turns and tracking mode."""
 
-    def __init__(self, tracking_plan: TrackingPlan, simulation_config) -> None:
+    def __init__(
+        self,
+        tracking_plan: TrackingPlan,
+        simulation_config,
+        *,
+        shuffle_turns: ShuffleTurns | None = None,
+    ) -> None:
+        """Create a planner.
+
+        Args:
+            tracking_plan: Tracking-mode policy for BPM/range expansion.
+            simulation_config: Worker and batching configuration.
+            shuffle_turns: Optional in-place turn ordering strategy. Defaults to
+                ``random.shuffle`` and can be overridden for deterministic tests.
+        """
         self.tracking_plan = tracking_plan
         self.simulation_config = simulation_config
+        self.shuffle_turns = shuffle_turns if shuffle_turns is not None else random.shuffle
 
     def build_turn_batches(
         self,
@@ -198,7 +219,7 @@ class WorkerTurnPlanner:
     ) -> list[list[int]]:
         """Materialise worker turn batches from grouped turns."""
         for turns in turns_by_file.values():
-            random.shuffle(turns)
+            self.shuffle_turns(turns)
 
         target_batches_by_file, use_balanced_sizing, effective_num_batches = (
             _distribute_target_batches_by_file(

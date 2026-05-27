@@ -18,36 +18,30 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 import tfs
-from omc3.hole_in_one import hole_in_one_entrypoint
 from pymadng_utils.model_creator.madng_utils import update_model_with_madng
-from tmom_recon import ACDipoleConfig, calculate_pz_measurement
+from tmom_recon import ACDipoleConfig
 from tmom_recon.acd.madng_driver import ACDipoleMadDriver
-from tmom_recon.svd import svd_clean_measurements
 
 from aba_optimiser.accelerators import LHC
-from aba_optimiser.config import (
-    DPP_OPTIMISER_CONFIG,
-    DPP_SIMULATION_CONFIG,
-    PROJECT_ROOT,
-)
 from aba_optimiser.mad import GenericMadInterface
+from aba_optimiser.measurements.analysis import run_measurement_analysis
+from aba_optimiser.measurements.loading import (
+    build_dataframe_file_indices,
+    convert_tbt_to_dataframes,
+    load_measurement_files,
+)
 from aba_optimiser.measurements.online_knobs import build_dict_from_nxcal_result, save_online_knobs
+from aba_optimiser.measurements.reconstruction import process_single_dataframe
 from aba_optimiser.measurements.squeeze_helpers import (
     extract_tunes_from_job_file,
-    get_or_make_sequence,
 )
-from aba_optimiser.measurements.tbt_io import (
-    _build_dataframe_file_indices,
-    convert_measurements,
-    load_files,
-)
-from aba_optimiser.noise import assign_bpm_variances
-from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import MeasurementConfig, OutputConfig, SequenceConfig
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from aba_optimiser.measurements.preprocessing import (
+        ClosedOrbitInput,
+    )
 
+    pass
 LOGGER = logging.getLogger(__name__)
 
 AC_DIPOLE_ATTR_KEYS = (
@@ -68,121 +62,6 @@ class ACDipoleReconstructionConfig:
     corrector_knobs_files: list[Path | None] | None = None
 
 
-def compute_uniform_vars(
-    combined: pd.DataFrame, bad_bpms: list[str], var_value: float = (1e-4) ** 2
-) -> pd.DataFrame:
-    """Set uniform variances for all BPMs.
-
-    Args:
-        combined: DataFrame with BPM measurements
-        bad_bpms: List of bad BPM names to set to infinite variance
-        var_value: Uniform variance value to use (default: (1e-4) ** 2)
-
-    Returns:
-        DataFrame with var_x, var_y, var_px, var_py columns added
-    """
-    combined["var_x"] = var_value
-    combined["var_y"] = var_value
-    combined["var_px"] = var_value
-    combined["var_py"] = var_value
-    combined.loc[combined["name"].isin(bad_bpms), "var_x"] = float("inf")
-    combined.loc[combined["name"].isin(bad_bpms), "var_y"] = float("inf")
-    combined.loc[combined["name"].isin(bad_bpms), "var_px"] = float("inf")
-    combined.loc[combined["name"].isin(bad_bpms), "var_py"] = float("inf")
-    return combined
-
-
-def compute_vars_from_known_noise(combined: pd.DataFrame, bad_bpms: list[str]) -> pd.DataFrame:
-    """Compute variances for x and y planes based on known noise levels."""
-    return assign_bpm_variances(combined, accelerator_type="lhc", bad_bpms=bad_bpms)
-
-
-def run_analysis(
-    analysis_dir: str | Path,
-    model_dir: str | Path,
-    files: list[Path],
-    beam: int,
-    nattunes: list[float],
-    tunes: list[float],
-) -> list[str]:
-    """Load, combine, and process data from multiple files."""
-    analysis_dir = Path(analysis_dir)
-    analysis_dir.mkdir(parents=True, exist_ok=True)
-    # bunches = [32, 1228, 2000] if beam == 2 else [0, 1138, 1968]
-    hole_in_one_entrypoint(
-        harpy=True,
-        files=files,
-        outputdir=analysis_dir / "lin_files",
-        unit="mm",
-        driven_excitation="acd",
-        first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
-        is_free_kick=False,
-        keep_exact_zeros=False,
-        max_peak=0.02,
-        nattunes=nattunes,
-        num_svd_iterations=3,
-        opposite_direction=beam == 2,
-        output_bits=10,
-        peak_to_peak=1e-08,
-        resonances=4,
-        sing_val=12,
-        svd_dominance_limit=0.925,
-        to_write=["lin", "spectra", "full_spectra", "bpm_summary"],
-        tune_clean_limit=1e-05,
-        tunes=tunes,
-        turn_bits=14,
-        model_dir=model_dir,
-        turns=[0, 50000],
-        clean=True,
-    )
-    # Find all the bunch IDs that were created
-    linfile_dir = analysis_dir / "lin_files"
-    analysed_files: list[Path] = [
-        created_file.with_suffix("") for created_file in linfile_dir.glob("*_bunchID*.linx")
-    ]
-
-    hole_in_one_entrypoint(
-        optics=True,
-        files=analysed_files,
-        outputdir=analysis_dir,
-        analyse_dpp=0,
-        # calibrationdir="/afs/cern.ch/eng/sl/lintrack/LHC_commissioning2017/Calibration_factors_2017/Calibration_factors_2017_beam1",
-        chromatic_beating=False,
-        compensation="equation",
-        coupling_method=2,
-        coupling_pairing=0,
-        isolation_forest=False,
-        nonlinear=[],
-        only_coupling=False,
-        range_of_bpms=11,
-        second_order_dispersion=False,
-        three_bpm_method=False,
-        three_d_excitation=False,
-        union=False,
-        accel="lhc",
-        ats=False,
-        beam=beam,
-        dpp=0.0,
-        model_dir=model_dir,
-        xing=False,
-        year="2025",
-    )
-
-    bad_bpms: list[str] = []
-    for file in analysed_files:
-        bpm_summary_file_x = file.parent / (file.name + ".bad_bpms_x")
-        bpm_summary_file_y = file.parent / (file.name + ".bad_bpms_y")
-        if bpm_summary_file_x.exists():
-            with bpm_summary_file_x.open("r") as f:
-                bad_bpms.extend([line.split(" ")[0] for line in f.readlines()])
-        if bpm_summary_file_y.exists():
-            with bpm_summary_file_y.open("r") as f:
-                bad_bpms.extend([line.split(" ")[0] for line in f.readlines()])
-    bad_bpms = list(set(bad_bpms))
-    LOGGER.info(f"Identified {len(bad_bpms)} bad BPMs from analysis.")
-    return bad_bpms
-
-
 def copy_ac_dipole_attrs(source: pd.DataFrame, target: pd.DataFrame) -> None:
     """Copy AC-dipole metadata attrs from source dataframe to target."""
     for key in AC_DIPOLE_ATTR_KEYS:
@@ -193,70 +72,6 @@ def copy_ac_dipole_attrs(source: pd.DataFrame, target: pd.DataFrame) -> None:
 # def write_datafile(data: pd.DataFrame, output_file: str | Path) -> None:
 #     """Write the combined DataFrame to a Parquet file."""
 #     data.to_parquet(output_file)
-
-
-def process_single_dataframe(
-    df_with_index: tuple[int, pd.DataFrame],
-    tws: pd.DataFrame,
-    bad_bpms: list[str],
-    analysis_dir: Path,
-    use_uniform_vars: bool,
-    beam: int,
-    ac_dipole_config_factory: Callable[[int], ACDipoleConfig | None] | None = None,
-    machine_deltap: float | None = None,
-) -> tuple[int, pd.DataFrame]:
-    """Process a single DataFrame: clean, compute vars, and calculate pz.
-
-    Args:
-        df_with_index: Tuple of (index, dataframe)
-        tws: Twiss DataFrame with optics parameters
-        bad_bpms: List of bad BPM names
-        use_uniform_vars: Whether to use uniform variances
-
-    Returns:
-        Tuple of (original_index, processed_dataframe)
-    """
-    i, df = df_with_index
-    ac_dipole_config = ac_dipole_config_factory(i) if ac_dipole_config_factory is not None else None
-
-    # SVD clean
-    df = svd_clean_measurements(df)
-
-    # Remove BPMs not in twiss data
-    df: pd.DataFrame = df[df["name"].isin(tws.index)]
-
-    # Compute variances
-    if use_uniform_vars:
-        df = compute_uniform_vars(df, bad_bpms)
-    else:
-        df.set_index("name", inplace=True)
-        df = compute_vars_from_known_noise(df, bad_bpms)
-        df.reset_index(inplace=True)
-
-    # Calculate pz
-    df = calculate_pz_measurement(
-        df,
-        analysis_dir,
-        model_tws=tws,
-        include_errors=True,
-        include_optics_errors=True,
-        reverse_meas_tws=beam == 2,
-        dpp_override=machine_deltap if machine_deltap is not None else 0.0,
-        ac_dipole_config=ac_dipole_config,
-    )
-
-    # Divide the variances by 10 because of the svd cleaning reducing noise
-    df["var_x"] = df["var_x"] / 100
-    df["var_y"] = df["var_y"] / 100
-
-    # Handle NaN values
-    if df["px"].isna().any() or df["py"].isna().any():
-        LOGGER.warning(f"NaN values found in px or py for dataframe {i}, dropping rows.")
-        df = df.dropna(subset=["px", "py"])
-
-    return i, df
-
-
 def detect_bad_bpms(
     pzs: pd.DataFrame | list[pd.DataFrame],
     all_bpms: set[str],
@@ -355,6 +170,11 @@ def process_measurements(
     tunes: list[float] | None = None,
     machine_deltaps: float | list[float] | None = None,
     ac_dipole_reconstruction_config: ACDipoleReconstructionConfig | None = None,
+    remove_closed_orbit: ClosedOrbitInput = None,
+    n_turns_free: int = 1000,
+    kicker_name: str | None = None,
+    nan_variance_patterns: str | list[str] | None = None,
+    accelerator_type: str = "lhc",
 ) -> tuple[dict[str, pd.DataFrame], list[str], dict[str, Path], pd.DataFrame]:
     """Process measurement files to compute pz data and identify bad BPMs.
 
@@ -373,6 +193,14 @@ def process_measurements(
         tunes: Driven tunes [Qx, Qy, Qz] (None to extract from model)
         machine_deltaps: Optional machine momentum offsets used during px/py reconstruction.
                 If a list, must match files length and will be expanded per bunch.
+        remove_closed_orbit: Optional closed-orbit subtraction strategy. Supported values are
+                None, "twiss", "average", a dataframe indexed by BPM name (or with NAME/name
+                column), or a dict mapping BPM name to x/y/(px/py) values.
+        n_turns_free: Number of pre-kick turns used when remove_closed_orbit="average".
+        kicker_name: Optional kicker marker name used to detect already-aligned input.
+        nan_variance_patterns: Optional regex pattern or patterns for names that should receive
+                NaN variances instead of failing the known-noise lookup.
+        accelerator_type: Noise-table accelerator key used for known-noise variances.
 
     Returns:
         Tuple of (dict mapping file paths to dataframes, bad_bpms_list, dict mapping keys to output paths, twiss_df)
@@ -464,7 +292,14 @@ def process_measurements(
         return cfg
 
     if bad_bpms is None or previous_analysis_dir is None:
-        bad_bpms = run_analysis(output_dir, model_dir, files, beam, nattunes, tunes)
+        bad_bpms = run_measurement_analysis(
+            output_dir,
+            model_dir,
+            files,
+            beam=beam,
+            nattunes=nattunes,
+            tunes=tunes,
+        )
         LOGGER.warning(
             "Previous analysis directory not provided; ran analysis for processing measurements."
         )
@@ -480,9 +315,9 @@ def process_measurements(
                 f"Provided previous_analysis_dir {analysis_dir} does not exist."
             )
 
-    data = load_files(files)
-    combined = convert_measurements(data, bad_bpms, combine_measurements=combine_files)
-    dataframe_file_indices = _build_dataframe_file_indices(data)
+    data = load_measurement_files(files)
+    combined = convert_tbt_to_dataframes(data, bad_bpms, combine_measurements=combine_files)
+    dataframe_file_indices = build_dataframe_file_indices(data)
 
     if machine_deltaps is None:
         per_file_machine_deltaps = [None] * len(files)
@@ -548,6 +383,11 @@ def process_measurements(
                             beam,
                             get_thread_local_ac_dipole_config,
                             per_dataframe_machine_deltaps[i],
+                            remove_closed_orbit,
+                            n_turns_free,
+                            kicker_name,
+                            nan_variance_patterns,
+                            accelerator_type,
                         ): i
                         for i, df in enumerate(combined)
                     }
@@ -571,13 +411,18 @@ def process_measurements(
             for i, df in enumerate(combined):
                 idx, processed_df = process_single_dataframe(
                     df_with_index=(i, df),
-                    tws=tws,
+                    twiss=tws,
                     bad_bpms=bad_bpms,
                     analysis_dir=analysis_dir,
                     use_uniform_vars=use_uniform_vars,
                     beam=beam,
                     ac_dipole_config_factory=get_thread_local_ac_dipole_config,
                     machine_deltap=per_dataframe_machine_deltaps[i],
+                    remove_closed_orbit=remove_closed_orbit,
+                    n_turns_free=n_turns_free,
+                    kicker_name=kicker_name,
+                    nan_variance_patterns=nan_variance_patterns,
+                    accelerator_type=accelerator_type,
                 )
                 processed_results[idx] = processed_df
                 LOGGER.info(f"Completed processing dataframe {idx + 1}/{len(combined)}")

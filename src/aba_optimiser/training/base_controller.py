@@ -16,10 +16,16 @@ from aba_optimiser.training.utils import filter_bad_bpms, normalise_true_strengt
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from typing import TypeAlias
 
     from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.config import OptimiserConfig, SimulationConfig
+    from aba_optimiser.training.configuration_manager import (
+        ConfigurationManager as ConfigurationManagerType,
+    )
     from aba_optimiser.training.controller_config import SequenceConfig
+
+    ConfigurationManagerCls: TypeAlias = type[ConfigurationManagerType]
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +50,7 @@ class BaseController(ABC):
     """
 
     _defer_managers: bool = False
+    _configuration_manager_cls: ConfigurationManagerCls = ConfigurationManager
 
     def __init__(
         self,
@@ -100,7 +107,7 @@ class BaseController(ABC):
         LOGGER.warning(f"After filtering bad BPMs, using BPM start points: {bpm_start_points}, end points: {bpm_end_points}")
 
         # Initialize configuration manager
-        self.config_manager = ConfigurationManager(
+        self.config_manager = self._configuration_manager_cls(
             accelerator,
             simulation_config,
             sequence_config,

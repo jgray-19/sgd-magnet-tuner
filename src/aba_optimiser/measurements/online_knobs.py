@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from aba_optimiser.config import CORRECTOR_STRENGTHS, TUNE_KNOBS_FILE
+
+if TYPE_CHECKING:
+    from datetime import datetime
+    from pathlib import Path
 
 LOGGER = logging.getLogger(__name__)
 

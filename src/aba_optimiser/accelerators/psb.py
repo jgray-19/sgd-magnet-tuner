@@ -27,7 +27,7 @@ class PSB(BasePSB, Accelerator):
     PATTERN_SKEW_SEXTUPOLE = r"^BR%d+%.XSK[26]L4$"
     PATTERN_CORRECTOR_H = r"^B[RE]%d+%.DHZ%d+L%d+$"
     PATTERN_CORRECTOR_V = r"^B[RE]%d+%.DVT%d+L%d+$"
-    QUAD_PERTURBATION_PATTERN = r"^BR\.Q(?:FO\d+|DE\d+)$"
+    QUAD_PERTURBATION_PATTERN = r"(?i)^BR\.Q(?:FO\d+|DE\d+)$"
     BPM_PATTERN_TEMPLATE = "^BR{ring}%.BPM"
 
     def __init__(

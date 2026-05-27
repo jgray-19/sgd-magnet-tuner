@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from aba_optimiser.accelerators import LHC
@@ -14,6 +15,38 @@ from aba_optimiser.training.controller_config import MeasurementConfig, OutputCo
 class DummyController(BaseController):
     def run(self) -> tuple[dict[str, float], dict[str, float]]:
         return {}, {}
+
+
+class EmptyKnobConfigurationManager(ConfigurationManager):
+    def setup_mad_interface(
+        self,
+        debug: bool = False,
+        mad_logfile=None,
+        corrector_strengths=None,
+        tune_knobs_file=None,
+    ) -> None:
+        del debug, mad_logfile, corrector_strengths, tune_knobs_file
+        self.mad_iface = SimpleNamespace(  # ty:ignore[invalid-assignment]
+            dp2pt=lambda value: value,
+            pt2dp=lambda value: value,
+        )
+        self.knob_names = []
+        self.elem_spos = []
+        self.all_bpms = ["BPM.9R1.B1", "BPM.9L2.B1"]
+        self.bpms_in_range = ["BPM.9R1.B1", "BPM.9L2.B1"]
+
+    def initialise_knob_strengths(
+        self,
+        true_strengths: dict[str, float] | None = None,
+        provided_initial_knobs: dict[str, float] | None = None,
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        del true_strengths, provided_initial_knobs
+        self.initial_strengths = np.array([])
+        return {}, {}
+
+
+class EmptyKnobController(DummyController):
+    _configuration_manager_cls = EmptyKnobConfigurationManager
 
 
 def test_measurement_config_expands_single_file_scoped_values(tmp_path) -> None:
@@ -29,42 +62,7 @@ def test_measurement_config_expands_single_file_scoped_values(tmp_path) -> None:
     assert config.machine_deltaps == [1e-4, 1e-4]
 
 
-def test_base_controller_raises_when_no_knobs_created(
-    monkeypatch: pytest.MonkeyPatch,
-    seq_b1,
-) -> None:
-    def fake_setup_mad_interface(
-        self,
-        debug=False,
-        mad_logfile=None,
-    ) -> None:
-        del debug, mad_logfile
-        self.mad_iface = SimpleNamespace()
-        self.knob_names = []
-        self.elem_spos = []
-        self.all_bpms = ["BPM.9R1.B1", "BPM.9L2.B1"]
-        self.bpms_in_range = ["BPM.9R1.B1", "BPM.9L2.B1"]
-        self.bend_lengths = None
-
-    def fake_initialise_knob_strengths(
-        self,
-        true_strengths,
-        provided_initial_knobs=None,
-    ) -> tuple[dict[str, float], dict[str, float]]:
-        del self, true_strengths, provided_initial_knobs
-        return {}, {}
-
-    monkeypatch.setattr(
-        ConfigurationManager,
-        "setup_mad_interface",
-        fake_setup_mad_interface,
-    )
-    monkeypatch.setattr(
-        ConfigurationManager,
-        "initialise_knob_strengths",
-        fake_initialise_knob_strengths,
-    )
-
+def test_base_controller_raises_when_no_knobs_created(seq_b1) -> None:
     accelerator = LHC(
         beam=1,
         kinetic_energy=6800,
@@ -86,7 +84,7 @@ def test_base_controller_raises_when_no_knobs_created(
     )
 
     with pytest.raises(ValueError, match="No optimisation knobs were created for this controller configuration"):
-        DummyController(
+        EmptyKnobController(
             accelerator=accelerator,
             optimiser_config=optimiser_config,
             simulation_config=simulation_config,

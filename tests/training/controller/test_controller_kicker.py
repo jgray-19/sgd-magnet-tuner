@@ -35,12 +35,11 @@ def _build_kicker_controller(
     tmp_path: Path,
     seq_psb: Path,
     loaded_psb_interface: AbaMadInterface,
+    flattop_turns: int = 10,
 ) -> tuple[Controller, dict[str, float]]:
     magnet_range = "$start/$end"
     bpm_start_points: list[str] = []
     bpm_end_points: list[str] = []
-
-    flattop_turns = 10
     off_magnet_path = tmp_path / "track_kicker_off_magnet.parquet"
 
     corrector_file, magnet_strengths, tune_knobs_file, kicker_name = _generate_kicker_track(
@@ -51,11 +50,11 @@ def _build_kicker_controller(
         bpm_pattern=r"(?i)br3\.bpm.*",
     )
     optimiser_config = OptimiserConfig(
-        max_epochs=300,
-        warmup_epochs=50,
+        max_epochs=500,
+        warmup_epochs=100,
         warmup_lr_start=1e-4,
-        max_lr=1e-2,
-        min_lr=1e-2,
+        max_lr=1e-3,
+        min_lr=1e-4,
         gradient_converged_value=5e-20,
     )
 
@@ -100,10 +99,12 @@ def test_controller_quad_opt_with_kicker(
     loaded_psb_interface: AbaMadInterface,
     controller_test_mode: str,
 ) -> None:
+    loss_regression = controller_test_mode == "loss_regression"
     ctrl, magnet_strengths = _build_kicker_controller(
         tmp_path=tmp_path,
         seq_psb=seq_psb,
         loaded_psb_interface=loaded_psb_interface,
+        flattop_turns=4 if loss_regression else 10,
     )
     logger.info(
         "Starting kicker controller with logfile at %s",
@@ -112,7 +113,7 @@ def test_controller_quad_opt_with_kicker(
 
     initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
 
-    if controller_test_mode == "loss_regression":
+    if loss_regression:
         true_loss = evaluate_controller_worker_loss(ctrl, magnet_strengths)
         assert true_loss < 1e-18, (
             f"True-strength kicker loss should be numerically tiny, got {true_loss:.3e}"
