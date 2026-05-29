@@ -18,6 +18,11 @@ from pymadng_utils.madx import make_madx_sequence
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
+from aba_optimiser.measurements.arc_config import (
+    MeasurementSetupConfig,
+    RangeConfig,
+    arc_ranges,
+)
 from aba_optimiser.measurements.create_datafile import (
     ACDipoleReconstructionConfig,
     process_measurements,
@@ -32,28 +37,6 @@ from aba_optimiser.training.controller_config import OutputConfig, SequenceConfi
 from aba_optimiser.training.controller_helpers import create_arc_measurement_config
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class RangeConfig:
-    """Grouped BPM ranges used for one closed-orbit optimisation sweep."""
-
-    magnet_ranges: list[str]
-    bpm_starts: list[list[str]]
-    bpm_end_points: list[list[str]]
-
-
-@dataclass
-class MeasurementSetupConfig:
-    """Input metadata for one closed-orbit measurement campaign."""
-
-    beam: int
-    model_dir: str
-    arc_config: RangeConfig
-    folder: str
-    name_prefix: str
-    times: list[str]
-    title: str
 
 
 @dataclass(frozen=True)
@@ -334,16 +317,10 @@ def create_beam1_configs(
     """Create measurement configurations for beam 1."""
     model_dir_b1 = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB1/Models/2025-11-07_B1_12cm_right_knobs/"
     skip_step = 3 if fixed_bpm else 5
-    arc_magnet_ranges_b1 = [f"BPM.9R{s}.B1/BPM.9L{s % 8 + 1}.B1" for s in range(1, 9)]
-    arc_bpm_starts_b1 = [[f"BPM.{i}R{s}.B1" for i in range(9, 35, skip_step)] for s in range(1, 9)]
-    arc_bpm_end_points_b1 = [
-        [f"BPM.{i}L{s % 8 + 1}.B1" for i in range(9, 34, skip_step)] for s in range(1, 9)
-    ]
-
-    arc_config_b1 = RangeConfig(
-        magnet_ranges=arc_magnet_ranges_b1,
-        bpm_starts=arc_bpm_starts_b1,
-        bpm_end_points=arc_bpm_end_points_b1,
+    arc_config_b1 = arc_ranges(
+        beam=1,
+        start_indices=range(9, 35, skip_step),
+        end_indices=range(9, 34, skip_step),
     )
 
     return [
@@ -404,17 +381,10 @@ def create_beam2_configs(
     )
     # Arc settings
     skip_step = 3 if use_fixed_bpm else 5
-    arc_magnet_ranges_b2 = [f"BPM.9L{s}.B2/BPM.9R{(s - 2) % 8 + 1}.B2" for s in range(8, 0, -1)]
-    arc_bpm_starts_b2 = [
-        [f"BPM.{i}L{s}.B2" for i in range(9, 34, skip_step)] for s in range(8, 0, -1)
-    ]
-    arc_bpm_end_points_b2 = [
-        [f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 35, skip_step)] for s in range(8, 0, -1)
-    ]
-    arc_config_b2 = RangeConfig(
-        magnet_ranges=arc_magnet_ranges_b2,
-        bpm_starts=arc_bpm_starts_b2,
-        bpm_end_points=arc_bpm_end_points_b2,
+    arc_config_b2 = arc_ranges(
+        beam=2,
+        start_indices=range(9, 34, skip_step),
+        end_indices=range(9, 35, skip_step),
     )
 
     return [

@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import DPP_OPTIMISER_CONFIG, DPP_SIMULATION_CONFIG, PROJECT_ROOT
+from aba_optimiser.measurements.arc_config import arc_ranges
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
 from aba_optimiser.training.controller import Controller
@@ -24,12 +25,7 @@ if __name__ == "__main__":
     model_dir = (
         "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB2/Models/2025_LHCB2_0p18m"
     )
-    MAGNET_RANGES = [f"BPM.9L{i}.B2/BPM.9R{(i - 2) % 8 + 1}.B2" for i in range(8, 0, -1)]
-
-    BPM_STARTS = [[f"BPM.{i}L{s}.B2" for i in range(9, 14)] for s in range(8, 0, -1)]
-    BPM_END_POINTS = [
-        [f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in range(9, 14)] for s in range(8, 0, -1)
-    ]
+    arc_config = arc_ranges(beam=2, start_indices=range(9, 14), end_indices=range(9, 14))
 
     folder = Path("/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-09/LHCB2/Measurements/")
     name_prefix = "Beam2@BunchTurn@2025_04_09@"
@@ -87,7 +83,7 @@ if __name__ == "__main__":
         logger.info(f"Starting optimisation for arc {arc + 1}/8")
 
         sequence_config = SequenceConfig(
-            magnet_range=MAGNET_RANGES[arc], bad_bpms=bad_bpms, first_bpm="BPM.34R8.B2"
+            magnet_range=arc_config.magnet_ranges[arc], bad_bpms=bad_bpms, first_bpm="BPM.34R8.B2"
         )
 
         controller = Controller(
@@ -96,8 +92,8 @@ if __name__ == "__main__":
             simulation_config=DPP_SIMULATION_CONFIG,
             sequence_config=sequence_config,
             measurement_config=measurement_config,
-            bpm_start_points=BPM_STARTS[arc],
-            bpm_end_points=BPM_END_POINTS[arc],
+            bpm_start_points=arc_config.bpm_starts[arc],
+            bpm_end_points=arc_config.bpm_end_points[arc],
             initial_knob_strengths=None,
             true_strengths=None,
             output_config=OutputConfig(show_plots=False),
