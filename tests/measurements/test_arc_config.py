@@ -10,10 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from aba_optimiser.measurements.arc_config import (
-    arc_magnet_ranges,
-    arc_ranges,
-)
+from aba_optimiser.measurements.arc_config import arc_magnet_ranges, arc_ranges
 
 
 def test_arc_magnet_ranges_beam1_matches_original_expression() -> None:
@@ -24,11 +21,6 @@ def test_arc_magnet_ranges_beam1_matches_original_expression() -> None:
 def test_arc_magnet_ranges_beam2_matches_original_expression() -> None:
     expected = [f"BPM.9L{s}.B2/BPM.9R{(s - 2) % 8 + 1}.B2" for s in range(8, 0, -1)]
     assert arc_magnet_ranges(2) == expected
-
-
-def test_arc_magnet_ranges_rejects_unknown_beam() -> None:
-    with pytest.raises(ValueError, match="beam"):
-        arc_magnet_ranges(3)
 
 
 def test_beam1_dense_ranges_match_create_datafile_loop() -> None:

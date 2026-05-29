@@ -45,9 +45,7 @@ def arc_magnet_ranges(beam: int) -> list[str]:
     """Return the ``BPM/BPM`` magnet range string for each of the 8 arcs."""
     if beam == 1:
         return [f"BPM.9R{s}.B1/BPM.9L{s % 8 + 1}.B1" for s in range(1, 9)]
-    if beam == 2:
-        return [f"BPM.9L{s}.B2/BPM.9R{(s - 2) % 8 + 1}.B2" for s in range(8, 0, -1)]
-    raise ValueError(f"Unsupported beam {beam!r}; expected 1 or 2")
+    return [f"BPM.9L{s}.B2/BPM.9R{(s - 2) % 8 + 1}.B2" for s in range(8, 0, -1)]
 
 
 def arc_ranges(
@@ -68,12 +66,10 @@ def arc_ranges(
         arcs = range(1, 9)
         bpm_starts = [[f"BPM.{i}R{s}.B1" for i in start_indices] for s in arcs]
         bpm_end_points = [[f"BPM.{i}L{s % 8 + 1}.B1" for i in end_indices] for s in arcs]
-    elif beam == 2:
+    else:
         arcs = range(8, 0, -1)
         bpm_starts = [[f"BPM.{i}L{s}.B2" for i in start_indices] for s in arcs]
         bpm_end_points = [[f"BPM.{i}R{(s - 2) % 8 + 1}.B2" for i in end_indices] for s in arcs]
-    else:
-        raise ValueError(f"Unsupported beam {beam!r}; expected 1 or 2")
     return RangeConfig(
         magnet_ranges=arc_magnet_ranges(beam),
         bpm_starts=bpm_starts,
