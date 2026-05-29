@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -18,6 +18,10 @@ from pymadng_utils.madx import make_madx_sequence
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
+from aba_optimiser.measurements.ac_dipole import (
+    ACDipoleOptimisationWindow,
+    window_from_attrs,
+)
 from aba_optimiser.measurements.arc_config import (
     MeasurementSetupConfig,
     RangeConfig,
@@ -37,26 +41,6 @@ from aba_optimiser.training.controller_config import OutputConfig, SequenceConfi
 from aba_optimiser.training.controller_helpers import create_arc_measurement_config
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class ACDipoleOptimisationWindow:
-    """Window definition for full-ring AC-dipole optimisation."""
-
-    bpm_upstream: str
-    bpm_downstream: str
-
-
-def window_from_attrs(attrs: dict) -> ACDipoleOptimisationWindow | None:
-    """Build AC-dipole optimisation window from dataframe attrs."""
-    upstream = attrs.get("ac_dipole_bpm_upstream")
-    downstream = attrs.get("ac_dipole_bpm_downstream")
-    if upstream and downstream:
-        return ACDipoleOptimisationWindow(
-            bpm_upstream=str(upstream),
-            bpm_downstream=str(downstream),
-        )
-    return None
 
 
 def create_ac_dipole_full_ring_config(beam: int, window: ACDipoleOptimisationWindow) -> RangeConfig:

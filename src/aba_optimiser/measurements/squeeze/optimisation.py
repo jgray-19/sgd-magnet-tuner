@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from aba_optimiser.measurements.ac_dipole import ACDipoleOptimisationWindow
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
@@ -21,23 +22,6 @@ from aba_optimiser.training.controller_config import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class ACDipoleOptimisationWindow:
-    """Window definition for full-turn arc-by-arc tracking around the AC dipole."""
-
-    bpm_upstream: str
-    bpm_downstream: str
-
-
-def window_from_attrs(attrs: dict) -> ACDipoleOptimisationWindow | None:
-    """Build an ACDipoleOptimisationWindow from a DataFrame's attrs, or None if metadata is absent."""
-    upstream = attrs.get("ac_dipole_bpm_upstream")
-    downstream = attrs.get("ac_dipole_bpm_downstream")
-    if not upstream or not downstream:
-        return None
-    return ACDipoleOptimisationWindow(bpm_upstream=str(upstream), bpm_downstream=str(downstream))
 
 
 def get_ac_dipole_bpm_points(

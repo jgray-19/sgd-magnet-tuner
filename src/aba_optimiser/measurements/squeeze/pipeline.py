@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from aba_optimiser.config import PROJECT_ROOT
+from aba_optimiser.measurements.ac_dipole import ACDipoleOptimisationWindow
 from aba_optimiser.measurements.b2_errors import resolve_b2_error_table
 from aba_optimiser.measurements.squeeze.constants import MEAS_TIMES, ZEROHZ, get_beam_paths
 from aba_optimiser.measurements.squeeze.io import (
@@ -28,7 +29,6 @@ from aba_optimiser.measurements.squeeze.io import (
     update_metadata,
 )
 from aba_optimiser.measurements.squeeze.optimisation import (
-    ACDipoleOptimisationWindow,
     optimise_arc,
     resolve_restore_resume,
 )
