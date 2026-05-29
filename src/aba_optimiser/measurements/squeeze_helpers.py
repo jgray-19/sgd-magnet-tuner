@@ -27,28 +27,12 @@ from aba_optimiser.mad import AbaMadInterface
 from aba_optimiser.measurements.squeeze_config import (
     ANALYSIS_DIRS,
     BETABEAT_DIR,
-    DEFAULT_MEASUREMENT_DATE,
-    MEASUREMENT_DATES,
     MODEL_DIRS,
-    PC,
     get_measurement_date,
 )
 from aba_optimiser.noise import assign_bpm_variances
 
 logger = logging.getLogger(__name__)
-
-# Environment configuration (paths, model/analysis dirs, dates, momentum) now lives in
-# squeeze_config. It is re-imported here for internal use and to keep the long-standing
-# `from squeeze_helpers import MODEL_DIRS` style imports working across the codebase.
-__all__ = [
-    "ANALYSIS_DIRS",
-    "BETABEAT_DIR",
-    "DEFAULT_MEASUREMENT_DATE",
-    "MEASUREMENT_DATES",
-    "MODEL_DIRS",
-    "PC",
-    "get_measurement_date",
-]
 
 
 # ==================== HELPER FUNCTIONS ====================

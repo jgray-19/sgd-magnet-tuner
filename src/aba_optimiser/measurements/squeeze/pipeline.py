@@ -32,8 +32,8 @@ from aba_optimiser.measurements.squeeze.optimisation import (
     optimise_arc,
     resolve_restore_resume,
 )
+from aba_optimiser.measurements.squeeze_config import MODEL_DIRS
 from aba_optimiser.measurements.squeeze_helpers import (
-    MODEL_DIRS,
     extract_tunes_from_job_file,
     get_or_make_sequence,
     get_results_dir,

@@ -17,11 +17,13 @@ import pandas as pd
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT
 from aba_optimiser.mad import GradientDescentMadInterface
-from aba_optimiser.measurements.squeeze_helpers import (
+from aba_optimiser.measurements.squeeze_config import (
     ANALYSIS_DIRS,
     BETABEAT_DIR,
     MODEL_DIRS,
     get_measurement_date,
+)
+from aba_optimiser.measurements.squeeze_helpers import (
     get_or_make_sequence,
     get_results_dir,
     load_estimates_and_uncertainties,

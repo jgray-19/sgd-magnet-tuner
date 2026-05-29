@@ -26,10 +26,10 @@ import pandas as pd
 import tfs
 
 from aba_optimiser.accelerators import LHC
+from aba_optimiser.config import PROJECT_ROOT
 from aba_optimiser.mad import GenericMadInterface, GradientDescentMadInterface
+from aba_optimiser.measurements.squeeze_config import ANALYSIS_DIRS
 from aba_optimiser.measurements.squeeze_helpers import (
-    ANALYSIS_DIRS,
-    PROJECT_ROOT,
     get_model_dir,
     get_or_make_sequence,
     get_results_dir,
