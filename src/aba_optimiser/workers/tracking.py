@@ -448,16 +448,20 @@ end
         unchanged. The arrays are sent as binary column matrices, which is the
         fastest serialisation path in pymadng.
         """
-        # pymadng requires 2-D arrays for the binary matrix protocol.
+        # pymadng requires 2-D arrays for the binary matrix protocol, so px/py
+        # arrive as N x 1 column matrices (the fastest serialisation path).
+        # Indexing a MAD matrix with a single index is linear (row-major), so
+        # new_px[particle] is the scalar value for that particle directly.
         mad.send("""
-new_px = python:recv()
-new_py = python:recv()
+new_px = python:recv()  -- N x 1 column matrix of updated px values
+new_py = python:recv()  -- N x 1 column matrix of updated py values
+
 local particle = 0
-for i=1,num_batches do
-    for j=1,#da_x0_c[i] do
+for batch=1,num_batches do
+    for j=1,#da_x0_c[batch] do
         particle = particle + 1
-        da_x0_c[i][j].px:set0(new_px[particle][1])
-        da_x0_c[i][j].py:set0(new_py[particle][1])
+        da_x0_c[batch][j].px:set0(new_px[particle])
+        da_x0_c[batch][j].py:set0(new_py[particle])
     end
 end
 """)
