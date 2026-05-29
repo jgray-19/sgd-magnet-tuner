@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
-from aba_optimiser.measurements.squeeze_helpers import BETABEAT_DIR, get_measurement_date
+from aba_optimiser.measurements.squeeze_config import BETABEAT_DIR, get_measurement_date
 
 ZEROHZ = "0Hz"
 PLUS_50HZ = "+50Hz"

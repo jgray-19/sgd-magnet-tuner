@@ -24,62 +24,31 @@ from turn_by_turn import read_tbt
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT
 from aba_optimiser.mad import AbaMadInterface
+from aba_optimiser.measurements.squeeze_config import (
+    ANALYSIS_DIRS,
+    BETABEAT_DIR,
+    DEFAULT_MEASUREMENT_DATE,
+    MEASUREMENT_DATES,
+    MODEL_DIRS,
+    PC,
+    get_measurement_date,
+)
 from aba_optimiser.noise import assign_bpm_variances
 
 logger = logging.getLogger(__name__)
 
-# ==================== CONSTANTS ====================
-DEFAULT_MEASUREMENT_DATE = "2025-04-27"
-BETABEAT_DIR = Path("/user/slops/data/LHC_DATA/OP_DATA/Betabeat/")
-PC = 6800.0  # GeV
-
-MODEL_DIRS = {
-    1: {
-        "1.2m": "b1_120cm_injTunes",
-        "1.2m_agc": "b1_120cm_injTunes",
-        "1.05m": "b1_105cm_injTunes",
-        "0.93m": "b2_93cm_injTunes",  # Double checked - this is correct (they accidentally wrote b2 in the folder name)
-        "0.725m": "b1_72cm_injTunes",
-        "0.6m": "b1_60cm_injTunes",
-        "0.45m": "b1_44cm_flat_injTunes",
-        "0.3m": "b1_30cm_flat_injTunes",
-        "0.25m": "b1_24cm_flat_injTunes",
-        "0.18m": "b1_18cm_flat_injTunes",
-        "inj": "OMC3_LHCB1_2025_28m010_31p012",
-        "inj_rdt": "OMC3_LHCB1_2025_inj_28m008_313p010",
-    },
-    2: {
-        "1.2m": "b2_120cm_injTunes",
-        "1.05m": "OMC3_LHCB2_105cm",
-        "0.93m": "b2_93cm_injTunes",
-        "0.725m": "b2_72cm_injTunes",
-        "0.6m": "b2_60cm_injTunes",
-        "0.45m": "b2_44cm_flat_injTunes",
-        "0.3m": "b2_30cm_flat_injTunes",
-        "0.25m": "b2_24cm_flat_injTunes",
-        "0.18m": "b2_18cm_flat_injTunes",
-        "inj": "OMC_LHCB2_2025_inj_28m010_31p012",
-        "inj_rdt": "2025_LHCB2_inj_028m008_0313p010",
-    },
-}
-
-ANALYSIS_DIRS = {
-    1: {
-        "1.2m": "2025-04-27_B1_120cm_injTunes_onOffMom",
-        "1.2m_agc": "2025-04-27_B1_120cm_injTunes_onOffMom_afterGlobal",
-        "inj": "2025-04-20_LHCB1_28m010_31p012_inj_onmom",
-        "inj_rdt": "LHCB1_inj_28m008_313p010_a3b3_RDTs_20-04-25",
-    },
-    2: {
-        "1.2m": "2025-04-27_B2_120cm_injTunes_onOffMom",
-        "inj_rdt": "17-29-02_ANALYSIS_highkicks_Injection",
-    },
-}
-
-MEASUREMENT_DATES = {
-    "inj": "2025-04-20",
-    "inj_rdt": "2025-04-20",
-}
+# Environment configuration (paths, model/analysis dirs, dates, momentum) now lives in
+# squeeze_config. It is re-imported here for internal use and to keep the long-standing
+# `from squeeze_helpers import MODEL_DIRS` style imports working across the codebase.
+__all__ = [
+    "ANALYSIS_DIRS",
+    "BETABEAT_DIR",
+    "DEFAULT_MEASUREMENT_DATE",
+    "MEASUREMENT_DATES",
+    "MODEL_DIRS",
+    "PC",
+    "get_measurement_date",
+]
 
 
 # ==================== HELPER FUNCTIONS ====================
@@ -99,18 +68,6 @@ def make_machine_settings_knobs_file(output_file: Path, time: str) -> Path:
         )
     logger.info("Saved machine-settings knobs for %s to %s", time, output_file)
     return output_file
-
-
-def get_measurement_date(squeeze_step: str) -> str:
-    """Get measurement date for a given squeeze step.
-
-    Args:
-        squeeze_step: Squeeze step (e.g., "1.2m", "0.6m")
-
-    Returns:
-        Measurement date string (e.g., "2025-04-27")
-    """
-    return MEASUREMENT_DATES.get(squeeze_step, DEFAULT_MEASUREMENT_DATE)
 
 
 def get_or_make_sequence(beam: int, madng_model_dir: Path, time: str | None = None) -> Path:

@@ -9,7 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from aba_optimiser.measurements.online_knobs import save_online_knobs
-from aba_optimiser.measurements.squeeze_helpers import get_measurement_date
+from aba_optimiser.measurements.squeeze_config import get_measurement_date
 from aba_optimiser.measurements.utils import find_all_bad_bpms
 
 logger = logging.getLogger(__name__)
