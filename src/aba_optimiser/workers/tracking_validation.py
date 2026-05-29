@@ -16,6 +16,7 @@ from aba_optimiser.mad.scripts import (
 from aba_optimiser.workers.abstract_worker import AbstractWorker
 from aba_optimiser.workers.common import TrackingData, WorkerConfig, split_array_to_batches
 from aba_optimiser.workers.tracking import OBSERVABLE_SPECS, TrackingWorker
+from aba_optimiser.workers.tracking_position_only import PositionOnlyConfigMixin
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -301,9 +302,5 @@ end
                 self.mad = None
 
 
-class PositionOnlyValidationTrackingWorker(ValidationTrackingWorker):
+class PositionOnlyValidationTrackingWorker(PositionOnlyConfigMixin, ValidationTrackingWorker):
     """Validation worker that compares only x/y position observables."""
-
-    observables = ("x", "y")
-    include_momentum = False
-    hessian_weight_order = ("x", "y")
