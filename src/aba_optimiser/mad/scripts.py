@@ -152,9 +152,12 @@ def _hessian_accumulation_block(observables: tuple[str, ...]) -> str:
     return _join_lines(lines)
 
 
-def build_tracking_init_script(observables: tuple[str, ...]) -> str:
+def build_tracking_init_script(
+    observables: tuple[str, ...], *, start_on_first_turn: bool = False
+) -> str:
     """Build the tracking initialisation script for the requested observables."""
     observables = _validate_observables(observables)
+    initial_observe_count = "1" if start_on_first_turn else "nbpms + 1"
 
     return f"""! Generated tracking init script
 assert(
@@ -183,7 +186,7 @@ for i=1,batch_size do
 {_allocation_block(observables)}
 end
 
-observe_count = nbpms + 1
+observe_count = {initial_observe_count}
 function save_data(elm, mflw, _, slc)
     if slc == -2 and elm:is_observed() then
         for i=1,batch_size do

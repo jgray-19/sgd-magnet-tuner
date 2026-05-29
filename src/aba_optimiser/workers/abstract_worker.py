@@ -80,6 +80,11 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         self.tracking_range = self.bpm_range
         if config.sdir < 0:
             self.tracking_range = f"{config.tracking_end_bpm}/{config.tracking_start_bpm}"
+        if config.initial_condition_marker is not None:
+            # Kicker mode: the sequence is already cycled to start at the kicker.
+            # Pass nil so MAD-NG tracks through the full sequence for all N turns
+            # rather than a named range that would treat elements outside it as drifts.
+            self.tracking_range = None
 
         LOGGER.debug(
             "Initializing worker %d for BPM range %s -> %s",

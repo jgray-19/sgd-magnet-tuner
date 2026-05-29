@@ -27,13 +27,11 @@ from xtrack_tools.monitors import line_to_dataframes
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
-from aba_optimiser.measurements.create_datafile import (
-    process_single_dataframe,
-)
 from aba_optimiser.measurements.optimise_squeeze_quads import (
     get_ac_dipole_bpm_points,
     window_from_attrs,
 )
+from aba_optimiser.measurements.reconstruction import process_single_dataframe
 from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.controller_config import (
     MeasurementConfig,
@@ -194,7 +192,7 @@ def test_controller_bend_opt_simple(
         for idx, measurement_df in enumerate(measurement_sources):
             _, processed_df = process_single_dataframe(
                 df_with_index=(idx, measurement_df),
-                tws=tws_no_err,
+                twiss=tws_no_err,
                 bad_bpms=bad_bpms,
                 analysis_dir=analysis_dir,
                 use_uniform_vars=False,

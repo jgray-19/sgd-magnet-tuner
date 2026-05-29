@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-BEAM_ENERGY_GEV = 6800.0
+PC_GEV = 6800.0
 TRACK_COLUMNS = (
     "turn",
     "name",
@@ -185,9 +185,7 @@ def generate_track_with_errors(
     destination_dir.mkdir(parents=True, exist_ok=True)
     measurement_file = destination_dir / "pz_data.parquet"
 
-    iface = AbaMadInterface(
-        accelerator=LHC(beam=beam, sequence_file=sequence_path, beam_energy=BEAM_ENERGY_GEV)
-    )
+    iface = AbaMadInterface(accelerator=LHC(beam=beam, sequence_file=sequence_path, pc=PC_GEV))
     iface.mad["zero_twiss", "_"] = iface.mad.twiss(sequence="loaded_sequence")
     # tws = iface.mad.zero_twiss.to_df().set_index("name")
 
@@ -226,9 +224,8 @@ def generate_track_with_errors(
         matched_tunes=matched_tunes,
         magnet_strengths=magnet_strengths,
         corrector_table=corrector_table,
-        beam=beam,
         sequence_file=sequence_path,
-        beam_energy=BEAM_ENERGY_GEV,
+        pc=PC_GEV,
         strict_set=False,
     )
 
@@ -300,7 +297,7 @@ def optimise_ranges(
 
         accelerator = LHC(
             beam=beam,
-            beam_energy=BEAM_ENERGY_GEV,
+            pc=PC_GEV,
             sequence_file=sequence_path,
             optimise_energy=True,
             optimise_quadrupoles=False,

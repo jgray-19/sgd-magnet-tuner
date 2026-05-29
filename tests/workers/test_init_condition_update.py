@@ -225,8 +225,12 @@ def test_send_init_condition_updates_slices_correctly() -> None:
         msg = received[i]
         assert isinstance(msg, dict), f"Worker {i} received unexpected value: {msg!r}"
         assert msg["cmd"] == "update_init_coords"
-        assert np.allclose(msg["px"], new_px_py[offset : offset + n, 0])
-        assert np.allclose(msg["py"], new_px_py[offset : offset + n, 1])
+        assert isinstance(msg["px"], np.ndarray)
+        assert isinstance(msg["py"], np.ndarray)
+        assert msg["px"].shape == (n, 1)
+        assert msg["py"].shape == (n, 1)
+        assert np.allclose(msg["px"][:, 0], new_px_py[offset : offset + n, 0])
+        assert np.allclose(msg["py"][:, 0], new_px_py[offset : offset + n, 1])
         offset += n
 
 

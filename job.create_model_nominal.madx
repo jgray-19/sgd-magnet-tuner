@@ -1,0 +1,45 @@
+title, "LHC Model created by omc3";
+! Model directory        /nfs/cs-ccr-nfsop/nfs2/vol1/u1/lhcop
+! Acc-Models             /user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-20/LHCB1/Models/OMC3_LHCB1_2025_inj_28m008_313p010/acc-models-lhc
+! LHC year               2025
+! Natural Tune X              0.280
+! Natural Tune Y              0.313
+! Best Knowledge                 NO
+! Excitation                    ACD
+! > Driven Tune X             0.272
+! > Driven Tune Y             0.323
+
+
+call, file = 'macros/general.macros.madx';
+call, file = 'macros/lhc.macros.madx';
+omc3_beam_energy = 450.0;
+exec, define_nominal_beams();
+
+call, file = 'macros/lhc.macros.run3.madx';
+
+! ----- Calling Sequence -----
+option, -echo;  ! suppress output from base sequence loading to keep the log small
+call, file = '/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-20/LHCB1/Models/OMC3_LHCB1_2025_inj_28m008_313p010/acc-models-lhc/lhc.seq';
+option, echo;  ! re-enable output to see the optics settings
+
+! ---- Call optics and other modifiers ----
+call, file = '/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-20/LHCB1/Models/OMC3_LHCB1_2025_inj_28m008_313p010/acc-models-lhc/operation/optics/R2025aRP_A11mC11mA10mL10m_PhaseKnob100ON.madx'; !@modifier
+
+! ----- Remove IR symmetry definitions -----
+
+call, file="/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-04-20/LHCB1/Models/OMC3_LHCB1_2025_inj_28m008_313p010/acc-models-lhc/toolkit/remove-triplet-symmetry-knob.madx"; ! removes 'ktqx.r1 := -ktqx.l1'-type issues
+
+! ----- Finalize Sequence -----
+exec, cycle_sequences();
+use, sequence = LHCB1;
+exec, match_tunes(0.28, 0.313, 1);
+exec, coupling_knob(1);
+exec, do_twiss_monitors(LHCB1, 'twiss.dat', 0.0);
+exec, do_twiss_elements(LHCB1, 'twiss_elements.dat', 0.0);
+use_acd=1;
+use_adt=0;
+if(use_acd == 1){
+exec, twiss_ac_dipole(0.28, 0.313, 0.272, 0.323, 1, 'twiss_ac.dat', 0.0);
+}else if(use_adt == 1){
+exec, twiss_adt(0.28, 0.313, 0.272, 0.323, 1, 'twiss_adt.dat', 0.0);
+}

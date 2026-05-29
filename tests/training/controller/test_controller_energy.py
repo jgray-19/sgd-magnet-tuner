@@ -212,6 +212,7 @@ def test_controller_energy_opt_sps_multi_turn(
     controller_test_mode: str,
 ) -> None:
     sps_dpp_value = -3e-4
+    sps_multi_turn_start_bpms = ["BPH.13208", "BPV.13308", "BPH.13608", "BPV.20108"]
     base_config = _make_simulation_config_energy()
     simulation_config = dataclasses.replace(
         base_config,
@@ -235,7 +236,7 @@ def test_controller_energy_opt_sps_multi_turn(
             loaded_interface=loaded_sps_interface,
             simulation_config=simulation_config,
             optimiser_config=optimiser_config,
-            bpm_start_points=["BPH.13208", "BPV.13308", "BPH.13608", "BPV.20108"],
+            bpm_start_points=sps_multi_turn_start_bpms,
             bpm_end_points=[],
             magnet_range="$start/$end",
             mad_log_name="controller_energy_opt_sps_multi_turn.log",
@@ -244,9 +245,14 @@ def test_controller_energy_opt_sps_multi_turn(
             dpp_value=sps_dpp_value,
             target_qx=0.13,
             target_qy=0.18,
+            flattop_turns=32,
         )
         initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
         true_loss = evaluate_controller_worker_loss(ctrl, true_knobs)
+        print(f"\nSPS multi-turn loss regression (n_run_turns={n_run_turns})")
+        print(f"  true_knobs={true_knobs}")
+        print(f"  initial_knobs={ctrl.initial_knobs}")
+        print(f"  initial_loss={initial_loss:.6e}  true_loss={true_loss:.6e}")
         assert true_loss < initial_loss * 1e-2
         return
 
@@ -255,7 +261,7 @@ def test_controller_energy_opt_sps_multi_turn(
         loaded_interface=loaded_sps_interface,
         simulation_config=simulation_config,
         optimiser_config=optimiser_config,
-        bpm_start_points=["BPH.13208", "BPV.13308", "BPH.13608", "BPV.20108"],
+        bpm_start_points=sps_multi_turn_start_bpms,
         bpm_end_points=[],
         magnet_range="$start/$end",
         mad_log_name="controller_energy_opt_sps_multi_turn.log",

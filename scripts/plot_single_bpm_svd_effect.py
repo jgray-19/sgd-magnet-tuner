@@ -17,7 +17,7 @@ from tmom_recon.physics.transverse import calculate_pz
 from tmom_recon.svd import svd_clean_measurements
 from turn_by_turn import read_tbt
 
-from aba_optimiser.measurements.create_datafile import compute_vars_from_known_noise
+from aba_optimiser.measurements.variances import assign_known_noise_variances
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ def add_momenta(
     tws = tws.set_index("name")
 
     # Add variance columns first (required by calculate_pz)
-    df_with_var = compute_vars_from_known_noise(df, bad_bpms)
+    df_with_var = assign_known_noise_variances(df, bad_bpms)
 
     # Calculate px and py
     df_with_p = calculate_pz(df_with_var, tws=tws, inject_noise=False)

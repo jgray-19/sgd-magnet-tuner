@@ -71,6 +71,36 @@ python scripts/optimise_energy.py
 python scripts/plot_results.py
 ```
 
+## Kicker mode
+
+Kicker mode supports single-start tracking where the initial conditions come
+from a kicker marker rather than a BPM. It enforces a single worker/track,
+disables validation payloads, and only tracks forward (no sdir = -1).
+
+Requirements:
+
+- The input data must include the kicker marker name with x, px, y, py columns.
+- The model sequence should include the kicker element so the sequence can be
+	cycled to it.
+
+Use the controller with ``KickerConfig``:
+
+```python
+from aba_optimiser.training.controller_config import KickerConfig
+
+kicker = KickerConfig(kicker_name="KICKER.NAME", turns_after_kicker=1024)
+controller = Controller(
+		accelerator=accelerator,
+		optimiser_config=optimiser_config,
+		simulation_config=simulation_config,
+		sequence_config=sequence_config,
+		measurement_config=measurement_config,
+		bpm_start_points=["KICKER.NAME"],
+		bpm_end_points=[],
+		kicker_config=kicker,
+)
+```
+
 ## Tests
 
 Run tests with pytest::

@@ -16,7 +16,7 @@ from aba_optimiser.training.result_manager import ResultManager
 
 MAGNET_RANGE = "BPM.11R2.B1/BPM.11L3.B1"
 knob_names, final_vals, uncertainties = read_results(str(OUTPUT_KNOBS))
-accelerator = LHC(beam=1, beam_energy=6800, sequence_file=get_lhc_file_path(1))
+accelerator = LHC(beam=1, pc=6800, sequence_file=get_lhc_file_path(1))
 mad_iface = GenericMadInterface(accelerator, magnet_range=MAGNET_RANGE)
 results = ResultManager(knob_names, mad_iface.elem_spos, accelerator)
 

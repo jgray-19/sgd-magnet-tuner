@@ -248,7 +248,7 @@ def estimate_dpp_for_times(
         sequence_file=sequence_file,
         model_dir=model_dir,
         seq_name=f"lhcb{beam}",
-        beam_energy_gev=6800,
+        pc_gev=6800,
         particle="proton",
         num_closest_bpms=15,
         plane="x",

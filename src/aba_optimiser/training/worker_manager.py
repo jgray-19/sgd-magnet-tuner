@@ -822,7 +822,13 @@ class WorkerManager:
         offset = 0
         for conn, n in zip(channels.parent_conns, self._worker_particle_counts):
             chunk = new_px_py[offset : offset + n]
-            conn.send({"cmd": "update_init_coords", "px": chunk[:, 0], "py": chunk[:, 1]})
+            conn.send(
+                {
+                    "cmd": "update_init_coords",
+                    "px": chunk[:, [0]],
+                    "py": chunk[:, [1]],
+                }
+            )
             offset += n
         # Collect acknowledgements
         for conn, worker in zip(channels.parent_conns, channels.workers):

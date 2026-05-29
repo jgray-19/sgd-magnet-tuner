@@ -46,7 +46,7 @@ class SimulationConfig:
     # bpm_range: str = "BPMYB.4L2.B1/BPMYB.5L2.B1"
     bpm_range: str = "BPMYB.5L2.B1/BPMR.6L2.B1"
     # bpm_range: str = "BPMR.6L2.B1/BPM.7L2.B1"
-    beam_energy: float = 6800
+    pc: float = 6800
 
 
 class TrackingResult(NamedTuple):
@@ -151,10 +151,15 @@ class MADSimulator:
         init_string = f"""
 MADX:load("{get_lhc_file_path(beam=1).absolute()}")
 local {LHCB1_SEQ_NAME} in MADX
-{LHCB1_SEQ_NAME}.beam = beam {{ particle = 'proton', energy = {self.config.beam_energy} }}
+{LHCB1_SEQ_NAME}.beam = beam {{ particle = 'proton', energy = {self.config.pc} }}
 local observed in MAD.element.flags
 {LHCB1_SEQ_NAME}:deselect(observed)
 {LHCB1_SEQ_NAME}:select(observed, {{pattern="BPM"}})
+for _, elm in {LHCB1_SEQ_NAME}:iter() do
+    if elm.dknl then
+        elm.dknl = {{0.0, 0.0, 0.0, 0.0}}
+    end
+end
 """
         # Install marker at start BPM and cycle sequence
         bpm_name = self.config.bpm_range.split("/")[0]
@@ -323,7 +328,16 @@ class NoiseAnalyser:
         for name in self.quad_names:
             noise = rng.normal(scale=REL_K1_STD_DEV)
             modifier_string += f"""
-MADX['{name}'].k1 = MADX['{name}'].k1 + {noise:-.16e} * math.abs(MADX['{name}'].k1)
+do
+    local e = MADX['{name}']
+    local vals = e.dknl
+    local effective_k1 = e.k1
+    if e.l ~= 0 then
+        effective_k1 = effective_k1 + vals[2] / e.l
+        vals[2] = vals[2] + {noise:-.16e} * math.abs(effective_k1) * e.l
+    end
+    e.dknl = vals
+end
             """
         self.simulator.mad.send(modifier_string)
 

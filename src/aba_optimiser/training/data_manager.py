@@ -67,8 +67,8 @@ class DataManager:
     # ---------- Internals ----------
 
     def _reduce_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        df["turn"] = df["turn"].astype("int32", copy=False)
-        df["name"] = df["name"].astype("category", copy=False)
+        df["turn"] = df["turn"].astype("int32")
+        df["name"] = df["name"].astype("category")
         markers = list(dict.fromkeys(self.bpms_in_range + self.extra_markers))
         # Copy because we drop non-selected markers and convert from view.
         return select_markers(df, markers).copy()
