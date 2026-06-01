@@ -210,5 +210,8 @@ profile.json
 *.sdds
 generated_mad_scripts/
 sequences_from_models/
+tests/data/model_creator/*.mad
+tests/data/sequences/*.json
+tests/data/sequences/*.mad
 # model-creator output dirs, e.g. 2026-04-08_p17m5_p23p5/
 20[0-9][0-9]-[0-1][0-9]-[0-3][0-9]_*/

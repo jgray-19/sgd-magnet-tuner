@@ -140,7 +140,6 @@ def test_controller_bend_opt_simple(
     tmp_path: Path,
     seq_b1: Path,
     model_dir_b1: Path,
-    estimated_strengths_file: Path,
     loaded_interface: AbaMadInterface,
 ) -> None:
     """Test bend optimisation using the same measurement processing flow as optimise_squeeze_quads."""
@@ -295,6 +294,7 @@ def test_controller_bend_opt_simple(
     all_estimates.update(estimate)
     plt.close("all")
 
+    estimated_strengths_file = tmp_path / "estimated_quad_strengths.json"
     with estimated_strengths_file.open("w") as f:
         json.dump(all_estimates, f)
 

@@ -18,7 +18,7 @@ from aba_optimiser.accelerators import LHC, PSB, SPS
 from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Generator
 
 # Configure logging for tests
 logging.getLogger("xdeps").setLevel(logging.WARNING)
@@ -85,12 +85,6 @@ def tracking_path(data_dir: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
-def estimated_strengths_file(data_dir: Path) -> Path:
-    """Path to the estimated quadrupole strengths file."""
-    return data_dir / "strengths" / "estimated_quad_strengths.json"
-
-
-@pytest.fixture(scope="session")
 def model_dir_b1() -> Path:
     """Path to the beam 1 model directory."""
     return Path(__file__).parent.parent / "models" / "lhcb1_12cm"
@@ -145,18 +139,3 @@ def beam2_interface(seq_b2: Path) -> Generator[AbaMadInterface, None, None]:
     with contextlib.suppress(Exception):
         del iface
 
-
-@pytest.fixture(scope="session")
-def xsuite_json_path(data_dir: Path) -> Callable[[str], Path]:
-    """Get the xsuite JSON path for a given sequence file.
-
-    Returns a callable that takes a sequence file name (e.g., "lhcb1.seq")
-    and returns the path to its pre-generated JSON file in data/sequences.
-    """
-    sequences_dir = data_dir / "sequences"
-
-    def _get_json_path(seq_file: str) -> Path:
-        # Extract base name without extension and create JSON path
-        return sequences_dir / Path(seq_file).with_suffix(".json")
-
-    return _get_json_path
