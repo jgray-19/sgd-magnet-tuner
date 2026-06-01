@@ -333,43 +333,13 @@ class WorkerManager:
         self.simulation_config = simulation_config
         self.machine_deltaps = machine_deltaps
 
-        validation_split = (
-            self._build_payload_split(
-                track_data,
-                self.turn_batches,
-                self.file_turn_map,
-                self.start_bpms,
-                self.end_bpms,
-                simulation_config,
-                self.machine_deltaps,
-            )
-            if enable_validation
-            else None
-        )
         n_run_turns = 1 if simulation_config.run_arc_by_arc else simulation_config.n_run_turns
-        if validation_split is None:
-            training_payloads = self.create_worker_payloads(
-                track_data,
-                self.turn_batches,
-                self.file_turn_map,
-                self.start_bpms,
-                self.end_bpms,
-                simulation_config,
-                self.machine_deltaps,
-            )
-            training_payloads = self.payload_builder.attach_global_weights(
-                training_payloads,
-                simulation_config.num_batches,
-                optimise_momenta=simulation_config.optimise_momenta,
-            )
-            validation_payloads = []
-            duplicated_validation_payload = False
-        else:
-            training_payloads = validation_split.training_payloads
-            validation_payloads = validation_split.validation_payloads
-            duplicated_validation_payload = validation_split.duplicated_validation_payload
-
         worker_mode = "arc-by-arc" if simulation_config.run_arc_by_arc else "multi-turn"
+
+        training_payloads, validation_payloads, duplicated_validation_payload = (
+            self._build_worker_payloads(track_data, simulation_config, enable_validation)
+        )
+
         LOGGER.info(
             "Worker tracking mode: %s (n_run_turns=%d)",
             worker_mode,
@@ -395,6 +365,78 @@ class WorkerManager:
         self.validation_loss_weights = []
         self._worker_particle_counts: list[int] = []
 
+        self._spawn_training_workers(
+            training_payloads, simulation_config, worker_mode, n_run_turns, initial_knobs
+        )
+        if validation_payloads:
+            self._spawn_validation_workers(
+                validation_payloads,
+                len(training_payloads),
+                simulation_config,
+                worker_mode,
+                n_run_turns,
+                initial_knobs,
+            )
+
+        self.channels = WorkerChannels(self.parent_conns, self.workers)
+        self.validation_channels = (
+            WorkerChannels(self.validation_parent_conns, self.validation_workers)
+            if self.validation_workers
+            else None
+        )
+
+    def _build_worker_payloads(
+        self,
+        track_data: dict[int, pd.DataFrame],
+        simulation_config: SimulationConfig,
+        enable_validation: bool,
+    ) -> tuple[list, list, bool]:
+        """Build training (and optional validation) payloads with global weights attached."""
+        validation_split = (
+            self._build_payload_split(
+                track_data,
+                self.turn_batches,
+                self.file_turn_map,
+                self.start_bpms,
+                self.end_bpms,
+                simulation_config,
+                self.machine_deltaps,
+            )
+            if enable_validation
+            else None
+        )
+        if validation_split is not None:
+            return (
+                validation_split.training_payloads,
+                validation_split.validation_payloads,
+                validation_split.duplicated_validation_payload,
+            )
+
+        training_payloads = self.create_worker_payloads(
+            track_data,
+            self.turn_batches,
+            self.file_turn_map,
+            self.start_bpms,
+            self.end_bpms,
+            simulation_config,
+            self.machine_deltaps,
+        )
+        training_payloads = self.payload_builder.attach_global_weights(
+            training_payloads,
+            simulation_config.num_batches,
+            optimise_momenta=simulation_config.optimise_momenta,
+        )
+        return training_payloads, [], False
+
+    def _spawn_training_workers(
+        self,
+        training_payloads: list,
+        simulation_config: SimulationConfig,
+        worker_mode: str,
+        n_run_turns: int,
+        initial_knobs: dict[str, float],
+    ) -> None:
+        """Spawn one process per training payload and record its runtime metadata."""
         for worker_id, (data, config, file_idx) in enumerate(training_payloads):
             parent, child = mp.Pipe()
             worker_class = self._select_worker_class(
@@ -442,78 +484,80 @@ class WorkerManager:
                 len(bpm_names),
             )
 
-        if validation_payloads:
-            covered_ranges: set[tuple[int, str, str]] = set()
-            for val_offset, validation_payload in enumerate(validation_payloads):
-                val_worker_id = len(training_payloads) + val_offset
-                val_parent, val_child = mp.Pipe()
-                val_data, val_config, val_file_idx = validation_payload
-                validation_class = self._select_worker_class(
-                    val_config.kick_plane,
-                    simulation_config.optimise_momenta,
-                    validation=True,
-                )
-                val_worker = validation_class(
-                    val_child,
-                    val_worker_id,
-                    [validation_payload],
-                    simulation_config,
-                    mode=worker_mode,
-                )
-                val_worker.start()
-                val_parent.send((initial_knobs, -1))
-                self.validation_parent_conns.append(val_parent)
-                self.validation_workers.append(val_worker)
+    def _spawn_validation_workers(
+        self,
+        validation_payloads: list,
+        training_worker_count: int,
+        simulation_config: SimulationConfig,
+        worker_mode: str,
+        n_run_turns: int,
+        initial_knobs: dict[str, float],
+    ) -> None:
+        """Spawn one validation process per validation payload and record its metadata."""
+        covered_ranges: set[tuple[int, str, str]] = set()
+        for val_offset, validation_payload in enumerate(validation_payloads):
+            val_worker_id = training_worker_count + val_offset
+            val_parent, val_child = mp.Pipe()
+            val_data, val_config, val_file_idx = validation_payload
+            validation_class = self._select_worker_class(
+                val_config.kick_plane,
+                simulation_config.optimise_momenta,
+                validation=True,
+            )
+            val_worker = validation_class(
+                val_child,
+                val_worker_id,
+                [validation_payload],
+                simulation_config,
+                mode=worker_mode,
+            )
+            val_worker.start()
+            val_parent.send((initial_knobs, -1))
+            self.validation_parent_conns.append(val_parent)
+            self.validation_workers.append(val_worker)
 
-                val_bpm_names = self.setup_helper.get_worker_bpm_names(
-                    val_config.tracking_start_bpm,
-                    val_config.tracking_end_bpm,
-                    val_config.sdir,
-                    val_config.kick_plane,
-                    val_config.bad_bpms,
+            val_bpm_names = self.setup_helper.get_worker_bpm_names(
+                val_config.tracking_start_bpm,
+                val_config.tracking_end_bpm,
+                val_config.sdir,
+                val_config.kick_plane,
+                val_config.bad_bpms,
+            )
+            self.validation_metadata.append(
+                self.setup_helper.make_runtime_metadata(
+                    worker_id=val_worker_id,
+                    file_idx=val_file_idx,
+                    config=val_config,
+                    bpm_names=val_bpm_names,
+                    n_run_turns=n_run_turns,
                 )
-                self.validation_metadata.append(
-                    self.setup_helper.make_runtime_metadata(
-                        worker_id=val_worker_id,
-                        file_idx=val_file_idx,
-                        config=val_config,
-                        bpm_names=val_bpm_names,
-                        n_run_turns=n_run_turns,
-                    )
-                )
-                val_tracks = payload_track_count(validation_payload)
-                self.validation_loss_weights.append(float(val_tracks))
-                covered_ranges.add(
-                    (
-                        val_file_idx,
-                        val_config.tracking_start_bpm,
-                        val_config.tracking_end_bpm,
-                    )
-                )
-                LOGGER.debug(
-                    "Val worker %d: file=%d, range=%s/%s, sdir=%d, kick_plane=%s, observed_bpms=%d, tracks=%d",
-                    val_worker_id,
+            )
+            val_tracks = payload_track_count(validation_payload)
+            self.validation_loss_weights.append(float(val_tracks))
+            covered_ranges.add(
+                (
                     val_file_idx,
                     val_config.tracking_start_bpm,
                     val_config.tracking_end_bpm,
-                    val_config.sdir,
-                    val_config.kick_plane,
-                    len(val_bpm_names),
-                    val_tracks,
                 )
-
-            LOGGER.info(
-                "Validation setup: payloads=%d, covered_ranges=%d, tracks=%d",
-                len(validation_payloads),
-                len(covered_ranges),
-                int(sum(self.validation_loss_weights)),
+            )
+            LOGGER.debug(
+                "Val worker %d: file=%d, range=%s/%s, sdir=%d, kick_plane=%s, observed_bpms=%d, tracks=%d",
+                val_worker_id,
+                val_file_idx,
+                val_config.tracking_start_bpm,
+                val_config.tracking_end_bpm,
+                val_config.sdir,
+                val_config.kick_plane,
+                len(val_bpm_names),
+                val_tracks,
             )
 
-        self.channels = WorkerChannels(self.parent_conns, self.workers)
-        self.validation_channels = (
-            WorkerChannels(self.validation_parent_conns, self.validation_workers)
-            if self.validation_workers
-            else None
+        LOGGER.info(
+            "Validation setup: payloads=%d, covered_ranges=%d, tracks=%d",
+            len(validation_payloads),
+            len(covered_ranges),
+            int(sum(self.validation_loss_weights)),
         )
 
     @staticmethod
