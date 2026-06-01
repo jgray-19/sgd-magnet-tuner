@@ -16,28 +16,20 @@ import sys
 from pathlib import Path
 
 import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from pymadng_utils.io.utils import save_knobs
 
-from aba_optimiser.accelerators import LHC, SPS
-from aba_optimiser.config import OptimiserConfig, SimulationConfig
-from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
-from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import MeasurementConfig, OutputConfig, SequenceConfig
-from aba_optimiser.training.validation_selection import payload_track_count
-from aba_optimiser.workers.tracking_validation import ValidationTrackingWorker
-from tests.training.controller_test_utils import _run_track_with_model
-from tests.training.helpers import generate_xsuite_env_with_errors
-
-matplotlib.use("Agg")
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-
+from aba_optimiser.accelerators import LHC, SPS
+from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
+from tests.training.controller_test_utils import _run_track_with_model
+from tests.training.helpers import generate_xsuite_env_with_errors
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -73,20 +65,20 @@ def build_accelerator(
     *,
     optimise_quadrupoles: bool,
 ):
-    pc = args.pc
-    if pc is None:
-        pc = 450.0 if args.accelerator == "sps" else 6800.0
+    kinetic_energy = args.beam_energy
+    if kinetic_energy is None:
+        kinetic_energy = 450.0 if args.accelerator == "sps" else 6800.0
 
     if args.accelerator == "lhc":
         return LHC(
             beam=args.beam,
             sequence_file=args.sequence_file,
-            pc=pc,
+            kinetic_energy=kinetic_energy,
             optimise_quadrupoles=optimise_quadrupoles,
         )
     return SPS(
         sequence_file=args.sequence_file,
-        pc=pc,
+        kinetic_energy=kinetic_energy,
         optimise_quadrupoles=optimise_quadrupoles,
     )
 
