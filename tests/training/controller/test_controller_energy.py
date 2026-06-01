@@ -16,13 +16,16 @@ from tests.training.controller_test_utils import (
     _build_energy_optimisation_case,
     _make_simulation_config_energy,
     _run_energy_optimisation_case,
-    evaluate_controller_worker_loss,
+    evaluate_controller_worker_losses,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
+
+
+pytestmark = pytest.mark.serial
 
 
 @pytest.mark.slow
@@ -55,8 +58,9 @@ def test_controller_energy_opt(
             magnet_range="BPM.9R2.B1/BPM.9L3.B1",
             mad_log_name="controller_energy_opt.log",
         )
-        initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
-        true_loss = evaluate_controller_worker_loss(ctrl, true_knobs)
+        initial_loss, true_loss = evaluate_controller_worker_losses(
+            ctrl, [ctrl.initial_knobs, true_knobs]
+        )
         assert true_loss < initial_loss * 1e-2
         return
 
@@ -112,8 +116,9 @@ def test_controller_energy_opt_sps(
             target_qx=0.13,
             target_qy=0.18,
         )
-        initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
-        true_loss = evaluate_controller_worker_loss(ctrl, true_knobs)
+        initial_loss, true_loss = evaluate_controller_worker_losses(
+            ctrl, [ctrl.initial_knobs, true_knobs]
+        )
         assert true_loss < initial_loss * 1e-2
         return
 
@@ -178,8 +183,9 @@ def test_controller_energy_opt_multi_turn(
             mad_log_name="controller_energy_opt_multi_turn.log",
             apply_orbit_correction=True,
         )
-        initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
-        true_loss = evaluate_controller_worker_loss(ctrl, true_knobs)
+        initial_loss, true_loss = evaluate_controller_worker_losses(
+            ctrl, [ctrl.initial_knobs, true_knobs]
+        )
         assert true_loss < initial_loss * 1e-2
         return
 
@@ -247,8 +253,9 @@ def test_controller_energy_opt_sps_multi_turn(
             target_qy=0.18,
             flattop_turns=32,
         )
-        initial_loss = evaluate_controller_worker_loss(ctrl, ctrl.initial_knobs)
-        true_loss = evaluate_controller_worker_loss(ctrl, true_knobs)
+        initial_loss, true_loss = evaluate_controller_worker_losses(
+            ctrl, [ctrl.initial_knobs, true_knobs]
+        )
         print(f"\nSPS multi-turn loss regression (n_run_turns={n_run_turns})")
         print(f"  true_knobs={true_knobs}")
         print(f"  initial_knobs={ctrl.initial_knobs}")

@@ -21,10 +21,10 @@ from aba_optimiser.training.controller_config import (
     SequenceConfig,
 )
 from tests.training.controller_test_utils import (
-    evaluate_controller_worker_loss,
     _generate_nonoise_track,
     _make_optimiser_config_quad,
     _make_simulation_config_quad,
+    evaluate_controller_worker_loss,
 )
 
 if TYPE_CHECKING:
@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.serial
 
 
 def _build_lhc_quad_controller(

@@ -368,7 +368,9 @@ end
         machine_pt = knob_updates.get("pt", 0.0)
 
         update_commands = [
-            f"loaded_sequence['{name}']:set0({val:.15e})" for name, val in knob_updates.items() if name != "pt"
+            f"loaded_sequence['{name}']:set0({val:.15e})"
+            for name, val in knob_updates.items()
+            if name != "pt" and name in self.knob_name_set
         ]
         if update_commands:
             mad.send("\n".join(update_commands))

@@ -150,23 +150,39 @@ class BetaMatcher:
         from aba_optimiser.training.scheduler import LRScheduler
 
         optimiser = LBFGSOptimiser(history_size=20, use_adaptive_lr=True)
-        scheduler = LRScheduler(warmup_epochs=10, decay_epochs=0, start_lr=1e-13, max_lr=3, min_lr=3)
+        # The beta-beating gradient is huge (~1e6) while the corrector knobs need
+        # micro-scale adjustments; the optimiser normalises the gradient/step to unit
+        # norm, so a unit learning rate would move knobs by O(1) and diverge instantly.
+        # A small constant LR keeps each step at the knob scale (~1e-5) and stable.
+        scheduler = LRScheduler(
+            warmup_epochs=1, decay_epochs=0, start_lr=1e-5, max_lr=1e-5, min_lr=1e-5
+        )
         x = initial_values.copy()
-        loss = np.inf
+        best_x = x.copy()
+        best_loss = np.inf
+        prev_loss = np.inf
         start_time = time.time()
-        for iteration in range(200):
+        # Each iteration runs a (cached) twiss, so the budget is kept modest; the
+        # loss decreases slowly but monotonically at this learning rate.
+        max_iterations = 50
+        for iteration in range(max_iterations):
             f, grad = objective_and_grad(x)
-            lr = scheduler(iteration)
-            x = optimiser.step(x, grad, lr)
+            # Track the best *evaluated* point so we never return an unevaluated
+            # (potentially diverged) step taken at the end of the loop.
+            if f < best_loss:
+                best_loss = f
+                best_x = x.copy()
             logger.info(
-                f"Iteration {iteration + 1}: loss={f:.5f}, lr={lr:.2e}, time={time.time() - start_time:.1f}s"
+                f"Iteration {iteration + 1}: loss={f:.5f}, lr=1.00e-05, time={time.time() - start_time:.1f}s"
             )
-            if f < 0.1 or abs(loss - f) < 1e-4:
+            if f < 0.1 or abs(prev_loss - f) < 1e-4:
                 logger.info("Convergence achieved")
                 break
-            loss = f
+            prev_loss = f
+            lr = scheduler(iteration)
+            x = optimiser.step(x, grad, lr)
 
-        final_knobs = {knobs_list[i]: x[i] for i in range(len(knobs_list))}
+        final_knobs = {knobs_list[i]: best_x[i] for i in range(len(knobs_list))}
         for knob, value in final_knobs.items():
             self.mad_interface.mad[f"MADX['{knob}']"] = value
 

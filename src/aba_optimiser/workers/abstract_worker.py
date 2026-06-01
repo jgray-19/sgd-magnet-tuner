@@ -74,6 +74,11 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         self.conn = conn
         self.config = config
         self.simulation_config = simulation_config
+        # Populated in setup_mad_interface: the knobs this worker actually created
+        # (its optimisation range). Runtime knob-updates are filtered to this set so
+        # values for magnets outside the worker's range are ignored rather than
+        # applied to a nonexistent MAD variable.
+        self.knob_name_set: set[str] = set()
         bpm_range_start = config.observation_range_start_bpm or config.tracking_start_bpm
         self.bpm_range = f"{bpm_range_start}/{config.tracking_end_bpm}"
 
@@ -276,14 +281,15 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         )
 
         knob_names = mad_iface.knob_names
-        if knob_names != list(init_knobs.keys()):
-            init_set = set(init_knobs.keys())
-            mad_set = set(knob_names)
-            diff_init_mad = init_set.symmetric_difference(mad_set)
+        self.knob_name_set = set(knob_names)
+        # Every knob this worker created (its optimisation range) must have an initial
+        # value. The caller provides initial values for the whole optimisation, which may
+        # also include magnets in this worker's tracking range that it does not optimise.
+        missing = self.knob_name_set - set(init_knobs)
+        if missing:
             raise ValueError(
-                f"Worker {self.worker_id}: Knob names from MAD {len(knob_names)} "
-                f"do not match initial knobs {len(list(init_knobs.keys()))}"
-                f"\nDifferent knobs: {diff_init_mad}"
+                f"Worker {self.worker_id}: {len(missing)} MAD knobs have no initial value, "
+                f"e.g. {sorted(missing)[:5]}"
             )
 
         mad = mad_iface.mad
@@ -301,14 +307,26 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         # Setup differential algebra maps
         self._setup_da_maps(mad)
 
-        # Apply initial knob values to the DA objects (constant term = initial value)
+        # Apply initial values for this worker's own knobs to the DA objects (set the
+        # constant term of each knob's TPSA variable).
         init_commands = [
             f"loaded_sequence['{name}']:set0({val:.15e})"
             for name, val in init_knobs.items()
-            if name != "pt"
+            if name != "pt" and name in self.knob_name_set
         ]
         if init_commands:
             mad.send("\n".join(init_commands))
+
+        # Apply the remaining initial values directly to the magnets: these are in this
+        # worker's tracking range but are optimised elsewhere, so they are not knobs here.
+        # Setting them keeps the machine in the correct state for tracking.
+        non_knob_strengths = {
+            name: val
+            for name, val in init_knobs.items()
+            if name != "pt" and name not in self.knob_name_set
+        }
+        if non_knob_strengths:
+            mad_iface.set_magnet_strengths(non_knob_strengths)
 
         return mad, mad_iface.nbpms
 

@@ -120,6 +120,7 @@ def _compute_training_weight_normaliser(ctrl: Controller) -> float:
 
 
 @pytest.mark.slow
+@pytest.mark.serial
 def test_controller_worker_hessian_matches_finite_difference_on_reduced_knob_subset(
     tmp_path,
     seq_b1,

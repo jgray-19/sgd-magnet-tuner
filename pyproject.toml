@@ -27,6 +27,7 @@ dependencies = [
 test = [
     "pytest",
     "pytest-cov",
+    "pytest-xdist",
     "tmom-recon",
     "xtrack-tools",
 ]
@@ -52,6 +53,7 @@ dev = [
 all = [
     "pytest",
     "pytest-cov",
+    "pytest-xdist",
     "sphinx>=7.0",
     "sphinx-autodoc-typehints>=2.0",
     "myst-parser>=2.0",
@@ -91,6 +93,7 @@ testpaths = ["tests"]
 norecursedirs = ["tests/data"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "serial: test must not run in parallel",
 ]
 addopts = [
     "--log-cli-format=%(levelname)s %(name)s %(message)s",

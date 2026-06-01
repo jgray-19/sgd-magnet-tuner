@@ -135,6 +135,8 @@ class ValidationTrackingWorker(TrackingWorker):
             py_name=PYTHON_IN_MAD,
         )
 
+        self.knob_name_set = set(mad_iface.knob_names)
+
         mad = mad_iface.mad
         mad["nbpms"] = mad_iface.nbpms
         mad["sdir"] = self.config.sdir
@@ -164,7 +166,7 @@ class ValidationTrackingWorker(TrackingWorker):
         update_commands = [
             f"loaded_sequence['{name}'] = {val:.15e}"
             for name, val in knob_updates.items()
-            if name != "pt"
+            if name != "pt" and name in self.knob_name_set
         ]
         if update_commands:
             mad.send("\n".join(update_commands))

@@ -24,6 +24,15 @@ if TYPE_CHECKING:
 logging.getLogger("xdeps").setLevel(logging.WARNING)
 
 
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Prevent serial tests from running inside pytest-xdist workers."""
+    if (
+        item.get_closest_marker("serial")
+        and getattr(item.config, "workerinput", None) is not None
+    ):
+        pytest.fail(f"{item.nodeid} is marked serial and cannot run under pytest-xdist")
+
+
 @pytest.fixture(scope="session")
 def data_dir() -> Path:
     """Path to the example corrector file used by several tests."""
@@ -138,4 +147,3 @@ def beam2_interface(seq_b2: Path) -> Generator[AbaMadInterface, None, None]:
     yield iface
     with contextlib.suppress(Exception):
         del iface
-

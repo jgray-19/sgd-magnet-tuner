@@ -234,9 +234,12 @@ da_x0_c = gphys.bet2map(B0, da_x0_base:copy())
         """
         # Send knob updates to MAD-NG
         update_commands = [
-            f"loaded_sequence['{name}']:set0({val:.15e})" for name, val in knob_updates.items()
+            f"loaded_sequence['{name}']:set0({val:.15e})"
+            for name, val in knob_updates.items()
+            if name in self.knob_name_set
         ]
-        mad.send("\n".join(update_commands))
+        if update_commands:
+            mad.send("\n".join(update_commands))
 
         # Run optics computation
         mad.send(self.run_track_script)

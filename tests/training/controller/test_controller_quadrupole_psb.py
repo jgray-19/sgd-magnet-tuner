@@ -36,6 +36,7 @@ PSB_BPM_START_POINTS = [
     "BR3.BPM9L3",
     "BR3.BPM13L3",
 ]
+pytestmark = pytest.mark.serial
 
 
 @pytest.mark.slow

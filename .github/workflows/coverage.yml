@@ -46,14 +46,11 @@ jobs:
       - name: Install package
         run: uv pip install -e '.[test,tracking]'
 
-      - name: Run non-slow tests first
-        run: pytest -ra -m "not slow" -x
+      - name: Run parallel non-serial tests
+        run: pytest -ra -n auto -m "not serial" --cov=aba_optimiser --cov-branch
 
-      - name: Run fast controller loss regressions
-        run: pytest -ra tests/training/controller -k loss_regression -x
-
-      - name: Run full test suite
-        run: pytest -ra --cov=aba_optimiser --cov-branch --cov-report=xml
+      - name: Run serial tests
+        run: pytest -ra -m serial --cov=aba_optimiser --cov-branch --cov-append --cov-report=xml
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5

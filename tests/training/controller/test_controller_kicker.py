@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.serial
 
 
 def _build_kicker_controller(
@@ -91,6 +92,7 @@ def _build_kicker_controller(
         ),
     )
     return ctrl, magnet_strengths.copy()
+
 
 @pytest.mark.slow
 def test_controller_quad_opt_with_kicker(

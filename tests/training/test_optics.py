@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.serial
 
 TRACK_COLUMNS = (
     "turn",

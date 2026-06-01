@@ -20,7 +20,6 @@ from tmom_recon.kicker.test_utils import (
     select_kicker_element,
     strip_inline_flags,
 )
-from xtrack_tools.coordinates import create_initial_conditions
 from xtrack_tools.kicker import _insert_exciter_at, _knl_ksl
 from xtrack_tools.monitors import (
     get_monitor_names_at_pattern,
@@ -61,16 +60,19 @@ def _run_track_with_model(
     use_diagonal_kicks: bool = True,
     combine_particles_into_single_file: bool = False,
     return_dataframes: bool = False,
+    twiss_data: pd.DataFrame | None = None,
 ) -> list[Path] | list[pd.DataFrame]:
     """Run tracking with the given model and initial conditions."""
     input_particles = len(action_list)
     if len(angle_list) != input_particles:
         raise ValueError("action_list and angle_list must have the same length")
+    if twiss_data is None:
+        raise ValueError("twiss_data must be provided; controller tests should use MAD-NG twiss")
 
     line: xt.Line = env[line_name]
     monitored_line = run_tracking_without_ac_dipole(
         line=line,
-        tws=line.twiss4d(),
+        tws=twiss_data,
         flattop_turns=flattop_turns,
         bpm_pattern=bpm_pattern,
         action_list=action_list,
@@ -184,6 +186,10 @@ def _generate_nonoise_track(
             angle_list = (np.linspace(0.0, 2 * np.pi, num=num_particles, endpoint=False)).tolist()
         action_list = [action] * num_particles
 
+    # MAD-NG's off-momentum twiss is more robust here than xsuite's periodic
+    # twiss solve, so pass it directly into xtrack_tools.
+    mad_twiss = interface_with_beam.run_twiss(observe=0, deltap=dpp_value).copy()
+
     # run_madng_tracking(
     #     interface=interface_with_beam,
     #     flattop_turns=flattop_turns,
@@ -205,6 +211,7 @@ def _generate_nonoise_track(
         line_name=interface_with_beam.accelerator.seq_name.lower(),
         bpm_pattern=bpm_pattern,
         use_diagonal_kicks=use_diagonal_kicks,
+        twiss_data=mad_twiss,
     )
     return corrector_file, magnet_strengths, tune_knobs_file
 
@@ -246,6 +253,7 @@ def _generate_kicker_track(
     if kicker_name is None:
         pytest.skip("No kicker-like element found in sequence for test")
 
+    mad_twiss = _load_mad_twiss_for_tracking(interface_with_beam, dpp_value)
     tws = line.twiss(method="4d")
     frev = float(1.0 / tws.t_rev0)
     s_kicker = float(line.get_s_position(kicker_name))
@@ -266,12 +274,12 @@ def _generate_kicker_track(
     monitor_pattern = rf"(?i:{bpm_pattern_clean})|{re.escape(kicker_name)}"
     monitor_names = get_monitor_names_at_pattern(kicked_line, monitor_pattern)
     start_elem = kicked_line.element_names[0].upper()
-    co_row = tws.rows[start_elem] if start_elem in tws.name else tws.rows[0]
+    co_row = mad_twiss.loc[start_elem] if start_elem in mad_twiss.index else mad_twiss.iloc[0]
     particles: xt.Particles = kicked_line.build_particles(
-        x=float(co_row["x"][0]),
-        px=float(co_row["px"][0]),
-        y=float(co_row["y"][0]),
-        py=float(co_row["py"][0]),
+        x=float(co_row["x"]),
+        px=float(co_row["px"]),
+        y=float(co_row["y"]),
+        py=float(co_row["py"]),
         delta=dpp_value,
     )
 
@@ -434,6 +442,14 @@ def _make_simulation_config_quad() -> SimulationConfig:
 
 def evaluate_controller_worker_loss(ctrl: Controller, knobs: dict[str, float]) -> float:
     """Return the total worker diagnostic loss summed across all workers at one knob setting."""
+    return evaluate_controller_worker_losses(ctrl, [knobs])[0]
+
+
+def evaluate_controller_worker_losses(
+    ctrl: Controller,
+    knobs_list: list[dict[str, float]],
+) -> list[float]:
+    """Return worker diagnostic losses for several knob settings using one worker startup."""
     ctrl.worker_manager.start_workers(
         ctrl.data_manager.track_data,
         ctrl.data_manager.turn_batches,
@@ -446,10 +462,13 @@ def evaluate_controller_worker_loss(ctrl: Controller, knobs: dict[str, float]) -
         enable_validation=ctrl.tracking_plan.enable_validation,
     )
     try:
-        diags = ctrl.worker_manager._request_worker_diagnostics(knobs)
+        losses = []
+        for knobs in knobs_list:
+            diags = ctrl.worker_manager._request_worker_diagnostics(knobs)
+            losses.append(sum(float(d["total_loss"]) for d in diags))  # type: ignore[arg-type]
     finally:
         ctrl.worker_manager.terminate_workers()
-    return sum(float(d["total_loss"]) for d in diags)  # type: ignore[arg-type]
+    return losses
 
 
 def run_madng_tracking(
