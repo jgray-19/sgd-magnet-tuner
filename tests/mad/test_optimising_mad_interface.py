@@ -341,8 +341,9 @@ class TestOptimisationMadInterfaceInit:
 
         # Verify that all_bpms contains all BPMs in the sequence
         assert len(interface.all_bpms) == 563
-        # Verify that twiss dataframe contains all observed BPMs (not just those in range)
-        assert len(twiss_df.index) == len(interface.all_bpms)
+        # Twiss dataframe is restricted to the observed (in-range) BPMs
+        assert len(twiss_df.index) == len(interface.bpms_in_range)
+        assert list(twiss_df.index) == interface.bpms_in_range
 
         cleanup_interface(interface)
 

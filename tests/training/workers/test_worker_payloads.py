@@ -23,7 +23,6 @@ def _make_builder(tmp_path: Path, all_bpms: list[str] | None = None) -> WorkerPa
     return WorkerPayloadBuilder(
         accelerator=accelerator,
         all_bpms=all_bpms or ["BPH.13208", "BPV.13308"],
-        kinetic_energy=450.0,
     )
 
 
