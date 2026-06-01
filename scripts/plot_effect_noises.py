@@ -13,8 +13,10 @@ generates comparison plots of the standard deviations.
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass
 from itertools import product
+from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
@@ -25,6 +27,11 @@ from tqdm.contrib.concurrent import process_map
 
 from aba_optimiser.config import REL_K1_STD_DEV
 from aba_optimiser.io.utils import get_lhc_file_path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from scripts.plot_functions import plot_error_bars_bpm_range, plot_std_log_comparison, show_plots
 
 LHCB1_SEQ_NAME = "lhcb1"  # Sequence name in MAD-X (lowercase)
@@ -126,8 +133,8 @@ class MADSimulator:
     def __init__(
         self,
         config: SimulationConfig,
-        matched_tunes: dict[str, float],
-        df_twiss: pd.DataFrame,
+        matched_tunes: dict[str, float] | None,
+        df_twiss: pd.DataFrame | None,
     ):
         self.matched_tunes = matched_tunes
         self.df_twiss: pd.DataFrame = df_twiss
@@ -180,7 +187,7 @@ MAD.element.marker {marker_name} {{ at=-1e-10, from="{bpm_name}" }} ! 1e-10 is t
         Returns:
             Tuple of (matched tune parameters, Twiss dataframe)
         """
-        if self.matched_tunes is not None and self.df_twiss is not None:
+        if self.matched_tunes and self.df_twiss is not None and not self.df_twiss.empty:
             return
 
         self.mad["SEQ_NAME"] = LHCB1_SEQ_NAME
@@ -291,8 +298,8 @@ class NoiseAnalyser:
     def __init__(
         self,
         config: SimulationConfig,
-        matched_tunes: dict[str, float],
-        df_twiss: pd.DataFrame,
+        matched_tunes: dict[str, float] | None,
+        df_twiss: pd.DataFrame | None,
     ):
         self.config = config
         self.simulator = MADSimulator(config, matched_tunes, df_twiss)
@@ -529,7 +536,7 @@ def main():
     logger.info(f"Starting analysis: nturns={config.nturns}, nangles={config.nangles}, samples={config.num_error_samples}")
 
     # Initialise temporary simulator to get baseline parameters
-    temp_simulator = MADSimulator(config, {}, pd.DataFrame())
+    temp_simulator = MADSimulator(config, None, None)
     matched_tunes = temp_simulator.matched_tunes
     df_twiss = temp_simulator.df_twiss
 
