@@ -226,7 +226,9 @@ def generate_track_with_errors(
     destination_dir.mkdir(parents=True, exist_ok=True)
     measurement_file = destination_dir / "pz_data.parquet"
 
-    iface = AbaMadInterface(accelerator=LHC(beam=beam, sequence_file=sequence_path, pc=PC_GEV))
+    iface = AbaMadInterface(
+        accelerator=LHC(beam=beam, sequence_file=sequence_path, kinetic_energy=PC_GEV)
+    )
     iface.mad["zero_twiss", "_"] = iface.mad.twiss(sequence="loaded_sequence")
 
     iface.observe_elements()
@@ -646,8 +648,8 @@ def main() -> None:
             arc_config = create_arc_config(args.beam)
         accel = LHC(
             beam=args.beam,
-            pc=pc,
             sequence_file=sequence_file,
+            kinetic_energy=pc,
             optimise_bends=True,
             normalise_bends=True,
         )
@@ -670,8 +672,8 @@ def main() -> None:
             # For just_plot, we need to recreate accel
             accel = LHC(
                 beam=args.beam,
-                pc=pc,
                 sequence_file=sequence_file,
+                kinetic_energy=pc,
                 optimise_bends=True,
                 normalise_bends=True,
             )

@@ -185,7 +185,9 @@ def generate_track_with_errors(
     destination_dir.mkdir(parents=True, exist_ok=True)
     measurement_file = destination_dir / "pz_data.parquet"
 
-    iface = AbaMadInterface(accelerator=LHC(beam=beam, sequence_file=sequence_path, pc=PC_GEV))
+    iface = AbaMadInterface(
+        accelerator=LHC(beam=beam, sequence_file=sequence_path, kinetic_energy=PC_GEV)
+    )
     iface.mad["zero_twiss", "_"] = iface.mad.twiss(sequence="loaded_sequence")
     # tws = iface.mad.zero_twiss.to_df().set_index("name")
 
@@ -225,7 +227,7 @@ def generate_track_with_errors(
         magnet_strengths=magnet_strengths,
         corrector_table=corrector_table,
         sequence_file=sequence_path,
-        pc=PC_GEV,
+        kinetic_energy=PC_GEV,
         strict_set=False,
     )
 
@@ -297,8 +299,8 @@ def optimise_ranges(
 
         accelerator = LHC(
             beam=beam,
-            pc=PC_GEV,
             sequence_file=sequence_path,
+            kinetic_energy=PC_GEV,
             optimise_energy=True,
             optimise_quadrupoles=False,
             optimise_bends=False,
