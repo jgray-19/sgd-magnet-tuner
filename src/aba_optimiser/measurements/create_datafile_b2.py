@@ -50,8 +50,8 @@ if __name__ == "__main__":
     bad_bpms_file = analysis_dir / "bad_bpms.txt"
     accelerator = LHC(
         beam=2,
-        pc=6800,
         sequence_file=get_or_make_sequence(2, Path(model_dir)),
+        kinetic_energy=6800,
     )
 
     pzs_dict, bad_bpms, _, _ = process_measurements(

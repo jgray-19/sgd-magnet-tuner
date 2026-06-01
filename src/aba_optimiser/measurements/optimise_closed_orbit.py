@@ -176,8 +176,8 @@ def optimise_ranges(
         # Create LHC accelerator instance
         accelerator = LHC(
             beam=beam,
-            pc=energy,
             sequence_file=sequence_path,
+            kinetic_energy=energy,
             optimise_energy=True,  # Since we're optimizing deltap/pt
         )
 
@@ -255,8 +255,8 @@ def optimise_corrector_ranges(
         # Create LHC accelerator instance
         accelerator = LHC(
             beam=beam,
-            pc=energy,
             sequence_file=sequence_path,
+            kinetic_energy=energy,
             optimise_correctors=True,
         )
 
@@ -503,8 +503,8 @@ def process_single_config(
     )
     accelerator = LHC(
         beam=config.beam,
-        pc=float(energy),
         sequence_file=sequence_file,
+        kinetic_energy=float(energy),
     )
 
     pzs_dict, bad_bpms, output_paths, _ = process_measurements(

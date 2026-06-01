@@ -108,8 +108,8 @@ def process_single_config(
     bad_bpms_file = temp_analysis_dir / "bad_bpms.txt"
     accelerator = LHC(
         beam=config.beam,
-        pc=6800,
         sequence_file=get_or_make_sequence(config.beam, Path(config.model_dir)),
+        kinetic_energy=6800,
     )
 
     # Generate files from times

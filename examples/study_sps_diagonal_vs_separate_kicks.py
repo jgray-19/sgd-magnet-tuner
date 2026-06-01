@@ -201,7 +201,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_sps_interface(sequence_file: Path) -> AbaMadInterface:
-    return AbaMadInterface(accelerator=SPS(sequence_file=sequence_file, pc=450.0))
+    return AbaMadInterface(accelerator=SPS(sequence_file=sequence_file, kinetic_energy=450.0))
 
 
 def get_bpm_positions(sequence_file: Path) -> pd.DataFrame:
@@ -248,7 +248,7 @@ def build_sps_tracking_environment(
         ),
         sequence_file=sequence_file,
         seq_name=interface.accelerator.seq_name,
-        pc=interface.accelerator.pc,
+        kinetic_energy=interface.accelerator.kinetic_energy,
         strict_set=False,
     )
     return env, perturbed_strengths, matched_tunes
@@ -687,8 +687,8 @@ def build_controller(
 ) -> Controller:
     """Build one controller configured exactly for the SPS comparison study."""
     accelerator = SPS(
-        pc=450.0,
         sequence_file=sequence_file,
+        kinetic_energy=450.0,
         optimise_quadrupoles=True,
     )
     label = case.name if run_label is None else run_label

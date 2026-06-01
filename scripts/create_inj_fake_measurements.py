@@ -266,8 +266,8 @@ def build_madx_twiss_for_frequency(
     )
     accelerator_meas = LHC(
         beam=beam,
-        pc=pc,
         sequence_file=sequence_file,
+        kinetic_energy=pc,
         optimise_quadrupoles=True,
         optimise_bends=True,
         optimise_other_quadrupoles=True,
@@ -308,8 +308,8 @@ def build_madx_twiss_for_frequency(
     )
     accelerator_model = LHC(
         beam=beam,
-        pc=pc,
         sequence_file=sequence_file,
+        kinetic_energy=pc,
     )
 
     mad_model = GradientDescentMadInterface(

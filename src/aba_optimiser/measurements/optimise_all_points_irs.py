@@ -98,8 +98,8 @@ def optimise_ranges(
 
         accelerator = LHC(
             beam=beam,
-            pc=energy,
             sequence_file=sequence_file,
+            kinetic_energy=energy,
             optimise_energy=True,
         )
 
@@ -408,8 +408,8 @@ def process_single_config(
     sequence_file = get_or_make_sequence(config.beam, Path(config.model_dir))
     accelerator = LHC(
         beam=config.beam,
-        pc=float(energy),
         sequence_file=sequence_file,
+        kinetic_energy=float(energy),
     )
 
     pzs_dict, _, output_paths, _ = process_measurements(

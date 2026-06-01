@@ -336,8 +336,8 @@ def main() -> None:
 
     accelerator = LHC(
         beam=args.beam,
-        pc=pc,
         sequence_file=sequence_file,
+        kinetic_energy=pc,
         optimise_quadrupoles=True,
         optimise_bends=True,
         optimise_other_quadrupoles=True,

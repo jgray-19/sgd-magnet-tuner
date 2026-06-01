@@ -86,7 +86,7 @@ def generate_closed_orbit(
     new_magnet_strengths: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """Generate closed orbit (name, s, x, y) from MAD-NG twiss."""
-    accelerator = LHC(beam=beam, pc=PC, sequence_file=sequence_file)
+    accelerator = LHC(beam=beam, kinetic_energy=PC, sequence_file=sequence_file)
     mad_iface = GenericMadInterface(
         accelerator,
         corrector_strengths=corrector_file,

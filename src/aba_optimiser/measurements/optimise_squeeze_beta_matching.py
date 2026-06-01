@@ -179,7 +179,7 @@ def run_optics_optimisation_for_squeeze_step(
         accelerator = LHC(
             beam=beam,
             sequence_file=sequence_path,
-            pc=PC,
+            kinetic_energy=PC,
             optimise_quadrupoles=True,
         )
         # Create and run controller
