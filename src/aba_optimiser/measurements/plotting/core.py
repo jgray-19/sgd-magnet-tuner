@@ -402,360 +402,375 @@ def filter_estimates_by_max_uncertainty(
     return filtered_estimates, filtered_uncertainties, filtered_actual
 
 
-def plot_quad_diffs(
+def _knob_diff(estimate: float, truth: float) -> float:
+    """Return the signed difference between an estimate and its true value."""
+    return estimate - truth
+
+
+def _is_displacement_knob(knob_name: str) -> bool:
+    """Return True when a knob name denotes a transverse displacement (dx/dy)."""
+    knob_suffix = knob_name.rsplit(".", 1)[-1].lower()
+    return knob_suffix.endswith(("dx", "dy"))
+
+
+def _load_arc56_vertical_offsets(beam: int, data_file: Path) -> dict[str, pd.DataFrame]:
+    """Load measured arc56 vertical-offset values (per reconstruction method) from a CSV."""
+    if not data_file.exists():
+        return {}
+
+    data = pd.read_csv(data_file)
+    if beam == 1:
+        name_col = "name"
+        methods = {
+            "pQMS 1": ("y offset beam 1 pQMS 1", "y offset unc beam 1 pQMS 1"),
+            "pQMS 2": ("y offset beam 1 pQMS 2", "y offset unc beam 1 pQMS 2"),
+            "k-mod": ("y offset beam 1 k-mod", "y offset unc beam 1 k-mod"),
+        }
+    else:
+        name_col = "name 2"
+        methods = {
+            "pQMS 1": ("y offset beam 2 pQMS 1", "y offset unc beam 2 pQMS 1"),
+            "pQMS 2": ("y offset beam 2 pQMS 2", "y offset unc beam 2 pQMS 2"),
+            "k-mod": ("y offset beam 2 k-mod", "y offset unc beam 2 k-mod"),
+        }
+
+    if name_col not in data.columns:
+        return {}
+
+    results: dict[str, pd.DataFrame] = {}
+    names = data[name_col].astype(str).str.strip().str.upper()
+    for method_label, (value_col, err_col) in methods.items():
+        if value_col not in data.columns or err_col not in data.columns:
+            continue
+        method_df = pd.DataFrame(
+            {
+                "name": names,
+                "value_mm": pd.to_numeric(data[value_col], errors="coerce") * 1.0e-3,
+                "err_mm": pd.to_numeric(data[err_col], errors="coerce") * 1.0e-3,
+            }
+        ).dropna(subset=["name", "value_mm", "err_mm"])
+        if not method_df.empty:
+            results[method_label] = method_df
+    return results
+
+
+def _overlay_arc56_offsets_on_displacement_axis(
+    ax: plt.Axes,
+    accelerator: LHC | None,
+    data_file: Path,
+) -> None:
+    """Overlay measured arc56 vertical offsets onto the displacement axis."""
+    if accelerator is None:
+        return
+
+    beam = int(getattr(accelerator, "beam", 1))
+    offsets_by_method = _load_arc56_vertical_offsets(beam, data_file)
+    if not offsets_by_method:
+        LOGGER.warning("No arc56 vertical offsets loaded from %s", data_file)
+        return
+
+    method_styles = {
+        "pQMS 1": ("P", "tab:green"),
+        "pQMS 2": ("X", "tab:cyan"),
+        "k-mod": ("*", "tab:brown"),
+    }
+
+    for method_label, method_df in offsets_by_method.items():
+        quad_elements = [f"MQ{name}.B{beam}" for name in method_df["name"]]
+        quad_pos = get_element_positions(accelerator, quad_elements)
+
+        xcoords: list[float] = []
+        ycoords: list[float] = []
+        yerrs: list[float] = []
+        missing_names: list[str] = []
+        for _, row in method_df.iterrows():
+            quad_element = f"MQ{row['name']}.B{beam}"
+            s_pos = quad_pos.get(quad_element)
+            if s_pos is None:
+                missing_names.append(str(row["name"]))
+                continue
+            xcoords.append(float(s_pos))
+            ycoords.append(float(row["value_mm"]))
+            yerrs.append(float(row["err_mm"]))
+
+        if not xcoords:
+            continue
+
+        marker_style, color = method_styles.get(method_label, ("D", "tab:gray"))
+        ax.errorbar(
+            xcoords,
+            ycoords,
+            yerr=yerrs,
+            fmt=marker_style,
+            linestyle="None",
+            markersize=6,
+            markeredgewidth=0.8,
+            color=color,
+            alpha=0.95,
+            capsize=2,
+            label=f"Arc56 dy offset ({method_label})",
+            zorder=5,
+        )
+
+        if missing_names:
+            LOGGER.warning(
+                "Could not map %d arc56 quadrupole names for beam %d (%s): %s",
+                len(missing_names),
+                beam,
+                method_label,
+                ", ".join(sorted(set(missing_names))),
+            )
+
+
+def _plot_knobs_on_axis(
+    ax: plt.Axes,
+    knob_names: list[str],
+    knob_values: list[float],
+    knob_uncertainties: list[float],
+    colors: list[str] | str,
+    accelerator: LHC | None,
+    ip_positions: dict[str, float] | None,
+    width: float = 20.0,
+) -> None:
+    """Bar-plot knob values on one axis, using element s-positions when an accelerator is given."""
+    if accelerator is None:
+        ax.bar(
+            range(len(knob_names)),
+            knob_values,
+            yerr=knob_uncertainties,
+            color=colors,
+            capsize=2,
+        )
+        ax.set_xticks(range(len(knob_names)))
+        ax.set_xticklabels([m.split(".")[1] for m in knob_names], rotation=90)
+        return
+
+    elem_names = [m.rsplit(".", 1)[0] for m in knob_names]
+    elem_pos = get_element_positions(accelerator, elem_names)
+    knobs_with_pos = [
+        (knob_name, knob_value, elem_pos[knob_name.rsplit(".", 1)[0]])
+        for knob_name, knob_value in zip(knob_names, knob_values, strict=False)
+        if knob_name.rsplit(".", 1)[0] in elem_pos
+    ]
+
+    if len(knobs_with_pos) == len(knob_names):
+        x_positions = [pos for _, _, pos in knobs_with_pos]
+        y_values = [value for _, value, _ in knobs_with_pos]
+        y_uncertainties = [
+            knob_uncertainties[knob_names.index(name)] for name, _, _ in knobs_with_pos
+        ]
+        if isinstance(colors, list):
+            plot_colors = [colors[knob_names.index(name)] for name, _, _ in knobs_with_pos]
+        else:
+            plot_colors = colors
+        ax.bar(
+            x_positions,
+            y_values,
+            yerr=y_uncertainties,
+            color=plot_colors,
+            width=width,
+            capsize=2,
+        )
+        ax.set_xlabel("S (m)")
+        if ip_positions is not None:
+            add_ip_positions_to_plot(ax, ip_positions)
+        return
+
+    ax.bar(
+        range(len(knob_names)), knob_values, yerr=knob_uncertainties, color=colors, capsize=2
+    )
+    ax.set_xticks(range(len(knob_names)))
+    ax.set_xticklabels([m.split(".")[1] for m in knob_names], rotation=90)
+
+
+def _plot_fullring_quad_diffs(
     estimates: dict,
     uncertainties: dict,
     actual: dict,
     squeeze_step: str,
     results_dir: Path,
-    fullring: bool = False,
-    accelerator: LHC | None = None,
-    overlay_arc56_offsets: bool = False,
+    accelerator: LHC | None,
+    overlay_arc56_offsets: bool,
 ) -> None:
-    """Plot optimisation-space knob values."""
-
-    def _plot_diff(mag_name: str, estimate: float, truth: float) -> float:
-        del mag_name
-        return estimate - truth
-
-    def _is_displacement_knob(knob_name: str) -> bool:
-        knob_suffix = knob_name.rsplit(".", 1)[-1].lower()
-        return knob_suffix.endswith(("dx", "dy"))
-
-    def _load_arc56_vertical_offsets(beam: int, data_file: Path) -> dict[str, pd.DataFrame]:
-        if not data_file.exists():
-            return {}
-
-        data = pd.read_csv(data_file)
-        if beam == 1:
-            name_col = "name"
-            methods = {
-                "pQMS 1": ("y offset beam 1 pQMS 1", "y offset unc beam 1 pQMS 1"),
-                "pQMS 2": ("y offset beam 1 pQMS 2", "y offset unc beam 1 pQMS 2"),
-                "k-mod": ("y offset beam 1 k-mod", "y offset unc beam 1 k-mod"),
-            }
-        else:
-            name_col = "name 2"
-            methods = {
-                "pQMS 1": ("y offset beam 2 pQMS 1", "y offset unc beam 2 pQMS 1"),
-                "pQMS 2": ("y offset beam 2 pQMS 2", "y offset unc beam 2 pQMS 2"),
-                "k-mod": ("y offset beam 2 k-mod", "y offset unc beam 2 k-mod"),
-            }
-
-        if name_col not in data.columns:
-            return {}
-
-        results: dict[str, pd.DataFrame] = {}
-        names = data[name_col].astype(str).str.strip().str.upper()
-        for method_label, (value_col, err_col) in methods.items():
-            if value_col not in data.columns or err_col not in data.columns:
-                continue
-            method_df = pd.DataFrame(
-                {
-                    "name": names,
-                    "value_mm": pd.to_numeric(data[value_col], errors="coerce") * 1.0e-3,
-                    "err_mm": pd.to_numeric(data[err_col], errors="coerce") * 1.0e-3,
-                }
-            ).dropna(subset=["name", "value_mm", "err_mm"])
-            if not method_df.empty:
-                results[method_label] = method_df
-        return results
-
-    def _overlay_arc56_offsets_on_displacement_axis(
-        ax: plt.Axes,
-        accelerator: LHC | None,
-        data_file: Path,
-    ) -> None:
-        if accelerator is None:
-            return
-
-        beam = int(getattr(accelerator, "beam", 1))
-        offsets_by_method = _load_arc56_vertical_offsets(beam, data_file)
-        if not offsets_by_method:
-            LOGGER.warning("No arc56 vertical offsets loaded from %s", data_file)
-            return
-
-        method_styles = {
-            "pQMS 1": ("P", "tab:green"),
-            "pQMS 2": ("X", "tab:cyan"),
-            "k-mod": ("*", "tab:brown"),
-        }
-
-        for method_label, method_df in offsets_by_method.items():
-            quad_elements = [f"MQ{name}.B{beam}" for name in method_df["name"]]
-            quad_pos = get_element_positions(accelerator, quad_elements)
-
-            xcoords: list[float] = []
-            ycoords: list[float] = []
-            yerrs: list[float] = []
-            missing_names: list[str] = []
-            for _, row in method_df.iterrows():
-                quad_element = f"MQ{row['name']}.B{beam}"
-                s_pos = quad_pos.get(quad_element)
-                if s_pos is None:
-                    missing_names.append(str(row["name"]))
-                    continue
-                xcoords.append(float(s_pos))
-                ycoords.append(float(row["value_mm"]))
-                yerrs.append(float(row["err_mm"]))
-
-            if not xcoords:
-                continue
-
-            marker_style, color = method_styles.get(method_label, ("D", "tab:gray"))
-            ax.errorbar(
-                xcoords,
-                ycoords,
-                yerr=yerrs,
-                fmt=marker_style,
-                linestyle="None",
-                markersize=6,
-                markeredgewidth=0.8,
-                color=color,
-                alpha=0.95,
-                capsize=2,
-                label=f"Arc56 dy offset ({method_label})",
-                zorder=5,
-            )
-
-            if missing_names:
-                LOGGER.warning(
-                    "Could not map %d arc56 quadrupole names for beam %d (%s): %s",
-                    len(missing_names),
-                    beam,
-                    method_label,
-                    ", ".join(sorted(set(missing_names))),
-                )
-
-    def _plot_knobs_on_axis(
-        ax: plt.Axes,
-        knob_names: list[str],
-        knob_values: list[float],
-        knob_uncertainties: list[float],
-        colors: list[str] | str,
-        accelerator: LHC | None,
-        ip_positions: dict[str, float] | None,
-        width: float = 20.0,
-    ) -> None:
-        if accelerator is None:
-            ax.bar(
-                range(len(knob_names)),
-                knob_values,
-                yerr=knob_uncertainties,
-                color=colors,
-                capsize=2,
-            )
-            ax.set_xticks(range(len(knob_names)))
-            ax.set_xticklabels([m.split(".")[1] for m in knob_names], rotation=90)
-            return
-
-        elem_names = [m.rsplit(".", 1)[0] for m in knob_names]
-        elem_pos = get_element_positions(accelerator, elem_names)
-        knobs_with_pos = [
-            (knob_name, knob_value, elem_pos[knob_name.rsplit(".", 1)[0]])
-            for knob_name, knob_value in zip(knob_names, knob_values, strict=False)
-            if knob_name.rsplit(".", 1)[0] in elem_pos
-        ]
-
-        if len(knobs_with_pos) == len(knob_names):
-            x_positions = [pos for _, _, pos in knobs_with_pos]
-            y_values = [value for _, value, _ in knobs_with_pos]
-            y_uncertainties = [
-                knob_uncertainties[knob_names.index(name)] for name, _, _ in knobs_with_pos
-            ]
-            if isinstance(colors, list):
-                plot_colors = [colors[knob_names.index(name)] for name, _, _ in knobs_with_pos]
-            else:
-                plot_colors = colors
-            ax.bar(
-                x_positions,
-                y_values,
-                yerr=y_uncertainties,
-                color=plot_colors,
-                width=width,
-                capsize=2,
-            )
-            ax.set_xlabel("S (m)")
-            if ip_positions is not None:
-                add_ip_positions_to_plot(ax, ip_positions)
-            return
-
-        ax.bar(
-            range(len(knob_names)), knob_values, yerr=knob_uncertainties, color=colors, capsize=2
+    """Plot full-ring knob differences as quadrupole, displacement and bend panels."""
+    arc_key = "Arc 1"
+    if arc_key not in estimates or arc_key not in actual:
+        raise KeyError(
+            "Full-ring mode expects all strengths under 'Arc 1' in both estimates and actual values."
         )
-        ax.set_xticks(range(len(knob_names)))
-        ax.set_xticklabels([m.split(".")[1] for m in knob_names], rotation=90)
 
-    if fullring:
-        arc_key = "Arc 1"
-        if arc_key not in estimates or arc_key not in actual:
-            raise KeyError(
-                "Full-ring mode expects all strengths under 'Arc 1' in both estimates and actual values."
-            )
+    mags = list(estimates[arc_key].keys())
+    strength_mags = [m for m in mags if not _is_displacement_knob(m)]
+    displacement_mags = [m for m in mags if _is_displacement_knob(m)]
 
-        mags = list(estimates[arc_key].keys())
-        strength_mags = [m for m in mags if not _is_displacement_knob(m)]
-        displacement_mags = [m for m in mags if _is_displacement_knob(m)]
+    quads = [m for m in strength_mags if "mq" in m.lower()]
+    bends = [m for m in strength_mags if "mq" not in m.lower() and "mb" in m.lower()]
+    others = [m for m in strength_mags if "mq" not in m.lower() and "mb" not in m.lower()]
+    bends_diffs = [_knob_diff(estimates[arc_key][m], actual[arc_key][m]) for m in bends]
+    bends_unc = [uncertainties[arc_key].get(m, 0.0) for m in bends]
+    others_diffs = [_knob_diff(estimates[arc_key][m], actual[arc_key][m]) for m in others]
+    others_unc = [uncertainties[arc_key].get(m, 0.0) for m in others]
+    displacement_diffs_mm = [
+        1e3 * _knob_diff(estimates[arc_key][m], actual[arc_key][m])
+        for m in displacement_mags
+    ]
+    displacement_unc_mm = [1e3 * uncertainties[arc_key].get(m, 0.0) for m in displacement_mags]
 
-        quads = [m for m in strength_mags if "mq" in m.lower()]
-        bends = [m for m in strength_mags if "mq" not in m.lower() and "mb" in m.lower()]
-        others = [m for m in strength_mags if "mq" not in m.lower() and "mb" not in m.lower()]
-        bends_diffs = [_plot_diff(m, estimates[arc_key][m], actual[arc_key][m]) for m in bends]
-        bends_unc = [uncertainties[arc_key].get(m, 0.0) for m in bends]
-        others_diffs = [_plot_diff(m, estimates[arc_key][m], actual[arc_key][m]) for m in others]
-        others_unc = [uncertainties[arc_key].get(m, 0.0) for m in others]
-        displacement_diffs_mm = [
-            1e3 * _plot_diff(m, estimates[arc_key][m], actual[arc_key][m])
-            for m in displacement_mags
+    displacement_colors = [
+        "tab:orange" if m.rsplit(".", 1)[-1].lower().endswith("dx") else "tab:purple"
+        for m in displacement_mags
+    ]
+
+    ip_positions = get_ip_positions(accelerator) if accelerator is not None else None
+    has_others_panel = len(others) > 0
+
+    import matplotlib.patches as mpatches
+
+    fig_main, main_axes = plt.subplots(2, 1, figsize=(22, 10))
+    ax1, displacement_ax = main_axes
+
+    if accelerator is not None:
+        quad_elems = [m.rsplit(".", 1)[0] for m in quads]
+        quad_pos = get_element_positions(accelerator, quad_elems)
+        quads_with_pos = [
+            (quad_name, quad_pos[quad_name.rsplit(".", 1)[0]])
+            for quad_name in quads
+            if quad_name.rsplit(".", 1)[0] in quad_pos
         ]
-        displacement_unc_mm = [1e3 * uncertainties[arc_key].get(m, 0.0) for m in displacement_mags]
-
-        displacement_colors = [
-            "tab:orange" if m.rsplit(".", 1)[-1].lower().endswith("dx") else "tab:purple"
-            for m in displacement_mags
+        quads_without_pos = [
+            quad_name for quad_name in quads if quad_name.rsplit(".", 1)[0] not in quad_pos
         ]
 
-        ip_positions = get_ip_positions(accelerator) if accelerator is not None else None
-        has_others_panel = len(others) > 0
-
-        import matplotlib.patches as mpatches
-
-        fig_main, main_axes = plt.subplots(2, 1, figsize=(22, 10))
-        ax1, displacement_ax = main_axes
-
-        if accelerator is not None:
-            quad_elems = [m.rsplit(".", 1)[0] for m in quads]
-            quad_pos = get_element_positions(accelerator, quad_elems)
-            quads_with_pos = [
-                (quad_name, quad_pos[quad_name.rsplit(".", 1)[0]])
-                for quad_name in quads
-                if quad_name.rsplit(".", 1)[0] in quad_pos
-            ]
-            quads_without_pos = [
-                quad_name for quad_name in quads if quad_name.rsplit(".", 1)[0] not in quad_pos
-            ]
-
-            if quads_without_pos:
-                others.extend(quads_without_pos)
-                others_diffs.extend(
-                    [
-                        _plot_diff(q, estimates[arc_key][q], actual[arc_key][q])
-                        for q in quads_without_pos
-                    ]
-                )
-                others_unc.extend([uncertainties[arc_key].get(q, 0.0) for q in quads_without_pos])
-                LOGGER.info(
-                    "Moved %d quadrupoles without s-position to 'Others' panel.",
-                    len(quads_without_pos),
-                )
-
-            if quads_with_pos:
-                quad_x = [pos for _, pos in quads_with_pos]
-                quad_y = [
-                    _plot_diff(q, estimates[arc_key][q], actual[arc_key][q])
-                    for q, _ in quads_with_pos
+        if quads_without_pos:
+            others.extend(quads_without_pos)
+            others_diffs.extend(
+                [
+                    _knob_diff(estimates[arc_key][q], actual[arc_key][q])
+                    for q in quads_without_pos
                 ]
-                quad_unc = [uncertainties[arc_key].get(q, 0.0) for q, _ in quads_with_pos]
-                ax1.bar(quad_x, quad_y, yerr=quad_unc, color="red", width=20.0, capsize=2)
-                ax1.set_xlabel("S (m)")
-                add_ip_positions_to_plot(ax1, ip_positions)
-            else:
-                ax1.text(
-                    0.5,
-                    0.5,
-                    "No quadrupoles with available s-position",
-                    transform=ax1.transAxes,
-                    ha="center",
-                    va="center",
-                )
-                ax1.set_xticks([])
+            )
+            others_unc.extend([uncertainties[arc_key].get(q, 0.0) for q in quads_without_pos])
+            LOGGER.info(
+                "Moved %d quadrupoles without s-position to 'Others' panel.",
+                len(quads_without_pos),
+            )
+
+        if quads_with_pos:
+            quad_x = [pos for _, pos in quads_with_pos]
+            quad_y = [
+                _knob_diff(estimates[arc_key][q], actual[arc_key][q])
+                for q, _ in quads_with_pos
+            ]
+            quad_unc = [uncertainties[arc_key].get(q, 0.0) for q, _ in quads_with_pos]
+            ax1.bar(quad_x, quad_y, yerr=quad_unc, color="red", width=20.0, capsize=2)
+            ax1.set_xlabel("S (m)")
+            add_ip_positions_to_plot(ax1, ip_positions)
         else:
-            quad_diffs = [_plot_diff(m, estimates[arc_key][m], actual[arc_key][m]) for m in quads]
-            quad_unc = [uncertainties[arc_key].get(m, 0.0) for m in quads]
-            ax1.bar(range(len(quads)), quad_diffs, yerr=quad_unc, color="red", capsize=2)
-            ax1.set_xticks(range(len(quads)))
-            ax1.set_xticklabels([m.split(".")[1] for m in quads], rotation=90)
-        ax1.set_title("Quadrupoles")
-        ax1.set_ylabel("Optimisation knob value")
+            ax1.text(
+                0.5,
+                0.5,
+                "No quadrupoles with available s-position",
+                transform=ax1.transAxes,
+                ha="center",
+                va="center",
+            )
+            ax1.set_xticks([])
+    else:
+        quad_diffs = [_knob_diff(estimates[arc_key][m], actual[arc_key][m]) for m in quads]
+        quad_unc = [uncertainties[arc_key].get(m, 0.0) for m in quads]
+        ax1.bar(range(len(quads)), quad_diffs, yerr=quad_unc, color="red", capsize=2)
+        ax1.set_xticks(range(len(quads)))
+        ax1.set_xticklabels([m.split(".")[1] for m in quads], rotation=90)
+    ax1.set_title("Quadrupoles")
+    ax1.set_ylabel("Optimisation knob value")
 
-        _plot_knobs_on_axis(
+    _plot_knobs_on_axis(
+        displacement_ax,
+        displacement_mags,
+        displacement_diffs_mm,
+        displacement_unc_mm,
+        displacement_colors,
+        accelerator,
+        ip_positions,
+    )
+    if overlay_arc56_offsets:
+        _overlay_arc56_offsets_on_displacement_axis(
             displacement_ax,
-            displacement_mags,
-            displacement_diffs_mm,
-            displacement_unc_mm,
-            displacement_colors,
             accelerator,
-            ip_positions,
+            ARC56_OFFSETS_FILE,
         )
-        if overlay_arc56_offsets:
-            _overlay_arc56_offsets_on_displacement_axis(
-                displacement_ax,
-                accelerator,
-                ARC56_OFFSETS_FILE,
-            )
-        displacement_ax.set_title("Quadrupole Displacements")
-        displacement_ax.set_ylabel("Displacement difference (mm)")
+    displacement_ax.set_title("Quadrupole Displacements")
+    displacement_ax.set_ylabel("Displacement difference (mm)")
 
-        displacement_handles = [
-            mpatches.Patch(color="tab:orange", label="dx"),
-            mpatches.Patch(color="tab:purple", label="dy"),
-        ]
-        displacement_ax.legend(handles=displacement_handles, loc="upper right")
+    displacement_handles = [
+        mpatches.Patch(color="tab:orange", label="dx"),
+        mpatches.Patch(color="tab:purple", label="dy"),
+    ]
+    displacement_ax.legend(handles=displacement_handles, loc="upper right")
 
-        plt.figure(fig_main.number)
-        plt.tight_layout()
-        _path = results_dir / f"quad_diffs_{squeeze_step}_fullring.png"
-        fig_main.savefig(_path)
-        print(f"Saved plot: {_path.resolve()}")
+    plt.figure(fig_main.number)
+    plt.tight_layout()
+    _path = results_dir / f"quad_diffs_{squeeze_step}_fullring.png"
+    fig_main.savefig(_path)
+    print(f"Saved plot: {_path.resolve()}")
 
-        bend_nrows = 2 if has_others_panel else 1
-        fig_bends, bend_axes = plt.subplots(bend_nrows, 1, figsize=(22, 5 * bend_nrows))
-        if bend_nrows == 1:
-            bend_axes = [bend_axes]
+    bend_nrows = 2 if has_others_panel else 1
+    fig_bends, bend_axes = plt.subplots(bend_nrows, 1, figsize=(22, 5 * bend_nrows))
+    if bend_nrows == 1:
+        bend_axes = [bend_axes]
 
-        bend_elem_names = [m.rsplit(".", 1)[0] for m in bends]
-        bend_kinds = get_element_kinds(accelerator, bend_elem_names) if accelerator is not None else {}
-        bend_colors = [
-            "tab:orange" if bend_kinds.get(m.rsplit(".", 1)[0], "sbend") == "rbend" else "tab:blue"
-            for m in bends
-        ]
+    bend_elem_names = [m.rsplit(".", 1)[0] for m in bends]
+    bend_kinds = get_element_kinds(accelerator, bend_elem_names) if accelerator is not None else {}
+    bend_colors = [
+        "tab:orange" if bend_kinds.get(m.rsplit(".", 1)[0], "sbend") == "rbend" else "tab:blue"
+        for m in bends
+    ]
+    _plot_knobs_on_axis(
+        bend_axes[0],
+        bends,
+        bends_diffs,
+        bends_unc,
+        bend_colors,
+        accelerator,
+        ip_positions,
+    )
+    bend_axes[0].set_title("Bending Magnets")
+    bend_axes[0].set_ylabel("Optimisation knob value")
+    bend_legend_handles = [
+        mpatches.Patch(color="tab:blue", label="sbend (MB)"),
+        mpatches.Patch(color="tab:orange", label="rbend (MBR)"),
+    ]
+    bend_axes[0].legend(handles=bend_legend_handles, loc="upper right")
+
+    if has_others_panel:
         _plot_knobs_on_axis(
-            bend_axes[0],
-            bends,
-            bends_diffs,
-            bends_unc,
-            bend_colors,
+            bend_axes[1],
+            others,
+            others_diffs,
+            others_unc,
+            "green",
             accelerator,
             ip_positions,
         )
-        bend_axes[0].set_title("Bending Magnets")
-        bend_axes[0].set_ylabel("Optimisation knob value")
-        bend_legend_handles = [
-            mpatches.Patch(color="tab:blue", label="sbend (MB)"),
-            mpatches.Patch(color="tab:orange", label="rbend (MBR)"),
-        ]
-        bend_axes[0].legend(handles=bend_legend_handles, loc="upper right")
+        bend_axes[1].set_title("Others")
+        bend_axes[1].set_ylabel("Optimisation knob value")
 
-        if has_others_panel:
-            _plot_knobs_on_axis(
-                bend_axes[1],
-                others,
-                others_diffs,
-                others_unc,
-                "green",
-                accelerator,
-                ip_positions,
-            )
-            bend_axes[1].set_title("Others")
-            bend_axes[1].set_ylabel("Optimisation knob value")
+    plt.figure(fig_bends.number)
+    plt.tight_layout()
+    _path = results_dir / f"quad_diffs_{squeeze_step}_fullring_bends.png"
+    fig_bends.savefig(_path)
+    print(f"Saved plot: {_path.resolve()}")
 
-        plt.figure(fig_bends.number)
-        plt.tight_layout()
-        _path = results_dir / f"quad_diffs_{squeeze_step}_fullring_bends.png"
-        fig_bends.savefig(_path)
-        print(f"Saved plot: {_path.resolve()}")
-        return
 
+
+def _plot_per_arc_quad_diffs(
+    estimates: dict,
+    uncertainties: dict,
+    actual: dict,
+    squeeze_step: str,
+    results_dir: Path,
+) -> None:
+    """Plot one knob-difference panel per arc on a shared 2x4 grid."""
     fig, axes = plt.subplots(2, 4, figsize=(20, 10))
     axes = axes.flatten()
     for arc_num in range(1, 9):
@@ -763,7 +778,7 @@ def plot_quad_diffs(
         arc_key = f"Arc {arc_num}"
         if arc_key in estimates:
             mags = list(estimates[arc_key].keys())
-            rel_diffs = [_plot_diff(m, estimates[arc_key][m], actual[arc_key][m]) for m in mags]
+            rel_diffs = [_knob_diff(estimates[arc_key][m], actual[arc_key][m]) for m in mags]
             rel_unc = [uncertainties[arc_key].get(m, 0.0) for m in mags]
             ax.bar(range(len(mags)), rel_diffs, yerr=rel_unc, capsize=2)
             ax.set_xticks(range(len(mags)))
@@ -776,6 +791,30 @@ def plot_quad_diffs(
     print(f"Saved plot: {_path.resolve()}")
 
 
+
+def plot_quad_diffs(
+    estimates: dict,
+    uncertainties: dict,
+    actual: dict,
+    squeeze_step: str,
+    results_dir: Path,
+    fullring: bool = False,
+    accelerator: LHC | None = None,
+    overlay_arc56_offsets: bool = False,
+) -> None:
+    """Plot optimisation-space knob values."""
+    if fullring:
+        _plot_fullring_quad_diffs(
+            estimates,
+            uncertainties,
+            actual,
+            squeeze_step,
+            results_dir,
+            accelerator,
+            overlay_arc56_offsets,
+        )
+        return
+    _plot_per_arc_quad_diffs(estimates, uncertainties, actual, squeeze_step, results_dir)
 def get_arc_ranges(beam: int) -> dict[int, tuple[str, str]]:
     """Get arc ranges (start BPM -> end BPM) for each arc."""
     if beam == 1:

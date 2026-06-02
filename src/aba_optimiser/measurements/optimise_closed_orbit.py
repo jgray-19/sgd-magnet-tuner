@@ -422,6 +422,100 @@ def create_beam2_configs(
     ]
 
 
+def _compute_three_turn_averages(pzs: pd.DataFrame) -> pd.DataFrame:
+    """Average each BPM's measurements and replicate them across three turns.
+
+    Per-BPM weighted means (and the variance of the mean, stored for downstream
+    weighting) are computed for each observable, then duplicated over turns 1-3
+    to match the tracking-data layout.
+    """
+    rows = []
+    for name, sub in pzs.groupby("name"):
+        mu_x, vm_x = compute_weighted_mean_and_variance(sub, "x", "var_x")
+        mu_y, vm_y = compute_weighted_mean_and_variance(sub, "y", "var_y")
+        mu_px, vm_px = compute_weighted_mean_and_variance(sub, "px", "var_px")
+        mu_py, vm_py = compute_weighted_mean_and_variance(sub, "py", "var_py")
+        rows.append(
+            {
+                "name": name,
+                "x": mu_x,
+                "y": mu_y,
+                "px": mu_px,
+                "py": mu_py,
+                "var_x": vm_x,
+                "var_y": vm_y,
+                "var_px": vm_px,
+                "var_py": vm_py,
+            }
+        )
+
+    averaged = pd.DataFrame(rows)
+
+    new_rows = []
+    for turn in [1, 2, 3]:
+        for _, row in averaged.iterrows():
+            new_rows.append(
+                {
+                    "name": row["name"],
+                    "turn": turn,
+                    "x": row["x"],
+                    "y": row["y"],
+                    "px": row["px"],
+                    "py": row["py"],
+                    "var_x": row["var_x"],
+                    "var_y": row["var_y"],
+                    "var_px": row["var_px"],
+                    "var_py": row["var_py"],
+                }
+            )
+    new_df = pd.DataFrame(new_rows)
+    new_df["name"] = new_df["name"].astype("category")
+    new_df["turn"] = new_df["turn"].astype("int32")
+    return new_df
+
+
+def _summarise_arc_deltaps(
+    results_arcs: list[float],
+    uncs_arcs: list[float],
+    fitted_deltaps: list[float],
+) -> tuple[float, float]:
+    """Return weighted-mean arc and fitted deltaps, falling back to plain means."""
+    try:
+        mean_arcs = weighted_mean(results_arcs, uncs_arcs)
+    except ValueError:
+        mean_arcs = float(np.mean(results_arcs))
+        logger.warning(
+            "Falling back to unweighted mean for arcs due to non-positive uncertainties."
+        )
+    try:
+        mean_fitted_deltap = weighted_mean(fitted_deltaps, uncs_arcs)
+    except ValueError:
+        mean_fitted_deltap = float(np.mean(fitted_deltaps))
+        logger.warning(
+            "Falling back to unweighted mean for fitted deltaps due to non-positive uncertainties."
+        )
+    return mean_arcs, mean_fitted_deltap
+
+
+def _write_arc_results_file(
+    results_file: Path,
+    results_arcs: list[float],
+    mean_arcs: float,
+) -> None:
+    """Write per-arc deltaps and their summary statistics to ``results_file``."""
+    with results_file.open("w") as f:
+        f.write("range\tdeltap\n")
+
+    with results_file.open("a") as f:
+        for i, dp in enumerate(results_arcs):
+            f.write(f"arc{i + 1}\t{dp}\n")
+        f.write(f"MeanArcs\t{mean_arcs}\n")
+        std_arcs = float(np.std(results_arcs))
+        f.write(f"StdDevArcs\t{std_arcs}\n")
+        stderr = std_arcs / np.sqrt(len(results_arcs)) if len(results_arcs) > 0 else 0.0
+        f.write(f"StdErrArcs\t{stderr}\n")
+
+
 def process_single_config(
     config: MeasurementSetupConfig,
     temp_analysis_dir: Path,
@@ -528,57 +622,7 @@ def process_single_config(
 
     file_path = ana_dir / measurement_filename
 
-    # Compute weighted averages per BPM with proper variance of the mean
-    rows = []
-    for name, sub in pzs.groupby("name"):
-        mu_x, vm_x = compute_weighted_mean_and_variance(sub, "x", "var_x")
-        mu_y, vm_y = compute_weighted_mean_and_variance(sub, "y", "var_y")
-        mu_px, vm_px = compute_weighted_mean_and_variance(sub, "px", "var_px")
-        mu_py, vm_py = compute_weighted_mean_and_variance(sub, "py", "var_py")
-        rows.append(
-            {
-                "name": name,
-                "x": mu_x,
-                "y": mu_y,
-                "px": mu_px,
-                "py": mu_py,
-                # Store the variance of the weighted mean for downstream weighting
-                "var_x": vm_x,
-                "var_y": vm_y,
-                "var_px": vm_px,
-                "var_py": vm_py,
-            }
-        )
-
-    averaged = pd.DataFrame(rows)
-    # print(
-    #     averaged["var_x"].describe(),
-    #     averaged["var_y"].describe(),
-    #     averaged["var_px"].describe(),
-    #     averaged["var_py"].describe(),
-    # )
-
-    # Create new DataFrame with 3 turns, each with averaged values
-    new_rows = []
-    for turn in [1, 2, 3]:
-        for _, row in averaged.iterrows():
-            new_rows.append(
-                {
-                    "name": row["name"],
-                    "turn": turn,
-                    "x": row["x"],
-                    "y": row["y"],
-                    "px": row["px"],
-                    "py": row["py"],
-                    "var_x": row["var_x"],
-                    "var_y": row["var_y"],
-                    "var_px": row["var_px"],
-                    "var_py": row["var_py"],
-                }
-            )
-    new_df = pd.DataFrame(new_rows)
-    new_df["name"] = new_df["name"].astype("category")
-    new_df["turn"] = new_df["turn"].astype("int32")
+    new_df = _compute_three_turn_averages(pzs)
 
     # Overwrite the measurement file
     new_df.to_parquet(file_path)
@@ -654,39 +698,16 @@ def process_single_config(
         logger.warning("No arc results produced; skipping summary output.")
         return
 
-    try:
-        mean_arcs = weighted_mean(results_arcs, uncs_arcs)
-    except ValueError:
-        mean_arcs = float(np.mean(results_arcs))
-        logger.warning(
-            "Falling back to unweighted mean for arcs due to non-positive uncertainties."
-        )
-    try:
-        mean_fitted_deltap = weighted_mean(fitted_deltaps, uncs_arcs)
-    except ValueError:
-        mean_fitted_deltap = float(np.mean(fitted_deltaps))
-        logger.warning(
-            "Falling back to unweighted mean for fitted deltaps due to non-positive uncertainties."
-        )
+    mean_arcs, mean_fitted_deltap = _summarise_arc_deltaps(
+        results_arcs, uncs_arcs, fitted_deltaps
+    )
     logger.info(f"Weighted mean deltap arcs: {mean_arcs}")
     logger.info(f"Std dev of deltap arcs: {np.std(results_arcs)}")
     logger.info(f"Weighted mean fitted deltap: {mean_fitted_deltap}")
 
     # Write the results to a file
     results_file = results_dir / f"{config.title}.txt"
-    with results_file.open("w") as f:
-        f.write("range\tdeltap\n")
-
-    with results_file.open("a") as f:
-        for i, dp in enumerate(results_arcs):
-            f.write(f"arc{i + 1}\t{dp}\n")
-        # f.write(f"acdipole_fullring\t{ac_dipole_deltap}\n")
-        # f.write(f"acdipole_fullring_unc\t{ac_dipole_unc}\n")
-        f.write(f"MeanArcs\t{mean_arcs}\n")
-        std_arcs = float(np.std(results_arcs))
-        f.write(f"StdDevArcs\t{std_arcs}\n")
-        stderr = std_arcs / np.sqrt(len(results_arcs)) if len(results_arcs) > 0 else 0.0
-        f.write(f"StdErrArcs\t{stderr}\n")
+    _write_arc_results_file(results_file, results_arcs, mean_arcs)
 
     if not optimise_correctors:
         return

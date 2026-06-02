@@ -228,7 +228,9 @@ class WorkerSetupHelper:
     def _bpm_behind_in_plane(self, start_bpm: str, plane_bpms: list[str]) -> str:
         """Return the previous BPM in the same plane as ``start_bpm``."""
         if start_bpm not in plane_bpms:
-            raise ValueError(f"Start BPM '{start_bpm}' is not a {plane.value}-plane BPM")
+            raise ValueError(
+                f"Start BPM '{start_bpm}' is not in the {plane_bpms} list for its plane"
+            )
         return plane_bpms[plane_bpms.index(start_bpm) - 1]
 
     def _single_plane_user_bpms(

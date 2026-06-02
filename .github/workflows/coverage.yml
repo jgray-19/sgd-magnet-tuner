@@ -49,8 +49,11 @@ jobs:
       - name: Run parallel non-serial tests
         run: pytest -ra -n auto -m "not serial" --cov=aba_optimiser --cov-branch
 
-      - name: Run serial tests
-        run: pytest -ra -m serial --cov=aba_optimiser --cov-branch --cov-append --cov-report=xml
+      - name: Run serial loss regression tests
+        run: pytest -ra -m serial -k "loss_regression" --cov=aba_optimiser --cov-branch --cov-append
+
+      - name: Run remaining serial tests
+        run: pytest -ra -m serial -k "not loss_regression" --cov=aba_optimiser --cov-branch --cov-append --cov-report=xml
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5

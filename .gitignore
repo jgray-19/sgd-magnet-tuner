@@ -179,6 +179,9 @@ plots/
 !src/aba_optimiser/mad/mad_scripts/
 !tests/data
 
+# Local uv source overrides (use git URLs on CI instead)
+uv.toml
+
 # AFS filesystem temp files
 .__afs*
 

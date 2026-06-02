@@ -16,6 +16,7 @@ import numpy as np
 
 from aba_optimiser.training.tracking_mode import ArcByArcTrackingPlan, TrackingPlan
 from aba_optimiser.training.validation_selection import (
+    ValidationSplitResult,
     payload_track_count,
     split_validation_payloads,
 )
@@ -164,7 +165,7 @@ class WorkerManager:
         optimise_momenta: bool,
         *,
         validation: bool = False,
-    ):
+    ) -> type:
         """Select the worker implementation for a payload."""
         if kick_plane not in {"xy", "x", "y"}:
             raise ValueError(f"Unsupported kick plane {kick_plane!r}")
@@ -294,7 +295,7 @@ class WorkerManager:
         end_bpms: list[str],
         simulation_config: SimulationConfig,
         machine_deltaps: list[float],
-    ):
+    ) -> ValidationSplitResult:
         """Build weighted training/validation payloads from current track data."""
         payloads = self.create_worker_payloads(
             track_data,

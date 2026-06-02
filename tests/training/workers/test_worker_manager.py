@@ -156,38 +156,16 @@ def _make_payload(
 def test_create_worker_payloads_multi_turn_creates_forward_and_backward_workers(
     tmp_path: Path,
 ) -> None:
+    all_bpms = ["BPH.13008", "BPV.13108", "BPH.13208", "BPV.13308"]
     manager = _make_manager(
         tmp_path,
         n_data_points={
-            ("BPH.13208", "BPV.13108"): 3,
+            ("BPH.13208", "BPH.13008"): 3,
         },
-        all_bpms=["BPV.13108", "BPH.13208", "BPV.13308"],
+        all_bpms=all_bpms,
     )
     manager.accelerator.infer_monitor_plane = lambda bpm: "H" if "BPH" in bpm else "V"  # type: ignore[method-assign]
-    df = pd.DataFrame(
-        {
-            "turn": [1, 1, 1, 2, 2, 2, 3, 3, 3],
-            "name": [
-                "BPV.13108",
-                "BPH.13208",
-                "BPV.13308",
-                "BPV.13108",
-                "BPH.13208",
-                "BPV.13308",
-                "BPV.13108",
-                "BPH.13208",
-                "BPV.13308",
-            ],
-            "x": [0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 3.0, 0.0],
-            "y": [3.0, 0.0, 4.0, 5.0, 0.0, 6.0, 7.0, 0.0, 8.0],
-            "px": [0.0, 0.1, 0.0, 0.0, 0.2, 0.0, 0.0, 0.3, 0.0],
-            "py": [0.3, 0.0, 0.4, 0.5, 0.0, 0.6, 0.7, 0.0, 0.8],
-            "var_x": [np.inf, 1.0, np.inf, np.inf, 1.0, np.inf, np.inf, 1.0, np.inf],
-            "var_y": [1.0, np.inf, 1.0, 1.0, np.inf, 1.0, 1.0, np.inf, 1.0],
-            "var_px": [np.inf, 1.0, np.inf, np.inf, 1.0, np.inf, np.inf, 1.0, np.inf],
-            "var_py": [1.0, np.inf, 1.0, 1.0, np.inf, 1.0, 1.0, np.inf, 1.0],
-        }
-    ).set_index(["turn", "name"])
+    df = _make_track_df(all_bpms, [1, 2, 3])
     simulation_config = SimulationConfig(
         tracks_per_worker=1,
         num_workers=2,
@@ -207,6 +185,9 @@ def test_create_worker_payloads_multi_turn_creates_forward_and_backward_workers(
         machine_deltaps=[0.0],
     )
 
+    # Single-plane machines build same-plane ranges: the x-plane start spawns a
+    # forward and backward worker that both observe the x-plane, ending at the
+    # previous x-plane BPM.
     assert len(payloads) == 2
     assert [
         (
@@ -217,25 +198,25 @@ def test_create_worker_payloads_multi_turn_creates_forward_and_backward_workers(
         )
         for _, config, _ in payloads
     ] == [
-        ("BPH.13208", "BPV.13108", 1, "x"),
-        ("BPH.13208", "BPV.13108", -1, "y"),
+        ("BPH.13208", "BPH.13008", 1, "x"),
+        ("BPH.13208", "BPH.13008", -1, "x"),
     ]
 
     forward_data = payloads[0][0]
     backward_data = payloads[1][0]
     assert np.isfinite(forward_data.position_variances[0, :, 0]).any()
     assert not np.isfinite(forward_data.position_variances[0, :, 1]).any()
-    assert not np.isfinite(backward_data.position_variances[0, :, 0]).any()
-    assert np.isfinite(backward_data.position_variances[0, :, 1]).any()
+    assert np.isfinite(backward_data.position_variances[0, :, 0]).any()
+    assert not np.isfinite(backward_data.position_variances[0, :, 1]).any()
 
 
 def test_create_worker_payloads_multi_turn_supports_mixed_start_planes(tmp_path: Path) -> None:
-    all_bpms = ["BPV.13108", "BPH.13208", "BPV.13308"]
+    all_bpms = ["BPH.13008", "BPV.13108", "BPH.13208", "BPV.13308"]
     manager = _make_manager(
         tmp_path,
         n_data_points={
-            ("BPH.13208", "BPV.13108"): 3,
-            ("BPV.13308", "BPH.13208"): 3,
+            ("BPH.13208", "BPH.13008"): 3,
+            ("BPV.13308", "BPV.13108"): 3,
         },
         all_bpms=all_bpms,
     )
@@ -260,41 +241,43 @@ def test_create_worker_payloads_multi_turn_supports_mixed_start_planes(tmp_path:
         machine_deltaps=[0.0],
     )
 
+    # Each single-plane start spawns a forward and backward worker confined to
+    # its own plane, so the x-plane and y-plane starts give four workers total.
     assert len(payloads) == 4
 
     payload_by_key = {
         (config.tracking_start_bpm, config.tracking_end_bpm, config.sdir): (data, config)
         for data, config, _ in payloads
     }
-    forward_h, forward_h_config = payload_by_key[("BPH.13208", "BPV.13108", 1)]
-    backward_h, backward_h_config = payload_by_key[("BPH.13208", "BPV.13108", -1)]
-    forward_v, forward_v_config = payload_by_key[("BPV.13308", "BPH.13208", 1)]
-    backward_v, backward_v_config = payload_by_key[("BPV.13308", "BPH.13208", -1)]
+    forward_h, forward_h_config = payload_by_key[("BPH.13208", "BPH.13008", 1)]
+    backward_h, backward_h_config = payload_by_key[("BPH.13208", "BPH.13008", -1)]
+    forward_v, forward_v_config = payload_by_key[("BPV.13308", "BPV.13108", 1)]
+    backward_v, backward_v_config = payload_by_key[("BPV.13308", "BPV.13108", -1)]
 
     assert forward_h_config.kick_plane == "x"
-    assert backward_h_config.kick_plane == "y"
+    assert backward_h_config.kick_plane == "x"
     assert forward_v_config.kick_plane == "y"
-    assert backward_v_config.kick_plane == "x"
+    assert backward_v_config.kick_plane == "y"
     assert np.isfinite(forward_h.position_variances[0, :, 0]).any()
     assert not np.isfinite(forward_h.position_variances[0, :, 1]).any()
-    assert not np.isfinite(backward_h.position_variances[0, :, 0]).any()
-    assert np.isfinite(backward_h.position_variances[0, :, 1]).any()
+    assert np.isfinite(backward_h.position_variances[0, :, 0]).any()
+    assert not np.isfinite(backward_h.position_variances[0, :, 1]).any()
     assert not np.isfinite(forward_v.position_variances[0, :, 0]).any()
     assert np.isfinite(forward_v.position_variances[0, :, 1]).any()
-    assert np.isfinite(backward_v.position_variances[0, :, 0]).any()
-    assert not np.isfinite(backward_v.position_variances[0, :, 1]).any()
+    assert not np.isfinite(backward_v.position_variances[0, :, 0]).any()
+    assert np.isfinite(backward_v.position_variances[0, :, 1]).any()
 
 
 def test_create_worker_payloads_arc_by_arc_uses_configured_fixed_pairs(tmp_path: Path) -> None:
-    all_bpms = ["BPH.13208", "BPV.13308", "BPV.20108"]
+    all_bpms = ["BPH.13008", "BPV.13108", "BPH.13208", "BPV.13308"]
     manager = _make_manager(
         tmp_path,
         n_data_points={
-            ("BPH.13208", "BPV.20108"): 3,
-            ("BPH.13208", "BPV.13308"): 2,
+            ("BPH.13208", "BPH.13008"): 3,
         },
         all_bpms=all_bpms,
     )
+    manager.accelerator.infer_monitor_plane = lambda bpm: "H" if "BPH" in bpm else "V"  # type: ignore[method-assign]
     df = _make_track_df(all_bpms, [1, 2, 3])
     simulation_config = SimulationConfig(
         tracks_per_worker=1,
@@ -309,11 +292,13 @@ def test_create_worker_payloads_arc_by_arc_uses_configured_fixed_pairs(tmp_path:
         turn_batches=[[2]],
         file_turn_map={2: 0},
         start_bpms=["BPH.13208"],
-        end_bpms=["BPV.13308"],
+        end_bpms=["BPH.13008"],
         simulation_config=simulation_config,
         machine_deltaps=[0.0],
     )
 
+    # Single-plane arc-by-arc ranges pair the same-plane start/end BPMs as the
+    # fixed forward/backward boundaries, keeping both workers on the x-plane.
     assert [
         (
             config.tracking_start_bpm,
@@ -323,8 +308,8 @@ def test_create_worker_payloads_arc_by_arc_uses_configured_fixed_pairs(tmp_path:
         )
         for _, config, _ in payloads
     ] == [
-        ("BPH.13208", "BPV.20108", 1, "x"),
-        ("BPH.13208", "BPV.13308", -1, "y"),
+        ("BPH.13208", "BPH.13008", 1, "x"),
+        ("BPH.13208", "BPH.13008", -1, "x"),
     ]
 
 
