@@ -39,6 +39,12 @@ _CORRECTOR_ATTRS_BY_KIND: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 
+def _exact_lua_pattern(name: str) -> str:
+    """Return a Lua pattern that matches one element name exactly."""
+    special_chars = set("^$()%.[]*+-?")
+    return "^" + "".join(f"%{char}" if char in special_chars else char for char in name) + "$"
+
+
 def _ensure_cycleable_start_element(
     iface: GenericMadInterface,
     start_bpm: str,
@@ -156,7 +162,7 @@ class GenericMadInterface(AbaMadInterface):
             if start_bpm is not None and start_bpm not in self.bpms_in_range
             else self.bpms_in_range
         )
-        self.observe_elements(observe_set)
+        self.observe_elements([_exact_lua_pattern(name) for name in observe_set])
         LOGGER.info("Restricted active observation set to %d BPMs", len(observe_set))
 
         # Apply corrector strengths if provided

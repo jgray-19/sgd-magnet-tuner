@@ -47,6 +47,14 @@ if TYPE_CHECKING:
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 
+def _load_mad_twiss_for_tracking(
+    interface_with_beam: AbaMadInterface,
+    dpp_value: float,
+) -> pd.DataFrame:
+    """Load MAD-NG twiss data for off-momentum tracking initial conditions."""
+    return interface_with_beam.run_twiss(observe=0, deltap=dpp_value).copy()
+
+
 def _run_track_with_model(
     env: xt.Environment,
     flattop_turns: int,
@@ -188,7 +196,7 @@ def _generate_nonoise_track(
 
     # MAD-NG's off-momentum twiss is more robust here than xsuite's periodic
     # twiss solve, so pass it directly into xtrack_tools.
-    mad_twiss = interface_with_beam.run_twiss(observe=0, deltap=dpp_value).copy()
+    mad_twiss = _load_mad_twiss_for_tracking(interface_with_beam, dpp_value)
 
     # run_madng_tracking(
     #     interface=interface_with_beam,

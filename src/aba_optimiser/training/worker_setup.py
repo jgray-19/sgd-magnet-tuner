@@ -127,6 +127,16 @@ class WorkerSetupHelper:
         bad_bpms: list[str] | None = None,
     ) -> list[str]:
         """Return the raw BPM range after applying explicit exclusions."""
+        start_plane = self._plane_for_bpm(start_bpm)
+        end_plane = self._plane_for_bpm(end_bpm)
+        if start_plane is not None and start_plane == end_plane:
+            return self.tracking_plan.get_range_bpm_names(
+                all_bpms=self._bpms_for_plane(start_plane),
+                start_bpm=start_bpm,
+                end_bpm=end_bpm,
+                sdir=sdir,
+                bad_bpms=bad_bpms,
+            )
         return self.tracking_plan.get_range_bpm_names(
             all_bpms=self.all_bpms,
             start_bpm=start_bpm,
@@ -160,7 +170,13 @@ class WorkerSetupHelper:
         if kick_plane == KickPlane.XY:
             return self.bad_bpms
 
-        range_bpms = self.get_range_bpm_names(start_bpm, end_bpm, sdir)
+        range_bpms = self.tracking_plan.get_range_bpm_names(
+            all_bpms=self.all_bpms,
+            start_bpm=start_bpm,
+            end_bpm=end_bpm,
+            sdir=sdir,
+            bad_bpms=None,
+        )
         plane_filtered = [
             bpm for bpm in range_bpms if not self.bpm_supports_plane(bpm, kick_plane)
         ]
@@ -173,15 +189,122 @@ class WorkerSetupHelper:
         simulation_config: SimulationConfig,
     ) -> list[WorkerRangeSpec]:
         """Return logical worker ranges before file-specific plane filtering."""
-        return self.tracking_plan.build_range_specs(
+        if self.tracking_plan.init_marker is not None or not any(
+            not self.bpm_supports_both_planes(bpm) for bpm in self.all_bpms
+        ):
+            return self.tracking_plan.build_range_specs(
+                start_bpms=start_bpms,
+                end_bpms=end_bpms,
+                all_bpms=self.all_bpms,
+                simulation_config=simulation_config,
+                use_fixed_bpm=self.use_fixed_bpm,
+                fixed_start=self.fixed_start,
+                fixed_end=self.fixed_end,
+            )
+
+        return self._build_single_plane_range_specs(
             start_bpms=start_bpms,
             end_bpms=end_bpms,
-            all_bpms=self.all_bpms,
             simulation_config=simulation_config,
-            use_fixed_bpm=self.use_fixed_bpm,
-            fixed_start=self.fixed_start,
-            fixed_end=self.fixed_end,
         )
+
+    def _plane_for_bpm(self, bpm: str) -> KickPlane | None:
+        """Return the single transverse plane measured by a BPM, if any."""
+        try:
+            supports_x = self.bpm_supports_plane(bpm, KickPlane.X)
+            supports_y = self.bpm_supports_plane(bpm, KickPlane.Y)
+        except ValueError:
+            return None
+        if supports_x and not supports_y:
+            return KickPlane.X
+        if supports_y and not supports_x:
+            return KickPlane.Y
+        return None
+
+    def _bpms_for_plane(self, plane: KickPlane) -> list[str]:
+        """Return model BPMs that can observe one transverse plane."""
+        return [bpm for bpm in self.all_bpms if self.bpm_supports_plane(bpm, plane)]
+
+    def _bpm_behind_in_plane(self, start_bpm: str, plane_bpms: list[str]) -> str:
+        """Return the previous BPM in the same plane as ``start_bpm``."""
+        if start_bpm not in plane_bpms:
+            raise ValueError(f"Start BPM '{start_bpm}' is not a {plane.value}-plane BPM")
+        return plane_bpms[plane_bpms.index(start_bpm) - 1]
+
+    def _single_plane_user_bpms(
+        self,
+        bpms: list[str],
+        *,
+        label: str,
+    ) -> dict[KickPlane, list[str]]:
+        """Split user-selected BPMs by their real monitor plane."""
+        by_plane = {KickPlane.X: [], KickPlane.Y: []}
+        for bpm in bpms:
+            plane = self._plane_for_bpm(bpm)
+            if plane is None:
+                LOGGER.warning(
+                    "Single-plane range planning keeps dual-plane %s BPM %s in both planes",
+                    label,
+                    bpm,
+                )
+                by_plane[KickPlane.X].append(bpm)
+                by_plane[KickPlane.Y].append(bpm)
+            else:
+                by_plane[plane].append(bpm)
+        return by_plane
+
+    def _build_single_plane_range_specs(
+        self,
+        *,
+        start_bpms: list[str],
+        end_bpms: list[str],
+        simulation_config: SimulationConfig,
+    ) -> list[WorkerRangeSpec]:
+        """Build ranges from same-plane BPM boundaries for single-plane machines."""
+        starts_by_plane = self._single_plane_user_bpms(start_bpms, label="start")
+        ends_by_plane = self._single_plane_user_bpms(end_bpms, label="end")
+        range_specs: list[WorkerRangeSpec] = []
+
+        for plane in (KickPlane.X, KickPlane.Y):
+            plane_bpms = self._bpms_for_plane(plane)
+            if not plane_bpms:
+                continue
+
+            starts = starts_by_plane[plane]
+            ends = ends_by_plane[plane]
+            if not starts and not ends:
+                LOGGER.warning(
+                    "No %s-plane BPM boundaries were provided for single-plane range planning",
+                    plane.value,
+                )
+                continue
+            if simulation_config.run_arc_by_arc and bool(starts) != bool(ends):
+                raise ValueError(
+                    f"Single-plane arc-by-arc ranges need both start and end BPMs for "
+                    f"the {plane.value}-plane; got {len(starts)} starts and {len(ends)} ends"
+                )
+
+            if not simulation_config.run_arc_by_arc:
+                for start_bpm in starts:
+                    end_bpm = self._bpm_behind_in_plane(start_bpm, plane_bpms)
+                    range_specs.extend(
+                        WorkerRangeSpec(start_bpm=start_bpm, end_bpm=end_bpm, sdir=sdir)
+                        for sdir in (1, -1)
+                    )
+                continue
+
+            range_specs.extend(
+                self.tracking_plan.build_range_specs(
+                    start_bpms=starts,
+                    end_bpms=ends,
+                    all_bpms=plane_bpms,
+                    simulation_config=simulation_config,
+                    use_fixed_bpm=self.use_fixed_bpm,
+                    fixed_start=starts[0] if self.use_fixed_bpm else self.fixed_start,
+                    fixed_end=ends[0] if self.use_fixed_bpm else self.fixed_end,
+                )
+            )
+        return range_specs
 
     @staticmethod
     def get_primary_file_idx(turn_batch: list[int], file_turn_map: dict[int, int]) -> int:
@@ -200,7 +323,12 @@ class WorkerSetupHelper:
         ):
             return (KickPlane.XY,)
         if data_plane == KickPlane.XY:
-            return (KickPlane.X, KickPlane.Y)
+            planes = [
+                plane
+                for plane in (KickPlane.X, KickPlane.Y)
+                if any(self.bpm_supports_plane(bpm, plane) for bpm in range_bpms)
+            ]
+            return tuple(planes)
         return (data_plane,)
 
     def make_observation_plan(
@@ -253,6 +381,7 @@ class WorkerSetupHelper:
             return None
         if not bpm_names:
             return None
+
         return WorkerObservationPlan(
             range_spec=range_spec,
             file_idx=file_idx,
