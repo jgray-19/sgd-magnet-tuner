@@ -32,7 +32,8 @@ from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.physics.deltap import dp2pt
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import (
+from aba_optimiser.training.workers.screening import OutlierScreener
+from aba_optimiser.training.config.models import (
     MeasurementConfig,
     OutputConfig,
     SequenceConfig,
@@ -472,7 +473,8 @@ def evaluate_controller_worker_losses(
     try:
         losses = []
         for knobs in knobs_list:
-            diags = ctrl.worker_manager._request_worker_diagnostics(knobs)
+            screener = OutlierScreener(ctrl.worker_manager.payload_builder)
+            diags = screener.request_worker_diagnostics(ctrl.worker_manager._channels(), knobs)
             losses.append(sum(float(d["total_loss"]) for d in diags))  # type: ignore[arg-type]
     finally:
         ctrl.worker_manager.terminate_workers()

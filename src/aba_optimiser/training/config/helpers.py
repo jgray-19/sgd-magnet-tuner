@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from aba_optimiser.training.controller_config import MeasurementConfig
+from aba_optimiser.training.config.models import MeasurementConfig
 
 if TYPE_CHECKING:
     from pathlib import Path

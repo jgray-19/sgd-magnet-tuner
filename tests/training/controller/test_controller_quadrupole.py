@@ -15,7 +15,7 @@ from aba_optimiser.accelerators import LHC, SPS
 from aba_optimiser.config import OptimiserConfig
 from aba_optimiser.mad.optimising_mad_interface import GradientDescentMadInterface
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import (
+from aba_optimiser.training.config.models import (
     MeasurementConfig,
     OutputConfig,
     SequenceConfig,

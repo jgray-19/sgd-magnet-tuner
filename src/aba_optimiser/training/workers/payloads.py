@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from aba_optimiser.accelerators import Accelerator
-    from aba_optimiser.training.worker_setup import WorkerObservationPlan
+    from aba_optimiser.training.workers.setup import WorkerObservationPlan
     from aba_optimiser.workers import WorkerConfig
 
 LOGGER = logging.getLogger(__name__)

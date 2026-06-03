@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from aba_optimiser.training.tracking_mode import TrackingPlan
+    from aba_optimiser.training.config.tracking import TrackingPlan
 
     ShuffleTurns = Callable[[list[int]], None]
 
@@ -98,7 +98,7 @@ def _get_range_spec_plan(
     Thin wrapper around ``TrackingPlan.range_specs_per_batch`` for use in tests
     and helper code that does not have a ``TrackingPlan`` instance.
     """
-    from aba_optimiser.training.tracking_mode import ArcByArcTrackingPlan
+    from aba_optimiser.training.config.tracking import ArcByArcTrackingPlan
 
     return ArcByArcTrackingPlan().range_specs_per_batch(
         run_arc_by_arc=run_arc_by_arc,

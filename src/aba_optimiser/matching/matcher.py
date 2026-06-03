@@ -147,7 +147,7 @@ class BetaMatcher:
             return f, grad
 
         from aba_optimiser.optimisers.lbfgs import LBFGSOptimiser
-        from aba_optimiser.training.scheduler import LRScheduler
+        from aba_optimiser.training.optimisation.scheduler import LRScheduler
 
         optimiser = LBFGSOptimiser(history_size=20, use_adaptive_lr=True)
         # The beta-beating gradient is huge (~1e6) while the corrector knobs need

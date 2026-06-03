@@ -70,9 +70,9 @@ all = [
 ]
 
 [tool.uv.sources]
-pymadng-utils = { git = "https://github.com/jgray-19/pymadng-utils.git" }
-tmom-recon = { git = "https://github.com/jgray-19/tmom-recon.git" }
-xtrack-tools = { git = "https://github.com/jgray-19/xtrack_tools.git" }
+pymadng-utils = { path = "../pymadng-utils", editable = true }
+tmom-recon = { path = "../tmom-recon", editable = true }
+xtrack-tools = { path = "../xtrack-tools", editable = true }
 
 
 [tool.setuptools]

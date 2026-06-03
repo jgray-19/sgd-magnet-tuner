@@ -7,8 +7,8 @@ import pandas as pd
 import pytest
 
 from aba_optimiser.accelerators import SPS
-from aba_optimiser.training.worker_payloads import WorkerPayloadBuilder
-from aba_optimiser.training.worker_setup import WorkerObservationPlan, WorkerRangeSpec
+from aba_optimiser.training.workers.payloads import WorkerPayloadBuilder
+from aba_optimiser.training.workers.setup import WorkerObservationPlan, WorkerRangeSpec
 from aba_optimiser.workers.common import KickPlane, TrackingData, WorkerConfig
 
 if TYPE_CHECKING:

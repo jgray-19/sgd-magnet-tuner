@@ -10,7 +10,7 @@ from pathlib import Path
 import tfs
 
 from aba_optimiser.accelerators import LHC
-from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig
+from aba_optimiser.config import MEASUREMENTS_ARTIFACTS_ROOT, OptimiserConfig
 
 # Import helper functions from the coordinate optimisation script to stay DRY
 from aba_optimiser.measurements.optimise_squeeze_quads import (
@@ -23,7 +23,7 @@ from aba_optimiser.measurements.squeeze_helpers import (
     get_or_make_sequence,
 )
 from aba_optimiser.measurements.utils import find_all_bad_bpms_from_analysis
-from aba_optimiser.training.controller_config import OutputConfig, SequenceConfig
+from aba_optimiser.training.config.models import OutputConfig, SequenceConfig
 from aba_optimiser.training_optics.controller import OpticsController
 
 logger = logging.getLogger(__name__)
@@ -146,7 +146,7 @@ def run_optics_optimisation_for_squeeze_step(
     sequence_path = get_or_make_sequence(beam, model_dir)
 
     # Results directory
-    results_dir = PROJECT_ROOT / f"b{beam}_optics_results"
+    results_dir = MEASUREMENTS_ARTIFACTS_ROOT / "results" / f"b{beam}_optics_results"
     results_dir.mkdir(exist_ok=True)
 
     # Get optics folder with measurements

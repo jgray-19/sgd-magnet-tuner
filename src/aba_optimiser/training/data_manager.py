@@ -9,14 +9,14 @@ import pandas as pd
 
 from aba_optimiser.config import FILE_COLUMNS
 from aba_optimiser.dataframes.utils import select_markers
-from aba_optimiser.training.worker_turn_planner import WorkerTurnPlanner
+from aba_optimiser.training.workers.turn_planner import WorkerTurnPlanner
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from aba_optimiser.config import SimulationConfig
-    from aba_optimiser.training.configuration_manager import ConfigurationManager
-    from aba_optimiser.training.tracking_mode import TrackingPlan
+    from aba_optimiser.training.config.manager import ConfigurationManager
+    from aba_optimiser.training.config.tracking import TrackingPlan
 
     ShuffleTurns = Callable[[list[int]], None]
 

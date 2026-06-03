@@ -9,39 +9,23 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import multiprocessing as mp
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
-from aba_optimiser.training.tracking_mode import ArcByArcTrackingPlan, TrackingPlan
-from aba_optimiser.training.validation_selection import (
+from aba_optimiser.training.workers.screening import OutlierScreener
+from aba_optimiser.training.config.tracking import ArcByArcTrackingPlan, TrackingPlan
+from aba_optimiser.training.workers.validation import (
     ValidationSplitResult,
-    payload_track_count,
     split_validation_payloads,
 )
-from aba_optimiser.training.worker_payloads import WorkerPayloadBuilder
-from aba_optimiser.training.worker_setup import WorkerRuntimeMetadata, WorkerSetupHelper
-from aba_optimiser.workers import (
-    PositionOnlyValidationTrackingWorker,
-    TrackingData,
-    TrackingWorker,
-    ValidationTrackingWorker,
-    WorkerConfig,
-)
+from aba_optimiser.training.workers.payloads import WorkerPayloadBuilder
+from aba_optimiser.training.workers.setup import WorkerRuntimeMetadata, WorkerSetupHelper
+from aba_optimiser.training.workers.spawning import WorkerSpawner
 from aba_optimiser.workers.protocol import WorkerChannels, raise_for_worker_error_payload
-from aba_optimiser.workers.tracking_position_only import PositionOnlyTrackingWorker
-
-# Maps (optimise_momenta, validation) -> worker class.
-# Add new worker types here without touching WorkerManager.
-_WORKER_CLASS_REGISTRY: dict[tuple[bool, bool], type] = {
-    (True, False): TrackingWorker,
-    (False, False): PositionOnlyTrackingWorker,
-    (True, True): ValidationTrackingWorker,
-    (False, True): PositionOnlyValidationTrackingWorker,
-}
 
 if TYPE_CHECKING:
+    import multiprocessing as mp
     from multiprocessing.connection import Connection
     from pathlib import Path
 
@@ -49,6 +33,7 @@ if TYPE_CHECKING:
 
     from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.config import SimulationConfig
+    from aba_optimiser.workers import TrackingData, WorkerConfig
 
 
 LOGGER = logging.getLogger(__name__)
@@ -158,23 +143,6 @@ class WorkerManager:
         if self.validation_channels is None:
             raise RuntimeError("Validation worker channel is not initialised")
         return self.validation_channels
-
-    @staticmethod
-    def _select_worker_class(
-        kick_plane: str,
-        optimise_momenta: bool,
-        *,
-        validation: bool = False,
-    ) -> type:
-        """Select the worker implementation for a payload."""
-        if kick_plane not in {"xy", "x", "y"}:
-            raise ValueError(f"Unsupported kick plane {kick_plane!r}")
-        worker_class = _WORKER_CLASS_REGISTRY.get((optimise_momenta, validation))
-        if worker_class is None:
-            raise ValueError(
-                f"No worker class registered for optimise_momenta={optimise_momenta}, validation={validation}"
-            )
-        return worker_class
 
     @staticmethod
     def _summarise_file_usage(
@@ -356,21 +324,21 @@ class WorkerManager:
                 "Validation payloads duplicate training payloads because a clean split would leave no training workers."
             )
 
-        self.parent_conns = []
-        self.workers = []
-        self.worker_metadata = []
-        self.validation_parent_conns = []
-        self.validation_workers = []
-        self.validation_channels = None
-        self.validation_metadata = []
-        self.validation_loss_weights = []
-        self._worker_particle_counts: list[int] = []
-
-        self._spawn_training_workers(
+        spawner = WorkerSpawner(self.setup_helper)
+        training = spawner.spawn_training(
             training_payloads, simulation_config, worker_mode, n_run_turns, initial_knobs
         )
+        self.parent_conns = training.parent_conns
+        self.workers = training.workers
+        self.worker_metadata = training.worker_metadata
+        self._worker_particle_counts: list[int] = training.particle_counts
+
+        self.validation_parent_conns = []
+        self.validation_workers = []
+        self.validation_metadata = []
+        self.validation_loss_weights = []
         if validation_payloads:
-            self._spawn_validation_workers(
+            validation = spawner.spawn_validation(
                 validation_payloads,
                 len(training_payloads),
                 simulation_config,
@@ -378,6 +346,10 @@ class WorkerManager:
                 n_run_turns,
                 initial_knobs,
             )
+            self.validation_parent_conns = validation.parent_conns
+            self.validation_workers = validation.workers
+            self.validation_metadata = validation.metadata
+            self.validation_loss_weights = validation.loss_weights
 
         self.channels = WorkerChannels(self.parent_conns, self.workers)
         self.validation_channels = (
@@ -428,309 +400,6 @@ class WorkerManager:
             optimise_momenta=simulation_config.optimise_momenta,
         )
         return training_payloads, [], False
-
-    def _spawn_training_workers(
-        self,
-        training_payloads: list,
-        simulation_config: SimulationConfig,
-        worker_mode: str,
-        n_run_turns: int,
-        initial_knobs: dict[str, float],
-    ) -> None:
-        """Spawn one process per training payload and record its runtime metadata."""
-        for worker_id, (data, config, file_idx) in enumerate(training_payloads):
-            parent, child = mp.Pipe()
-            worker_class = self._select_worker_class(
-                config.kick_plane,
-                simulation_config.optimise_momenta,
-                validation=False,
-            )
-            worker = worker_class(
-                child,
-                worker_id,
-                data,
-                config,
-                simulation_config,
-                mode=worker_mode,
-            )
-            worker.start()
-            self.parent_conns.append(parent)
-            self.workers.append(worker)
-            self._worker_particle_counts.append(len(data.init_coords))
-            parent.send((initial_knobs, -1))
-            bpm_names = self.setup_helper.get_worker_bpm_names(
-                config.tracking_start_bpm,
-                config.tracking_end_bpm,
-                config.sdir,
-                config.kick_plane,
-                config.bad_bpms,
-            )
-            self.worker_metadata.append(
-                self.setup_helper.make_runtime_metadata(
-                    worker_id=worker_id,
-                    file_idx=file_idx,
-                    config=config,
-                    bpm_names=bpm_names,
-                    n_run_turns=n_run_turns,
-                )
-            )
-            LOGGER.debug(
-                "Trn worker %d: file=%d, range=%s/%s, sdir=%d, kick_plane=%s, observed_bpms=%d",
-                worker_id,
-                file_idx,
-                config.tracking_start_bpm,
-                config.tracking_end_bpm,
-                config.sdir,
-                config.kick_plane,
-                len(bpm_names),
-            )
-
-    def _spawn_validation_workers(
-        self,
-        validation_payloads: list,
-        training_worker_count: int,
-        simulation_config: SimulationConfig,
-        worker_mode: str,
-        n_run_turns: int,
-        initial_knobs: dict[str, float],
-    ) -> None:
-        """Spawn one validation process per validation payload and record its metadata."""
-        covered_ranges: set[tuple[int, str, str]] = set()
-        for val_offset, validation_payload in enumerate(validation_payloads):
-            val_worker_id = training_worker_count + val_offset
-            val_parent, val_child = mp.Pipe()
-            val_data, val_config, val_file_idx = validation_payload
-            validation_class = self._select_worker_class(
-                val_config.kick_plane,
-                simulation_config.optimise_momenta,
-                validation=True,
-            )
-            val_worker = validation_class(
-                val_child,
-                val_worker_id,
-                [validation_payload],
-                simulation_config,
-                mode=worker_mode,
-            )
-            val_worker.start()
-            val_parent.send((initial_knobs, -1))
-            self.validation_parent_conns.append(val_parent)
-            self.validation_workers.append(val_worker)
-
-            val_bpm_names = self.setup_helper.get_worker_bpm_names(
-                val_config.tracking_start_bpm,
-                val_config.tracking_end_bpm,
-                val_config.sdir,
-                val_config.kick_plane,
-                val_config.bad_bpms,
-            )
-            self.validation_metadata.append(
-                self.setup_helper.make_runtime_metadata(
-                    worker_id=val_worker_id,
-                    file_idx=val_file_idx,
-                    config=val_config,
-                    bpm_names=val_bpm_names,
-                    n_run_turns=n_run_turns,
-                )
-            )
-            val_tracks = payload_track_count(validation_payload)
-            self.validation_loss_weights.append(float(val_tracks))
-            covered_ranges.add(
-                (
-                    val_file_idx,
-                    val_config.tracking_start_bpm,
-                    val_config.tracking_end_bpm,
-                )
-            )
-            LOGGER.debug(
-                "Val worker %d: file=%d, range=%s/%s, sdir=%d, kick_plane=%s, observed_bpms=%d, tracks=%d",
-                val_worker_id,
-                val_file_idx,
-                val_config.tracking_start_bpm,
-                val_config.tracking_end_bpm,
-                val_config.sdir,
-                val_config.kick_plane,
-                len(val_bpm_names),
-                val_tracks,
-            )
-
-        LOGGER.info(
-            "Validation setup: payloads=%d, covered_ranges=%d, tracks=%d",
-            len(validation_payloads),
-            len(covered_ranges),
-            int(sum(self.validation_loss_weights)),
-        )
-
-    @staticmethod
-    def _compute_positive_z_scores(values: np.ndarray) -> np.ndarray:
-        """Compute positive-side z-scores; values below mean map to 0."""
-        v = np.asarray(values, dtype=np.float64)
-        finite = np.isfinite(v)
-        z = np.zeros_like(v, dtype=np.float64)
-        if finite.sum() < 2:
-            return z
-
-        mean = float(np.mean(v[finite]))
-        std = float(np.std(v[finite]))
-        if std <= 0.0:
-            return z
-
-        z_vals = (v - mean) / std
-        z[finite] = np.maximum(z_vals[finite], 0.0)
-        return z
-
-    def _request_worker_diagnostics(
-        self, initial_knobs: dict[str, float]
-    ) -> list[dict[str, object]]:
-        """Request diagnostics from all workers and return validated payloads."""
-        diagnostics: list[dict[str, object]] = []
-        channels = self._channels()
-        channels.send_all({"cmd": "diagnostics", "knobs": initial_knobs})
-        for result in channels.recv_all():
-            if not isinstance(result, dict):
-                raise RuntimeError(f"Unexpected diagnostics payload from worker: {type(result)}")
-            diagnostics.append(result)  # ty:ignore[invalid-argument-type]
-        return diagnostics
-
-    def _build_bpm_masks_from_diagnostics(
-        self,
-        diagnostics: list[dict[str, object]],
-        bpm_sigma_threshold: float,
-    ) -> list[np.ndarray]:
-        """Build keep-masks from per-BPM losses."""
-        bpm_masks: list[np.ndarray] = []
-
-        for meta, diag in zip(self.worker_metadata, diagnostics, strict=True):
-            worker_id = int(diag["worker_id"])
-            loss_per_point = np.asarray(diag["loss_per_bpm"], dtype=np.float64)
-            loss_per_bpm = self.payload_builder.diagnostic_loss_per_bpm(
-                loss_per_point=loss_per_point,
-                bpm_names=meta.bpm_names,
-                n_run_turns=meta.n_run_turns,
-                worker_id=worker_id,
-            )
-            bpm_z = self._compute_positive_z_scores(loss_per_bpm)
-            keep_mask = np.ones(len(meta.bpm_names), dtype=bool)
-            outlier_indices = np.where(bpm_z > bpm_sigma_threshold)[0]
-
-            for bpm_idx in outlier_indices:
-                keep_mask[bpm_idx] = False
-                LOGGER.warning(
-                    "Worker %d: loss at BPM %s is %.2f standard deviations away from the mean, ignoring for optimisation.",
-                    worker_id,
-                    meta.bpm_names[bpm_idx],
-                    bpm_z[bpm_idx],
-                )
-
-            bpm_masks.append(keep_mask)
-
-        return bpm_masks
-
-    def _classify_worker_outliers(
-        self,
-        worker_losses: np.ndarray,
-        worker_sigma_threshold: float,
-    ) -> list[bool]:
-        """Identify high-loss worker outliers from adjusted worker losses."""
-        worker_z = self._compute_positive_z_scores(worker_losses)
-        worker_disabled: list[bool] = []
-        n_disabled = 0
-
-        for idx, meta in enumerate(self.worker_metadata):
-            z_score = float(worker_z[idx])
-            disable = z_score > worker_sigma_threshold
-            worker_disabled.append(disable)
-            if disable:
-                n_disabled += 1
-                LOGGER.warning(
-                    "Worker %d with starting BPM %s is %.2f standard deviations away from the mean, ignoring.",
-                    meta.worker_id,
-                    meta.start_bpm,
-                    z_score,
-                )
-
-        if n_disabled == 0:
-            max_z = float(np.max(worker_z)) if worker_z.size else 0.0
-            LOGGER.warning(
-                "Worker outlier screening: no workers exceeded threshold %.2fσ (max z-score %.2f).",
-                worker_sigma_threshold,
-                max_z,
-            )
-
-        return worker_disabled
-
-    def _summarise_screening_losses(
-        self,
-        diagnostics: list[dict[str, object]],
-        bpm_masks: list[np.ndarray],
-        worker_disabled: list[bool],
-    ) -> None:
-        """Log loss before masking and projected loss after masking/disabling."""
-        raw_worker_losses: list[float] = []
-        projected_worker_losses: list[float] = []
-
-        for idx, (diag, mask, disable, meta) in enumerate(
-            zip(diagnostics, bpm_masks, worker_disabled, self.worker_metadata, strict=True)
-        ):
-            loss_per_point = np.asarray(diag["loss_per_bpm"], dtype=np.float64)
-            expanded_mask = self.payload_builder.expand_bpm_mask(mask, meta.n_run_turns)
-            if loss_per_point.size != expanded_mask.size:
-                raise RuntimeError(
-                    f"Worker diagnostics at index {idx} has incompatible mask/point lengths "
-                    f"({expanded_mask.size} mask points vs {loss_per_point.size} losses)"
-                )
-
-            raw_loss = float(np.nansum(loss_per_point))
-            kept_loss = float(np.nansum(loss_per_point[expanded_mask])) if not disable else 0.0
-            raw_worker_losses.append(raw_loss)
-            projected_worker_losses.append(kept_loss)
-
-        raw_total = float(np.sum(raw_worker_losses))
-        projected_total = float(np.sum(projected_worker_losses))
-        n_workers = max(1, len(raw_worker_losses))
-        raw_mean = raw_total / n_workers
-        projected_mean = projected_total / n_workers
-        reduction = 100.0 * (1.0 - projected_total / raw_total) if raw_total > 0.0 else 0.0
-
-        LOGGER.info(
-            "Pre-screening loss summary: total=%.6e, mean/worker=%.6e",
-            raw_total,
-            raw_mean,
-        )
-        LOGGER.info(
-            "Projected post-screening loss summary: total=%.6e, mean/worker=%.6e (reduction=%.2f%%)",
-            projected_total,
-            projected_mean,
-            reduction,
-        )
-
-    def _apply_screening_actions(
-        self,
-        bpm_masks: list[np.ndarray],
-        worker_disabled: list[bool],
-    ) -> None:
-        """Send mask/disable settings to workers and verify acknowledgements."""
-        for conn, keep_mask, disable, meta in zip(
-            self.parent_conns, bpm_masks, worker_disabled, self.worker_metadata, strict=True
-        ):
-            expanded_mask = self.payload_builder.expand_bpm_mask(keep_mask, meta.n_run_turns)
-            conn.send(
-                {
-                    "cmd": "apply_mask",
-                    "keep_bpm_mask": expanded_mask.tolist(),
-                    "disable_worker": disable,
-                }
-            )
-
-        acknowledgements = (
-            [conn.recv() for conn in self.parent_conns]
-            if self.channels is None
-            else self._channels().recv_all()
-        )
-        for ack in acknowledgements:
-            ack_dict = cast("dict[object, object]", ack) if isinstance(ack, dict) else None
-            if ack_dict is None or ack_dict.get("status") != "ok":
-                raise RuntimeError(f"Failed to apply worker mask settings: {ack}")
 
     @staticmethod
     def _assert_control_ack(response: object, *, command: str) -> None:
@@ -792,39 +461,13 @@ class WorkerManager:
         worker_sigma_threshold: float = 2.0,
     ) -> None:
         """Screen and mask outliers before optimisation starts."""
-        if not self.parent_conns:
-            LOGGER.warning("No workers available for pre-optimisation outlier screening")
-            return
-
-        LOGGER.info(
-            "Running pre-optimisation outlier screening (BPM=%.1fσ, worker=%.1fσ)",
-            bpm_sigma_threshold,
-            worker_sigma_threshold,
-        )
-
-        diagnostics = self._request_worker_diagnostics(initial_knobs)
-        worker_losses: list[float] = []
-        for idx, diag in enumerate(diagnostics):
-            total_loss_raw = diag.get("total_loss")
-            if not isinstance(total_loss_raw, int | float | np.floating):
-                raise RuntimeError(
-                    f"Worker diagnostics at index {idx} missing numeric total_loss: {diag}"
-                )
-            worker_losses.append(float(total_loss_raw))
-
-        worker_disabled = self._classify_worker_outliers(
-            np.asarray(worker_losses, dtype=np.float64),
-            worker_sigma_threshold,
-        )
-        bpm_masks = self._build_bpm_masks_from_diagnostics(diagnostics, bpm_sigma_threshold)
-        self._summarise_screening_losses(diagnostics, bpm_masks, worker_disabled)
-        self._apply_screening_actions(bpm_masks, worker_disabled)
-
-        LOGGER.warning(
-            "Pre-optimisation screening complete: masked %d BPM entries across workers, disabled %d/%d workers",
-            sum(int((~mask).sum()) for mask in bpm_masks),
-            sum(worker_disabled),
-            len(self.parent_conns),
+        OutlierScreener(self.payload_builder).screen(
+            channels=self._channels(),
+            parent_conns=self.parent_conns,
+            worker_metadata=self.worker_metadata,
+            initial_knobs=initial_knobs,
+            bpm_sigma_threshold=bpm_sigma_threshold,
+            worker_sigma_threshold=worker_sigma_threshold,
         )
 
     def collect_worker_results(self, total_turns: int) -> tuple[float, np.ndarray]:

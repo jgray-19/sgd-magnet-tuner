@@ -18,7 +18,7 @@ from pymadng_utils.io.utils import save_knobs
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig
-from aba_optimiser.training.controller_config import OutputConfig, SequenceConfig
+from aba_optimiser.training.config.models import OutputConfig, SequenceConfig
 from aba_optimiser.training_optics import OpticsController
 
 if TYPE_CHECKING:

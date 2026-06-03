@@ -15,14 +15,14 @@ from tmom_recon import build_twiss_from_measurements
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.training.base_controller import BaseController
 from aba_optimiser.training.utils import extract_bpm_range_names
-from aba_optimiser.training.worker_lifecycle import WorkerLifecycleManager
+from aba_optimiser.training.workers.lifecycle import WorkerLifecycleManager
 from aba_optimiser.workers import OpticsData, OpticsWorker, WorkerConfig
 
 if TYPE_CHECKING:
     import pandas as pd
 
     from aba_optimiser.accelerators import Accelerator
-    from aba_optimiser.training.controller_config import OutputConfig, SequenceConfig
+    from aba_optimiser.training.config.models import OutputConfig, SequenceConfig
 
 logger = logging.getLogger(__name__)
 

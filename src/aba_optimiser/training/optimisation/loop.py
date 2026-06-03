@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, TypedDict, cast
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
@@ -14,26 +13,19 @@ from aba_optimiser.optimisers import adam as _adam  # noqa: F401
 from aba_optimiser.optimisers import amsgrad as _amsgrad  # noqa: F401
 from aba_optimiser.optimisers import lbfgs as _lbfgs  # noqa: F401
 from aba_optimiser.optimisers.base import BaseOptimiser
-from aba_optimiser.training.scheduler import LRScheduler
+from aba_optimiser.training.optimisation.checkpointing import OptimisationCheckpointer
+from aba_optimiser.training.optimisation.scheduler import LRScheduler
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     from tensorboardX import SummaryWriter
 
     from aba_optimiser.config import OptimiserConfig, SimulationConfig
-    from aba_optimiser.training.controller_config import CheckpointConfig
+    from aba_optimiser.training.config.models import CheckpointConfig
     from aba_optimiser.workers.protocol import WorkerChannels
 
 LOGGER = logging.getLogger(__name__)
-
-
-class _CheckpointState(TypedDict):
-    saved_epoch: int
-    next_epoch: int
-    current_knobs: dict[str, float]
-    prev_loss: float | None
 
 
 class OptimisationLoop:
@@ -125,45 +117,6 @@ class OptimisationLoop:
             raise ValueError(f"Unknown optimiser type: {optimiser_type}")
         LOGGER.info(f"Using optimiser: {self.optimiser.__class__.__name__}")
 
-    @staticmethod
-    def _checkpoint_options(
-        checkpoint_config: CheckpointConfig | None,
-    ) -> tuple[Path | None, int, bool]:
-        """Unpack checkpoint options with sensible defaults when disabled."""
-        if checkpoint_config is None:
-            return None, 0, False
-        return (
-            checkpoint_config.checkpoint_path,
-            checkpoint_config.checkpoint_every_n_epochs,
-            checkpoint_config.restore_from_checkpoint,
-        )
-
-    @staticmethod
-    def _should_save_periodic_checkpoint(
-        checkpoint_path: Path | None,
-        checkpoint_every_n_epochs: int,
-        epoch: int,
-    ) -> bool:
-        """Return True when this epoch should trigger periodic checkpointing."""
-        return (
-            checkpoint_path is not None
-            and checkpoint_every_n_epochs > 0
-            and (epoch + 1) % checkpoint_every_n_epochs == 0
-        )
-
-    @staticmethod
-    def _should_save_final_checkpoint(
-        checkpoint_path: Path | None,
-        checkpoint_every_n_epochs: int,
-        last_completed_epoch: int,
-    ) -> bool:
-        """Return True when a final checkpoint should be written on loop exit."""
-        return (
-            checkpoint_path is not None
-            and checkpoint_every_n_epochs > 0
-            and last_completed_epoch >= 0
-        )
-
     def _is_new_best(
         self,
         epoch_loss: float,
@@ -218,9 +171,7 @@ class OptimisationLoop:
         epoch_end_hook: Callable[[dict[str, float]], None] | None = None,
     ) -> dict[str, float]:
         """Run the main optimisation loop."""
-        checkpoint_path, checkpoint_every_n_epochs, restore_from_checkpoint = (
-            self._checkpoint_options(checkpoint_config)
-        )
+        checkpointer = OptimisationCheckpointer(self, checkpoint_config)
 
         if "pt" in current_knobs and current_knobs["pt"] == 0.0:
             current_knobs["pt"] = 1e-6  # Initialise pt to non-zero
@@ -228,19 +179,14 @@ class OptimisationLoop:
         prev_loss = None
         start_epoch = 0
 
-        if restore_from_checkpoint:
-            if checkpoint_path is None:
-                raise ValueError("restore_from_checkpoint=True requires checkpoint_path to be set")
-            checkpoint_state = self._load_checkpoint(
-                checkpoint_path,
-                base_current_knobs=current_knobs,
-            )
+        if checkpointer.restore:
+            checkpoint_state = checkpointer.load(base_current_knobs=current_knobs)
             current_knobs = checkpoint_state["current_knobs"]
             prev_loss = checkpoint_state["prev_loss"]
             start_epoch = checkpoint_state["next_epoch"]
             LOGGER.info(
                 "Restored optimisation checkpoint from %s at epoch %d",
-                checkpoint_path,
+                checkpointer.path,
                 checkpoint_state["saved_epoch"],
             )
 
@@ -308,17 +254,9 @@ class OptimisationLoop:
             if (
                 not stop_for_loss_change
                 and not stop_for_grad_norm
-                and self._should_save_periodic_checkpoint(
-                    checkpoint_path, checkpoint_every_n_epochs, epoch
-                )
+                and checkpointer.should_save_periodic(epoch)
             ):
-                assert checkpoint_path is not None
-                self._save_checkpoint(
-                    checkpoint_path=checkpoint_path,
-                    epoch=epoch,
-                    current_knobs=current_knobs,
-                    prev_loss=prev_loss,
-                )
+                checkpointer.save(epoch, current_knobs, prev_loss)
                 saved_checkpoint = True
 
             self._log_epoch_stats(
@@ -345,267 +283,10 @@ class OptimisationLoop:
                     f"\nGradient norm below threshold: {self.smoothed_grad_norm:.3e}. Stopping early at epoch {epoch}."
                 )
                 break
-        if self._should_save_final_checkpoint(
-            checkpoint_path, checkpoint_every_n_epochs, last_completed_epoch
-        ):
-            assert checkpoint_path is not None
-            self._save_checkpoint(
-                checkpoint_path=checkpoint_path,
-                epoch=last_completed_epoch,
-                current_knobs=current_knobs,
-                prev_loss=prev_loss,
-            )
+        if checkpointer.should_save_final(last_completed_epoch):
+            checkpointer.save(last_completed_epoch, current_knobs, prev_loss)
 
         return self.best_knobs
-
-    def _save_checkpoint(
-        self,
-        checkpoint_path: Path,
-        epoch: int,
-        current_knobs: dict[str, float],
-        prev_loss: float | None,
-    ) -> None:
-        """Save optimisation state so the run can be resumed later."""
-        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "saved_epoch": int(epoch),
-            "next_epoch": int(epoch + 1),
-            "knob_names": self.knob_names,
-            "current_knobs": {k: float(v) for k, v in current_knobs.items()},
-            "best_knobs": {k: float(v) for k, v in self.best_knobs.items()},
-            "best_loss": float(self.best_loss),
-            "prev_loss": None if prev_loss is None else float(prev_loss),
-            "smoothed_grad_norm": float(self.smoothed_grad_norm),
-            "smoothed_loss_change": float(self.smoothed_loss_change),
-            "optimiser_class": self.optimiser.__class__.__name__,
-            "optimiser_state": self.optimiser.state_to_dict(),
-        }
-        checkpoint_path.write_text(json.dumps(payload, indent=2))
-
-    @staticmethod
-    def _clip_name_list_for_error(names: set[str]) -> str:
-        """Format long knob-name sets for concise error messages."""
-        return ", ".join(sorted(names)[:10]) + ("..." if len(names) > 10 else "")
-
-    @staticmethod
-    def _nonfinite_knob_names(knobs: dict[str, float]) -> list[str]:
-        """Return knob names whose values are not finite."""
-        return [name for name, value in knobs.items() if not np.isfinite(value)]
-
-    def _validate_finite_knob_values(self, knobs: dict[str, float], *, label: str) -> None:
-        """Reject knob maps that contain NaN or infinite values."""
-        nonfinite = self._nonfinite_knob_names(knobs)
-        if nonfinite:
-            raise ValueError(
-                f"{label} contains non-finite knob values: "
-                + self._clip_name_list_for_error(set(nonfinite))
-            )
-
-    def _initialise_merged_current_knobs(
-        self,
-        base_current_knobs: dict[str, float] | None,
-    ) -> dict[str, float]:
-        """Build the starting current-knob map used when restoring checkpoints."""
-        current_knob_set = set(self.knob_names)
-        if base_current_knobs is None:
-            return {k: (1e-6 if k == "pt" else 0.0) for k in self.knob_names}
-
-        if set(base_current_knobs.keys()) != current_knob_set:
-            raise ValueError(
-                "base_current_knobs must contain exactly the current optimisation knob set."
-            )
-        merged = {str(k): float(v) for k, v in base_current_knobs.items()}
-        self._validate_finite_knob_values(merged, label="base_current_knobs")
-        return merged
-
-    def _validate_checkpoint_knob_compatibility(
-        self,
-        saved_knob_names: list[str],
-    ) -> set[str]:
-        """Ensure checkpoint knobs are a subset of the current optimisation knobs."""
-        saved_knob_set = set(saved_knob_names)
-        current_knob_set = set(self.knob_names)
-
-        missing_in_current = saved_knob_set.difference(current_knob_set)
-        if missing_in_current:
-            raise ValueError(
-                "Checkpoint knob names are not compatible with current optimisation setup. "
-                "Current setup is missing checkpoint knobs: "
-                + self._clip_name_list_for_error(missing_in_current)
-            )
-        return saved_knob_set
-
-    def _parse_checkpoint_knob_values(
-        self,
-        payload: dict[str, Any],
-        field_name: str,
-    ) -> dict[str, float]:
-        """Parse and validate a knob-value mapping from checkpoint payload."""
-        current_knob_set = set(self.knob_names)
-        checkpoint_values = {
-            str(k): float(v) for k, v in cast("dict[str, Any]", payload.get(field_name, {})).items()
-        }
-        unknown_names = set(checkpoint_values.keys()).difference(current_knob_set)
-        if unknown_names:
-            raise ValueError(
-                f"Checkpoint {field_name} contain names that are not in the current optimisation setup: "
-                + self._clip_name_list_for_error(unknown_names)
-            )
-        self._validate_finite_knob_values(checkpoint_values, label=f"Checkpoint {field_name}")
-        return checkpoint_values
-
-    @staticmethod
-    def _expand_vector_to_current_knobs(
-        vector: list[float],
-        saved_knob_names: list[str],
-        current_knob_names: list[str],
-        fill_value: float,
-    ) -> list[float]:
-        """Remap a saved optimizer vector onto the current knob layout with padding."""
-        if len(vector) != len(saved_knob_names):
-            raise ValueError(
-                "Optimiser state vector length does not match checkpoint knob_names length."
-            )
-        saved_index = {name: i for i, name in enumerate(saved_knob_names)}
-        return [
-            float(vector[saved_index[name]]) if name in saved_index else fill_value
-            for name in current_knob_names
-        ]
-
-    def _resize_optimiser_state_for_current_knobs(
-        self,
-        optimiser_state: dict[str, Any],
-        saved_knob_names: list[str],
-        merged_current_knobs: dict[str, float],
-    ) -> dict[str, Any]:
-        """Resize/remap optimiser state vectors to match current knob layout."""
-        if saved_knob_names == self.knob_names:
-            return optimiser_state
-
-        state = dict(optimiser_state)
-        state_type = str(state.get("type", "")).lower()
-
-        if state_type in {"adam", "amsgrad"}:
-            state["m"] = self._expand_vector_to_current_knobs(
-                cast("list[float]", state["m"]),
-                saved_knob_names,
-                self.knob_names,
-                fill_value=0.0,
-            )
-            state["v"] = self._expand_vector_to_current_knobs(
-                cast("list[float]", state["v"]),
-                saved_knob_names,
-                self.knob_names,
-                fill_value=0.0,
-            )
-            if state_type == "amsgrad" and "v_hat_max" in state:
-                state["v_hat_max"] = self._expand_vector_to_current_knobs(
-                    cast("list[float]", state["v_hat_max"]),
-                    saved_knob_names,
-                    self.knob_names,
-                    fill_value=0.0,
-                )
-            return state
-
-        if state_type == "lbfgs":
-            state["S"] = [
-                self._expand_vector_to_current_knobs(
-                    cast("list[float]", vec),
-                    saved_knob_names,
-                    self.knob_names,
-                    fill_value=0.0,
-                )
-                for vec in cast("list[list[float]]", state.get("S", []))
-            ]
-            state["Y"] = [
-                self._expand_vector_to_current_knobs(
-                    cast("list[float]", vec),
-                    saved_knob_names,
-                    self.knob_names,
-                    fill_value=0.0,
-                )
-                for vec in cast("list[list[float]]", state.get("Y", []))
-            ]
-            prev_params = state.get("prev_params")
-            if prev_params is not None:
-                state["prev_params"] = self._expand_vector_to_current_knobs(
-                    cast("list[float]", prev_params),
-                    saved_knob_names,
-                    self.knob_names,
-                    fill_value=0.0,
-                )
-            prev_grads = state.get("prev_grads")
-            if prev_grads is not None:
-                state["prev_grads"] = self._expand_vector_to_current_knobs(
-                    cast("list[float]", prev_grads),
-                    saved_knob_names,
-                    self.knob_names,
-                    fill_value=0.0,
-                )
-            return state
-
-        # Unknown optimiser states are passed through unchanged and may still fail
-        # in load_state_dict with a clearer optimiser-specific message.
-        _ = merged_current_knobs
-        return state
-
-    def _load_checkpoint(
-        self,
-        checkpoint_path: Path,
-        base_current_knobs: dict[str, float] | None = None,
-    ) -> _CheckpointState:
-        """Load optimisation state from checkpoint and apply it to this loop."""
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
-
-        payload = cast("dict[str, Any]", json.loads(checkpoint_path.read_text()))
-
-        saved_knob_names = [str(k) for k in payload.get("knob_names", [])]
-        saved_knob_set = self._validate_checkpoint_knob_compatibility(saved_knob_names)
-
-        merged_current_knobs = self._initialise_merged_current_knobs(base_current_knobs)
-
-        checkpoint_current = self._parse_checkpoint_knob_values(payload, "current_knobs")
-
-        missing_checkpoint_current = saved_knob_set.difference(set(checkpoint_current.keys()))
-        if missing_checkpoint_current:
-            raise ValueError(
-                "Checkpoint current knobs are missing saved checkpoint knob values: "
-                + self._clip_name_list_for_error(missing_checkpoint_current)
-            )
-
-        merged_current_knobs.update(checkpoint_current)
-        self._validate_finite_knob_values(merged_current_knobs, label="Restored current knobs")
-
-        checkpoint_best = self._parse_checkpoint_knob_values(payload, "best_knobs")
-        self._validate_finite_knob_values(checkpoint_best, label="Checkpoint best_knobs")
-
-        self.best_knobs = merged_current_knobs.copy()
-        self.best_knobs.update(checkpoint_best)
-        self.best_loss = float(payload.get("best_loss", float("inf")))
-        self.smoothed_grad_norm = float(payload.get("smoothed_grad_norm", 0.0))
-        self.smoothed_loss_change = float(payload.get("smoothed_loss_change", 0.0))
-
-        optimiser_state = payload.get("optimiser_state", {})
-        if optimiser_state:
-            try:
-                resized_state = self._resize_optimiser_state_for_current_knobs(
-                    cast("dict[str, Any]", optimiser_state),
-                    saved_knob_names,
-                    merged_current_knobs,
-                )
-                self.optimiser.load_state_dict(resized_state)
-            except (KeyError, TypeError, ValueError) as exc:
-                LOGGER.info("Skipping optimiser state restore: %s", exc)
-
-        return {
-            "saved_epoch": int(payload.get("saved_epoch", 0)),
-            "next_epoch": int(payload.get("next_epoch", 0)),
-            "current_knobs": merged_current_knobs,
-            "prev_loss": (
-                float(payload["prev_loss"]) if payload.get("prev_loss") is not None else None
-            ),
-        }
 
     def _collect_batch_results(
         self, channels: WorkerChannels

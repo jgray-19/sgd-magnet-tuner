@@ -5,19 +5,25 @@ and checkpointing for the optimisation workflow.
 """
 
 from aba_optimiser.training.base_controller import BaseController
-from aba_optimiser.training.configuration_manager import ConfigurationManager
-from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import (
+from aba_optimiser.training.config import (
+    ArcByArcTrackingPlan,
+    CheckpointConfig,
+    ConfigurationManager,
+    FullRingBpmTrackingPlan,
+    KickerConfig,
+    KickerTrackingPlan,
     MeasurementConfig,
     OutputConfig,
     SequenceConfig,
-)
-from aba_optimiser.training.controller_helpers import (
+    TrackingPlan,
+    WorkerRangeSpec,
+    build_tracking_plan,
     create_arc_measurement_config,
 )
+from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.data_manager import DataManager
-from aba_optimiser.training.optimisation_loop import OptimisationLoop
-from aba_optimiser.training.scheduler import LRScheduler
+from aba_optimiser.training.optimisation.loop import OptimisationLoop
+from aba_optimiser.training.optimisation.scheduler import LRScheduler
 from aba_optimiser.training.utils import (
     bpm_supports_both_planes,
     bpm_supports_plane,
@@ -27,16 +33,24 @@ from aba_optimiser.training.utils import (
     load_tfs_files,
     normalise_true_strengths,
 )
-from aba_optimiser.training.worker_lifecycle import WorkerLifecycleManager
-from aba_optimiser.training.worker_manager import WorkerManager
+from aba_optimiser.training.workers.lifecycle import WorkerLifecycleManager
+from aba_optimiser.training.workers.manager import WorkerManager
 
 __all__ = [
     "BaseController",
+    "ArcByArcTrackingPlan",
+    "CheckpointConfig",
     "ConfigurationManager",
     "Controller",
+    "FullRingBpmTrackingPlan",
+    "KickerConfig",
+    "KickerTrackingPlan",
     "MeasurementConfig",
     "OutputConfig",
     "SequenceConfig",
+    "TrackingPlan",
+    "WorkerRangeSpec",
+    "build_tracking_plan",
     "create_arc_measurement_config",
     "DataManager",
     "OptimisationLoop",

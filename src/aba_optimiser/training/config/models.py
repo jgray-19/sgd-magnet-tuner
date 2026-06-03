@@ -7,9 +7,11 @@ individual arguments passed to controller constructors.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
+
+from aba_optimiser.config import TRAINING_RUNS_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,7 @@ class OutputConfig:
             concurrently during shutdown. ``True`` means use all workers, ``False``
             means run one-by-one, and a positive integer sets an explicit concurrency
             cap.
+        tensorboard_root: Root directory for TensorBoard event-file runs.
         mad_logfile: Optional MAD log file path.
         python_logfile: Optional Python worker log file path.
     """
@@ -98,6 +101,7 @@ class OutputConfig:
     write_tensorboard_logs: bool = True
     include_uncertainty: bool = True
     parallel_hessian: bool | int = True
+    tensorboard_root: Path = field(default_factory=lambda: TRAINING_RUNS_ROOT)
     mad_logfile: Path | None = None
     python_logfile: Path | None = None
     def __post_init__(self) -> None:

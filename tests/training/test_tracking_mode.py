@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aba_optimiser.training.tracking_mode import KickerTrackingPlan
+from aba_optimiser.training.config.tracking import KickerTrackingPlan
 
 
 def test_kicker_tracking_plan_keeps_observation_range_anchored_at_marker() -> None:

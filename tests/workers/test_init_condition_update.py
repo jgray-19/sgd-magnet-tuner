@@ -176,7 +176,7 @@ def _recv_and_ack(child_conn, received_store: list, idx: int) -> None:
 
 def _make_real_channels(counts: list[int]):
     """Build a WorkerManager stub backed by real mp.Pipe() connections."""
-    from aba_optimiser.training.worker_manager import WorkerManager
+    from aba_optimiser.training.workers.manager import WorkerManager
     from aba_optimiser.workers.protocol import WorkerChannels
 
     parent_conns, child_conns = zip(*[mp.Pipe() for _ in counts])

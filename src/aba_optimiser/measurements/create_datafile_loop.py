@@ -12,12 +12,16 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 from aba_optimiser.accelerators import LHC
-from aba_optimiser.config import DPP_OPTIMISER_CONFIG, DPP_SIMULATION_CONFIG, PROJECT_ROOT
+from aba_optimiser.config import (
+    DPP_OPTIMISER_CONFIG,
+    DPP_SIMULATION_CONFIG,
+    MEASUREMENTS_ARTIFACTS_ROOT,
+)
 from aba_optimiser.measurements.arc_config import MeasurementSetupConfig, arc_ranges
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
+from aba_optimiser.training.config.models import MeasurementConfig, OutputConfig, SequenceConfig
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import MeasurementConfig, OutputConfig, SequenceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +87,7 @@ def process_single_config(
     config: MeasurementSetupConfig, temp_analysis_dir: Path, date: str
 ) -> None:
     """Process a single measurement configuration."""
-    results_dir = PROJECT_ROOT / f"b{config.beam}_results"
+    results_dir = MEASUREMENTS_ARTIFACTS_ROOT / "results" / f"b{config.beam}_results"
     results_dir.mkdir(exist_ok=True)
 
     # Delete temp_analysis_dir if it exists
@@ -208,7 +212,7 @@ def main():
         configs = create_beam2_configs(folder, name_prefix)
 
     # Temporary analysis directory
-    temp_analysis_dir = PROJECT_ROOT / "temp_analysis"
+    temp_analysis_dir = MEASUREMENTS_ARTIFACTS_ROOT / "temp" / "temp_analysis"
 
     # Process each configuration
     for config in configs:

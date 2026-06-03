@@ -12,10 +12,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from aba_optimiser.training.base_controller import BaseController
-from aba_optimiser.training.controller_config import KickerConfig, OutputConfig
+from aba_optimiser.training.config.models import KickerConfig, OutputConfig
+from aba_optimiser.training.config.tracking import build_tracking_plan
 from aba_optimiser.training.data_manager import DataManager
-from aba_optimiser.training.tracking_mode import build_tracking_plan
-from aba_optimiser.training.worker_manager import WorkerManager
+from aba_optimiser.training.workers.manager import WorkerManager
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.config import OptimiserConfig, SimulationConfig
-    from aba_optimiser.training.controller_config import (
+    from aba_optimiser.training.config.models import (
         CheckpointConfig,
         MeasurementConfig,
         SequenceConfig,

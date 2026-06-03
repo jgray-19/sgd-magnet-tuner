@@ -85,18 +85,23 @@ Optimisation Runtime
 
    aba_optimiser.training
    aba_optimiser.training.base_controller
-   aba_optimiser.training.configuration_manager
+   aba_optimiser.training.config
    aba_optimiser.training.controller
-   aba_optimiser.training.controller_config
+   aba_optimiser.training.config.helpers
+   aba_optimiser.training.config.manager
+   aba_optimiser.training.config.models
+   aba_optimiser.training.config.tracking
    aba_optimiser.training.data_manager
-   aba_optimiser.training.optimisation_loop
+   aba_optimiser.training.optimisation
+   aba_optimiser.training.optimisation.loop
    aba_optimiser.training.result_manager
-   aba_optimiser.training.scheduler
-   aba_optimiser.training.validation_selection
-   aba_optimiser.training.worker_lifecycle
-   aba_optimiser.training.worker_manager
-   aba_optimiser.training.worker_payloads
-   aba_optimiser.training.worker_setup
+   aba_optimiser.training.optimisation.scheduler
+   aba_optimiser.training.workers
+   aba_optimiser.training.workers.lifecycle
+   aba_optimiser.training.workers.manager
+   aba_optimiser.training.workers.payloads
+   aba_optimiser.training.workers.setup
+   aba_optimiser.training.workers.validation
 
 
 Workers

@@ -6,7 +6,8 @@ import pandas as pd
 from aba_optimiser.accelerators import SPS
 from aba_optimiser.config import SimulationConfig
 from aba_optimiser.training.data_manager import DataManager
-from aba_optimiser.training.worker_manager import WorkerManager
+from aba_optimiser.training.workers.manager import WorkerManager
+from aba_optimiser.training.workers.spawning import WorkerSpawner
 from aba_optimiser.workers.tracking import TrackingWorker
 from aba_optimiser.workers.tracking_position_only import PositionOnlyTrackingWorker
 
@@ -191,9 +192,7 @@ def test_create_worker_payloads_keeps_single_plane_file_for_dual_plane_bpm(tmp_p
 
 
 def test_select_worker_class_reuses_generic_tracking_workers(tmp_path) -> None:
-    manager = _make_manager(tmp_path)
-
-    assert manager._select_worker_class("xy", True) is TrackingWorker
-    assert manager._select_worker_class("xy", False) is PositionOnlyTrackingWorker
-    assert manager._select_worker_class("x", True) is TrackingWorker
-    assert manager._select_worker_class("y", False) is PositionOnlyTrackingWorker
+    assert WorkerSpawner.select_worker_class("xy", True) is TrackingWorker
+    assert WorkerSpawner.select_worker_class("xy", False) is PositionOnlyTrackingWorker
+    assert WorkerSpawner.select_worker_class("x", True) is TrackingWorker
+    assert WorkerSpawner.select_worker_class("y", False) is PositionOnlyTrackingWorker

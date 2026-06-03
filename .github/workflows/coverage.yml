@@ -14,6 +14,7 @@ env:
 defaults:
   run:
     shell: bash
+    working-directory: sgd-magnet-tuner
 
 jobs:
   coverage:
@@ -29,7 +30,23 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          path: sgd-magnet-tuner
           persist-credentials: true
+
+      - uses: actions/checkout@v5
+        with:
+          repository: jgray-19/pymadng-utils
+          path: pymadng-utils
+
+      - uses: actions/checkout@v5
+        with:
+          repository: jgray-19/tmom-recon
+          path: tmom-recon
+
+      - uses: actions/checkout@v5
+        with:
+          repository: jgray-19/xtrack_tools
+          path: xtrack-tools
 
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
@@ -37,7 +54,7 @@ jobs:
           python-version: ${{ env.python-version }}
           enable-cache: true
           activate-environment: true
-          cache-dependency-glob: 'pyproject.toml'
+          cache-dependency-glob: 'sgd-magnet-tuner/pyproject.toml'
 
       - name: Ensure pip, setuptools and wheel
         run: uv pip install --upgrade pip setuptools wheel

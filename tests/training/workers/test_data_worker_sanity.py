@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from aba_optimiser.training.worker_turn_planner import _distribute_target_batches_by_file
-from aba_optimiser.training.worker_payloads import WorkerPayloadBuilder
+from aba_optimiser.training.workers.payloads import WorkerPayloadBuilder
+from aba_optimiser.training.workers.turn_planner import _distribute_target_batches_by_file
 
 
 def test_distribute_target_batches_spreads_across_files() -> None:

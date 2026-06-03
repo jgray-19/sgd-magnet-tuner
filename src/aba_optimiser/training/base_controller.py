@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING
 
 from tensorboardX import SummaryWriter
 
-from aba_optimiser.training.configuration_manager import ConfigurationManager
-from aba_optimiser.training.controller_config import OutputConfig
-from aba_optimiser.training.optimisation_loop import OptimisationLoop
+from aba_optimiser.training.config.manager import ConfigurationManager
+from aba_optimiser.training.config.models import OutputConfig
+from aba_optimiser.training.optimisation.loop import OptimisationLoop
 from aba_optimiser.training.utils import filter_bad_bpms, normalise_true_strengths
 
 if TYPE_CHECKING:
@@ -20,10 +20,10 @@ if TYPE_CHECKING:
 
     from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.config import OptimiserConfig, SimulationConfig
-    from aba_optimiser.training.configuration_manager import (
+    from aba_optimiser.training.config.manager import (
         ConfigurationManager as ConfigurationManagerType,
     )
-    from aba_optimiser.training.controller_config import SequenceConfig
+    from aba_optimiser.training.config.models import SequenceConfig
 
     ConfigurationManagerCls: TypeAlias = type[ConfigurationManagerType]
 
@@ -218,7 +218,9 @@ class BaseController(ABC):
             return None
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        return SummaryWriter(log_dir=f"runs/{timestamp}_{log_suffix}")
+        log_dir = self.output_config.tensorboard_root / f"{timestamp}_{log_suffix}"
+        log_dir.parent.mkdir(parents=True, exist_ok=True)
+        return SummaryWriter(log_dir=str(log_dir))
 
     @abstractmethod
     def run(self) -> tuple[dict[str, float], dict[str, float]]:

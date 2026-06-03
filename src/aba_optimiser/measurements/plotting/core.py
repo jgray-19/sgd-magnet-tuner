@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from aba_optimiser.accelerators import LHC
-from aba_optimiser.config import PROJECT_ROOT
+from aba_optimiser.config import MEASUREMENTS_ARTIFACTS_ROOT, PROJECT_ROOT
 from aba_optimiser.mad import GradientDescentMadInterface
 from aba_optimiser.measurements.squeeze_config import (
     ANALYSIS_DIRS,
@@ -92,7 +92,9 @@ def prepare_plot_context(
     results_dir = get_results_dir(beam)
 
     squeeze_step_id = squeeze_step.replace(".", "_")
-    temp_analysis_dir = PROJECT_ROOT / f"temp_analysis_squeeze_b{beam}_{squeeze_step_id}"
+    temp_analysis_dir = (
+        MEASUREMENTS_ARTIFACTS_ROOT / "temp" / f"temp_analysis_squeeze_b{beam}_{squeeze_step_id}"
+    )
     madng_model_dir = temp_analysis_dir / "madng_model"
     if not madng_model_dir.exists():
         model_dir = model_base_dir / MODEL_DIRS[beam][squeeze_step]
@@ -104,7 +106,10 @@ def prepare_plot_context(
     if estimate_source == "estimates":
         fldr_name = "optics" if use_optics else "squeeze"
         estimates_file = (
-            PROJECT_ROOT / f"b{beam}_{fldr_name}_results" / f"quad_estimates_{squeeze_step}.json"
+            MEASUREMENTS_ARTIFACTS_ROOT
+            / "results"
+            / f"b{beam}_{fldr_name}_results"
+            / f"quad_estimates_{squeeze_step}.json"
         )
         if not estimates_file.exists():
             legacy_estimates_file = estimates_file.with_suffix(".txt")
@@ -216,7 +221,8 @@ def prepare_plot_context(
 def load_model_metadata(beam: int, squeeze_step: str) -> tuple[float, float, Path | None]:
     """Load beam energy, machine deltap, and optional b2 error table from optimisation metadata."""
     metadata_file = (
-        PROJECT_ROOT
+        MEASUREMENTS_ARTIFACTS_ROOT
+        / "temp"
         / f"temp_analysis_squeeze_b{beam}_{squeeze_step.replace('.', '_')}"
         / "metadata.json"
     )
@@ -241,7 +247,12 @@ def load_estimates_from_checkpoints(
 ) -> dict[str, dict[str, float]]:
     """Load per-arc estimate knobs from optimisation checkpoints."""
     squeeze_step_id = squeeze_step.replace(".", "_")
-    default_dir = PROJECT_ROOT / f"temp_analysis_squeeze_b{beam}_{squeeze_step_id}" / "checkpoints"
+    default_dir = (
+        MEASUREMENTS_ARTIFACTS_ROOT
+        / "temp"
+        / f"temp_analysis_squeeze_b{beam}_{squeeze_step_id}"
+        / "checkpoints"
+    )
     ckpt_dir = checkpoint_dir if checkpoint_dir is not None else default_dir
     if not ckpt_dir.exists():
         raise FileNotFoundError(f"Checkpoint directory not found: {ckpt_dir}")

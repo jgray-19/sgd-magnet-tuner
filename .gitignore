@@ -162,6 +162,8 @@ cython_debug/
 
 # remove the tensorboard logs
 runs/
+artifacts/measurements/runs/
+artifacts/training/runs/
 
 **/acc-models-lhc/
 *_analysis*/
@@ -174,13 +176,11 @@ docs/api/
 /mad_scripts/
 models/**
 plots/
+artifacts/measurements/plots/
 *.out
 *.png
 !src/aba_optimiser/mad/mad_scripts/
 !tests/data
-
-# Local uv source overrides (use git URLs on CI instead)
-uv.toml
 
 # AFS filesystem temp files
 .__afs*

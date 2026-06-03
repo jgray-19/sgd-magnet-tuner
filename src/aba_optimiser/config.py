@@ -217,6 +217,9 @@ FILE_COLUMNS: tuple[str, ...] = (
 # =============================================================================
 
 PROJECT_ROOT = Path(__file__).absolute().parent.parent.parent
+ARTIFACTS_ROOT = PROJECT_ROOT / "artifacts"
+TRAINING_RUNS_ROOT = ARTIFACTS_ROOT / "training" / "runs"
+MEASUREMENTS_ARTIFACTS_ROOT = ARTIFACTS_ROOT / "measurements"
 logger.info(f"Current project root: {PROJECT_ROOT}")
 
 # Data files

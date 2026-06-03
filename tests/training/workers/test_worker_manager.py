@@ -9,12 +9,13 @@ import pandas as pd
 
 from aba_optimiser.accelerators import SPS
 from aba_optimiser.config import SimulationConfig
-from aba_optimiser.training.validation_selection import (
+from aba_optimiser.training.workers.screening import OutlierScreener
+from aba_optimiser.training.workers.validation import (
     payload_track_count,
     split_validation_payloads,
 )
-from aba_optimiser.training.worker_manager import WorkerManager
-from aba_optimiser.training.worker_setup import WorkerRuntimeMetadata
+from aba_optimiser.training.workers.manager import WorkerManager
+from aba_optimiser.training.workers.setup import WorkerRuntimeMetadata
 from aba_optimiser.workers import TrackingData, WorkerConfig
 from aba_optimiser.workers.common import KickPlane
 
@@ -377,13 +378,14 @@ def test_build_bpm_masks_from_diagnostics_aggregates_multi_turn_losses(tmp_path:
         )
     ]
 
-    masks = manager._build_bpm_masks_from_diagnostics(
+    masks = OutlierScreener(manager.payload_builder).build_bpm_masks_from_diagnostics(
         diagnostics=[
             {
                 "worker_id": 0,
                 "loss_per_bpm": [1.0, 50.0, 1.0, 50.0],
             }
         ],
+        worker_metadata=manager.worker_metadata,
         bpm_sigma_threshold=0.5,
     )
 
@@ -419,7 +421,9 @@ def test_apply_screening_actions_expands_masks_across_turns(tmp_path: Path) -> N
         ),
     ]
 
-    manager._apply_screening_actions(
+    OutlierScreener(manager.payload_builder).apply_screening_actions(
+        parent_conns=manager.parent_conns,
+        worker_metadata=manager.worker_metadata,
         bpm_masks=[np.array([True, False]), np.array([False, True])],
         worker_disabled=[False, True],
     )
@@ -455,10 +459,11 @@ def test_summarise_screening_losses_logs_pre_and_projected_loss(tmp_path: Path, 
     ]
 
     with caplog.at_level("INFO"):
-        manager._summarise_screening_losses(
+        OutlierScreener(manager.payload_builder).summarise_screening_losses(
             diagnostics=[{"worker_id": 0, "loss_per_bpm": [1.0, 9.0, 1.0, 9.0]}],
             bpm_masks=[np.array([True, False])],
             worker_disabled=[False],
+            worker_metadata=manager.worker_metadata,
         )
 
     assert "Pre-screening loss summary" in caplog.text

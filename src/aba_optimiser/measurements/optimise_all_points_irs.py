@@ -16,14 +16,18 @@ from nxcals.spark_session_builder import get_or_create
 from omc3.machine_data_extraction.nxcals_knobs import get_energy
 
 from aba_optimiser.accelerators import LHC
-from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
+from aba_optimiser.config import (
+    MEASUREMENTS_ARTIFACTS_ROOT,
+    OptimiserConfig,
+    SimulationConfig,
+)
 from aba_optimiser.measurements.create_datafile import (
     process_measurements,
     save_online_knobs,
 )
 from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
+from aba_optimiser.training.config.models import MeasurementConfig, OutputConfig, SequenceConfig
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import MeasurementConfig, OutputConfig, SequenceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -356,13 +360,13 @@ def process_single_config(
                        If False (default for IRs), create all combinations of start/end BPMs (Cartesian product)
                        to provide more measurement constraints.
     """
-    results_dir = PROJECT_ROOT / f"b{config.beam}ir_allpoints_results"
+    results_dir = MEASUREMENTS_ARTIFACTS_ROOT / "results" / f"b{config.beam}ir_allpoints_results"
     tune_knobs_file = results_dir / f"tune_knobs_{config.title}.txt"
     corrector_knobs_file = results_dir / f"corrector_knobs_{config.title}.txt"
     results_dir.mkdir(exist_ok=True)
 
     # Copy bad bpms from co results
-    co_results_dir = PROJECT_ROOT / f"b{config.beam}co_results"
+    co_results_dir = MEASUREMENTS_ARTIFACTS_ROOT / "results" / f"b{config.beam}co_results"
     co_bad_bpms_file = co_results_dir / f"bad_bpms_{config.title}.txt"
     ir_bad_bpms_file = results_dir / f"bad_bpms_{config.title}.txt"
     if co_bad_bpms_file.exists():
@@ -561,7 +565,9 @@ def main():
         configs = create_beam2_configs(folder, name_prefix)
 
     # Temporary analysis directory
-    temp_analysis_dir = PROJECT_ROOT / f"temp_analysis_allpoints_{args.beam}"
+    temp_analysis_dir = (
+        MEASUREMENTS_ARTIFACTS_ROOT / "temp" / f"temp_analysis_allpoints_{args.beam}"
+    )
 
     # Determine use_fixed_bpm from args (default False)
     use_fixed_bpm = args.fixed_bpm

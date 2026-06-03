@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from aba_optimiser.config import SimulationConfig
-    from aba_optimiser.training.controller_config import KickerConfig
+    from aba_optimiser.training.config.models import KickerConfig
 
 # Imported lazily inside methods to avoid a circular import at module load time.
 # Both helpers are stable, side-effect-free utilities.

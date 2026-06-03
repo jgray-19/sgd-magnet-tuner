@@ -12,8 +12,8 @@ from aba_optimiser.config import DPP_OPTIMISER_CONFIG, DPP_SIMULATION_CONFIG, PR
 from aba_optimiser.measurements.arc_config import arc_ranges
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
+from aba_optimiser.training.config.models import MeasurementConfig, OutputConfig, SequenceConfig
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import MeasurementConfig, OutputConfig, SequenceConfig
 
 logger = logging.getLogger(__name__)
 

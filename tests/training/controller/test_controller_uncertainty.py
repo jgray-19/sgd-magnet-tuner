@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from aba_optimiser.training.controller import Controller, _estimate_uncertainties_from_hessian
-from aba_optimiser.training.controller_config import OutputConfig
+from aba_optimiser.training.config.models import OutputConfig
 from aba_optimiser.workers.common import WeightProcessor
 
 
@@ -127,7 +127,7 @@ def test_controller_worker_hessian_matches_finite_difference_on_reduced_knob_sub
     loaded_interface,
 ) -> None:
     from aba_optimiser.accelerators import LHC
-    from aba_optimiser.training.controller_config import MeasurementConfig, SequenceConfig
+    from aba_optimiser.training.config.models import MeasurementConfig, SequenceConfig
     from tests.training.controller_test_utils import (
         _generate_nonoise_track,
         _make_optimiser_config_quad,

@@ -8,14 +8,14 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from aba_optimiser.mad import GradientDescentMadInterface
-from aba_optimiser.training.tracking_mode import ArcByArcTrackingPlan, TrackingPlan
+from aba_optimiser.training.config.tracking import ArcByArcTrackingPlan, TrackingPlan
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.config import SimulationConfig
-    from aba_optimiser.training.controller_config import SequenceConfig
+    from aba_optimiser.training.config.models import SequenceConfig
 
 
 LOGGER = logging.getLogger(__name__)

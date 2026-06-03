@@ -17,7 +17,11 @@ from pymadng_utils.io.utils import save_knobs
 from pymadng_utils.madx import make_madx_sequence
 
 from aba_optimiser.accelerators import LHC
-from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
+from aba_optimiser.config import (
+    MEASUREMENTS_ARTIFACTS_ROOT,
+    OptimiserConfig,
+    SimulationConfig,
+)
 from aba_optimiser.measurements.ac_dipole import (
     ACDipoleOptimisationWindow,
     window_from_attrs,
@@ -36,9 +40,9 @@ from aba_optimiser.measurements.squeeze_helpers import (
     get_or_make_sequence,
     make_machine_settings_knobs_file,
 )
+from aba_optimiser.training.config.helpers import create_arc_measurement_config
+from aba_optimiser.training.config.models import OutputConfig, SequenceConfig
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import OutputConfig, SequenceConfig
-from aba_optimiser.training.controller_helpers import create_arc_measurement_config
 
 logger = logging.getLogger(__name__)
 
@@ -537,7 +541,7 @@ def process_single_config(
         use_fixed_bpm: If True (default), use fixed reference BPM approach.
                        If False, create all combinations of start/end BPMs (Cartesian product).
     """
-    results_dir = PROJECT_ROOT / f"b{config.beam}co_results"
+    results_dir = MEASUREMENTS_ARTIFACTS_ROOT / "results" / f"b{config.beam}co_results"
     tune_knobs_file = results_dir / f"tune_knobs_{config.title}.txt"
     corrector_knobs_file = results_dir / f"corrector_knobs_{config.title}.txt"
     results_dir.mkdir(exist_ok=True)
@@ -802,7 +806,7 @@ def main():
     print(configs)
 
     # Temporary analysis directory
-    temp_analysis_dir = PROJECT_ROOT / f"temp_analysis_co_{args.beam}"
+    temp_analysis_dir = MEASUREMENTS_ARTIFACTS_ROOT / "temp" / f"temp_analysis_co_{args.beam}"
 
     # Process each configuration
     for config in configs:

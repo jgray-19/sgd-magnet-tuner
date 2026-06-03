@@ -13,13 +13,13 @@ if TYPE_CHECKING:
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.measurements.squeeze.io import save_arc_estimates
-from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import (
+from aba_optimiser.training.config.models import (
     CheckpointConfig,
     MeasurementConfig,
     OutputConfig,
     SequenceConfig,
 )
+from aba_optimiser.training.controller import Controller
 
 logger = logging.getLogger(__name__)
 

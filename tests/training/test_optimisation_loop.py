@@ -9,7 +9,9 @@ import pytest
 
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.optimisers.adam import AdamOptimiser
-from aba_optimiser.training.optimisation_loop import OptimisationLoop
+from aba_optimiser.training.optimisation.checkpointing import OptimisationCheckpointer
+from aba_optimiser.training.config.models import CheckpointConfig
+from aba_optimiser.training.optimisation.loop import OptimisationLoop
 from aba_optimiser.workers.protocol import WorkerChannels
 
 
@@ -36,6 +38,10 @@ def _make_loop(knob_names: list[str]) -> OptimisationLoop:
         optimiser_config=optimiser_config,
         simulation_config=simulation_config,
     )
+
+
+def _make_checkpointer(loop: OptimisationLoop, checkpoint_path) -> OptimisationCheckpointer:
+    return OptimisationCheckpointer(loop, CheckpointConfig(checkpoint_path=checkpoint_path))
 
 
 def test_load_checkpoint_allows_current_knob_superset(tmp_path) -> None:
@@ -67,7 +73,7 @@ def test_load_checkpoint_allows_current_knob_superset(tmp_path) -> None:
     checkpoint_path.write_text(json.dumps(checkpoint_payload))
 
     base_current = {"k1": 10.0, "k2": 20.0, "k3": 30.0}
-    checkpoint_state = loop._load_checkpoint(checkpoint_path, base_current_knobs=base_current)
+    checkpoint_state = _make_checkpointer(loop, checkpoint_path).load(base_current_knobs=base_current)
 
     assert checkpoint_state["saved_epoch"] == 3
     assert checkpoint_state["next_epoch"] == 4
@@ -95,7 +101,7 @@ def test_load_checkpoint_rejects_missing_current_checkpoint_knobs(tmp_path) -> N
     checkpoint_path.write_text(json.dumps(checkpoint_payload))
 
     with pytest.raises(ValueError, match="missing checkpoint knobs"):
-        loop._load_checkpoint(checkpoint_path)
+        _make_checkpointer(loop, checkpoint_path).load()
 
 
 def test_load_checkpoint_rejects_non_finite_knob_values(tmp_path) -> None:
@@ -110,7 +116,7 @@ def test_load_checkpoint_rejects_non_finite_knob_values(tmp_path) -> None:
     checkpoint_path.write_text(json.dumps(checkpoint_payload))
 
     with pytest.raises(ValueError, match="non-finite knob values"):
-        loop._load_checkpoint(checkpoint_path)
+        _make_checkpointer(loop, checkpoint_path).load()
 
 
 def test_load_checkpoint_remaps_and_pads_in_current_knob_order(tmp_path) -> None:
@@ -138,7 +144,7 @@ def test_load_checkpoint_remaps_and_pads_in_current_knob_order(tmp_path) -> None
     checkpoint_path.write_text(json.dumps(checkpoint_payload))
 
     base_current = {"k3": -3.0, "k1": -1.0, "k2": -2.0, "k4": 99.0}
-    checkpoint_state = loop._load_checkpoint(checkpoint_path, base_current_knobs=base_current)
+    checkpoint_state = _make_checkpointer(loop, checkpoint_path).load(base_current_knobs=base_current)
 
     # Values should be in current order: [k3, k1, k2, k4].
     assert checkpoint_state["current_knobs"] == {

@@ -22,7 +22,7 @@ from tmom_recon.svd import svd_clean_measurements, weighted_svd_clean_measuremen
 from turn_by_turn import read_tbt
 
 from aba_optimiser.accelerators import LHC
-from aba_optimiser.config import PROJECT_ROOT
+from aba_optimiser.config import MEASUREMENTS_ARTIFACTS_ROOT
 from aba_optimiser.mad import AbaMadInterface
 from aba_optimiser.measurements.squeeze_config import (
     ANALYSIS_DIRS,
@@ -216,7 +216,7 @@ def get_results_dir(beam: int) -> Path:
     Returns:
         Path to results directory
     """
-    results_dir = PROJECT_ROOT / f"b{beam}_squeeze_results"
+    results_dir = MEASUREMENTS_ARTIFACTS_ROOT / "results" / f"b{beam}_squeeze_results"
     results_dir.mkdir(parents=True, exist_ok=True)
     return results_dir
 

@@ -33,7 +33,7 @@ from aba_optimiser.measurements.optimise_squeeze_quads import (
 )
 from aba_optimiser.measurements.reconstruction import process_single_dataframe
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import (
+from aba_optimiser.training.config.models import (
     MeasurementConfig,
     OutputConfig,
     SequenceConfig,

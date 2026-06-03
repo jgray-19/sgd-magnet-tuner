@@ -13,7 +13,7 @@ from pymadng_utils.model_creator.madng_utils import update_model_with_madng
 if TYPE_CHECKING:
     from pathlib import Path
 
-from aba_optimiser.config import PROJECT_ROOT
+from aba_optimiser.config import MEASUREMENTS_ARTIFACTS_ROOT
 from aba_optimiser.measurements.ac_dipole import ACDipoleOptimisationWindow
 from aba_optimiser.measurements.b2_errors import resolve_b2_error_table
 from aba_optimiser.measurements.squeeze.constants import MEAS_TIMES, ZEROHZ, get_beam_paths
@@ -189,7 +189,11 @@ def process_squeeze_step(
         raise NotImplementedError("Please include 0Hz measurements to build the closed-orbit reference.")
 
     results_dir.mkdir(exist_ok=True)
-    temp_analysis_dir = PROJECT_ROOT / f"temp_analysis_squeeze_b{beam}_{squeeze_step.replace('.', '_')}"
+    temp_analysis_dir = (
+        MEASUREMENTS_ARTIFACTS_ROOT
+        / "temp"
+        / f"temp_analysis_squeeze_b{beam}_{squeeze_step.replace('.', '_')}"
+    )
     bad_bpms_file = results_dir / f"bad_bpms_{squeeze_step}.txt"
     meas_times_for_step = meas_times[squeeze_step]
 

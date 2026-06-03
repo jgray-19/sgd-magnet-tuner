@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from aba_optimiser.training.tracking_mode import TrackingPlan, WorkerRangeSpec
+from aba_optimiser.training.config.tracking import TrackingPlan, WorkerRangeSpec
 from aba_optimiser.training.utils import bpm_supports_both_planes, bpm_supports_plane
 from aba_optimiser.workers import WorkerConfig
 from aba_optimiser.workers.common import KickPlane

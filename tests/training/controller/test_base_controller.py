@@ -8,8 +8,8 @@ import pytest
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.training.base_controller import BaseController
-from aba_optimiser.training.configuration_manager import ConfigurationManager
-from aba_optimiser.training.controller_config import MeasurementConfig, OutputConfig, SequenceConfig
+from aba_optimiser.training.config.manager import ConfigurationManager
+from aba_optimiser.training.config.models import MeasurementConfig, OutputConfig, SequenceConfig
 
 
 class DummyController(BaseController):

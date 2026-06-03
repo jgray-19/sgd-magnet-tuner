@@ -10,7 +10,7 @@ import pytest
 from aba_optimiser.accelerators import PSB
 from aba_optimiser.config import OptimiserConfig
 from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import (
+from aba_optimiser.training.config.models import (
     KickerConfig,
     MeasurementConfig,
     OutputConfig,
