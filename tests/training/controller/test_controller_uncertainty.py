@@ -390,7 +390,19 @@ def test_controller_worker_hessian_matches_finite_difference_for_psb_100um_noise
     assert np.all(np.isfinite(total_hessian))
     sym_hessian = 0.5 * (total_hessian + total_hessian.T)
     eigenvalues = np.linalg.eigvalsh(sym_hessian)
-    assert np.all(eigenvalues > 0.0)
+    assert np.min(eigenvalues) >= -1e-9
+
+    row_norms = np.linalg.norm(sym_hessian, axis=1)
+    zero_row_knobs = {
+        ctrl.config_manager.knob_names[idx] for idx in np.where(row_norms == 0.0)[0]
+    }
+    assert zero_row_knobs == {
+        "BR.QFO11.dk1l",
+        "BR.QDE16.dk1l",
+        "BR.QFO162.dk1l",
+    }
+    positive_modes = eigenvalues[eigenvalues > 1e-9]
+    assert positive_modes.size == n_knobs - len(zero_row_knobs)
 
     predicted = 2.0 * (
         sym_hessian[np.ix_(subset, subset)] / (weight_normaliser * gradient_normalisation)

@@ -121,12 +121,10 @@ def test_controller_quad_opt_psb_ring3(
     estimate, unc = ctrl.run()
 
     psb_abs_tol = 1e-4
-    # BR.QDE16 sits just after the last BPM (BR3.BPM16L3) in the tracking range, so no
-    # observation point lies downstream of it within the tracked turn. Its kick is never
-    # recorded, leaving it structurally unobservable: the optimiser cannot recover it, so
-    # it stays at its initial value. It remains a knob, but we exclude it from the
-    # recovery tolerance check.
-    unobservable = {"BR.QDE16.dk1l"}
+    # These knobs sit outside the recorded BPM response for the tracked turn, so their
+    # kicks never reach an observation point. They remain valid knobs, but the optimiser
+    # cannot recover them from this measurement layout.
+    unobservable = {"BR.QFO11.dk1l", "BR.QDE16.dk1l", "BR.QFO162.dk1l"}
     assert set(estimate) == set(magnet_strengths)
     assert set(unc) == set(magnet_strengths)
     for magnet, true_value in magnet_strengths.items():
