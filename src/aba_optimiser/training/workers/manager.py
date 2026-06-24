@@ -607,59 +607,21 @@ class WorkerManager:
             for conn in self.validation_parent_conns:
                 with contextlib.suppress(BrokenPipeError, EOFError):
                     conn.send((None, None))
-        self._join_workers(
-            self.validation_workers,
-            self.validation_parent_conns,
-            drain_final_payload=False,
-        )
-
-    @staticmethod
-    def _join_workers(workers: list, conns: list, *, drain_final_payload: bool = True) -> None:
-        """Drain any pending payload, then wait for workers to exit.
-
-        On a clean shutdown each training worker sends a final Hessian payload after
-        the termination sentinel. Callers that do not consume it would deadlock when
-        that payload exceeds the pipe buffer, since the worker blocks on the unread
-        send. Draining unblocks the worker so it exits. Validation workers send no
-        final payload, so their cleanup skips this drain and joins directly.
-
-        Joins have no timeout: workers may be midway through a long simulation when
-        the termination signal arrives, and we trust them to exit once it completes.
-        """
-        if drain_final_payload:
-            for conn in conns:
-                with contextlib.suppress(BrokenPipeError, EOFError, OSError):
-                    conn.recv()
-        for worker in workers:
+        for worker in self.validation_workers:
             worker.join()
 
     def terminate_workers(self) -> None:
-        """Terminate training and validation workers and clean up processes."""
+        """Kill all workers immediately, for aborting after an error or interrupt.
+
+        Unlike the clean shutdown in ``termination_and_hessian``, this makes no
+        attempt to drain payloads or join gracefully: the workers may be wedged in
+        a failed simulation and would never respond to a termination sentinel, so we
+        send SIGTERM and reap them rather than waiting.
+        """
         LOGGER.info("Terminating workers...")
-        self._disable_training_hessian_on_exit()
-        if self.channels is not None:
-            with contextlib.suppress(BrokenPipeError, EOFError):
-                self.channels.send_all((None, None))
-        else:
-            for conn in self.parent_conns:
-                with contextlib.suppress(BrokenPipeError, EOFError):
-                    conn.send((None, None))
-
-        self._join_workers(self.workers, self.parent_conns)
-        self._stop_validation_workers()
-
-    def _disable_training_hessian_on_exit(self) -> None:
-        """Tell training workers to skip Hessian estimation during cleanup shutdown."""
-        if not self.workers:
-            return
-
-        channels = self.channels or WorkerChannels(self.parent_conns, self.workers)
-        try:
-            channels.send_all({"cmd": "set_hessian_mode", "enabled": False})
-            for response in channels.recv_all():
-                self._assert_control_ack(response, command="set_hessian_mode")
-        except (BrokenPipeError, EOFError, OSError, RuntimeError) as exc:
-            LOGGER.debug("Could not disable worker Hessian-on-exit during cleanup: %s", exc)
+        for worker in (*self.workers, *self.validation_workers):
+            worker.terminate()
+            worker.join()
 
     def termination_and_hessian(
         self,

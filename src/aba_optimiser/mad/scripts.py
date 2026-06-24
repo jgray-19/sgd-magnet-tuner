@@ -156,7 +156,7 @@ def _track_call(*, x0: str, atexit: str, level: int = 0) -> str:
     return _join_lines(
         [
             _indent(level, "local _, mflw = track {"),
-            *(_indent(level + 1, field) for field in fields),
+            *(_indent(level + 1, f"{field},") for field in fields),
             _indent(level, "}"),
         ]
     )

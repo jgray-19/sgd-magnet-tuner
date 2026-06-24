@@ -50,6 +50,7 @@ class _FakeChannels:
 class _FakeWorker:
     def __init__(self) -> None:
         self.join_calls = 0
+        self.terminate_calls = 0
         self.exitcode = 0
         self.pid = 1234
 
@@ -60,7 +61,7 @@ class _FakeWorker:
         return False
 
     def terminate(self) -> None:
-        pass
+        self.terminate_calls += 1
 
 
 class _ConnThatMustNotPoll:
@@ -659,27 +660,22 @@ def test_termination_and_hessian_parallel_uses_broadcast_shutdown(tmp_path: Path
     assert [worker.join_calls for worker in manager.workers] == [1, 1]
 
 
-def test_terminate_workers_disables_hessian_before_cleanup_shutdown(tmp_path: Path) -> None:
+def test_terminate_workers_kills_training_and_validation_workers(tmp_path: Path) -> None:
     manager = _make_manager(tmp_path)
-    manager.channels = _FakeChannels(
-        [
-            {"worker_id": 0, "status": "ok"},
-            {"worker_id": 1, "status": "ok"},
-        ]
-    )
-    manager.workers = [_FakeWorker(), _FakeWorker()]  # type: ignore[assignment]
+    training = [_FakeWorker(), _FakeWorker()]
+    validation = [_FakeWorker()]
+    manager.workers = training  # type: ignore[assignment]
+    manager.validation_workers = validation  # type: ignore[assignment]
     manager.parent_conns = []
-    manager.validation_workers = []
     manager.validation_parent_conns = []
+    manager.channels = None
     manager.validation_channels = None
 
     manager.terminate_workers()
 
-    assert manager.channels.sent == [
-        {"cmd": "set_hessian_mode", "enabled": False},
-        (None, None),
-    ]
-    assert [worker.join_calls for worker in manager.workers] == [1, 1]
+    for worker in (*training, *validation):
+        assert worker.terminate_calls == 1
+        assert worker.join_calls == 1
 
 
 def test_stop_validation_workers_does_not_wait_for_final_payload(tmp_path: Path) -> None:

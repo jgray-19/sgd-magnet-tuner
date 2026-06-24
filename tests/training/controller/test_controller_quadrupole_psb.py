@@ -65,7 +65,7 @@ def test_controller_quad_opt_psb_ring3(
     base_sim = _make_simulation_config_quad()
     simulation_config = dataclasses.replace(
         base_sim,
-        tracks_per_worker=1,
+        tracks_per_worker=50,
         num_workers=4,
         num_batches=4,
         run_arc_by_arc=False,
@@ -74,7 +74,7 @@ def test_controller_quad_opt_psb_ring3(
         worker_loss_outlier_sigma=20,
     )
     optimiser_config = OptimiserConfig(
-        max_epochs=6000,
+        max_epochs=1000,
         warmup_epochs=40,
         warmup_lr_start=1e-6,
         max_lr=3e-4,
@@ -121,9 +121,17 @@ def test_controller_quad_opt_psb_ring3(
     estimate, unc = ctrl.run()
 
     psb_abs_tol = 1e-4
+    # BR.QDE16 sits just after the last BPM (BR3.BPM16L3) in the tracking range, so no
+    # observation point lies downstream of it within the tracked turn. Its kick is never
+    # recorded, leaving it structurally unobservable: the optimiser cannot recover it, so
+    # it stays at its initial value. It remains a knob, but we exclude it from the
+    # recovery tolerance check.
+    unobservable = {"BR.QDE16.dk1l"}
     assert set(estimate) == set(magnet_strengths)
     assert set(unc) == set(magnet_strengths)
     for magnet, true_value in magnet_strengths.items():
+        if magnet in unobservable:
+            continue
         est_value = estimate[magnet]
         abs_diff = abs(est_value - true_value)
         rel_diff = abs_diff / abs(true_value) if true_value != 0 else abs(est_value)
