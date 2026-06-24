@@ -133,6 +133,7 @@ class ValidationTrackingWorker(TrackingWorker):
             debug=self.config.debug,
             mad_logfile=worker_logfile,
             py_name=PYTHON_IN_MAD,
+            install_acd_markers=self.config.install_acd_markers,
         )
 
         self.knob_name_set = set(mad_iface.knob_names)
@@ -243,6 +244,7 @@ end
             self.mad, self.nbpms = self.setup_mad_interface(knob_values)
             self.send_initial_conditions(self.mad)
             self._initialise_mad_computation(self.mad)
+            self.run_preflight_check(self.mad, self.nbpms)
             LOGGER.debug(
                 "Worker %s: Ready for validation file=%d range=%s/%s sdir=%d kick_plane=%s tracks=%d bpms=%d",
                 self.worker_id,

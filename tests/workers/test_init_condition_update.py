@@ -190,10 +190,44 @@ def _make_real_channels(counts: list[int]):
 
     wm = object.__new__(WorkerManager)
     wm._worker_particle_counts = list(counts)
+    wm._validation_worker_particle_counts = []
     wm.channels = channels
+    wm.validation_channels = None
     wm._channels = lambda: channels
 
     return wm, list(child_conns)
+
+
+def _make_real_channels_with_validation(
+    training_counts: list[int], validation_counts: list[int]
+):
+    """Build a WorkerManager stub with both training and validation pipe connections."""
+    from aba_optimiser.training.workers.manager import WorkerManager
+    from aba_optimiser.workers.protocol import WorkerChannels
+
+    def _build_channels(counts: list[int], id_offset: int):
+        parent_conns, child_conns = zip(*[mp.Pipe() for _ in counts])
+        ch = object.__new__(WorkerChannels)
+        ch.parent_conns = tuple(parent_conns)
+        ch.workers = tuple(
+            SimpleNamespace(pid=id_offset + i, exitcode=None) for i in range(len(counts))
+        )
+        ch._count = len(counts)
+        ch._conn_index = {conn: i for i, conn in enumerate(parent_conns)}
+        return ch, list(child_conns)
+
+    trn_channels, trn_children = _build_channels(training_counts, id_offset=0)
+    val_channels, val_children = _build_channels(validation_counts, id_offset=len(training_counts))
+
+    wm = object.__new__(WorkerManager)
+    wm._worker_particle_counts = list(training_counts)
+    wm._validation_worker_particle_counts = list(validation_counts)
+    wm.channels = trn_channels
+    wm.validation_channels = val_channels
+    wm._channels = lambda: trn_channels
+    wm._validation_channels = lambda: val_channels
+
+    return wm, trn_children, val_children
 
 
 def test_send_init_condition_updates_slices_correctly() -> None:
@@ -240,6 +274,79 @@ def test_send_init_condition_updates_rejects_wrong_shape() -> None:
 
     with pytest.raises(ValueError, match="shape"):
         wm.send_init_condition_updates(np.zeros((4, 2)))  # wrong total (should be 5)
+
+
+def test_send_init_condition_updates_also_updates_validation_workers() -> None:
+    trn_counts = [3, 2]
+    val_counts = [4, 1]
+    wm, trn_children, val_children = _make_real_channels_with_validation(trn_counts, val_counts)
+
+    total = sum(trn_counts) + sum(val_counts)
+    new_px_py = np.column_stack([
+        np.arange(total, dtype=float),
+        -np.arange(total, dtype=float),
+    ])
+
+    all_children = trn_children + val_children
+    all_counts = trn_counts + val_counts
+    received: list = [None] * len(all_children)
+    threads = [
+        threading.Thread(target=_recv_and_ack, args=(all_children[i], received, i))
+        for i in range(len(all_children))
+    ]
+    for t in threads:
+        t.start()
+
+    wm.send_init_condition_updates(new_px_py)
+
+    for t in threads:
+        t.join(timeout=5.0)
+        assert not t.is_alive(), "Worker thread did not finish in time"
+
+    offset = 0
+    for i, n in enumerate(all_counts):
+        msg = received[i]
+        assert isinstance(msg, dict), f"Worker {i} received unexpected value: {msg!r}"
+        assert msg["cmd"] == "update_init_coords"
+        assert msg["px"].shape == (n, 1)
+        assert msg["py"].shape == (n, 1)
+        assert np.allclose(msg["px"][:, 0], new_px_py[offset : offset + n, 0])
+        assert np.allclose(msg["py"][:, 0], new_px_py[offset : offset + n, 1])
+        offset += n
+
+
+def test_send_init_condition_updates_rejects_wrong_shape_with_validation() -> None:
+    wm, _, _ = _make_real_channels_with_validation([3, 2], [4])
+    # total should be 3+2+4=9; passing 8 must fail
+    with pytest.raises(ValueError, match="shape"):
+        wm.send_init_condition_updates(np.zeros((8, 2)))
+
+
+def test_send_init_condition_updates_skips_validation_when_none() -> None:
+    """When there are no validation workers, only training workers receive the update."""
+    counts = [3, 2]
+    wm, child_conns = _make_real_channels(counts)
+    assert wm.validation_channels is None
+
+    total = sum(counts)
+    new_px_py = np.column_stack([np.arange(total, dtype=float), np.zeros(total)])
+
+    received: list = [None] * len(counts)
+    threads = [
+        threading.Thread(target=_recv_and_ack, args=(child_conns[i], received, i))
+        for i in range(len(counts))
+    ]
+    for t in threads:
+        t.start()
+
+    wm.send_init_condition_updates(new_px_py)
+
+    for t in threads:
+        t.join(timeout=5.0)
+        assert not t.is_alive()
+
+    # All training workers received their slices.
+    assert all(msg is not None for msg in received)
 
 
 # ---------------------------------------------------------------------------

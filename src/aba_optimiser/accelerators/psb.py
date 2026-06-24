@@ -23,7 +23,7 @@ class PSB(BasePSB, Accelerator):
     PATTERN_SBENDS = r"^BR%.BHZ%d+$"
     PATTERN_RBENDS = r"^BR%.BSW%d+L%d+%.%d+$"
     PATTERN_QUADRUPOLE = "^BR%.Q[FD][OE]%d+$"
-    PATTERN_SEXTUPOLE = r"^BR%d+%.XNO[49]L1$"
+    PATTERN_SEXTUPOLE = r"^BR%d+%.XNO%d+L1$"
     PATTERN_SKEW_SEXTUPOLE = r"^BR%d+%.XSK[26]L4$"
     PATTERN_CORRECTOR_H = r"^B[RE]%d+%.DHZ%d+L%d+$"
     PATTERN_CORRECTOR_V = r"^B[RE]%d+%.DVT%d+L%d+$"
@@ -44,6 +44,8 @@ class PSB(BasePSB, Accelerator):
         optimise_sextupoles: bool = False,
         optimise_correctors: bool = False,
         optimise_energy: bool = False,
+        optimise_bpm_dx: bool = False,
+        optimise_bpm_dy: bool = False,
         custom_knobs_to_optimise: list[str] | None = None,
     ):
         """Initialise PSB accelerator for a specific ring."""
@@ -61,6 +63,8 @@ class PSB(BasePSB, Accelerator):
             optimise_quad_dx=optimise_quad_dx,
             optimise_sextupoles=optimise_sextupoles,
             optimise_energy=optimise_energy,
+            optimise_bpm_dx=optimise_bpm_dx,
+            optimise_bpm_dy=optimise_bpm_dy,
             custom_knobs_to_optimise=custom_knobs_to_optimise,
         )
         # PSB-specific optimisation flags not handled by any parent
@@ -83,6 +87,8 @@ class PSB(BasePSB, Accelerator):
             optimise_correctors=o.get("optimise_correctors", self.optimise_correctors),
             optimise_quad_dx=o.get("optimise_quad_dx", self.optimise_quad_dx),
             optimise_quad_dy=o.get("optimise_quad_dy", self.optimise_quad_dy),
+            optimise_bpm_dx=o.get("optimise_bpm_dx", self.optimise_bpm_dx),
+            optimise_bpm_dy=o.get("optimise_bpm_dy", self.optimise_bpm_dy),
             custom_knobs_to_optimise=o.get("custom_knobs_to_optimise", self.custom_knobs_to_optimise),
         )
 
@@ -93,6 +99,7 @@ class PSB(BasePSB, Accelerator):
 
     def get_supported_knob_specs(self) -> list[KnobSpec]:
         """Return the PSB knob specifications currently supported."""
+        bpm_pattern = self.BPM_PATTERN_TEMPLATE.format(ring=self.ring)
         # fmt: off
         return [
             KnobSpec("quadrupole", "k1",      self.PATTERN_QUADRUPOLE,    "k1", self.optimise_quadrupoles, "quadrupoles"),
@@ -104,6 +111,8 @@ class PSB(BasePSB, Accelerator):
             KnobSpec("vkicker",    "kick",    self.PATTERN_CORRECTOR_V,   None, self.optimise_correctors,  "correctors"),
             KnobSpec("quadrupole", "dy",      self.PATTERN_QUADRUPOLE,    "k1", self.optimise_quad_dy,     "quadrupole vertical offsets"),
             KnobSpec("quadrupole", "dx",      self.PATTERN_QUADRUPOLE,    "k1", self.optimise_quad_dx,     "quadrupole horizontal offsets"),
+            KnobSpec("monitor",    "dx",      bpm_pattern,                None, self.optimise_bpm_dx,      "BPM horizontal offsets"),
+            KnobSpec("monitor",    "dy",      bpm_pattern,                None, self.optimise_bpm_dy,      "BPM vertical offsets"),
         ]
         # fmt: on
 
@@ -115,6 +124,15 @@ class PSB(BasePSB, Accelerator):
             "dy": (self.PATTERN_QUADRUPOLE,),
         }
 
+    @property
+    def bpm_misalignment_patterns(self) -> dict[str, tuple[str, ...]]:
+        """Return PSB BPM patterns eligible for misalignment knobs."""
+        bpm_pattern = self.BPM_PATTERN_TEMPLATE.format(ring=self.ring)
+        return {
+            "dx": (bpm_pattern,),
+            "dy": (bpm_pattern,),
+        }
+
     def get_perturbation_families(self) -> dict[str, dict[str, str | float | dict]]:
         """Return perturbation metadata for PSB quadrupoles."""
         return {
@@ -123,6 +141,16 @@ class PSB(BasePSB, Accelerator):
                 "pattern": self.QUAD_PERTURBATION_PATTERN,
             },
         }
+
+    @staticmethod
+    def infer_monitor_plane(bpm_name: str) -> str:
+        """Infer measurement plane from PSB monitor names, including ACD markers."""
+        name = bpm_name.upper()
+        if any(token in name for token in (".BPM", ".BWS", ".BPP", ".BPT")):
+            return "HV"
+        if name.endswith("_AFTER") or name.endswith("_BEFORE"):
+            return "HV"
+        raise ValueError(f"Unsupported PSB monitor name for plane inference: {bpm_name}")
 
     def apply_accelerator_specific_errors(self, mad_iface: AbaMadInterface) -> None:
         """PSB has no accelerator-specific startup error tables."""

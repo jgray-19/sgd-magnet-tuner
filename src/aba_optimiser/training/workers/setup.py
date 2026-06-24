@@ -170,15 +170,14 @@ class WorkerSetupHelper:
         if kick_plane == KickPlane.XY:
             return self.bad_bpms
 
-        range_bpms = self.tracking_plan.get_range_bpm_names(
-            all_bpms=self.all_bpms,
-            start_bpm=start_bpm,
-            end_bpm=end_bpm,
-            sdir=sdir,
-            bad_bpms=None,
-        )
+        # Unobserve every off-plane BPM in the *whole ring*, not just those inside
+        # the named range. A full-ring multi-turn track traverses the entire ring
+        # (and the wrap between the range end and start each turn), so any off-plane
+        # BPM left observed outside the range still fires save_data and overflows the
+        # nbpms * n_run_turns result vectors (MAD seti "index out of bounds").
+        del start_bpm, end_bpm, sdir
         plane_filtered = [
-            bpm for bpm in range_bpms if not self.bpm_supports_plane(bpm, kick_plane)
+            bpm for bpm in self.all_bpms if not self.bpm_supports_plane(bpm, kick_plane)
         ]
         return self.merge_bad_bpms(self.bad_bpms, plane_filtered)
 
@@ -287,7 +286,13 @@ class WorkerSetupHelper:
                 )
 
             if not simulation_config.run_arc_by_arc:
-                for start_bpm in starts:
+                # Full-ring workers track from the fixed turn-increment start ($start),
+                # so anchor every worker at the plane's first BPM rather than cycling
+                # to each user start BPM (which would be double-observed at the wrap).
+                plane_starts = (
+                    starts if self.tracking_plan.cycle_to_init_bpm else [plane_bpms[0]]
+                )
+                for start_bpm in plane_starts:
                     end_bpm = self._bpm_behind_in_plane(start_bpm, plane_bpms)
                     range_specs.extend(
                         WorkerRangeSpec(start_bpm=start_bpm, end_bpm=end_bpm, sdir=sdir)
@@ -441,12 +446,14 @@ class WorkerSetupHelper:
             tune_knobs_file=self.tune_knobs_files[plan.file_idx],
             observation_range_start_bpm=self.tracking_plan.observation_start_bpm(self.all_bpms),
             initial_condition_marker=plan.init_marker,
+            cycle_sequence=self.tracking_plan.cycle_to_init_bpm,
             sdir=plan.range_spec.sdir,
             kick_plane=plan.kick_plane,
             bad_bpms=plan.bad_bpms,
             debug=self.debug,
             mad_logfile=self.mad_logfile,
             python_logfile=self.python_logfile,
+            install_acd_markers=self.tracking_plan.requires_acd_markers(),
         )
 
     @staticmethod

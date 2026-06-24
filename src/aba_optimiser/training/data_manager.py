@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 from typing import TYPE_CHECKING
 
@@ -77,12 +78,12 @@ class DataManager:
         self, source: str, needed_turns: set[int] | None, offset: int
     ) -> pd.DataFrame:
         """Read a parquet with optional turn filtering and column validation."""
+        markers = self.bpms_in_range + self.extra_markers
+        filters: list = [("name", "in", markers)]
         if needed_turns:
             filtered_turns = [t - offset for t in needed_turns]
-            filters = [("turn", "in", filtered_turns), ("name", "in", self.bpms_in_range)]
-            df = pd.read_parquet(source, columns=FILE_COLUMNS, filters=filters)
-        else:
-            df = pd.read_parquet(source, columns=FILE_COLUMNS)
+            filters.append(("turn", "in", filtered_turns))
+        df = pd.read_parquet(source, columns=FILE_COLUMNS, filters=filters)
 
         # Always apply offset to create global turn IDs
         df["turn"] = df["turn"] + offset
@@ -93,18 +94,19 @@ class DataManager:
         return df
 
     def _reorder_track_dataframes(self) -> None:
-        """Reorder track dataframes to have turns in ascending order and BPMs in bpm_order."""
+        """Reorder track dataframes while preserving measurement BPM order.
+
+        The per-turn BPM order encodes the tracking origin used when the
+        measurement was generated.  Preserving it lets the payload builder detect
+        range wraps and shift the wrapped part to the next/previous turn.
+        """
         for file_idx in self.track_data:
             all_turns = sorted(self.track_data[file_idx].index.get_level_values("turn").unique())
-            # reduce bpm order to only those present in the data
-            marker_order = list(dict.fromkeys(self.bpms_in_range + self.extra_markers))
-            bpm_order_filtered = [
-                bpm
-                for bpm in marker_order
-                if bpm in self.track_data[file_idx].index.get_level_values("name")
-            ]
+            marker_order = list(
+                dict.fromkeys(self.track_data[file_idx].index.get_level_values("name"))
+            )
             self.track_data[file_idx] = self.track_data[file_idx].reindex(
-                pd.MultiIndex.from_product([all_turns, bpm_order_filtered], names=["turn", "name"])
+                pd.MultiIndex.from_product([all_turns, marker_order], names=["turn", "name"])
             )
 
     @staticmethod
@@ -211,20 +213,24 @@ class DataManager:
             for file_idx in range(len(sources))
         }
 
-        # Load and reduce
+        # Load and reduce (parallel across files to overlap decompression)
         file_tracks: dict[int, pd.DataFrame] = {}
         file_kick_planes: dict[int, str] = {}
         LOGGER.info(f"Loading {len(sources)} measurement file(s)...")
-        for file_idx, source in enumerate(sources):
+
+        def _load_one(args: tuple[int, str]) -> tuple[int, pd.DataFrame, str]:
+            file_idx, source = args
             LOGGER.debug(f"Loading file {file_idx}: {source}")
             df = self._read_parquet(source, needed_turns, offsets[file_idx])
-            file_tracks[file_idx] = self._reduce_dataframe(df)
-            file_kick_planes[file_idx] = self.infer_kick_plane(file_tracks[file_idx])
-            LOGGER.debug(
-                "File %d kick-plane classification: %s",
-                file_idx,
-                file_kick_planes[file_idx],
-            )
+            df = self._reduce_dataframe(df)
+            kick_plane = self.infer_kick_plane(df)
+            LOGGER.debug("File %d kick-plane classification: %s", file_idx, kick_plane)
+            return file_idx, df, kick_plane
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(sources)) as pool:
+            for file_idx, df, kick_plane in pool.map(_load_one, enumerate(sources)):
+                file_tracks[file_idx] = df
+                file_kick_planes[file_idx] = kick_plane
 
         # Handle NaN values in track data coordinate-by-coordinate.
         # This is important for single-plane BPMs where one plane is intentionally missing:

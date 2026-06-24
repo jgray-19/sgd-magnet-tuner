@@ -118,7 +118,8 @@ def _generate_nonoise_track(
     for lag in [np.pi / 3]:
         monitored_line = run_ac_dipole_tracking_with_particles(
             line=env[seq_name],
-            beam=beam,
+            acd_marker=f"mkqa.6l4.b{beam}",
+            sequence_name=seq_name,
             ramp_turns=acd_ramp,
             flattop_turns=flattop_turns,
             driven_tunes=driven_tunes,

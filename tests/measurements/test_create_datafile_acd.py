@@ -50,6 +50,9 @@ def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path:
     )
     twiss.index = twiss.index.astype(str)
     twiss.index.name = "name"
+    # The fixture twiss predates vertical dispersion; PSB dy is ~0 and the
+    # MAD-NG twiss table used in production includes it, so supply it here.
+    twiss["dy"] = 0.0
 
     df = pd.DataFrame(
         {

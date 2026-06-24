@@ -2,7 +2,7 @@
 Data processing utilities for accelerator simulation data.
 
 This module provides functions for processing tracking data, adding noise,
-applying SVD cleaning, and writing data to files.
+applying weighted SVD cleaning, and writing data to files.
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from tmom_recon import calculate_transverse_pz, inject_noise_xy_inplace
-from tmom_recon.svd import svd_clean_measurements
+from tmom_recon import calculate_pz, inject_noise_xy
+from tmom_recon.svd import weighted_svd_clean_measurements
 
 from aba_optimiser.config import MOMENTUM_STD_DEV, POSITION_STD_DEV
 
@@ -109,18 +109,18 @@ def process_track_with_queue(
         # Add noise and enqueue noisy data
         true_df["name"] = true_df["name"].astype("category")
 
-        # noisy_df = calculate_pz(true_df, tws=tws, info=True)
+        # noisy_df = calculate_pz(true_df, model_tws=tws, info=True)
         # noisy_df["name"] = noisy_df["name"].astype(str)
         # noise_table = pa.Table.from_pandas(noisy_df, preserve_index=False)
         # noise_q.put(noise_table)
         # del noise_table
 
         noisy_df = true_df.copy()
-        inject_noise_xy_inplace(noisy_df, true_df, np.random.default_rng())
+        noisy_df = inject_noise_xy(noisy_df, np.random.default_rng())
 
         # Filter the noisy data and enqueue cleaned data
-        cleaned_df = svd_clean_measurements(noisy_df)
-        cleaned_df = calculate_transverse_pz(cleaned_df, tws, inject_noise=False, info=False)
+        cleaned_df = weighted_svd_clean_measurements(noisy_df)
+        cleaned_df = calculate_pz(cleaned_df, model_tws=tws, inject_noise=False, info=False)
         del noisy_df  # Clean up noisy_df after its last use
 
         cleaned_df["name"] = cleaned_df["name"].astype(str)
@@ -220,7 +220,7 @@ def add_noise_and_clean(
     true_df: pd.DataFrame, tws: tfs.TfsDataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Add noise to tracking data and apply SVD cleaning.
+    Add noise to tracking data and apply weighted SVD cleaning.
 
     Args:
         true_df: Clean tracking dataframe
@@ -233,12 +233,12 @@ def add_noise_and_clean(
     true_df["name"] = true_df["name"].astype("category")
 
     # Add noise
-    noisy_df = calculate_transverse_pz(true_df, inject_noise=True, tws=tws, info=True)
+    noisy_df = calculate_pz(true_df, inject_noise=True, model_tws=tws, info=True)
     noisy_df["name"] = noisy_df["name"].astype(str)
 
-    # Apply SVD cleaning
-    cleaned_df = svd_clean_measurements(noisy_df)
-    cleaned_df = calculate_transverse_pz(cleaned_df, inject_noise=False, tws=tws, info=True)
+    # Apply weighted SVD cleaning
+    cleaned_df = weighted_svd_clean_measurements(noisy_df)
+    cleaned_df = calculate_pz(cleaned_df, inject_noise=False, model_tws=tws, info=True)
     return noisy_df, cleaned_df
 
 

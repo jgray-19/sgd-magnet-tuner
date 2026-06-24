@@ -9,16 +9,16 @@ import pytest
 
 from aba_optimiser.accelerators import PSB
 from aba_optimiser.config import OptimiserConfig
-from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.config.models import (
     MeasurementConfig,
     OutputConfig,
     SequenceConfig,
 )
+from aba_optimiser.training.controller import Controller
 from tests.training.controller_test_utils import (
-    evaluate_controller_worker_loss,
     _generate_nonoise_track,
     _make_simulation_config_quad,
+    evaluate_controller_worker_loss,
 )
 
 if TYPE_CHECKING:

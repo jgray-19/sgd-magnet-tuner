@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from tmom_recon import ACDipoleConfig, calculate_pz_measurement
-from tmom_recon.svd import svd_clean_measurements
+from pymadng_utils.physics import dp2pt
+from tmom_recon import ACDipoleConfig, calculate_pz
+from tmom_recon.svd import weighted_svd_clean_measurements
 
 from aba_optimiser.measurements.preprocessing import (
     ClosedOrbitInput,
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
 LOGGER = logging.getLogger(__name__)
+PROTON_MASS_GEV = 0.93827208816
 
 
 def process_single_dataframe(
@@ -54,7 +56,6 @@ def process_single_dataframe(
         n_turns_free=n_turns_free,
         kicker_name=kicker_name,
     )
-    df = svd_clean_measurements(df)
     df = df[df["name"].isin(twiss.index)]
     df = _assign_variances(
         df,
@@ -63,20 +64,40 @@ def process_single_dataframe(
         nan_variance_patterns=nan_variance_patterns,
         accelerator_type=accelerator_type,
     )
+    df = weighted_svd_clean_measurements(df)
 
-    df = calculate_pz_measurement(
+    machine_pt = _machine_deltap_to_pt(machine_deltap, twiss)
+    df = calculate_pz(
         df,
-        analysis_dir,
+        measurement_dir=analysis_dir,
         model_tws=twiss,
-        include_errors=True,
-        include_optics_errors=True,
+        # include_errors=True,
+        # include_optics_errors=True,
         reverse_meas_tws=beam == 2,
-        dpp_override=machine_deltap if machine_deltap is not None else 0.0,
-        ac_dipole_config=ac_dipole_config,
+        pt_override=machine_pt,
+        acd=ac_dipole_config,
     )
     df = _scale_position_variances_after_svd(df)
     df = _drop_nan_momenta(df, dataframe_index=index)
     return index, df
+
+
+def _machine_deltap_to_pt(machine_deltap: float | None, twiss: pd.DataFrame) -> float:
+    """Convert machine ``dp/p`` metadata to MAD-NG ``pt`` for dispersion-aware reconstruction."""
+    if machine_deltap is None:
+        return 0.0
+    headers = {str(key).lower(): value for key, value in getattr(twiss, "headers", {}).items()}
+    beta0 = headers.get("beta")
+    if beta0 is not None:
+        return dp2pt(machine_deltap, float(beta0))
+    energy = headers.get("energy")
+    if energy is not None:
+        beta0 = (1.0 - (PROTON_MASS_GEV / float(energy)) ** 2) ** 0.5
+        return dp2pt(machine_deltap, beta0)
+    LOGGER.warning(
+        "Twiss headers do not contain beam beta or energy; converting machine_deltap to pt with beta=1."
+    )
+    return dp2pt(machine_deltap)
 
 
 def _assign_variances(

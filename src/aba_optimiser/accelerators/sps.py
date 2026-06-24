@@ -134,6 +134,11 @@ class SPS(Accelerator):
         raise NotImplementedError("SPS does not define an AC-dipole exciter marker")
 
     @property
+    def ac_dipole_name(self) -> str:
+        """SPS does not use an AC-dipole exciter model."""
+        raise NotImplementedError("SPS does not define an AC-dipole exciter")
+
+    @property
     def ac_dipole_location(self) -> tuple[str, float]:
         """SPS does not use the LHC AC-dipole exciter model."""
         raise NotImplementedError("SPS does not define an AC-dipole exciter location")

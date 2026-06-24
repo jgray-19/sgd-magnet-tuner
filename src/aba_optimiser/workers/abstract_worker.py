@@ -266,10 +266,26 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
 
         worker_logfile = self._resolve_per_worker_logfile(self.config.mad_logfile)
 
+        # Cycle to the initial-condition marker (kicker) or to the point where this
+        # worker's measured turn increment starts. For backward ranges that is the
+        # tracking end, because the payload initial coordinates are taken there.
+        # Full-ring workers keep the natural $start so no BPM is duplicated at the
+        # ring wrap.
+        tracking_init_bpm = (
+            self.config.tracking_start_bpm
+            if self.config.sdir > 0
+            else self.config.tracking_end_bpm
+        )
+        cycle_target = (
+            self.config.initial_condition_marker or tracking_init_bpm
+            if self.config.cycle_sequence
+            else None
+        )
+
         # Use accelerator factory to create MAD interface
         mad_iface = GradientDescentMadInterface(
             accelerator=self.config.accelerator,
-            start_bpm=self.config.initial_condition_marker or self.config.tracking_start_bpm,
+            start_bpm=cycle_target,
             magnet_range=self.config.magnet_range,
             bpm_range=self.bpm_range,
             corrector_strengths=self.config.corrector_strengths,
@@ -278,6 +294,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             debug=self.config.debug,
             mad_logfile=worker_logfile,
             py_name=PYTHON_IN_MAD,
+            install_acd_markers=self.config.install_acd_markers,
         )
 
         knob_names = mad_iface.knob_names
@@ -294,7 +311,12 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
 
         mad = mad_iface.mad
         mad["knob_names"] = knob_names
-        mad["nbpms"] = mad_iface.nbpms
+        # With no tracking range (kicker mode) MAD tracks the full cycled ring and
+        # observes every monitor, so the observable vectors must be sized for all
+        # BPMs. The named range count would miss the BPM that wraps past the start
+        # marker, undersizing the vectors and overflowing during tracking.
+        nbpms = len(mad_iface.all_bpms) if self.tracking_range is None else mad_iface.nbpms
+        mad["nbpms"] = nbpms
         mad["sdir"] = self.config.sdir
 
         # Import required MAD-NG modules
@@ -328,7 +350,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         if non_knob_strengths:
             mad_iface.set_magnet_strengths(non_knob_strengths)
 
-        return mad, mad_iface.nbpms
+        return mad, nbpms
 
     @abstractmethod
     def _setup_da_maps(self, mad: MAD) -> None:

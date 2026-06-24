@@ -47,12 +47,19 @@ class WorkerConfig:
     tune_knobs_file: Path | None
     observation_range_start_bpm: str | None = None
     initial_condition_marker: str | None = None
+    # When False the worker leaves the sequence at its natural ``$start`` instead of
+    # cycling to ``tracking_start_bpm``. Cycling to a BPM places that BPM at both the
+    # ring start and the wrap, so full-ring multi-turn tracking observes it twice per
+    # turn and overflows the result vectors; full-ring workers therefore track from the
+    # fixed turn-increment start (``$start``) and only compare against their BPM range.
+    cycle_sequence: bool = True
     sdir: int = 1
     kick_plane: KickPlane = KickPlane.XY
     bad_bpms: list[str] | None = None
     debug: bool = False
     mad_logfile: Path | None = None
     python_logfile: Path | None = None
+    install_acd_markers: bool = False
 
 
 @dataclass

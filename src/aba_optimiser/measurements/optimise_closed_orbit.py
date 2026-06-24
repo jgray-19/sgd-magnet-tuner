@@ -10,7 +10,6 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import numpy as np
-import pandas as pd
 from nxcals.spark_session_builder import get_or_create
 from omc3.machine_data_extraction.nxcals_knobs import get_energy
 from pymadng_utils.io.utils import save_knobs
@@ -36,6 +35,7 @@ from aba_optimiser.measurements.create_datafile import (
     process_measurements,
     save_online_knobs,
 )
+from aba_optimiser.measurements.orbit_averaging import compute_three_turn_averages
 from aba_optimiser.measurements.squeeze_helpers import (
     get_or_make_sequence,
     make_machine_settings_knobs_file,
@@ -74,46 +74,6 @@ def weighted_mean(values: list[float], uncertainties: list[float]) -> float:
     weights = [1 / (u**2) for _, u in finite_pairs]
     numerator = sum(v * w for (v, _), w in zip(finite_pairs, weights))
     return numerator / sum(weights)
-
-
-def compute_weighted_mean_and_variance(
-    sub: pd.DataFrame, value_col: str, var_col: str
-) -> tuple[float, float]:
-    """Compute inverse-variance weighted mean and its variance.
-
-    Args:
-        sub: DataFrame subset for a single BPM
-        value_col: Column name for values to average
-        var_col: Column name for variances
-
-    Returns:
-        Tuple of (weighted_mean, variance_of_mean)
-    """
-    vals = sub[value_col].to_numpy()
-    vars_ = sub[var_col].to_numpy()
-    mask = np.isfinite(vals) & np.isfinite(vars_) & (vars_ > 0)
-    vals = vals[mask]
-    vars_ = vars_[mask]
-
-    # Fallback when no valid variances are available
-    if vals.size == 0:
-        mu = float(sub[value_col].mean())
-        n = sub[value_col].count()
-        if n >= 2:
-            v_unw = float(np.var(sub[value_col].to_numpy(), ddof=1))
-            var_mean = v_unw / n
-        else:
-            var_mean = np.nan
-        return mu, var_mean
-
-    w = 1.0 / vars_
-    sum_w = float(np.sum(w))
-    mu = float(np.sum(w * vals) / sum_w)
-
-    # Variance of weighted mean from reported measurement variances
-    var_mean = 1.0 / sum_w
-
-    return mu, var_mean
 
 
 def prepare_sequence_file(
@@ -426,58 +386,6 @@ def create_beam2_configs(
     ]
 
 
-def _compute_three_turn_averages(pzs: pd.DataFrame) -> pd.DataFrame:
-    """Average each BPM's measurements and replicate them across three turns.
-
-    Per-BPM weighted means (and the variance of the mean, stored for downstream
-    weighting) are computed for each observable, then duplicated over turns 1-3
-    to match the tracking-data layout.
-    """
-    rows = []
-    for name, sub in pzs.groupby("name"):
-        mu_x, vm_x = compute_weighted_mean_and_variance(sub, "x", "var_x")
-        mu_y, vm_y = compute_weighted_mean_and_variance(sub, "y", "var_y")
-        mu_px, vm_px = compute_weighted_mean_and_variance(sub, "px", "var_px")
-        mu_py, vm_py = compute_weighted_mean_and_variance(sub, "py", "var_py")
-        rows.append(
-            {
-                "name": name,
-                "x": mu_x,
-                "y": mu_y,
-                "px": mu_px,
-                "py": mu_py,
-                "var_x": vm_x,
-                "var_y": vm_y,
-                "var_px": vm_px,
-                "var_py": vm_py,
-            }
-        )
-
-    averaged = pd.DataFrame(rows)
-
-    new_rows = []
-    for turn in [1, 2, 3]:
-        for _, row in averaged.iterrows():
-            new_rows.append(
-                {
-                    "name": row["name"],
-                    "turn": turn,
-                    "x": row["x"],
-                    "y": row["y"],
-                    "px": row["px"],
-                    "py": row["py"],
-                    "var_x": row["var_x"],
-                    "var_y": row["var_y"],
-                    "var_px": row["var_px"],
-                    "var_py": row["var_py"],
-                }
-            )
-    new_df = pd.DataFrame(new_rows)
-    new_df["name"] = new_df["name"].astype("category")
-    new_df["turn"] = new_df["turn"].astype("int32")
-    return new_df
-
-
 def _summarise_arc_deltaps(
     results_arcs: list[float],
     uncs_arcs: list[float],
@@ -626,7 +534,7 @@ def process_single_config(
 
     file_path = ana_dir / measurement_filename
 
-    new_df = _compute_three_turn_averages(pzs)
+    new_df = compute_three_turn_averages(pzs)
 
     # Overwrite the measurement file
     new_df.to_parquet(file_path)

@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tmom_recon import build_twiss_from_measurements
 
+from aba_optimiser.measurements.b2_errors import read_b2_error_table
 from aba_optimiser.measurements.plotting.core import (
     BEST_KNOWLEDGE_LABEL,
     BETTER_KNOWLEDGE_LABEL,
@@ -18,6 +19,7 @@ from aba_optimiser.measurements.plotting.core import (
     MEASUREMENT_LABEL,
     PLOT_COLORS,
     add_ip_positions_to_plot,
+    get_element_positions,
     get_fullring_twiss,
     get_ip_positions,
     prepare_plot_context,
@@ -282,6 +284,34 @@ def plot_fullring_comparison(
         logging.getLogger(__name__).warning(
             "Could not find dq1/dq2 in twiss headers for any full-ring model. Skipping chromaticity plot."
         )
+
+    if accelerator.b2_errors is not None:
+        b2_table = read_b2_error_table(accelerator.b2_errors)
+        elem_names = list(b2_table.keys())
+        elem_pos = get_element_positions(accelerator, elem_names)
+        b2_with_pos = sorted(
+            ((name, b2_table[name], pos) for name, pos in elem_pos.items() if name in b2_table),
+            key=lambda t: t[2],
+        )
+        if b2_with_pos:
+            fig_b2, ax_b2 = plt.subplots(figsize=(16, 4))
+            ax_b2.bar(
+                [pos for _, _, pos in b2_with_pos],
+                [k1l for _, k1l, _ in b2_with_pos],
+                width=20.0,
+                color="tab:purple",
+                alpha=0.7,
+            )
+            ax_b2.axhline(0.0, color="k", linewidth=0.8, alpha=0.5)
+            ax_b2.set_xlabel("S (m)")
+            ax_b2.set_ylabel(r"$K_1 L$ [m$^{-1}$]")
+            ax_b2.set_title("Dipole b2 errors")
+            ax_b2.grid(visible=True, alpha=0.3)
+            add_ip_positions_to_plot(ax_b2, ip_positions)
+            plt.tight_layout()
+            _path = results_dir / f"b2_errors_{squeeze_step}_fullring.png"
+            plt.savefig(_path, dpi=150)
+            print(f"Saved plot: {_path.resolve()}")
 
     plt.show()
 

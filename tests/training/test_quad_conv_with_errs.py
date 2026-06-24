@@ -80,7 +80,8 @@ def _write_ac_dipole_measurements(
         monitored_line = run_ac_dipole_tracking_with_particles(
             line=line,
             tws=tws,
-            beam=1,
+            acd_marker="mkqa.6l4.b1",
+            sequence_name="lhcb1",
             ramp_turns=acd_ramp,
             flattop_turns=flattop_turns,
             driven_tunes=driven_tunes,
@@ -172,16 +173,16 @@ def test_controller_bend_opt_simple(
     tws_no_err = get_twiss_without_errors(seq_b1, just_bpms=True)
 
     ac_dipole_model = ACDipoleMadDriver(
-        sequence_file=seq_b1,
-        beam=1,
-        kinetic_energy=6800.0,
-        deltap=0.0,
+        accelerator=LHC(beam=1, sequence_file=seq_b1, kinetic_energy=6800.0),
+        pt=0.0,
         observed_elements=loaded_interface.accelerator.get_ac_dipole_marker(),
         discard_mad_output=True,
     )
     ac_dipole_config = ACDipoleConfig(
         ac_dipole_marker=loaded_interface.accelerator.get_ac_dipole_marker(),
         model=ac_dipole_model,
+        dpx_tune=0.27,
+        dpy_tune=0.322,
     )
 
     processed_dir = tmp_path / "processed_measurements"

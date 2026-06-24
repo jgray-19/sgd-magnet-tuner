@@ -30,6 +30,14 @@ def get_sequence_creation_time(meas_times_for_step: dict[str, list[str]], squeez
     return get_measurement_time(min(all_times), squeeze_step).isoformat()
 
 
+def get_central_measurement_time(meas_times_for_step: dict[str, list[str]], squeeze_step: str) -> datetime:
+    """Return the chronologically central measurement time for a squeeze step."""
+    all_times = sorted(t for times in meas_times_for_step.values() for t in times)
+    if not all_times:
+        raise ValueError(f"No measurement times configured for squeeze step {squeeze_step}.")
+    return get_measurement_time(all_times[len(all_times) // 2], squeeze_step)
+
+
 def get_knob_files(results_dir: Path, squeeze_step: str, freq: str) -> tuple[Path, Path]:
     """Return (tune_knobs_file, corrector_strengths_file) for a squeeze step and frequency."""
     return (
@@ -124,6 +132,7 @@ def prepare_frequency_metadata(
     meas_base_dir: Path,
     results_dir: Path,
     squeeze_step: str,
+    energy: float | None = None,
 ) -> tuple[list[Path], Path, Path, set[str], float]:
     """Resolve file paths, download knobs, and collect bad BPMs for one frequency."""
     meas_date = get_measurement_date(squeeze_step)
@@ -152,6 +161,7 @@ def prepare_frequency_metadata(
         beam=beam,
         tune_knobs_file=tune_knobs_file,
         corrector_knobs_file=corrector_knobs_file,
+        energy=energy,
     )
 
     return files, tune_knobs_file, corrector_knobs_file, bad_bpms, float(energy)

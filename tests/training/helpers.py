@@ -81,6 +81,7 @@ def generate_model_with_errors(
     apply_orbit_correction: bool = True,
     target_qx: float = 0.28,
     target_qy: float = 0.31,
+    rel_error: float | None = None,
 ) -> tuple[dict[str, float], dict, tfs.TfsDataFrame]:
     """
     Generate a MAD model with errors and return the xsuite environment.
@@ -108,7 +109,7 @@ def generate_model_with_errors(
     if magnet_type:
         LOGGER.info(f"Applying magnetic perturbations to {magnet_type}")
         magnet_strengths, _ = interface.apply_magnet_perturbations(
-            rel_error=None,  # Use default from ERROR_TABLE
+            rel_error=rel_error,  # None -> use default from ERROR_TABLE
             seed=42,
             magnet_type=magnet_type,
         )
@@ -160,6 +161,7 @@ def generate_xsuite_env_with_errors(
     apply_orbit_correction: bool = True,
     target_qx: float = 0.28,
     target_qy: float = 0.31,
+    rel_error: float | None = None,
 ) -> tuple[xt.Environment, dict[str, float], dict, tfs.TfsDataFrame]:
     """
     Generate a MAD model with errors and return the xsuite environment.
@@ -183,6 +185,7 @@ def generate_xsuite_env_with_errors(
         apply_orbit_correction,
         target_qx,
         target_qy,
+        rel_error,
     )
 
     # Create xsuite environment with orbit correction applied

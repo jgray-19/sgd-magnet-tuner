@@ -34,11 +34,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 random.seed(42)  # For reproducibility
 
+HESSIAN_MIN_EIGENVALUE = 1e-30
+
 
 def _estimate_uncertainties_from_hessian(
     total_hessian: np.ndarray,
     *,
-    min_eigenvalue: float = 1e-8,
+    min_eigenvalue: float = HESSIAN_MIN_EIGENVALUE,
 ) -> np.ndarray:
     """Convert an approximate Hessian into 1-sigma parameter uncertainties.
 
@@ -89,16 +91,18 @@ class Controller(BaseController):
         simulation_config: SimulationConfig,
         sequence_config: SequenceConfig,
         measurement_config: MeasurementConfig,
-        bpm_start_points: list[str],
-        bpm_end_points: list[str],
+        bpm_start_points: list[str] = [],
+        bpm_end_points: list[str] = [],
         initial_knob_strengths: dict[str, float] | None = None,
         true_strengths: Path | dict[str, float] | None = None,
         debug: bool = False,
         optimise_knobs: list[str] | None = None,
         output_config: OutputConfig | None = None,
         checkpoint_config: CheckpointConfig | None = None,
-        initial_conditions_callback: Callable[[dict[str, float]], np.ndarray] | None = None,
+        initial_conditions_callback: Callable[[dict[str, float]], np.ndarray]
+        | None = None,
         kicker_config: KickerConfig | None = None,
+        use_acd: bool = False,
     ):
         """
         Initialise the controller with all required managers.
@@ -111,13 +115,17 @@ class Controller(BaseController):
             simulation_config (SimulationConfig): Simulation and worker configuration.
             sequence_config (SequenceConfig): Sequence and beam configuration.
             measurement_config (MeasurementConfig): Measurement data file configuration.
-            output_config (OutputConfig): Output/logging behaviour.
             bpm_start_points (list[str]): Starting BPM names for each range.
             bpm_end_points (list[str]): Ending BPM names for each range.
             initial_knob_strengths (dict[str, float] | None, optional): Initial knob strengths in optimisation space.
             true_strengths (Path | dict[str, float], optional): True strengths file or dict in optimisation space.
             debug (bool, optional): Enable debug mode. Defaults to False.
             optimise_knobs (list[str] | None, optional): List of global knob names to optimise.
+            output_config (OutputConfig): Output/logging behaviour.
+            checkpoint_config (CheckpointConfig | None): Checkpointing configuration.
+            initial_conditions_callback (Callable[[dict[str, float]], np.ndarray] | None, optional
+            kicker_config (KickerConfig | None, optional): Kicker mode configuration. Defaults to None.
+            use_acd (bool, optional): Whether to enable ACD mode. Defaults to False
         """
 
         # Log optimisation targets
@@ -127,7 +135,10 @@ class Controller(BaseController):
         else:
             logger.info("Using position-only optimisation (x, y only)")
 
+        acd_name: str | None = None
         if kicker_config is not None:
+            if use_acd:
+                raise ValueError("Kicker mode and ACD mode cannot both be enabled.")
             kicker_config.log_state()
             sequence_config = dataclasses.replace(
                 sequence_config,
@@ -149,6 +160,29 @@ class Controller(BaseController):
                 kicker_config.kicker_name,
                 kicker_config.turns_after_kicker,
             )
+        elif use_acd:
+            acd_after = accelerator.acd_marker_name("after")
+            acd_before = accelerator.acd_marker_name("before")
+            acd_name = accelerator.ac_dipole_name
+            sequence_config = dataclasses.replace(
+                sequence_config,
+                first_bpm=sequence_config.first_bpm or acd_after,
+            )
+            simulation_config = dataclasses.replace(
+                simulation_config,
+                run_arc_by_arc=False,
+                n_run_turns=1,
+                different_turns_per_range=False,
+            )
+            bpm_start_points = [acd_after, acd_before]
+            bpm_end_points = []
+            logger.info("ACD mode enabled: after=%s, before=%s", acd_after, acd_before)
+        else:
+            logger.info("Standard tracking mode: no kicker or ACD")
+            if not bpm_start_points:
+                raise ValueError(
+                    "bpm_start_points must be provided in standard tracking mode."
+                )
 
         # Normalize and validate multi-config inputs
         measurement_config = measurement_config.expanded_for_measurements()
@@ -162,9 +196,11 @@ class Controller(BaseController):
         self.checkpoint_config = checkpoint_config
         self.initial_conditions_callback = initial_conditions_callback
         self.kicker_config = kicker_config
+        self.use_acd = use_acd
         self.tracking_plan = build_tracking_plan(
             kicker_config=kicker_config,
             simulation_config=simulation_config,
+            acd_name=acd_name,
         )
 
         # BaseController will normalise the optimisation-space inputs and handle

@@ -59,6 +59,7 @@ class SpawnedValidationWorkers:
     workers: list[mp.Process] = field(default_factory=list)
     metadata: list[WorkerRuntimeMetadata] = field(default_factory=list)
     loss_weights: list[float] = field(default_factory=list)
+    particle_counts: list[int] = field(default_factory=list)
 
 
 class WorkerSpawner:
@@ -193,6 +194,7 @@ class WorkerSpawner:
             )
             val_tracks = payload_track_count(validation_payload)
             spawned.loss_weights.append(float(val_tracks))
+            spawned.particle_counts.append(len(val_data.init_coords))
             covered_ranges.add(
                 (
                     val_file_idx,

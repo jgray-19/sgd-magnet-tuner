@@ -54,7 +54,7 @@ def test_build_madng_twiss_table_uses_existing_twiss_file(tmp_path: Path) -> Non
     expected = tfs.TfsDataFrame(
         {"NAME": ["BPM1"], "S": [1.23], "BETX": [10.0]},
     )
-    twiss_path = tmp_path / "twiss.dat"
+    twiss_path = tmp_path / "twiss_ac.dat"
     tfs.write(twiss_path, expected, save_index=False)
 
     result = build_madng_twiss_table(

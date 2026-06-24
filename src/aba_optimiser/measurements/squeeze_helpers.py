@@ -8,16 +8,22 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 import tfs
+from packaging.version import InvalidVersion, Version
+from pandas.errors import Pandas4Warning
 from pymadng_utils.madx import make_madx_sequence
+from tmom_recon import ACDipoleConfig, calculate_pz
 from tmom_recon.acd.madng_driver import ACDipoleMadDriver
-from tmom_recon.acd.reconstruction import calculate_ac_dipole_momentum
-from tmom_recon.physics.dpp_calculation import estimate_dpp_from_model
+from tmom_recon.physics.pt_calculation import estimate_pt_from_model
 from tmom_recon.svd import svd_clean_measurements, weighted_svd_clean_measurements
 from turn_by_turn import read_tbt
 
@@ -32,11 +38,41 @@ from aba_optimiser.measurements.squeeze_config import (
 )
 from aba_optimiser.noise import assign_bpm_variances
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 logger = logging.getLogger(__name__)
 
 
 # ==================== HELPER FUNCTIONS ====================
 _MACHINE_SETTINGS_KNOBS_FILENAME = "machine_settings_knobs.madx"
+
+
+@contextmanager
+def _suppress_omc3_pandas_copy_warning() -> Iterator[None]:
+    """Suppress the known omc3/pandas copy warning for the legacy NXCALS path."""
+    if not _should_suppress_omc3_pandas_copy_warning():
+        yield
+        return
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*",
+            category=Pandas4Warning,
+        )
+        yield
+
+
+def _should_suppress_omc3_pandas_copy_warning() -> bool:
+    """Return True for the known incompatible omc3/pandas version combination."""
+    try:
+        omc3_version = Version(version("omc3"))
+        pandas_version = Version(version("pandas"))
+    except (PackageNotFoundError, InvalidVersion):
+        return False
+
+    return omc3_version == Version("0.28.0") and pandas_version > Version("3.0.0")
 
 
 def make_machine_settings_knobs_file(output_file: Path, time: str) -> Path:
@@ -45,7 +81,8 @@ def make_machine_settings_knobs_file(output_file: Path, time: str) -> Path:
 
     output_file = Path(output_file)
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    extract_knobs({"time": time, "output": output_file})
+    with _suppress_omc3_pandas_copy_warning():
+        extract_knobs({"time": time, "output": output_file})
     if not output_file.exists():
         raise FileNotFoundError(
             f"Expected machine-settings knobs file was not created: {output_file}"
@@ -381,6 +418,8 @@ def reconstruct_ac_dipole_measurements(
         raise FileNotFoundError(f"Sequence file not found: {sequence_path}")
 
     model_twiss = tfs.read(model_twiss_file, index="name")
+    job_file = model_dir / "job.create_model_nominal.madx"
+    _nat_x, _nat_y, drv_x, drv_y = extract_tunes_from_job_file(job_file)
     lhc_accel = LHC(beam=beam, kinetic_energy=energy, sequence_file=sequence_path)
     ac_dipole_marker = lhc_accel.get_ac_dipole_marker()
     svd_clean = weighted_svd_clean_measurements if use_weighted_svd else svd_clean_measurements
@@ -421,14 +460,15 @@ def reconstruct_ac_dipole_measurements(
             )
             orig_data = orig_data[~orig_data["name"].str.upper().isin(unknown_bpms)].copy()
 
-        dpp_est = float(estimate_dpp_from_model(orig_data.copy(deep=True), model_twiss))
+        pt_est = float(estimate_pt_from_model(orig_data.copy(deep=True), model_twiss))
+        dpp_est = float(lhc_accel.pt2dp(pt_est))
         tune_knobs_file = tune_knobs_files[file_idx] if tune_knobs_files else None
 
         model = None
         try:
             model = _LHCACDipoleMadDriver(
                 accelerator=lhc_accel,
-                deltap=dpp_est,
+                pt=pt_est,
                 observed_elements=ac_dipole_marker,
                 discard_mad_output=True,
                 tune_knobs_file=tune_knobs_file,
@@ -436,13 +476,18 @@ def reconstruct_ac_dipole_measurements(
             if magnet_strengths:
                 model.set_magnet_strengths(magnet_strengths)
 
-            reconstructed = calculate_ac_dipole_momentum(
-                orig_data,
-                model_twiss,
+            acd_config = ACDipoleConfig(
                 ac_dipole_marker=ac_dipole_marker,
                 model=model,
-                inject_noise=False,
-                use_immediate_neighbors_for_bpms=True,
+                dpx_tune=drv_x,
+                dpy_tune=drv_y,
+            )
+            reconstructed = calculate_pz(
+                orig_data,
+                model_tws=model_twiss,
+                acd=acd_config,
+                acd_only=True,
+                info=False,
             )
         finally:
             if model is not None and hasattr(model, "close"):
@@ -461,13 +506,19 @@ def reconstruct_ac_dipole_measurements(
         bpm_table.attrs.update(
             {
                 "DPP_EST": dpp_est,
+                "PT_EST": pt_est,
                 "ac_dipole_marker": ac_dipole_marker,
                 "ac_dipole_bpm_upstream": upstream_name,
                 "ac_dipole_bpm_downstream": downstream_name,
             }
         )
 
-        logger.info(f"Reconstructed {measurement_file.name}: DPP_EST={dpp_est:.6f}")
+        logger.info(
+            "Reconstructed %s: PT_EST=%.6e DPP_EST=%.6e",
+            measurement_file.name,
+            pt_est,
+            dpp_est,
+        )
         return measurement_file.stem, bpm_table
 
     results: dict[str, pd.DataFrame] = {}

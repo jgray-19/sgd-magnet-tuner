@@ -201,12 +201,15 @@ local {info.dk_table}, {attr} in loaded_sequence['{element_name}']
         return {name: self._get_base_element_strength(*name.rsplit(".", 1)) for name in names}
 
     def observe_bpms(
-        self, bpm_pattern: str | None = None, bad_bpms: list[str] | None = None
+        self,
+        bpm_pattern: str | None = None,
+        bad_bpms: list[str] | None = None,
+        unobserve_first: bool = True,
     ) -> None:
         """Set up the MAD-NG session to observe BPMs."""
         if bpm_pattern is None:
             bpm_pattern = self.accelerator.bpm_pattern
-        super().observe_bpms(bpm_pattern, bad_bpms)
+        super().observe_bpms(bpm_pattern, bad_bpms, unobserve_first)
 
     def get_bpm_list(self, bpm_range: str) -> tuple[list[str], list[str]]:
         """Get list of observed BPM names in the sequence and in a range."""

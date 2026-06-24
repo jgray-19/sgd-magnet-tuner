@@ -15,6 +15,7 @@ import numpy as np
 from aba_optimiser.mad.scripts import (
     build_tracking_hessian_script,
     build_tracking_init_script,
+    build_tracking_preflight_script,
     build_tracking_script,
     dump_debug_script,
 )
@@ -314,6 +315,48 @@ end
         """
         mad.send(self.run_track_init_text)
 
+    def run_preflight_check(self, mad: MAD, nbpms: int) -> None:
+        """Validate the observation geometry once with a single-particle dry run.
+
+        Tracks one particle through the configured range/turns and confirms MAD
+        observes exactly ``nbpms * n_run_turns`` points — the size the result
+        vectors are allocated with and filled by ``seti`` every real run. Doing this
+        up front turns a mis-scoped observe/range (e.g. an off-plane BPM left
+        observed outside the range) into a clear worker error here instead of an
+        opaque MAD ``index out of bounds`` deep in the optimisation loop, and lets
+        the hot tracking loop run without re-validating.
+        """
+        mad.send(build_tracking_preflight_script())
+        report = mad.recv()
+        if report.get("lost"):
+            # A lost preflight particle is handled the same way at runtime (the
+            # epoch is rejected); don't fail startup, just skip the count check
+            # since a truncated track gives a misleading observation count.
+            LOGGER.warning(
+                "Worker %d: preflight particle lost; skipping observation-count check "
+                "(range=%s sdir=%d)",
+                self.worker_id,
+                self.tracking_range,
+                self.config.sdir,
+            )
+            return
+        observed = int(report["observed"])
+        expected = int(report["expected"])
+        if observed != expected:
+            raise ValueError(
+                f"Worker {self.worker_id}: preflight observed {observed} BPM points per run "
+                f"but the result vectors hold {expected} (nbpms={nbpms} x n_run_turns). "
+                f"An observe/range mismatch would overflow tracking; check the observe "
+                f"pattern and bad_bpms for plane {self.config.kick_plane!r} "
+                f"(range={self.tracking_range!r}, sdir={self.config.sdir})."
+            )
+        LOGGER.debug(
+            "Worker %d: preflight OK (%d observed == %d allocated)",
+            self.worker_id,
+            observed,
+            expected,
+        )
+
     def compute_gradients_and_loss(
         self, mad: MAD, knob_updates: dict[str, float], batch: int
     ) -> tuple[np.ndarray, float]:
@@ -470,8 +513,8 @@ end
         mad.send(new_px.reshape(-1, 1)).send(new_py.reshape(-1, 1))
 
         # Mirror in Python so _init_coords_np stays consistent
-        self._init_coords_np[:, 1] = new_px
-        self._init_coords_np[:, 3] = new_py
+        self._init_coords_np[:, 1] = new_px.ravel()
+        self._init_coords_np[:, 3] = new_py.ravel()
 
     def _handle_control_command(self, mad: MAD, command: dict[str, object]) -> None:
         """Handle control-plane commands from parent process."""
@@ -536,14 +579,10 @@ end
         for observable in self.hessian_weight_order:
             mad.send((self.hessian_weights[observable] * hmask).tolist())
 
-    def _get_hessian_script(self) -> str:
-        """Get the MAD script used for Hessian approximation."""
-        return self.hessian_script_text
-
     def _compute_hessian_part(self, mad: MAD, n_knobs: int) -> np.ndarray:
         """Compute this worker's Hessian contribution."""
         self._send_hessian_weights(mad)
-        mad.send(self._get_hessian_script())
+        mad.send(self.hessian_script_text)
         return np.asarray(mad.recv())
 
     def _compute_loss_and_gradients(
@@ -593,6 +632,7 @@ end
             mad, nbpms = self.setup_mad_interface(knob_values)
             self.send_initial_conditions(mad)
             self._initialise_mad_computation(mad)
+            self.run_preflight_check(mad, nbpms)
 
             LOGGER.debug(f"Worker {self.worker_id}: Ready for computation with {nbpms} BPMs")
 

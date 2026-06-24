@@ -39,12 +39,6 @@ _CORRECTOR_ATTRS_BY_KIND: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 
-def _exact_lua_pattern(name: str) -> str:
-    """Return a Lua pattern that matches one element name exactly."""
-    special_chars = set("^$()%.[]*+-?")
-    return "^" + "".join(f"%{char}" if char in special_chars else char for char in name) + "$"
-
-
 def _ensure_cycleable_start_element(
     iface: GenericMadInterface,
     start_bpm: str,
@@ -120,6 +114,7 @@ class GenericMadInterface(AbaMadInterface):
         debug: bool = False,
         mad_logfile: Path | None = None,
         discard_mad_output: bool = False,
+        install_acd_markers: bool = False,
     ):
         stdout, redirect_stderr = self._resolve_mad_stdout(mad_logfile, discard_mad_output)
 
@@ -142,28 +137,25 @@ class GenericMadInterface(AbaMadInterface):
         self.mad["magnet_range"] = self.magnet_range
         self.mad["bpm_range"] = self.bpm_range
 
-        self.observe_bpms(bad_bpms=bad_bpms)
-        all_bpms, _ = self.get_bpm_list(self.bpm_range)
-        self.make_all_monitors_thin(all_bpms)
-        self.unobserve_all_elements()
+        not_bpms = []
+        if install_acd_markers:
+            acd_before, acd_after = self.insert_acd_markers()
+            # Include _after so _ensure_cycleable_start_element can find it
+            LOGGER.info("Installed ACD markers: before=%s, after=%s", acd_before, acd_after)
+            not_bpms = [acd_before, acd_after]
+            self.observe_elements(not_bpms)
+
+        # Don't unobserve BPMs if we just installed ACD markers
+        self.observe_bpms(bad_bpms=bad_bpms, unobserve_first=not install_acd_markers)
+        self.bpms_in_range, self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
+        self.make_all_monitors_thin(list(set(self.all_bpms) - set(not_bpms)))
 
         if start_bpm is not None:
-            _ensure_cycleable_start_element(self, start_bpm, all_bpms)
+            _ensure_cycleable_start_element(self, start_bpm, self.all_bpms)
             self.cycle_sequence(marker_name=start_bpm)
             LOGGER.info(f"Cycled sequence to start at BPM: {start_bpm}")
         else:
             LOGGER.info("Skipping sequence cycling (no start BPM provided)")
-
-        # Setup observation and ranges
-        self.observe_bpms(bad_bpms=bad_bpms)
-        self.bpms_in_range, self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
-        observe_set = (
-            self.all_bpms
-            if start_bpm is not None and start_bpm not in self.bpms_in_range
-            else self.bpms_in_range
-        )
-        self.observe_elements([_exact_lua_pattern(name) for name in observe_set])
-        LOGGER.info("Restricted active observation set to %d BPMs", len(observe_set))
 
         # Apply corrector strengths if provided
         if corrector_strengths is not None:
@@ -199,13 +191,13 @@ class GenericMadInterface(AbaMadInterface):
         LOGGER.info(f"Counted {len(bpms_in_range)} BPMs in range: {bpm_range}")
         return bpms_in_range, len(bpms_in_range), all_bpms
 
-    def make_all_monitors_thin(self, monitors: list[str]) -> None:
+    def make_all_monitors_thin(self, monitors: list[str], observe_after: bool = True) -> None:
         """Replace monitor elements with markers in the specified BPM range."""
         for bpm in monitors:
             assert "monitor" in self.mad.MADX[bpm].kind, (
                 f"Element {bpm} is not a monitor, cannot be made thin"
             )
-            self.make_element_thin(bpm)
+            self.make_element_thin(bpm, observe_after=observe_after)
         LOGGER.info(
             f"Replaced {len(monitors)} monitor BPMs with markers in range: {self.bpm_range}"
         )
@@ -319,6 +311,7 @@ class GradientDescentMadInterface(GenericMadInterface):
         debug: bool = False,
         mad_logfile: Path | None = None,
         discard_mad_output: bool = False,
+        install_acd_markers: bool = False,
     ):
         super().__init__(
             accelerator,
@@ -332,6 +325,7 @@ class GradientDescentMadInterface(GenericMadInterface):
             debug,
             mad_logfile,
             discard_mad_output,
+            install_acd_markers,
         )
 
         if accelerator.has_any_optimisation():

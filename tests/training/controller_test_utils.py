@@ -20,6 +20,7 @@ from tmom_recon.kicker.test_utils import (
     select_kicker_element,
     strip_inline_flags,
 )
+from xtrack_tools.coordinates import create_initial_conditions
 from xtrack_tools.kicker import _insert_exciter_at, _knl_ksl
 from xtrack_tools.monitors import (
     get_monitor_names_at_pattern,
@@ -31,13 +32,13 @@ from xtrack_tools.tracking import run_tracking, run_tracking_without_ac_dipole
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.physics.deltap import dp2pt
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
-from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.workers.screening import OutlierScreener
 from aba_optimiser.training.config.models import (
     MeasurementConfig,
     OutputConfig,
     SequenceConfig,
 )
+from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.workers.screening import OutlierScreener
 from tests.training.helpers import TRACK_COLUMNS, generate_xsuite_env_with_errors
 
 if TYPE_CHECKING:
@@ -79,6 +80,14 @@ def _run_track_with_model(
         raise ValueError("twiss_data must be provided; controller tests should use MAD-NG twiss")
 
     line: xt.Line = env[line_name]
+    resolved_start_marker = start_marker
+    if resolved_start_marker is None:
+        monitor_names = get_monitor_names_at_pattern(line, bpm_pattern)
+        if not monitor_names:
+            raise ValueError(f"No BPMs matched pattern {bpm_pattern!r} in line {line_name!r}")
+        # Start tracking at the first observed BPM so action-angle initialisation
+        # uses a physical monitor rather than a synthetic drift element.
+        resolved_start_marker = str(monitor_names[0])
     monitored_line = run_tracking_without_ac_dipole(
         line=line,
         tws=twiss_data,
@@ -88,7 +97,7 @@ def _run_track_with_model(
         angle_list=angle_list,
         use_diagonal_kicks=use_diagonal_kicks,
         deltas=dpp_value,
-        start_marker=start_marker,
+        start_marker=resolved_start_marker,
     )
 
     true_dfs = line_to_dataframes(monitored_line)
@@ -308,6 +317,10 @@ def _generate_kicker_track(
     )
     tracking_df = tracking_df.loc[:, TRACK_COLUMNS].copy()
     tracking_df["name"] = tracking_df["name"].astype(str)
+    # realign re-groups each turn's rows to begin just after the kicker, giving the
+    # cycled (kicker-relative) BPM order that MAD observes when it tracks the full
+    # sequence cycled to the kicker. The worker compares observables positionally,
+    # so the saved per-turn order must match that cycled order.
     tracking_df = realign_kicker_turns(
         tracking_df,
         kicker_name=kicker_name,
@@ -449,16 +462,29 @@ def _make_simulation_config_quad() -> SimulationConfig:
     )
 
 
-def evaluate_controller_worker_loss(ctrl: Controller, knobs: dict[str, float]) -> float:
+def evaluate_controller_worker_loss(
+    ctrl: Controller,
+    knobs: dict[str, float],
+    *,
+    enable_validation: bool | None = None,
+) -> float:
     """Return the total worker diagnostic loss summed across all workers at one knob setting."""
-    return evaluate_controller_worker_losses(ctrl, [knobs])[0]
+    return evaluate_controller_worker_losses(
+        ctrl,
+        [knobs],
+        enable_validation=enable_validation,
+    )[0]
 
 
 def evaluate_controller_worker_losses(
     ctrl: Controller,
     knobs_list: list[dict[str, float]],
+    *,
+    enable_validation: bool | None = None,
 ) -> list[float]:
     """Return worker diagnostic losses for several knob settings using one worker startup."""
+    if enable_validation is None:
+        enable_validation = ctrl.tracking_plan.enable_validation
     ctrl.worker_manager.start_workers(
         ctrl.data_manager.track_data,
         ctrl.data_manager.turn_batches,
@@ -468,7 +494,7 @@ def evaluate_controller_worker_losses(
         ctrl.simulation_config,
         ctrl.machine_deltaps,
         ctrl.initial_knobs,
-        enable_validation=ctrl.tracking_plan.enable_validation,
+        enable_validation=enable_validation,
     )
     try:
         losses = []

@@ -49,6 +49,50 @@ class EmptyKnobController(DummyController):
     _configuration_manager_cls = EmptyKnobConfigurationManager
 
 
+def test_configuration_manager_preserves_model_defaults_for_missing_initial_knobs(seq_b1) -> None:
+    accelerator = LHC(
+        beam=1,
+        kinetic_energy=6800,
+        sequence_file=seq_b1,
+        optimise_quadrupoles=True,
+    )
+    simulation_config = SimulationConfig(
+        tracks_per_worker=1,
+        num_workers=1,
+        num_batches=1,
+    )
+    manager = ConfigurationManager(
+        accelerator=accelerator,
+        simulation_config=simulation_config,
+        sequence_config=SequenceConfig("BPM.9R1.B1/BPM.9L2.B1"),
+        bpm_start_points=["BPM.9R1.B1"],
+        bpm_end_points=["BPM.9L2.B1"],
+    )
+    initial_state = {"k1": 1.25, "k2": -0.75, "k3": 0.5}
+
+    class FakeMadInterface:
+        def __init__(self, initial_values: dict[str, float]) -> None:
+            self.values = initial_values.copy()
+
+        def receive_knob_values(self) -> np.ndarray:
+            return np.asarray([self.values[name] for name in manager.knob_names], dtype=float)
+
+        def update_knob_values(self, new_values: dict[str, float]) -> None:
+            self.values.update(new_values)
+
+    manager.knob_names = list(initial_state)
+    manager.mad_iface = FakeMadInterface(initial_state)  # ty:ignore[invalid-assignment]
+
+    initial_knobs, filtered_true = manager.initialise_knob_strengths(
+        true_strengths={"k1": 9.0, "outside": 2.0},
+        provided_initial_knobs={"k2": 4.0},
+    )
+
+    assert initial_knobs == {"k1": 1.25, "k2": 4.0, "k3": 0.5}
+    assert filtered_true == {"k1": 9.0}
+    np.testing.assert_allclose(manager.initial_strengths, np.array([1.25, 4.0, 0.5]))
+
+
 def test_measurement_config_expands_single_file_scoped_values(tmp_path) -> None:
     config = MeasurementConfig(
         measurement_files=[tmp_path / "m0.parquet", tmp_path / "m1.parquet"],

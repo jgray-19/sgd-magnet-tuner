@@ -228,11 +228,10 @@ for name, k1l in pairs(b2_errors) do
     elseif element.knl ~= nil and k1l ~= 0 then
         element.knl = {{
             element.knl[1] or 0,
-            element.knl[2] or 0,
+            (element.knl[2] or 0) + k1l,
             element.knl[3] or 0,
             element.knl[4] or 0,
         }}
-        element.knl[2] = element.knl[2] + k1l
         applied[name] = element.knl[2]
     elseif k1l ~= 0 then
         error("Element has no knl table for K1L b2 application: " .. name)

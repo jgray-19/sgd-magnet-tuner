@@ -13,15 +13,15 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
-from aba_optimiser.training.workers.screening import OutlierScreener
 from aba_optimiser.training.config.tracking import ArcByArcTrackingPlan, TrackingPlan
+from aba_optimiser.training.workers.payloads import WorkerPayloadBuilder
+from aba_optimiser.training.workers.screening import OutlierScreener
+from aba_optimiser.training.workers.setup import WorkerRuntimeMetadata, WorkerSetupHelper
+from aba_optimiser.training.workers.spawning import WorkerSpawner
 from aba_optimiser.training.workers.validation import (
     ValidationSplitResult,
     split_validation_payloads,
 )
-from aba_optimiser.training.workers.payloads import WorkerPayloadBuilder
-from aba_optimiser.training.workers.setup import WorkerRuntimeMetadata, WorkerSetupHelper
-from aba_optimiser.training.workers.spawning import WorkerSpawner
 from aba_optimiser.workers.protocol import WorkerChannels, raise_for_worker_error_payload
 
 if TYPE_CHECKING:
@@ -93,6 +93,7 @@ class WorkerManager:
         self.validation_channels: WorkerChannels | None = None
         self.validation_metadata: list[WorkerRuntimeMetadata] = []
         self.validation_loss_weights: list[float] = []
+        self._validation_worker_particle_counts: list[int] = []
         self.channels: WorkerChannels | None = None
         self.track_data: dict[int, pd.DataFrame] = {}
         self.turn_batches: list[list[int]] = []
@@ -350,6 +351,7 @@ class WorkerManager:
             self.validation_workers = validation.workers
             self.validation_metadata = validation.metadata
             self.validation_loss_weights = validation.loss_weights
+            self._validation_worker_particle_counts = validation.particle_counts
 
         self.channels = WorkerChannels(self.parent_conns, self.workers)
         self.validation_channels = (
@@ -491,36 +493,76 @@ class WorkerManager:
         return total_loss / total_turns, agg_grad
 
     def send_init_condition_updates(self, new_px_py: np.ndarray) -> None:
-        """Push updated initial px/py to every training worker.
+        """Push updated initial px/py to every training and validation worker.
 
         ``new_px_py`` must be a float64 array of shape ``(n_total_particles, 2)``
-        where the rows are ordered to match the training workers in creation order
-        and, within each worker, in particle order.  The total number of rows must
-        equal ``sum(self._worker_particle_counts)``.
+        where the rows are ordered: training workers first (in creation order),
+        then validation workers (in creation order), and within each worker in
+        particle order.  The total number of rows must equal
+        ``sum(self._worker_particle_counts) + sum(self._validation_worker_particle_counts)``.
 
         Workers handle the update before processing the next gradient batch, so
         this method is safe to call between epochs (from the epoch_end_hook).
         """
-        expected = sum(self._worker_particle_counts)
+        expected = sum(self._worker_particle_counts) + sum(self._validation_worker_particle_counts)
         if new_px_py.shape != (expected, 2):
             raise ValueError(
                 f"new_px_py must have shape ({expected}, 2), got {new_px_py.shape}"
             )
-        channels = self._channels()
-        offset = 0
-        for conn, n in zip(channels.parent_conns, self._worker_particle_counts):
-            chunk = new_px_py[offset : offset + n]
-            conn.send(
-                {
-                    "cmd": "update_init_coords",
-                    "px": chunk[:, [0]],
-                    "py": chunk[:, [1]],
-                }
+
+        def _send_to_channels(channels: WorkerChannels, counts: list[int], offset: int) -> int:
+            for conn, n in zip(channels.parent_conns, counts):
+                chunk = new_px_py[offset : offset + n]
+                conn.send({"cmd": "update_init_coords", "px": chunk[:, [0]], "py": chunk[:, [1]]})
+                offset += n
+            for conn, worker in zip(channels.parent_conns, channels.workers):
+                WorkerChannels._recv(conn, worker)
+            return offset
+
+        offset = _send_to_channels(self._channels(), self._worker_particle_counts, 0)
+        if self.validation_channels is not None:
+            _send_to_channels(
+                self._validation_channels(), self._validation_worker_particle_counts, offset
             )
-            offset += n
-        # Collect acknowledgements
-        for conn, worker in zip(channels.parent_conns, channels.workers):
-            WorkerChannels._recv(conn, worker)
+
+    def build_update_px_py(self, updated_track_data: dict[int, pd.DataFrame]) -> np.ndarray:
+        """Build the combined px/py array for training and validation workers.
+
+        Returns a float64 array of shape ``(n_total_particles, 2)`` suitable for
+        passing directly to :meth:`send_init_condition_updates`.  Training worker
+        rows come first, followed by validation worker rows.
+
+        When there are no validation workers the result is identical to extracting
+        ``init_coords[:, [1, 3]]`` from :meth:`create_worker_payloads`.
+        """
+        has_validation = bool(self._validation_worker_particle_counts)
+        if has_validation:
+            split = self._build_payload_split(
+                updated_track_data,
+                self.turn_batches,
+                self.file_turn_map,
+                self.start_bpms,
+                self.end_bpms,
+                self.simulation_config,
+                self.machine_deltaps,
+            )
+            all_payloads = split.training_payloads + split.validation_payloads
+        else:
+            all_payloads = self.create_worker_payloads(
+                updated_track_data,
+                self.turn_batches,
+                self.file_turn_map,
+                self.start_bpms,
+                self.end_bpms,
+                self.simulation_config,
+                self.machine_deltaps,
+            )
+        rows = [
+            [float(data.init_coords[i, 1]), float(data.init_coords[i, 3])]
+            for data, _config, _file_idx in all_payloads
+            for i in range(len(data.init_coords))
+        ]
+        return np.asarray(rows, dtype=np.float64)
 
     def compute_validation_loss(self, current_knobs: dict[str, float]) -> float | None:
         """Evaluate the held-out validation worker at the current knobs."""
@@ -565,12 +607,36 @@ class WorkerManager:
             for conn in self.validation_parent_conns:
                 with contextlib.suppress(BrokenPipeError, EOFError):
                     conn.send((None, None))
-        for worker in self.validation_workers:
+        self._join_workers(
+            self.validation_workers,
+            self.validation_parent_conns,
+            drain_final_payload=False,
+        )
+
+    @staticmethod
+    def _join_workers(workers: list, conns: list, *, drain_final_payload: bool = True) -> None:
+        """Drain any pending payload, then wait for workers to exit.
+
+        On a clean shutdown each training worker sends a final Hessian payload after
+        the termination sentinel. Callers that do not consume it would deadlock when
+        that payload exceeds the pipe buffer, since the worker blocks on the unread
+        send. Draining unblocks the worker so it exits. Validation workers send no
+        final payload, so their cleanup skips this drain and joins directly.
+
+        Joins have no timeout: workers may be midway through a long simulation when
+        the termination signal arrives, and we trust them to exit once it completes.
+        """
+        if drain_final_payload:
+            for conn in conns:
+                with contextlib.suppress(BrokenPipeError, EOFError, OSError):
+                    conn.recv()
+        for worker in workers:
             worker.join()
 
     def terminate_workers(self) -> None:
         """Terminate training and validation workers and clean up processes."""
         LOGGER.info("Terminating workers...")
+        self._disable_training_hessian_on_exit()
         if self.channels is not None:
             with contextlib.suppress(BrokenPipeError, EOFError):
                 self.channels.send_all((None, None))
@@ -579,9 +645,21 @@ class WorkerManager:
                 with contextlib.suppress(BrokenPipeError, EOFError):
                     conn.send((None, None))
 
-        for worker in self.workers:
-            worker.join()
+        self._join_workers(self.workers, self.parent_conns)
         self._stop_validation_workers()
+
+    def _disable_training_hessian_on_exit(self) -> None:
+        """Tell training workers to skip Hessian estimation during cleanup shutdown."""
+        if not self.workers:
+            return
+
+        channels = self.channels or WorkerChannels(self.parent_conns, self.workers)
+        try:
+            channels.send_all({"cmd": "set_hessian_mode", "enabled": False})
+            for response in channels.recv_all():
+                self._assert_control_ack(response, command="set_hessian_mode")
+        except (BrokenPipeError, EOFError, OSError, RuntimeError) as exc:
+            LOGGER.debug("Could not disable worker Hessian-on-exit during cleanup: %s", exc)
 
     def termination_and_hessian(
         self,

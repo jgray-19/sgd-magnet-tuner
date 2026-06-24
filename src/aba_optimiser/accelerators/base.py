@@ -11,6 +11,7 @@ from pymadng_utils.accelerators.base import Accelerator as BaseAccelerator
 
 LOGGER = logging.getLogger(__name__)
 _INDEXED_RESULT_MULTIPOLE_RE = re.compile(r"\.(knl|ksl)\[(\d+)\]$")
+_MISALIGNMENT_ATTRIBUTES = frozenset({"dx", "dy"})
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -49,6 +50,8 @@ class Accelerator(BaseAccelerator, ABC):
         optimise_sextupoles: bool = False,
         optimise_quad_dx: bool = False,
         optimise_quad_dy: bool = False,
+        optimise_bpm_dx: bool = False,
+        optimise_bpm_dy: bool = False,
         custom_knobs_to_optimise: list[str] | None = None,
         **kwargs,
     ):
@@ -71,6 +74,8 @@ class Accelerator(BaseAccelerator, ABC):
         self.optimise_sextupoles = optimise_sextupoles
         self.optimise_quad_dx = optimise_quad_dx
         self.optimise_quad_dy = optimise_quad_dy
+        self.optimise_bpm_dx = optimise_bpm_dx
+        self.optimise_bpm_dy = optimise_bpm_dy
         self.custom_knobs_to_optimise = custom_knobs_to_optimise
         if self.custom_knobs_to_optimise is not None:
             legacy = [
@@ -91,6 +96,11 @@ class Accelerator(BaseAccelerator, ABC):
             or self.optimise_energy
             or bool(self.custom_knobs_to_optimise)
         )
+
+    @property
+    def ac_dipole_name(self) -> str:
+        """Return the AC-dipole exciter name for machines that define one."""
+        raise NotImplementedError(f"{type(self).__name__} does not define an AC-dipole exciter")
 
     @property
     @abstractmethod
@@ -184,33 +194,50 @@ class Accelerator(BaseAccelerator, ABC):
         """Return quadrupole misalignment patterns keyed by attribute name."""
         return {}
 
+    @property
+    def bpm_misalignment_patterns(self) -> dict[str, tuple[str, ...]]:
+        """Return BPM/monitor misalignment patterns keyed by attribute name."""
+        return {}
+
     def prepare_mad_for_knob_creation(
         self,
         mad_iface: GradientDescentMadInterface,
         selected_specs: list[tuple[str, str, str, str | None]],
     ) -> None:
         """Prepare accelerator-specific MAD state before knob creation."""
-        del selected_specs
-        quadrupole_dx_patterns = (
-            self.quadrupole_misalignment_patterns.get("dx", ())
-            if self.optimise_quad_dx
-            else ()
-        )
-        quadrupole_dy_patterns = (
-            self.quadrupole_misalignment_patterns.get("dy", ())
-            if self.optimise_quad_dy
-            else ()
-        )
-        if not quadrupole_dx_patterns and not quadrupole_dy_patterns:
+        grouped: dict[str, dict[str, list[str]]] = {}
+        for kind, attr, pattern, _nonzero_attr in selected_specs:
+            if attr not in _MISALIGNMENT_ATTRIBUTES:
+                continue
+            grouped.setdefault(kind, {"dx": [], "dy": []})[attr].append(pattern)
+
+        for element_kind, patterns in grouped.items():
+            self._prepare_misalignments_for_kind(
+                mad_iface,
+                element_kind,
+                dx_patterns=tuple(patterns["dx"]),
+                dy_patterns=tuple(patterns["dy"]),
+            )
+
+    def _prepare_misalignments_for_kind(
+        self,
+        mad_iface: GradientDescentMadInterface,
+        element_kind: str,
+        dx_patterns: tuple[str, ...],
+        dy_patterns: tuple[str, ...],
+    ) -> None:
+        """Attach MAD-NG deferred misalignment tables to one kind of element."""
+        if not dx_patterns and not dy_patterns:
             return
 
         mad_iface.mad.send(f"""
         local tblcat in MAD.utility
+        local element_kind = {mad_iface.py_name}:recv()
         local dx_patterns = {mad_iface.py_name}:recv()
         local dy_patterns = {mad_iface.py_name}:recv()
         local patterns = tblcat(dx_patterns, dy_patterns)
         for i, e in loaded_sequence:siter(magnet_range) do
-            if e.kind == "quadrupole" then
+            if e.kind == element_kind then
                 for _, pattern in ipairs(patterns) do
                     if string.match(e.name, pattern) then
                         e.dx = e.dx or 0
@@ -222,7 +249,8 @@ class Accelerator(BaseAccelerator, ABC):
             end
         end
         """)
-        mad_iface.mad.send(quadrupole_dx_patterns).send(quadrupole_dy_patterns)
+        mad_iface.mad.send(element_kind)
+        mad_iface.mad.send(dx_patterns).send(dy_patterns)
 
     @abstractmethod
     def apply_accelerator_specific_errors(self, mad_iface: AbaMadInterface) -> None:

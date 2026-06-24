@@ -231,8 +231,8 @@ def test_controller_energy_opt_sps_multi_turn(
         max_epochs=250,
         warmup_epochs=20,
         warmup_lr_start=2e-5 * n_run_turns,
-        max_lr=2e-6,
-        min_lr=2e-6,
+        max_lr=4e-6,
+        min_lr=4e-6,
         gradient_converged_value=5e-10,
     )
 

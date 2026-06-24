@@ -137,7 +137,7 @@ def prepare_plot_context(
         beam=beam,
         kinetic_energy=kinetic_energy,
         sequence_file=seq_file,
-        #b2_errors=b2_errors,
+        # b2_errors=b2_errors,
         optimise_bends=True,
         optimise_quadrupoles=True,
         optimise_other_quadrupoles=True,

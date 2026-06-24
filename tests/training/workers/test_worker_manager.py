@@ -9,13 +9,13 @@ import pandas as pd
 
 from aba_optimiser.accelerators import SPS
 from aba_optimiser.config import SimulationConfig
+from aba_optimiser.training.workers.manager import WorkerManager
 from aba_optimiser.training.workers.screening import OutlierScreener
+from aba_optimiser.training.workers.setup import WorkerRuntimeMetadata
 from aba_optimiser.training.workers.validation import (
     payload_track_count,
     split_validation_payloads,
 )
-from aba_optimiser.training.workers.manager import WorkerManager
-from aba_optimiser.training.workers.setup import WorkerRuntimeMetadata
 from aba_optimiser.workers import TrackingData, WorkerConfig
 from aba_optimiser.workers.common import KickPlane
 
@@ -53,8 +53,25 @@ class _FakeWorker:
         self.exitcode = 0
         self.pid = 1234
 
-    def join(self) -> None:
+    def join(self, timeout: float | None = None) -> None:
         self.join_calls += 1
+
+    def is_alive(self) -> bool:
+        return False
+
+    def terminate(self) -> None:
+        pass
+
+
+class _ConnThatMustNotPoll:
+    def send(self, payload: object) -> None:
+        self.sent = payload
+
+    def poll(self, timeout: float | None = None) -> bool:
+        raise AssertionError(f"Validation cleanup should not poll for payloads, got {timeout}")
+
+    def recv(self) -> object:
+        raise AssertionError("Validation cleanup should not receive a final payload")
 
 
 def _start_pipe_worker(child_conn: multiprocessing.connection.Connection, responses: list[object]) -> threading.Thread:
@@ -640,6 +657,43 @@ def test_termination_and_hessian_parallel_uses_broadcast_shutdown(tmp_path: Path
     np.testing.assert_allclose(total, 3.0 * np.eye(2, dtype=np.float64))
     assert manager.channels.sent == [(None, None)]
     assert [worker.join_calls for worker in manager.workers] == [1, 1]
+
+
+def test_terminate_workers_disables_hessian_before_cleanup_shutdown(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    manager.channels = _FakeChannels(
+        [
+            {"worker_id": 0, "status": "ok"},
+            {"worker_id": 1, "status": "ok"},
+        ]
+    )
+    manager.workers = [_FakeWorker(), _FakeWorker()]  # type: ignore[assignment]
+    manager.parent_conns = []
+    manager.validation_workers = []
+    manager.validation_parent_conns = []
+    manager.validation_channels = None
+
+    manager.terminate_workers()
+
+    assert manager.channels.sent == [
+        {"cmd": "set_hessian_mode", "enabled": False},
+        (None, None),
+    ]
+    assert [worker.join_calls for worker in manager.workers] == [1, 1]
+
+
+def test_stop_validation_workers_does_not_wait_for_final_payload(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    worker = _FakeWorker()
+    conn = _ConnThatMustNotPoll()
+    manager.validation_channels = None
+    manager.validation_workers = [worker]  # type: ignore[list-item]
+    manager.validation_parent_conns = [conn]  # type: ignore[list-item]
+
+    manager._stop_validation_workers()
+
+    assert conn.sent == (None, None)
+    assert worker.join_calls == 1
 
 
 def test_termination_and_hessian_serial_stops_workers_one_by_one(tmp_path: Path) -> None:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+import pandas as pd
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -12,6 +14,7 @@ if TYPE_CHECKING:
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
+from aba_optimiser.measurements.orbit_averaging import compute_three_turn_averages
 from aba_optimiser.measurements.squeeze.io import save_arc_estimates
 from aba_optimiser.training.config.models import (
     CheckpointConfig,
@@ -22,6 +25,29 @@ from aba_optimiser.training.config.models import (
 from aba_optimiser.training.controller import Controller
 
 logger = logging.getLogger(__name__)
+
+
+def _create_averaged_measurement_config(
+    measurements: list[dict],
+    temp_analysis_dir: Path,
+    arc_num: int,
+) -> MeasurementConfig:
+    """Load measurement parquets, average over all turns, and return a MeasurementConfig."""
+    avg_files = []
+    for i, m in enumerate(measurements):
+        df = pd.read_parquet(m["file"])
+        avg_df = compute_three_turn_averages(df)
+        avg_path = temp_analysis_dir / f"avg_orbit_arc{arc_num}_file{i}.parquet"
+        avg_df.to_parquet(avg_path)
+        avg_files.append(avg_path)
+    return MeasurementConfig(
+        measurement_files=avg_files,
+        corrector_files=[m["corrector_file"] for m in measurements],
+        tune_knobs_files=[m["tune_knobs_file"] for m in measurements],
+        machine_deltaps=0.0,
+        bunches_per_file=1,
+        flattop_turns=3,
+    )
 
 
 def get_ac_dipole_bpm_points(
@@ -193,35 +219,55 @@ def optimise_arc(
             arc_num,
         )
     else:
-        bend_ctrl = Controller(
-            LHC(
-                beam=beam,
-                kinetic_energy=energy,
-                sequence_file=sequence_path,
-                # b2_errors=b2_errors, # This makes the bend optimisation unstable and lose particles, we first want to get a good baseline without it
-                optimise_bends=True,
-                optimise_quad_dy=True,
-            ),
-            OptimiserConfig(
-                max_epochs=100,
-                warmup_epochs=50,
-                warmup_lr_start=1e-6,
-                max_lr=1e-6,
-                min_lr=3e-6,
-                gradient_converged_value=1e-6,
-                optimiser_type="adam",
-            ),
-            get_default_simulation_config(num_batches=5, tracks_per_worker=50),
-            sequence_config,
-            measurement_config,
-            bpm_start_points,
-            bpm_end_points,
-            initial_knob_strengths=None,
-            true_strengths=None,
-            output_config=output_cfg,
-            checkpoint_config=bend_checkpoint_cfg,
-        )
-        bend_estimates, _ = bend_ctrl.run()
+        bend_estimates: dict[str, float] | None = None
+        if not restore_bends_opt:
+            logger.info("Pre-stage: averaged closed-orbit bend fit for arc %d", arc_num)
+            avg_measurement_config = _create_averaged_measurement_config(
+                measurements, temp_analysis_dir, arc_num
+            )
+            avg_bend_ctrl = Controller(
+                LHC(
+                    beam=beam,
+                    kinetic_energy=energy,
+                    sequence_file=sequence_path,
+                    # b2_errors=b2_errors,
+                    optimise_bends=True,
+                    optimise_quad_dy=True,
+                ),
+                OptimiserConfig(
+                    max_epochs=1000,
+                    warmup_epochs=30,
+                    warmup_lr_start=5e-7,
+                    max_lr=1e-6,
+                    min_lr=1e-6,
+                    gradient_converged_value=1e-3,
+                    optimiser_type="adam",
+                ),
+                SimulationConfig(
+                    tracks_per_worker=1,
+                    num_batches=1,
+                    num_workers=60,
+                    use_fixed_bpm=True,
+                    run_arc_by_arc=True,
+                    optimise_momenta=False,
+                    bpm_loss_outlier_sigma=5,
+                    enable_preloop_outlier_screening=False,
+                ),
+                sequence_config,
+                avg_measurement_config,
+                bpm_start_points,
+                bpm_end_points,
+                initial_knob_strengths=None,
+                true_strengths=None,
+                output_config=OutputConfig(
+                    include_uncertainty=False,
+                    mad_logfile=output_cfg.mad_logfile,
+                    python_logfile=output_cfg.python_logfile,
+                    parallel_hessian=output_cfg.parallel_hessian,
+                ),
+                checkpoint_config=bend_checkpoint_cfg,
+            )
+            bend_estimates, _ = avg_bend_ctrl.run()
 
     quad_ctrl_without_b2 = Controller(
         LHC(
@@ -238,13 +284,13 @@ def optimise_arc(
         OptimiserConfig(
             max_epochs=300,
             warmup_epochs=5,
-            warmup_lr_start=1e-10,
-            max_lr=2e-6,
-            min_lr=2e-6,
+            warmup_lr_start=1e-6,
+            max_lr=2e-6 if "inj" in squeeze_step else 5e-7,
+            min_lr=2e-6 if "inj" in squeeze_step else 5e-7,
             gradient_converged_value=1e-7,
             optimiser_type="adam",
         ),
-        get_default_simulation_config(100),
+        get_default_simulation_config(num_batches=30),
         sequence_config,
         measurement_config,
         bpm_start_points,
@@ -278,15 +324,17 @@ def optimise_arc(
             gradient_converged_value=1e-7,
             optimiser_type="adam",
         ),
-        get_default_simulation_config(),
+        get_default_simulation_config(num_batches=30),
         sequence_config,
         measurement_config,
         bpm_start_points,
         bpm_end_points,
+        # initial_knob_strengths=bend_estimates,
         initial_knob_strengths=estimates,
         true_strengths=None,
         output_config=output_cfg,
-        checkpoint_config=None,  # Don't checkpoint the final run with b2 errors, to avoid accidentally restoring from it
+        checkpoint_config=quad_checkpoint_cfg,
+        # checkpoint_config=None,  # Don't checkpoint the final run with b2 errors, to avoid accidentally restoring from it
         debug=False,
     )
     estimates, uncertainties = quad_ctrl_with_b2.run()

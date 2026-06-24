@@ -10,6 +10,7 @@ from aba_optimiser.training.config.models import (
     SequenceConfig,
 )
 from aba_optimiser.training.config.tracking import (
+    ACDTrackingPlan,
     ArcByArcTrackingPlan,
     FullRingBpmTrackingPlan,
     KickerTrackingPlan,
@@ -19,6 +20,7 @@ from aba_optimiser.training.config.tracking import (
 )
 
 __all__ = [
+    "ACDTrackingPlan",
     "ArcByArcTrackingPlan",
     "CheckpointConfig",
     "ConfigurationManager",

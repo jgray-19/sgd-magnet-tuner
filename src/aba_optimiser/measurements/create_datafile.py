@@ -138,7 +138,7 @@ def build_madng_twiss_table(
     Returns:
         Twiss DataFrame with optics parameters
     """
-    tws_file = output_dir / "twiss.dat"
+    tws_file = output_dir / "twiss_ac.dat"
     if not tws_file.exists():
         LOGGER.info(
             f"Generating MAD-NG Twiss tables with extracted model tunes: {nattunes}, {tunes}"
@@ -272,9 +272,10 @@ def process_measurements(
         acd_accelerator = LHC(
             beam=beam, sequence_file=sequence_for_acd, kinetic_energy=accelerator.kinetic_energy
         )
+        machine_pt = acd_accelerator.dp2pt(machine_deltap or 0.0)
         model = ACDipoleMadDriver(
             accelerator=acd_accelerator,
-            deltap=machine_deltap if machine_deltap is not None else 0.0,
+            pt=machine_pt,
             observed_elements=ac_dipole_marker,
             tune_knobs_file=tune_knobs_file,
             corrector_knobs_file=corrector_knobs_file,
@@ -283,6 +284,8 @@ def process_measurements(
         cfg = ACDipoleConfig(
             ac_dipole_marker=ac_dipole_marker,
             model=model,
+            dpx_tune=float(tunes[0]),
+            dpy_tune=float(tunes[1]),
             tune_knobs_file=tune_knobs_file,
             corrector_knobs_file=corrector_knobs_file,
         )

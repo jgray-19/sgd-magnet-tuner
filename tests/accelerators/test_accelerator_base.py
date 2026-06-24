@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from pymadng_utils.accelerators.base import PROTON_MASS_GEV
+from pymadng_utils.physics import PROTON_MASS_GEV
 
 from aba_optimiser.accelerators.base import Accelerator, KnobSpec
 

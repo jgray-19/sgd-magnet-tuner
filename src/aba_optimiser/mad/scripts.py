@@ -61,95 +61,116 @@ def _indent(level: int, text: str) -> str:
     return f"{TAB * level}{text}"
 
 
-def _table_definitions(observables: tuple[str, ...]) -> str:
-    lines: list[str] = []
-    for observable in observables:
-        lines.append(f"{observable} = table.new(batch_size, 0)")
-    for observable in observables:
-        lines.append(f"d{observable}_dk = table.new(batch_size, 0)")
+def _per_observable(observables: tuple[str, ...], template: str, *, level: int = 0) -> list[str]:
+    """Render ``template`` once per observable as indented Lua lines.
+
+    ``template`` is a normal ``str.format`` template using ``{o}`` for the
+    observable name, e.g. ``"{o}[i]:zeros()"``.
+    """
+    return [_indent(level, template.format(o=observable)) for observable in observables]
+
+
+def _table_definitions(observables: tuple[str, ...], *, include_derivatives: bool = True) -> str:
+    lines = _per_observable(observables, "{o} = table.new(batch_size, 0)")
+    if include_derivatives:
+        lines += _per_observable(observables, "d{o}_dk = table.new(batch_size, 0)")
     return _join_lines(lines)
 
 
-def _allocation_block(observables: tuple[str, ...]) -> str:
-    lines: list[str] = []
-    for observable in observables:
-        lines.append(_indent(1, f"{observable}[i] = vector(nbpms * n_run_turns)"))
-    for observable in observables:
-        lines.append(_indent(1, f"d{observable}_dk[i] = matrix(matrix_size, nbpms * n_run_turns)"))
+def _allocation_block(observables: tuple[str, ...], *, include_derivatives: bool = True) -> str:
+    lines = _per_observable(observables, "{o}[i] = vector(nbpms * n_run_turns)", level=1)
+    if include_derivatives:
+        lines += _per_observable(
+            observables, "d{o}_dk[i] = matrix(matrix_size, nbpms * n_run_turns)", level=1
+        )
     return _join_lines(lines)
 
 
 def _save_scalar_block(observables: tuple[str, ...]) -> str:
-    lines: list[str] = []
-    for observable in observables:
-        lines.append(
-            _indent(3, f"{observable}[i]:seti(observe_count, mflw[i].{observable}:get0())")
-        )
-    return _join_lines(lines)
+    return _join_lines(
+        _per_observable(observables, "{o}[i]:seti(observe_count, mflw[i].{o}:get0())", level=3)
+    )
 
 
 def _save_knob_derivative_block(observables: tuple[str, ...]) -> str:
-    lines: list[str] = []
-    for observable in observables:
-        lines.append(
-            _indent(
-                4,
-                f"d{observable}_dk[i]:setsub(set_range, observe_count, get_knob_vec(mflw[i].{observable}))",
-            )
+    return _join_lines(
+        _per_observable(
+            observables,
+            "d{o}_dk[i]:setsub(set_range, observe_count, get_knob_vec(mflw[i].{o}))",
+            level=4,
         )
-    return _join_lines(lines)
+    )
 
 
 def _save_energy_derivative_block(observables: tuple[str, ...]) -> str:
-    lines: list[str] = []
-    for observable in observables:
-        lines.append(
-            _indent(
-                4,
-                f"d{observable}_dk[i]:setsub(dpt_idx, observe_count, mflw[i].{observable}:get(7))",
-            )
+    return _join_lines(
+        _per_observable(
+            observables,
+            "d{o}_dk[i]:setsub(dpt_idx, observe_count, mflw[i].{o}:get(7))",
+            level=4,
         )
+    )
+
+
+def _reset_block(observables: tuple[str, ...], *, include_derivatives: bool = True) -> str:
+    lines = _per_observable(observables, "{o}[i]:zeros()", level=2)
+    if include_derivatives:
+        lines += _per_observable(observables, "d{o}_dk[i]:zeros()", level=2)
     return _join_lines(lines)
 
 
-def _reset_block(observables: tuple[str, ...]) -> str:
-    lines: list[str] = []
-    for observable in observables:
-        lines.append(_indent(2, f"{observable}[i]:zeros()"))
-    for observable in observables:
-        lines.append(_indent(2, f"d{observable}_dk[i]:zeros()"))
+def _send_block(observables: tuple[str, ...], *, include_derivatives: bool = True) -> str:
+    lines = _per_observable(observables, f"{PYTHON_IN_MAD}:send({{o}}, true)")
+    if include_derivatives:
+        lines += _per_observable(observables, f"{PYTHON_IN_MAD}:send(d{{o}}_dk, true)")
     return _join_lines(lines)
-
-
-def _send_block(observables: tuple[str, ...]) -> str:
-    lines: list[str] = []
-    for observable in observables:
-        lines.append(f"{PYTHON_IN_MAD}:send({observable}, true)")
-    for observable in observables:
-        lines.append(f"{PYTHON_IN_MAD}:send(d{observable}_dk, true)")
-    return _join_lines(lines)
-
-
-def _hessian_asserts(observables: tuple[str, ...]) -> str:
-    return " and ".join(f"weights_{observable}" for observable in observables)
 
 
 def _hessian_weight_block(observables: tuple[str, ...]) -> str:
-    lines: list[str] = []
-    for observable in observables:
-        lines.append(f"local W_{observable} = vector(weights_{observable}):diag()")
-    return _join_lines(lines)
+    return _join_lines(_per_observable(observables, "local W_{o} = vector(weights_{o}):diag()"))
 
 
 def _hessian_accumulation_block(observables: tuple[str, ...]) -> str:
-    lines: list[str] = []
-    for observable in observables:
-        lines.append(_indent(2, f"local j_{observable} = d{observable}_dk[part]"))
-    for observable in observables:
-        lines.append(
-            _indent(2, f"Htot = Htot + j_{observable} * (W_{observable} * j_{observable}:t())")
-        )
+    lines = _per_observable(observables, "local j_{o} = d{o}_dk[part]", level=2)
+    lines += _per_observable(observables, "Htot = Htot + j_{o} * (W_{o} * j_{o}:t())", level=2)
     return _join_lines(lines)
+
+
+def _track_call(*, x0: str, atexit: str, level: int = 0) -> str:
+    """Render a MAD ``track{...}`` call with the standard tracking arguments.
+
+    Only ``x0`` and the ``atexit`` callback differ between the tracking,
+    preflight, validation and Hessian scripts; ``level`` indents the whole call
+    for use inside a ``for`` loop.
+    """
+    fields = [
+        "sequence=loaded_sequence",
+        f"X0={x0}",
+        "nturn=n_run_turns",
+        "save=false",
+        f"atexit={atexit}",
+        "range=tracking_range",
+        "dir=sdir",
+        "aperture={kind='circle', 100}",
+    ]
+    return _join_lines(
+        [
+            _indent(level, "local _, mflw = track {"),
+            *(_indent(level + 1, field) for field in fields),
+            _indent(level, "}"),
+        ]
+    )
+
+
+def _observation_gate_definition() -> str:
+    """Return the MAD predicate shared by every observation callback.
+
+    An element is an observation point on its exit slice (``slc == -4``) when it is
+    flagged observed. Defining it once keeps ``save_data``, the validation saver and
+    the preflight counter on exactly the same gate, so the preflight count can never
+    drift from what the real tracking callbacks store.
+    """
+    return "function is_observation_point(elm, slc)\nreturn slc == -4 and elm:is_observed()\nend"
 
 
 def build_tracking_init_script(
@@ -160,12 +181,6 @@ def build_tracking_init_script(
     initial_observe_count = "1" if start_on_first_turn else "nbpms + 1"
 
     return f"""! Generated tracking init script
-assert(
-    batch_size and nbpms and knob_monomials and n_run_turns and sdir and
-    knob_names and vector and matrix and python,
-    "Missing required variables for initialising"
-)
-
 num_knobs = #knob_names
 local matrix_size = optimise_energy and (num_knobs + 1) or num_knobs
 local set_range, get_range, get_knob_vec
@@ -186,9 +201,11 @@ for i=1,batch_size do
 {_allocation_block(observables)}
 end
 
+{_observation_gate_definition()}
+
 observe_count = {initial_observe_count}
 function save_data(elm, mflw, _, slc)
-    if slc == -2 and elm:is_observed() then
+    if is_observation_point(elm, slc) then
         for i=1,batch_size do
 {_save_scalar_block(observables)}
 
@@ -219,16 +236,7 @@ def build_tracking_script(observables: tuple[str, ...]) -> str:
     observables = _validate_observables(observables)
     return f"""! Generated tracking script
 reset_before_tracking()
-local _, mflw= track {{
-    sequence=loaded_sequence,
-    X0=da_x0_c[batch],
-    nturn=n_run_turns,
-    save=false,
-    atexit=save_data,
-    range=tracking_range,
-    dir=sdir,
-    aperture= {{kind='circle', 100}}
-}}
+{_track_call(x0="da_x0_c[batch]", atexit="save_data")}
 
 local n_lost = 0
 for i=1,batch_size do
@@ -238,41 +246,49 @@ end
 {_send_block(observables)}
 """
 
+
+def build_tracking_preflight_script() -> str:
+    """Build the single-particle preflight script.
+
+    Tracks one particle through the configured range/turns with a counting
+    ``atexit`` and reports how many BPM points were observed. The worker compares
+    this against the allocated result-vector size (``nbpms * n_run_turns``) once,
+    before the optimisation loop, so an observe/range misconfiguration fails with a
+    clear message here instead of as an opaque ``seti`` index-out-of-bounds deep in
+    a tracking run. Observable-independent: only the observation geometry matters.
+    """
+    return f"""! Generated tracking preflight script
+local observed = 0
+local function preflight_counter(elm, mflw, _, slc)
+    if is_observation_point(elm, slc) then observed = observed + 1 end
+end
+{_track_call(x0="da_x0_c[1][1]", atexit="preflight_counter")}
+{PYTHON_IN_MAD}:send({{
+    observed=observed,
+    expected=nbpms * n_run_turns,
+    lost=(mflw[1] and mflw[1].status == 'lost') or false,
+}}, true)
+"""
+
+
 def build_validation_init_script(observables: tuple[str, ...]) -> str:
     """Build the validation initialisation script without derivative storage."""
     observables = _validate_observables(observables)
 
-    table_lines = [f"{observable} = table.new(batch_size, 0)" for observable in observables]
-    alloc_lines = [
-        _indent(1, f"{observable}[i] = vector(nbpms * n_run_turns)")
-        for observable in observables
-    ]
-    scalar_lines = [
-        _indent(3, f"{observable}[i]:seti(observe_count, mflw[i].{observable}:get0())")
-        for observable in observables
-    ]
-    reset_lines = [
-        _indent(2, f"{observable}[i]:zeros()")
-        for observable in observables
-    ]
-
     return f"""! Generated validation init script
-assert(
-    batch_size and nbpms and n_run_turns and sdir and vector and {PYTHON_IN_MAD},
-    "Missing required variables for validation initialising"
-)
-
-{_join_lines(table_lines)}
+{_table_definitions(observables, include_derivatives=False)}
 
 for i=1,batch_size do
-{_join_lines(alloc_lines)}
+{_allocation_block(observables, include_derivatives=False)}
 end
+
+{_observation_gate_definition()}
 
 observe_count = nbpms + 1
 function save_val_data(elm, mflw, _, slc)
-    if slc == -2 and elm:is_observed() then
+    if is_observation_point(elm, slc) then
         for i=1,batch_size do
-{_join_lines(scalar_lines)}
+{_save_scalar_block(observables)}
         end
         observe_count = observe_count + 1
     end
@@ -281,7 +297,7 @@ end
 function reset_before_validation()
     observe_count = 1
     for i=1,batch_size do
-{_join_lines(reset_lines)}
+{_reset_block(observables, include_derivatives=False)}
     end
 end
 """
@@ -290,22 +306,11 @@ end
 def build_validation_script(observables: tuple[str, ...]) -> str:
     """Build the validation tracking script without derivative returns."""
     observables = _validate_observables(observables)
-    send_lines = "\n".join(
-        f"{PYTHON_IN_MAD}:send({observable}, true)" for observable in observables
-    )
     return f"""! Generated validation script
 reset_before_validation()
-local _, mflw= track{{
-    sequence=loaded_sequence,
-    X0=da_x0_c[batch],
-    nturn=n_run_turns,
-    save=false,
-    atexit=save_val_data,
-    range=tracking_range,
-    dir=sdir,
-}}
+{_track_call(x0="da_x0_c[batch]", atexit="save_val_data")}
 
-{send_lines}
+{_send_block(observables, include_derivatives=False)}
 """
 
 
@@ -313,13 +318,6 @@ def build_tracking_hessian_script(observables: tuple[str, ...]) -> str:
     """Build the Hessian script for the requested observables."""
     observables = _validate_observables(observables)
     return f"""! Generated tracking Hessian script
-assert(
-    loaded_sequence and batch_size and nbpms and reset_before_tracking and
-    knob_names and coord_names and da_x0_c and knob_monomials and
-    {_hessian_asserts(observables)} and vector and matrix and {PYTHON_IN_MAD} and n_run_turns,
-    "Missing required variables for tracking"
-)
-
 local matrix, vector in MAD
 local matrix_size = optimise_energy and (num_knobs + 1) or num_knobs
 local Htot = matrix(matrix_size, matrix_size):zeros()
@@ -328,15 +326,7 @@ collectgarbage("collect")
 
 for batch=1,num_batches do
     reset_before_tracking()
-    local _, mflw= track{{
-        sequence = loaded_sequence,
-        X0 = da_x0_c[batch],
-        nturn = n_run_turns,
-        save=false,
-        atexit=save_data,
-        range=tracking_range,
-        dir=sdir,
-    }}
+{_track_call(x0="da_x0_c[batch]", atexit="save_data", level=1)}
 
     for part = 1, batch_size do
 {_hessian_accumulation_block(observables)}
@@ -344,3 +334,16 @@ for batch=1,num_batches do
 end
 {PYTHON_IN_MAD}:send(Htot, true)
 """
+
+
+if __name__ == "__main__":
+    scripts = {
+        "tracking init": build_tracking_init_script(TRACKING_OBSERVABLES),
+        "tracking": build_tracking_script(TRACKING_OBSERVABLES),
+        "tracking preflight": build_tracking_preflight_script(),
+        "validation init": build_validation_init_script(TRACKING_OBSERVABLES),
+        "validation": build_validation_script(TRACKING_OBSERVABLES),
+        "tracking Hessian": build_tracking_hessian_script(TRACKING_OBSERVABLES),
+    }
+    for name, script in scripts.items():
+        print(f"{'=' * 80}\n{name}\n{'=' * 80}\n{script}")

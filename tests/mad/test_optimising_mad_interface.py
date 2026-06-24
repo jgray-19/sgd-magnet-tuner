@@ -191,8 +191,8 @@ def setup_and_check_interface(
     assert interface.mad["bpm_range"] == bpm_range
     assert len(interface.bpms_in_range) == interface.nbpms
 
-    # Check that only BPMs in range are observed
-    check_element_observations_by_names(interface, interface.bpms_in_range)
+    # Observation covers the whole ring; the range only defines bpms_in_range/nbpms
+    check_element_observations_by_names(interface, interface.all_bpms)
 
     # Run twiss calculation to get BPM data
     twiss_df = interface.run_twiss()
@@ -341,9 +341,9 @@ class TestOptimisationMadInterfaceInit:
 
         # Verify that all_bpms contains all BPMs in the sequence
         assert len(interface.all_bpms) == 563
-        # Twiss dataframe is restricted to the observed (in-range) BPMs
-        assert len(twiss_df.index) == len(interface.bpms_in_range)
-        assert list(twiss_df.index) == interface.bpms_in_range
+        # Twiss dataframe covers the whole observed ring, not just the range
+        assert len(twiss_df.index) == len(interface.all_bpms)
+        assert list(twiss_df.index) == interface.all_bpms
 
         cleanup_interface(interface)
 

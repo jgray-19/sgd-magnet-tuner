@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from aba_optimiser.training.utils import create_bpm_range_specs, extract_bpm_range_names
+
 if TYPE_CHECKING:
     import pandas as pd
 
@@ -15,12 +17,10 @@ if TYPE_CHECKING:
 # Imported lazily inside methods to avoid a circular import at module load time.
 # Both helpers are stable, side-effect-free utilities.
 def _extract_bpm_range_names(all_bpms, start_bpm, end_bpm, sdir, *, allow_missing_start=False):
-    from aba_optimiser.training.utils import extract_bpm_range_names
     return extract_bpm_range_names(all_bpms, start_bpm, end_bpm, sdir, allow_missing_start)
 
 
 def _create_bpm_range_specs(start_bpms, end_bpms, use_fixed_bpm, fixed_start=None, fixed_end=None):
-    from aba_optimiser.training.utils import create_bpm_range_specs
     return create_bpm_range_specs(start_bpms, end_bpms, use_fixed_bpm, fixed_start, fixed_end)
 
 
@@ -60,6 +60,22 @@ class TrackingPlan(ABC):
     def enable_validation(self) -> bool:
         """Return whether validation workers should be enabled."""
         return True
+
+    @property
+    def cycle_to_init_bpm(self) -> bool:
+        """Return whether workers cycle the sequence to their init/start BPM.
+
+        Cycling to a BPM places it at both the ring start and the wrap, so a worker
+        that tracks the full ring observes it twice per turn. Plans that track the
+        whole ring keep the natural ``$start`` (the fixed turn-increment start) and
+        return ``False`` here; range-limited plans (arc-by-arc, kicker) cycle to their
+        own init point and return ``True``.
+        """
+        return True
+
+    def requires_acd_markers(self) -> bool:
+        """Return whether ACD markers must be installed in the MAD sequence."""
+        return False
 
     def observed_bpms(self, bpms_in_range: list[str], all_bpms: list[str]) -> list[str]:
         """Return the BPMs compared against measurements."""
@@ -236,7 +252,13 @@ class ArcByArcTrackingPlan(TrackingPlan):
 
 @dataclass(frozen=True)
 class FullRingBpmTrackingPlan(TrackingPlan):
-    """BPM-initialised multi-turn tracking around the full ring."""
+    """Multi-turn tracking around the full ring from the fixed turn-increment start.
+
+    Every worker tracks the whole ring from the natural ``$start`` (where each
+    measured turn begins) rather than cycling to a per-worker BPM. Anchoring all
+    workers at the same point keeps the simulated and measured turn boundaries
+    aligned and stops the start BPM being observed twice per turn at the wrap.
+    """
 
     @property
     def init_marker(self) -> str | None:
@@ -249,6 +271,34 @@ class FullRingBpmTrackingPlan(TrackingPlan):
     @property
     def force_forward_tracking(self) -> bool:
         return False
+
+    @property
+    def cycle_to_init_bpm(self) -> bool:
+        return False
+
+    def build_range_specs(
+        self,
+        *,
+        start_bpms: list[str],
+        end_bpms: list[str],
+        all_bpms: list[str],
+        simulation_config: SimulationConfig,
+        use_fixed_bpm: bool,
+        fixed_start: str,
+        fixed_end: str,
+    ) -> list[WorkerRangeSpec]:
+        """Anchor every worker at ``$start`` (``all_bpms[0]``) for the full ring.
+
+        The per-worker ``start_bpms`` only chose where the sequence was cycled before;
+        anchoring them all here removes that choice (and the wrap double-count) while
+        still covering both tracking directions.
+        """
+        del start_bpms, end_bpms, use_fixed_bpm, fixed_start, fixed_end, simulation_config
+        anchor = all_bpms[0]
+        wrap_end = _bpm_behind(all_bpms, anchor)
+        return [
+            WorkerRangeSpec(start_bpm=anchor, end_bpm=wrap_end, sdir=sdir) for sdir in (1, -1)
+        ]
 
 
 @dataclass(frozen=True)
@@ -373,12 +423,103 @@ class KickerTrackingPlan(TrackingPlan):
         }
 
 
+@dataclass(frozen=True)
+class ACDTrackingPlan(ArcByArcTrackingPlan):
+    """Bidirectional tracking initialised at AC-dipole markers."""
+
+    acd_name: str
+
+    @property
+    def acd_after(self) -> str:
+        return f"{self.acd_name}_after"
+
+    @property
+    def acd_before(self) -> str:
+        return f"{self.acd_name}_before"
+
+    @property
+    def allow_missing_start(self) -> bool:
+        return False
+
+    def requires_acd_markers(self) -> bool:
+        return True
+
+    def extra_markers(self) -> list[str]:
+        return [self.acd_after, self.acd_before]
+
+    def observed_bpms(self, bpms_in_range: list[str], all_bpms: list[str]) -> list[str]:
+        return all_bpms
+
+    def observation_start_bpm(self, all_bpms: list[str]) -> str | None:
+        del all_bpms
+        return None
+
+    def range_specs_per_batch(
+        self,
+        *,
+        run_arc_by_arc: bool,
+        use_fixed_bpm: bool,
+        num_starts: int,
+        num_ends: int,
+    ) -> tuple[int, str]:
+        return 2, "ACD bidirectional (forward + backward)"
+
+    def bpm_pairs(
+        self,
+        *,
+        start_bpms: list[str],
+        end_bpms: list[str],
+        all_bpms: list[str],
+        run_arc_by_arc: bool,
+        use_fixed_bpm: bool,
+        fixed_start: str,
+        fixed_end: str,
+    ) -> list[tuple[str, str]]:
+        return [(self.acd_after, self.acd_before)]
+
+    def build_range_specs(
+        self,
+        *,
+        start_bpms: list[str],
+        end_bpms: list[str],
+        all_bpms: list[str],
+        simulation_config: SimulationConfig,
+        use_fixed_bpm: bool,
+        fixed_start: str,
+        fixed_end: str,
+    ) -> list[WorkerRangeSpec]:
+        return [
+            WorkerRangeSpec(start_bpm=self.acd_after, end_bpm=self.acd_before, sdir=1),
+            WorkerRangeSpec(start_bpm=self.acd_after, end_bpm=self.acd_before, sdir=-1),
+        ]
+
+    # def n_data_points(
+    #     self,
+    #     *,
+    #     all_bpms: list[str],
+    #     mad_iface,
+    #     bpm_pairs: list[tuple[str, str]],
+    #     n_turns: int,
+    # ) -> dict[tuple[str, str], int]:
+    #     from aba_optimiser.workers import TrackingWorker
+
+    #     n_bpms = len(all_bpms)
+    #     return {
+    #         (self.acd_after, self.acd_before): TrackingWorker.get_n_data_points(
+    #             n_bpms, n_turns=n_turns
+    #         )
+    #     }
+
+
 def build_tracking_plan(
     *,
     kicker_config: KickerConfig | None,
     simulation_config: SimulationConfig,
+    acd_name: str | None,
 ) -> TrackingPlan:
     """Return the tracking plan for the current controller run."""
+    if acd_name is not None:
+        return ACDTrackingPlan(acd_name=acd_name)
     if kicker_config is None:
         if simulation_config.run_arc_by_arc:
             return ArcByArcTrackingPlan()

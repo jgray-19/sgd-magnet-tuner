@@ -46,9 +46,11 @@ def test_build_range_specs_for_multi_turn_creates_forward_and_backward_ranges(tm
         ),
     )
 
+    # Full-ring workers anchor at the plane's first BPM ($start order), not the
+    # user-supplied start BPM, so the sequence is never cycled to a BPM.
     assert specs == [
-        WorkerRangeSpec(start_bpm="BPH.13208", end_bpm="BPH.13008", sdir=1),
-        WorkerRangeSpec(start_bpm="BPH.13208", end_bpm="BPH.13008", sdir=-1),
+        WorkerRangeSpec(start_bpm="BPH.13008", end_bpm="BPH.13208", sdir=1),
+        WorkerRangeSpec(start_bpm="BPH.13008", end_bpm="BPH.13208", sdir=-1),
     ]
 
 
@@ -72,13 +74,13 @@ def test_build_observation_plan_filters_single_plane_bpms_and_requires_measurabl
     assert len(forward_plans) == 1
     forward_plan = forward_plans[0]
     assert forward_plan.kick_plane == "x"
-    assert forward_plan.bpm_names == ["BPH.13208", "BPH.13008"]
+    assert forward_plan.bpm_names == ["BPH.13008", "BPH.13208"]
 
     backward_plans = helper.build_observation_plans(range_specs[1], file_idx=0)
     assert len(backward_plans) == 1
     backward_plan = backward_plans[0]
     assert backward_plan.kick_plane == "x"
-    assert backward_plan.bpm_names == ["BPH.13008", "BPH.13208"]
+    assert backward_plan.bpm_names == ["BPH.13208", "BPH.13008"]
     assert backward_plan.range_spec == range_specs[1]
 
 
@@ -130,8 +132,8 @@ def test_build_observation_plans_split_dual_plane_data_across_single_plane_bpms(
     ] == [
         (
             "x",
-            ["BPH.13208", "BPH.13008"],
-            WorkerRangeSpec(start_bpm="BPH.13208", end_bpm="BPH.13008", sdir=1),
+            ["BPH.13008", "BPH.13208"],
+            WorkerRangeSpec(start_bpm="BPH.13008", end_bpm="BPH.13208", sdir=1),
         ),
     ]
     assert [
@@ -140,8 +142,8 @@ def test_build_observation_plans_split_dual_plane_data_across_single_plane_bpms(
     ] == [
         (
             "x",
-            ["BPH.13008", "BPH.13208"],
-            WorkerRangeSpec(start_bpm="BPH.13208", end_bpm="BPH.13008", sdir=-1),
+            ["BPH.13208", "BPH.13008"],
+            WorkerRangeSpec(start_bpm="BPH.13008", end_bpm="BPH.13208", sdir=-1),
         ),
     ]
     assert [
@@ -150,12 +152,15 @@ def test_build_observation_plans_split_dual_plane_data_across_single_plane_bpms(
     ] == [
         (
             "y",
-            ["BPV.13308", "BPV.20108", "BPV.13108"],
-            WorkerRangeSpec(start_bpm="BPV.13308", end_bpm="BPV.13108", sdir=1),
+            ["BPV.13108", "BPV.13308", "BPV.20108"],
+            WorkerRangeSpec(start_bpm="BPV.13108", end_bpm="BPV.20108", sdir=1),
         ),
     ]
-    assert forward_plans[0].bad_bpms == ["BPV.13308", "BPV.20108"]
-    assert y_forward_plans[0].bad_bpms == ["BPH.13008"]
+    # Off-plane BPMs are unobserved across the whole ring, not just inside the named
+    # range: a full-ring multi-turn track traverses every element (incl. the wrap),
+    # so an off-plane BPM left observed outside the range overflows the result vectors.
+    assert forward_plans[0].bad_bpms == ["BPV.13108", "BPV.13308", "BPV.20108"]
+    assert y_forward_plans[0].bad_bpms == ["BPH.13008", "BPH.13208"]
 
 
 def test_make_worker_config_uses_file_specific_artifacts(tmp_path: Path) -> None:
@@ -195,14 +200,14 @@ def test_observation_plan_uses_plane_compatible_range_for_split_full_ring_worker
     assert len(plans) == 1
     plan = plans[0]
     assert plan.kick_plane == "y"
-    assert plan.bpm_names == ["BPV.13308", "BPV.20108", "BPV.13108"]
+    assert plan.bpm_names == ["BPV.13108", "BPV.13308", "BPV.20108"]
     assert plan.range_spec == WorkerRangeSpec(
-        start_bpm="BPV.13308",
-        end_bpm="BPV.13108",
+        start_bpm="BPV.13108",
+        end_bpm="BPV.20108",
         sdir=1,
     )
 
     config = helper.make_worker_config(plan)
 
-    assert config.tracking_start_bpm == "BPV.13308"
-    assert config.tracking_end_bpm == "BPV.13108"
+    assert config.tracking_start_bpm == "BPV.13108"
+    assert config.tracking_end_bpm == "BPV.20108"

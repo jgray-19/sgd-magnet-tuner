@@ -68,6 +68,7 @@ class ConfigurationManager:
             bad_bpms=self.sequence_config.bad_bpms,
             debug=debug,
             mad_logfile=mad_logfile,
+            install_acd_markers=self.tracking_plan.requires_acd_markers(),
         )
         self.knob_names = self.mad_iface.knob_names
 
@@ -75,6 +76,12 @@ class ConfigurationManager:
 
         self.all_bpms = self.mad_iface.all_bpms
         self.bpms_in_range = self.mad_iface.bpms_in_range
+        if self.tracking_plan.init_marker is not None:
+            # Kicker mode: the interface cycled the sequence to start at the kicker.
+            # Re-read the BPM list so its order matches the cycled order MAD observes
+            # while tracking the full ring. Workers compare observables positionally,
+            # so the observation BPM order must agree with that cycled order.
+            self.all_bpms, _ = self.mad_iface.get_bpm_list("$start/$end")
         LOGGER.info(f"Total BPMs in model: {len(self.all_bpms)}, BPMs in specified range {self.magnet_range}: {len(self.bpms_in_range)}")
 
         allowed_starts = {self.sequence_config.first_bpm} if self.sequence_config.first_bpm else set()
@@ -145,7 +152,7 @@ class ConfigurationManager:
         """Initialise knob strengths from MAD and filter true strengths.
 
         All inputs must be in optimisation space.
-        Missing keys in provided_initial_knobs default to 1e-7 to avoid flat starts.
+        Missing keys in provided_initial_knobs keep the current model defaults.
         """
         if self.mad_iface is None:
             raise ValueError("MAD interface must be setup first")
@@ -160,11 +167,12 @@ class ConfigurationManager:
                     + ", ".join(unknown_initial[:10])
                     + ("..." if len(unknown_initial) > 10 else "")
                 )
-            # Use provided initial knobs (in optimisation space) where available.
+            # Warm-start from the current model values and override only the
+            # knobs that were explicitly provided.
             LOGGER.info("Using provided initial knob strengths from previous optimisation")
-            full_initial_knobs = {
-                knob_name: provided_initial_knobs.get(knob_name, 0) for knob_name in self.knob_names
-            }
+            model_initial_knobs = dict(zip(self.knob_names, self.mad_iface.receive_knob_values()))
+            full_initial_knobs = model_initial_knobs
+            full_initial_knobs.update(provided_initial_knobs)
 
             self.mad_iface.update_knob_values(full_initial_knobs)
         initial_strengths = self.mad_iface.receive_knob_values()
