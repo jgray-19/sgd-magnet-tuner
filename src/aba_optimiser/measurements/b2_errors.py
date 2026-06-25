@@ -41,6 +41,7 @@ def resolve_b2_error_table(
 
 def read_b2_error_table(path: Path | str) -> dict[str, float]:
     """Read an OMC3-style b2 error table as element-name to K1L mapping."""
+    assert Path(path).suffix == ".errors", f"Expected a .errors file, got {path}"
     table = tfs.read(path, index=NAME)
     LOGGER.info(f"Read b2 error table from {path} with {len(table)} entries")
     if "K1L" not in table.columns:

@@ -247,9 +247,8 @@ class GenericMadInterface(AbaMadInterface):
             return
         if tune_knobs_file is None:
             raise ValueError(
-                "b2 dipole errors shift the machine tunes, so a tune knobs file must be "
-                "provided to the MAD interface to restore them; got tune_knobs_file=None "
-                f"with b2_errors={b2_errors}"
+                "The tune knobs are designed to compensate for the known b2 errors."
+                "Therefore it makes no sense to apply b2 errors without also applying the tune knobs."
             )
 
         b2_table = read_b2_error_table(b2_errors)
