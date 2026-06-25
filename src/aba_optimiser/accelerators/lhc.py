@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from pymadng_utils.accelerators.lhc import LHC as BaseLHC  # noqa: N811
 
 from aba_optimiser.accelerators.base import Accelerator, KnobSpec
+from aba_optimiser.mad.aba_mad_interface import MAX_MULTIPOLE
 from aba_optimiser.measurements.b2_errors import read_b2_error_table
 from aba_optimiser.physics.lhc_bends import normalise_lhcbend_magnets
 
@@ -215,6 +216,7 @@ class LHC(BaseLHC, Accelerator):
             LOGGER.warning("No entries found in b2 error table %s", self.b2_errors)
             return
 
+        zeros = ", ".join(["0.0"] * MAX_MULTIPOLE)
         mad_iface.mad.send(
             f"""
 local b2_errors = {mad_iface.py_name}:recv()
@@ -225,20 +227,17 @@ for name, k1l in pairs(b2_errors) do
     local element = loaded_sequence[name]
     if element == nil then
         table.insert(missing, name)
-    elseif element.knl ~= nil and k1l ~= 0 then
-        element.knl = {{
-            element.knl[1] or 0,
-            (element.knl[2] or 0) + k1l,
-            element.knl[3] or 0,
-            element.knl[4] or 0,
-        }}
-        applied[name] = element.knl[2]
     elseif k1l ~= 0 then
-        error("Element has no knl table for K1L b2 application: " .. name)
+        -- Route the b2 K1L into the dknl perturbation table, leaving the
+        -- dipole slot dknl[1] at 0 and adding the quadrupole error to dknl[2].
+        if not MAD.typeid.is_deferred(element.dknl) then
+            element.dknl = MAD.typeid.deferred {{{zeros}}}
+        end
+        element.dknl[2] = (element.dknl[2] or 0.0) + k1l
+        applied[name] = element.dknl[2]
     end
 end
 
-loaded_sequence:update()
 {mad_iface.py_name}:send(applied, true)
 {mad_iface.py_name}:send(missing, true)
 """

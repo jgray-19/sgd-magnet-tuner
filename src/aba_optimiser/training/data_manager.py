@@ -94,19 +94,36 @@ class DataManager:
         return df
 
     def _reorder_track_dataframes(self) -> None:
-        """Reorder track dataframes while preserving measurement BPM order.
+        """Reorder track dataframes into the model's ring order.
 
-        The per-turn BPM order encodes the tracking origin used when the
-        measurement was generated.  Preserving it lets the payload builder detect
-        range wraps and shift the wrapped part to the next/previous turn.
+        The payload builder infers per-turn range wraps from the element order,
+        assuming it follows ring order so that a contiguous tracking range maps to
+        a monotonic column sequence that crosses the ring boundary exactly once.
+        A measurement file's own row order is *not* guaranteed to match ring order
+        (for example ACD marker rows may be written after all the BPMs), and an
+        element that is out of ring order makes the wrap detector count an extra
+        wrap and read one turn too far ahead. Reorder to ``all_bpms`` — the model's
+        canonical ring order, which the payload builder also uses to build the
+        observed ranges — so wrap detection is correct regardless of how the
+        measurement was written. Names present in the data but absent from
+        ``all_bpms`` are kept, appended in their original appearance order.
         """
+        ring_rank = {name: idx for idx, name in enumerate(self.all_bpms)}
         for file_idx in self.track_data:
             all_turns = sorted(self.track_data[file_idx].index.get_level_values("turn").unique())
-            marker_order = list(
+            appearance = list(
                 dict.fromkeys(self.track_data[file_idx].index.get_level_values("name"))
             )
+            appearance_rank = {name: idx for idx, name in enumerate(appearance)}
+            ordered = sorted(
+                appearance,
+                key=lambda name: (
+                    ring_rank.get(name, len(ring_rank)),
+                    appearance_rank[name],
+                ),
+            )
             self.track_data[file_idx] = self.track_data[file_idx].reindex(
-                pd.MultiIndex.from_product([all_turns, marker_order], names=["turn", "name"])
+                pd.MultiIndex.from_product([all_turns, ordered], names=["turn", "name"])
             )
 
     @staticmethod

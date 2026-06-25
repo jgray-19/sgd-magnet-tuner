@@ -60,6 +60,7 @@ def process_measurements_fresh(
     freq_metadata: dict[str, tuple[list[Path], Path, Path]] = {}
     all_files: list[Path] = []
     acd_tune_knobs_files: list[Path | None] = []
+    acd_corrector_knobs_files: list[Path | None] = []
     all_bad_bpms: set[str] = set()
     central_meas_time = get_central_measurement_time(meas_times_for_step, squeeze_step)
     energy = get_online_energy(central_meas_time)
@@ -80,6 +81,7 @@ def process_measurements_fresh(
         freq_metadata[freq] = (files, tune_knobs_file, corrector_knobs_file)
         all_files.extend(files)
         acd_tune_knobs_files.extend([tune_knobs_file] * len(files))
+        acd_corrector_knobs_files.extend([corrector_knobs_file] * len(files))
         all_bad_bpms.update(bad_bpms)
 
     logger.info("Using central beam energy %.6f GeV from %s for all measurement files", energy, central_meas_time)
@@ -101,6 +103,7 @@ def process_measurements_fresh(
         energy=energy,
         use_weighted_svd=use_weighted_svd,
         tune_knobs_files=acd_tune_knobs_files or None,
+        corrector_knobs_files=acd_corrector_knobs_files or None,
         num_workers=8,
     )
 
@@ -236,7 +239,13 @@ def process_squeeze_step(
         shutil.copytree(model_dir, madng_model_dir, symlinks=True)
         sequence_path = get_or_make_sequence(beam, madng_model_dir, time=sequence_time)
         madng_accel = MadngLHCAccelerator(beam=beam, sequence_file=sequence_path)
-        update_model_with_madng(madng_accel, madng_model_dir, tunes=[nat_x, nat_y], convert_to_madx=False)
+        update_model_with_madng(
+            madng_accel,
+            madng_model_dir,
+            tunes=[nat_x, nat_y],
+            drv_tunes=[drv_x, drv_y],
+            convert_to_madx=False,
+        )
 
     if skip_reload:
         all_measurements, energy, window = load_measurements_from_reload(

@@ -22,6 +22,7 @@ from packaging.version import InvalidVersion, Version
 from pandas.errors import Pandas4Warning
 from pymadng_utils.madx import make_madx_sequence
 from tmom_recon import ACDipoleConfig, calculate_pz
+from tmom_recon.acd.integration import apply_precomputed_ac_dipole_bpm_overrides
 from tmom_recon.acd.madng_driver import ACDipoleMadDriver
 from tmom_recon.physics.pt_calculation import estimate_pt_from_model
 from tmom_recon.svd import svd_clean_measurements, weighted_svd_clean_measurements
@@ -46,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 # ==================== HELPER FUNCTIONS ====================
 _MACHINE_SETTINGS_KNOBS_FILENAME = "machine_settings_knobs.madx"
+_MAX_MODEL_CLOSED_ORBIT_M = 5e-5
 
 
 @contextmanager
@@ -352,7 +354,6 @@ class _LHCACDipoleMadDriver(ACDipoleMadDriver, AbaMadInterface):
     def __init__(self, **kwargs):
         ACDipoleMadDriver.__init__(self, **kwargs)
 
-
 def _tbt_frames_to_dataframe(x_frame: pd.DataFrame, y_frame: pd.DataFrame) -> pd.DataFrame:
     """Convert TBT X/Y frames to a long-form (name, turn, x, y) DataFrame."""
     if list(x_frame.index) != list(y_frame.index):
@@ -374,24 +375,25 @@ def _tbt_frames_to_dataframe(x_frame: pd.DataFrame, y_frame: pd.DataFrame) -> pd
 
 def _fill_acd_momenta(bpm_table: pd.DataFrame, reconstructed: pd.DataFrame) -> pd.DataFrame:
     """Write reconstructed px/py into the two AC-dipole adjacent BPMs."""
-    turn_lookup = reconstructed.set_index("turn")
-    for bpm_name, px_col, py_col in (
-        (
-            str(reconstructed.attrs["bpm_upstream"]),
-            "px_bpm_upstream_cleaned",
-            "py_bpm_upstream_cleaned",
-        ),
-        (
-            str(reconstructed.attrs["bpm_downstream"]),
-            "px_bpm_downstream_cleaned",
-            "py_bpm_downstream_cleaned",
-        ),
-    ):
-        mask = bpm_table["name"] == bpm_name
-        turns = bpm_table.loc[mask, "turn"]
-        bpm_table.loc[mask, "px"] = turns.map(turn_lookup[px_col]).to_numpy(dtype=float)
-        bpm_table.loc[mask, "py"] = turns.map(turn_lookup[py_col]).to_numpy(dtype=float)
-    return bpm_table
+    return apply_precomputed_ac_dipole_bpm_overrides(bpm_table, reconstructed)
+
+
+def _append_acd_marker_rows(bpm_table: pd.DataFrame, reconstructed: pd.DataFrame) -> pd.DataFrame:
+    """Append the marker-side ACD state rows emitted by tmom-recon."""
+    marker_rows = reconstructed.loc[
+        reconstructed["name"].astype(str).str.endswith(("_before", "_after"))
+    ].copy()
+    if marker_rows.empty:
+        logger.warning("ACD reconstruction carried no _before/_after marker rows to append.")
+        return bpm_table
+    marker_rows = marker_rows.reindex(columns=bpm_table.columns)
+    combined = pd.concat([bpm_table, marker_rows], ignore_index=True, sort=False)
+    logger.info(
+        "Appended %d AC-dipole marker row(s) (%s) to the reconstruction.",
+        len(marker_rows),
+        ", ".join(sorted(marker_rows["name"].astype(str).unique())),
+    )
+    return combined
 
 
 def reconstruct_ac_dipole_measurements(
@@ -402,6 +404,7 @@ def reconstruct_ac_dipole_measurements(
     energy: float,
     use_weighted_svd: bool = True,
     tune_knobs_files: list[Path | None] | None = None,
+    corrector_knobs_files: list[Path | None] | None = None,
     magnet_strengths: dict[str, float] | None = None,
     num_workers: int = 8,
 ) -> dict[str, pd.DataFrame]:
@@ -416,12 +419,21 @@ def reconstruct_ac_dipole_measurements(
         raise FileNotFoundError(f"Model twiss not found: {model_twiss_file}")
     if not sequence_path.exists():
         raise FileNotFoundError(f"Sequence file not found: {sequence_path}")
+    if tune_knobs_files is not None and len(tune_knobs_files) != len(measurement_files):
+        raise ValueError(
+            "tune_knobs_files must match measurement_files length: "
+            f"{len(tune_knobs_files)} != {len(measurement_files)}"
+        )
+    if corrector_knobs_files is not None and len(corrector_knobs_files) != len(measurement_files):
+        raise ValueError(
+            "corrector_knobs_files must match measurement_files length: "
+            f"{len(corrector_knobs_files)} != {len(measurement_files)}"
+        )
 
     model_twiss = tfs.read(model_twiss_file, index="name")
     job_file = model_dir / "job.create_model_nominal.madx"
     _nat_x, _nat_y, drv_x, drv_y = extract_tunes_from_job_file(job_file)
     lhc_accel = LHC(beam=beam, kinetic_energy=energy, sequence_file=sequence_path)
-    ac_dipole_marker = lhc_accel.get_ac_dipole_marker()
     svd_clean = weighted_svd_clean_measurements if use_weighted_svd else svd_clean_measurements
 
     def process_single_measurement(
@@ -463,21 +475,23 @@ def reconstruct_ac_dipole_measurements(
         pt_est = float(estimate_pt_from_model(orig_data.copy(deep=True), model_twiss))
         dpp_est = float(lhc_accel.pt2dp(pt_est))
         tune_knobs_file = tune_knobs_files[file_idx] if tune_knobs_files else None
+        corrector_knobs_file = corrector_knobs_files[file_idx] if corrector_knobs_files else None
 
         model = None
         try:
             model = _LHCACDipoleMadDriver(
                 accelerator=lhc_accel,
                 pt=pt_est,
-                observed_elements=ac_dipole_marker,
+                observed_elements=lhc_accel.ac_dipole_name,
                 discard_mad_output=True,
                 tune_knobs_file=tune_knobs_file,
+                corrector_knobs_file=corrector_knobs_file,
             )
             if magnet_strengths:
                 model.set_magnet_strengths(magnet_strengths)
 
             acd_config = ACDipoleConfig(
-                ac_dipole_marker=ac_dipole_marker,
+                ac_dipole_marker=lhc_accel.ac_dipole_name,
                 model=model,
                 dpx_tune=drv_x,
                 dpy_tune=drv_y,
@@ -493,12 +507,18 @@ def reconstruct_ac_dipole_measurements(
             if model is not None and hasattr(model, "close"):
                 model.close()
 
+        if not isinstance(reconstructed, pd.DataFrame) or reconstructed.empty:
+            raise ValueError(
+                f"Reconstruction failed for {measurement_file}, got {type(reconstructed)} with shape {getattr(reconstructed, 'shape', None)}"
+            )
+
         bpm_table = orig_data.copy(deep=True)
         bpm_table["px"] = 0.0
         bpm_table["py"] = 0.0
         bpm_table["var_px"] = 1.0
         bpm_table["var_py"] = 1.0
         bpm_table = _fill_acd_momenta(bpm_table, reconstructed)
+        bpm_table = _append_acd_marker_rows(bpm_table, reconstructed)
         bpm_table = bpm_table.reset_index(drop=True)
 
         upstream_name = str(reconstructed.attrs["bpm_upstream"])
@@ -507,7 +527,7 @@ def reconstruct_ac_dipole_measurements(
             {
                 "DPP_EST": dpp_est,
                 "PT_EST": pt_est,
-                "ac_dipole_marker": ac_dipole_marker,
+                "ac_dipole_marker": lhc_accel.ac_dipole_name,
                 "ac_dipole_bpm_upstream": upstream_name,
                 "ac_dipole_bpm_downstream": downstream_name,
             }

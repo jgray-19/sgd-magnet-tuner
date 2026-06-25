@@ -163,6 +163,9 @@ class GenericMadInterface(AbaMadInterface):
         else:
             LOGGER.info("Skipping corrector strengths (not provided)")
 
+        self._validate_error_tune_knobs(tune_knobs_file)
+        self.accelerator.apply_accelerator_specific_errors(self)
+
         # Apply tune knobs if provided
         if tune_knobs_file is not None:
             self._set_tune_knobs(tune_knobs_file)
@@ -184,6 +187,18 @@ class GenericMadInterface(AbaMadInterface):
         if discard_mad_output:
             return "/dev/null", True
         return None, False
+
+    def _validate_error_tune_knobs(self, tune_knobs_file: Path | None) -> None:
+        """Ensure interface-level tune knobs are available for tune-shifting errors."""
+        b2_errors = getattr(self.accelerator, "b2_errors", None)
+        if b2_errors is None:
+            return
+        if tune_knobs_file is None:
+            raise ValueError(
+                "b2 dipole errors shift the machine tunes, so a tune knobs file must be "
+                "provided to the MAD interface to restore them; got tune_knobs_file=None "
+                f"with b2_errors={b2_errors}"
+            )
 
     def count_bpms(self, bpm_range: str) -> tuple[list[str], int, list[str]]:
         """Count the number of BPM elements in the specified range."""

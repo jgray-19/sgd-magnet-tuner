@@ -15,28 +15,22 @@ if TYPE_CHECKING:
 
 
 def _get_bend_sample(
-    interface: GenericMadInterface, *, limit: int = 20
-) -> tuple[list[str], dict[str, float], dict[str, float]]:
+    interface: GenericMadInterface, *, beam: int = 2, limit: int = 20
+) -> tuple[list[str], dict[str, float]]:
+    """Return the names and lengths of the first ``limit`` arc MB bends."""
     interface.mad.send(
         f"""
-local limit = {limit}
 local names = {{}}
 local lengths = {{}}
-local values = {{}}
 
 for _, e in loaded_sequence:iter() do
     if e.kind == "sbend"
         and e.l ~= nil
         and e.l > 0
-        and string.match(e.name, "^MB%.[ABC]?%d+[LR][1-8]%.B2$") then
-        if e.knl == nil then
-            error("Expected bend to expose knl for K1L application: " .. e.name)
-        end
+        and string.match(e.name, "^MB%.[ABC]?%d+[LR][1-8]%.B{beam}$") then
         table.insert(names, e.name)
         lengths[e.name] = e.l
-        values[e.name] = e.knl[2] or 0
-
-        if #names >= limit then
+        if #names >= {limit} then
             break
         end
     end
@@ -44,13 +38,11 @@ end
 
 {interface.py_name}:send(names, true)
 {interface.py_name}:send(lengths, true)
-{interface.py_name}:send(values, true)
 """
     )
     names = interface.mad.recv()
     lengths = interface.mad.recv()
-    values = interface.mad.recv()
-    return names, lengths, values
+    return names, lengths
 
 
 def _write_b2_error_table(path: Path, names: list[str], lengths: dict[str, float]) -> dict[str, float]:
@@ -61,14 +53,16 @@ def _write_b2_error_table(path: Path, names: list[str], lengths: dict[str, float
     return k1l_values
 
 
-def _get_bend_component(interface: GenericMadInterface, name: str) -> float:
+def _get_bend_dknl2(interface: GenericMadInterface, name: str) -> float:
+    """Return the quadrupole perturbation dknl[2] applied to a bend (0 if none)."""
     interface.mad.send(
         f"""
 local element = loaded_sequence['{name}']
-if element.knl == nil then
-    error("Expected bend to expose knl for K1L application: " .. '{name}')
+local value = 0
+if MAD.typeid.is_deferred(element.dknl) then
+    value = element.dknl[2] or 0
 end
-{interface.py_name}:send(element.knl[2] or 0)
+{interface.py_name}:send(value)
 """
     )
     return float(interface.mad.recv())
@@ -81,7 +75,6 @@ local excluded = {interface.py_name}:recv()
 
 for _, e in loaded_sequence:iter() do
     if e.kind == "sbend"
-        and e.knl ~= nil
         and e.l ~= nil
         and e.l > 0
         and string.match(e.name, "^MB%.[ABC]?%d+[LR][1-8]%.B2$")
@@ -91,7 +84,7 @@ for _, e in loaded_sequence:iter() do
     end
 end
 
-error("Could not find untouched LHC bend with knl")
+error("Could not find untouched LHC bend")
 """
     )
     interface.mad.send(dict.fromkeys(excluded_names, True))
@@ -117,18 +110,35 @@ def test_resolve_b2_error_table_picks_closest_energy(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_lhc_b2_errors_modify_bend_strengths_and_destabilise_twiss(
-    seq_b2: Path, tmp_path: Path
+def test_lhc_b2_errors_require_tune_knobs_file(seq_b2: Path, tmp_path: Path) -> None:
+    """b2 errors shift the tunes, so the MAD interface must receive a tune knobs file."""
+    error_file = tmp_path / "b2_errors.tfs"
+    _write_b2_error_table(error_file, ["MB.A12L1.B2"], {"MB.A12L1.B2": 14.3})
+
+    with pytest.raises(ValueError, match="tune knobs file must be"):
+        GenericMadInterface(
+            accelerator=LHC(
+                beam=2,
+                kinetic_energy=6800.0,
+                sequence_file=seq_b2,
+                b2_errors=error_file,
+            ),
+        )
+
+
+@pytest.mark.slow
+def test_lhc_b2_errors_route_to_dknl_and_keep_twiss_stable(
+    seq_b2: Path, tune_knobs_file: Path, tmp_path: Path
 ) -> None:
     clean = GenericMadInterface(
         accelerator=LHC(beam=2, kinetic_energy=6800.0, sequence_file=seq_b2)
     )
     try:
-        names, lengths, base_values = _get_bend_sample(clean, limit=20)
+        names, lengths = _get_bend_sample(clean, beam=2, limit=20)
         assert names, "Expected to find at least one LHC bend"
         untouched_name = _find_untouched_bend(clean, names)
-        untouched_before = _get_bend_component(clean, untouched_name)
-        assert clean.run_twiss(observe=0) is not None
+        clean_twiss = clean.run_twiss(observe=0)
+        assert clean_twiss is not None
     finally:
         cleanup_interface(clean)
 
@@ -142,17 +152,18 @@ def test_lhc_b2_errors_modify_bend_strengths_and_destabilise_twiss(
             sequence_file=seq_b2,
             b2_errors=error_file,
         ),
+        tune_knobs_file=tune_knobs_file,
     )
     try:
-        _, _, applied_values = _get_bend_sample(with_errors, limit=20)
-        untouched_after = _get_bend_component(with_errors, untouched_name)
-        with pytest.raises(RuntimeError, match="Twiss failed"):
-            with_errors.run_twiss(observe=0)
+        # Each errored bend carries its K1L in the dknl[2] (quadrupole) slot.
+        for name in names:
+            assert _get_bend_dknl2(with_errors, name) == pytest.approx(
+                k1l_values[name], rel=0.0, abs=1e-15
+            ), name
+        # Bends absent from the table keep an empty perturbation table.
+        assert _get_bend_dknl2(with_errors, untouched_name) == 0.0
+        # Small b2 errors shift the tunes but must NOT destabilise twiss.
+        errored_twiss = with_errors.run_twiss(observe=0)
+        assert errored_twiss is not None
     finally:
         cleanup_interface(with_errors)
-
-    for name in names:
-        delta = float(applied_values[name]) - float(base_values[name])
-        assert delta == pytest.approx(k1l_values[name], rel=0.0, abs=1e-15), name
-
-    assert untouched_after == pytest.approx(untouched_before, rel=0.0, abs=1e-15)

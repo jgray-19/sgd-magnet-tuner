@@ -80,7 +80,6 @@ class AbaMadInterface(KnobMadInterface):
     def __init__(self, accelerator: Accelerator, **kwargs):
         super().__init__(accelerator=accelerator, **kwargs)
         self.accelerator = accelerator
-        self.accelerator.apply_accelerator_specific_errors(self)
 
     # --- multipole perturbation table helpers ---
 

@@ -14,7 +14,11 @@ from aba_optimiser.mad.scripts import (
     build_validation_script,
 )
 from aba_optimiser.workers.abstract_worker import AbstractWorker
-from aba_optimiser.workers.common import TrackingData, WorkerConfig, split_array_to_batches
+from aba_optimiser.workers.common import (
+    TrackingData,
+    WorkerConfig,
+    split_array_to_batches,
+)
 from aba_optimiser.workers.tracking import OBSERVABLE_SPECS, TrackingWorker
 from aba_optimiser.workers.tracking_position_only import PositionOnlyConfigMixin
 
@@ -76,6 +80,9 @@ class ValidationTrackingWorker(TrackingWorker):
         init_coords = data.init_coords
         if np.isnan(init_coords).any():
             raise ValueError(f"Worker {self.worker_id}: NaNs found in initial coordinates")
+        # Keep the flat python copy in sync with MAD so per-epoch init-coord
+        # updates (update_init_coords) can mirror the new px/py here too.
+        self._init_coords_np = np.ascontiguousarray(init_coords, dtype=np.float64)
         if data.precomputed_weights is None:
             raise ValueError("Precomputed weights must be provided for ValidationTrackingWorker")
 
@@ -281,6 +288,13 @@ end
                             f"Worker {self.worker_id}: replace_validation_payloads missing payload list"
                         )
                     self._replace_validation_payloads(raw_payloads)
+                    self.conn.send({"worker_id": self.worker_id, "status": "ok"})
+                    continue
+
+                if cmd == "update_init_coords":
+                    new_px = np.asarray(message["px"], dtype=np.float64)
+                    new_py = np.asarray(message["py"], dtype=np.float64)
+                    self._send_init_condition_update(self.mad, new_px, new_py)
                     self.conn.send({"worker_id": self.worker_id, "status": "ok"})
                     continue
 
