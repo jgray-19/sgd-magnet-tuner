@@ -186,21 +186,14 @@ class WorkerPayloadBuilder:
         repeated = bpm_names * n_run_turns
         col_offsets = np.array([bpm_offsets[b] for b in repeated], dtype=np.int64)
 
-        if bpm_names[0] in self.tracking_anchor_markers:
-            # Marker-anchored measurement rows (kicker/ACD) are already realigned
-            # into logical turns starting at the marker, including the upstream
-            # tail of the physical turn. Keep each repeated marker list within
-            # the same dataframe turn.
-            turn_delta = np.repeat(np.arange(n_run_turns, dtype=np.int64), len(bpm_names))
+        # Measurement rows stay in sequence-file order; detect physical turn wraps
+        # from the BPM column order, even when tracking starts from a marker.
+        diff = np.diff(col_offsets)
+        if sdir == 1:
+            wrap = np.concatenate([[0], (diff < 0).astype(np.int64)])
         else:
-            # Detect turn wraps: for sdir=+1 a backward jump in column index means
-            # the sequence crossed the end of the ring and entered the next turn.
-            diff = np.diff(col_offsets)
-            if sdir == 1:
-                wrap = np.concatenate([[0], (diff < 0).astype(np.int64)])
-            else:
-                wrap = np.concatenate([[0], (diff > 0).astype(np.int64)])
-            turn_delta = np.cumsum(wrap) * sdir  # shape (n_data,)
+            wrap = np.concatenate([[0], (diff > 0).astype(np.int64)])
+        turn_delta = np.cumsum(wrap) * sdir  # shape (n_data,)
 
         # fixed_offsets is the same for every starting turn; shape (n_data,)
         fixed_offsets = turn_delta * row_stride + col_offsets

@@ -83,8 +83,8 @@ def _generate_acd_track(
     tws = line.twiss(method="4d")
     tt = line.get_table()
     s_acd = float(tt["s_center", acd_elem.lower()])
-    s_before = s_acd - 1e-6
-    s_after = s_acd + 1e-6
+    s_before = s_acd - 1e-9
+    s_after = s_acd + 1e-9
 
     acd_line = line.copy()
 
