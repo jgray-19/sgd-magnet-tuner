@@ -115,6 +115,7 @@ class WorkerManager:
         self.payload_builder = WorkerPayloadBuilder(
             accelerator=accelerator,
             all_bpms=all_bpms,
+            tracking_anchor_markers=self.tracking_plan.tracking_anchor_markers(),
         )
 
     def _sync_helpers(self) -> None:
@@ -123,7 +124,13 @@ class WorkerManager:
         self.setup_helper.file_kick_planes = self.file_kick_planes
         self.setup_helper.interface_options_per_file = self.interface_options_per_file
         self.setup_helper.tracking_plan = self.tracking_plan
+        self.setup_helper.tracking_anchor_markers = set(
+            self.tracking_plan.tracking_anchor_markers()
+        )
         self.payload_builder.all_bpms = self.all_bpms
+        self.payload_builder.tracking_anchor_markers = set(
+            self.tracking_plan.tracking_anchor_markers()
+        )
 
     def _channels(self) -> WorkerChannels:
         """Return the active training-worker channels."""

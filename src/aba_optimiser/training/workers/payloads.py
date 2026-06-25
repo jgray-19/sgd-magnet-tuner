@@ -44,9 +44,11 @@ class WorkerPayloadBuilder:
         self,
         accelerator: Accelerator,
         all_bpms: list[str],
+        tracking_anchor_markers: list[str] | None = None,
     ) -> None:
         self.accelerator = accelerator
         self.all_bpms = all_bpms
+        self.tracking_anchor_markers = set(tracking_anchor_markers or [])
         self._pos_cache: dict[tuple, dict[tuple[int, str], int]] = {}
         self._layout_cache: dict[tuple, tuple[dict[int, int], dict[str, int], int]] = {}
 
@@ -69,10 +71,14 @@ class WorkerPayloadBuilder:
 
     def bpm_supports_plane(self, bpm: str, kick_plane: str) -> bool:
         """Return whether `bpm` can measure the requested kick plane."""
+        if bpm in self.tracking_anchor_markers:
+            return True
         return bpm_supports_plane(self.accelerator, bpm, kick_plane)
 
     def bpm_supports_both_planes(self, bpm: str) -> bool:
         """Return whether `bpm` can measure both transverse planes."""
+        if bpm in self.tracking_anchor_markers:
+            return True
         return bpm_supports_both_planes(self.accelerator, bpm)
 
     def validate_worker_bpm_names(self, bpm_names: list[str], kick_plane: str) -> None:
@@ -180,14 +186,21 @@ class WorkerPayloadBuilder:
         repeated = bpm_names * n_run_turns
         col_offsets = np.array([bpm_offsets[b] for b in repeated], dtype=np.int64)
 
-        # Detect turn wraps: for sdir=+1 a backward jump in column index means
-        # the sequence crossed the end of the ring and entered the next turn.
-        diff = np.diff(col_offsets)
-        if sdir == 1:
-            wrap = np.concatenate([[0], (diff < 0).astype(np.int64)])
+        if bpm_names[0] in self.tracking_anchor_markers:
+            # Marker-anchored measurement rows (kicker/ACD) are already realigned
+            # into logical turns starting at the marker, including the upstream
+            # tail of the physical turn. Keep each repeated marker list within
+            # the same dataframe turn.
+            turn_delta = np.repeat(np.arange(n_run_turns, dtype=np.int64), len(bpm_names))
         else:
-            wrap = np.concatenate([[0], (diff > 0).astype(np.int64)])
-        turn_delta = np.cumsum(wrap) * sdir  # shape (n_data,)
+            # Detect turn wraps: for sdir=+1 a backward jump in column index means
+            # the sequence crossed the end of the ring and entered the next turn.
+            diff = np.diff(col_offsets)
+            if sdir == 1:
+                wrap = np.concatenate([[0], (diff < 0).astype(np.int64)])
+            else:
+                wrap = np.concatenate([[0], (diff > 0).astype(np.int64)])
+            turn_delta = np.cumsum(wrap) * sdir  # shape (n_data,)
 
         # fixed_offsets is the same for every starting turn; shape (n_data,)
         fixed_offsets = turn_delta * row_stride + col_offsets
@@ -204,6 +217,8 @@ class WorkerPayloadBuilder:
             return True, False
         if kick_plane == "y":
             return False, True
+        if init_bpm in self.tracking_anchor_markers:
+            return True, True
         plane = self.accelerator.infer_monitor_plane(init_bpm)
         return "H" in plane, "V" in plane
 

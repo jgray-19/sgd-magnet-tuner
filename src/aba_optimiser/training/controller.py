@@ -136,14 +136,15 @@ class Controller(BaseController):
             logger.info("Using position-only optimisation (x, y only)")
 
         acd_name: str | None = None
+        # The element each measurement turn is recorded from (kicker/ACD modes write
+        # their data cycled to a marker). Used as the default measurement first BPM
+        # when a file does not specify its own.
+        mode_first_bpm: str | None = None
         if kicker_config is not None:
             if use_acd:
                 raise ValueError("Kicker mode and ACD mode cannot both be enabled.")
             kicker_config.log_state()
-            sequence_config = dataclasses.replace(
-                sequence_config,
-                first_bpm=sequence_config.first_bpm or kicker_config.kicker_name,
-            )
+            mode_first_bpm = kicker_config.kicker_name
             simulation_config = dataclasses.replace(
                 simulation_config,
                 tracks_per_worker=1,
@@ -164,10 +165,7 @@ class Controller(BaseController):
             acd_after = accelerator.acd_marker_name("after")
             acd_before = accelerator.acd_marker_name("before")
             acd_name = accelerator.ac_dipole_name
-            sequence_config = dataclasses.replace(
-                sequence_config,
-                first_bpm=sequence_config.first_bpm or acd_after,
-            )
+            mode_first_bpm = acd_after
             simulation_config = dataclasses.replace(
                 simulation_config,
                 run_arc_by_arc=False,
@@ -190,6 +188,9 @@ class Controller(BaseController):
         self.measurement_files = measurement_config.files
         self.interface_options = [d.interface_options for d in measurement_config.details]
         self.machine_deltaps = [d.machine_deltap for d in measurement_config.details]
+        # Per-file BPM the measurement turns are recorded from; falls back to the
+        # mode-specific marker (kicker/ACD) when a file does not set its own.
+        self.first_bpms = [d.first_bpm or mode_first_bpm for d in measurement_config.details]
         self.num_configs = len(self.measurement_files)
         self.output_config = output_config if output_config is not None else OutputConfig()
         self.checkpoint_config = checkpoint_config
@@ -384,6 +385,7 @@ class Controller(BaseController):
             self.simulation_config,
             self.measurement_files,
             tracking_plan=self.tracking_plan,
+            first_bpms=self.first_bpms,
             extra_markers=self.tracking_plan.extra_markers(),
         )
 

@@ -148,13 +148,13 @@ def optimise_ranges(
         sequence_config = SequenceConfig(
             magnet_range=range_config.magnet_ranges[i],
             bad_bpms=bad_bpms,
-            first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
         )
 
         measurement_config = create_arc_measurement_config(
             measurement_file,
             corrector_strengths=corrector_knobs_file,
             tune_knobs_file=tune_knobs_file,
+            first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
         )
 
         logger.info(
@@ -225,7 +225,6 @@ def optimise_corrector_ranges(
         sequence_config = SequenceConfig(
             magnet_range=range_config.magnet_ranges[i],
             bad_bpms=bad_bpms,
-            first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
         )
 
         meas_config = create_arc_measurement_config(
@@ -233,6 +232,7 @@ def optimise_corrector_ranges(
             machine_deltap=machine_deltap,
             corrector_strengths=corrector_knobs_file,
             tune_knobs_file=tune_knobs_file,
+            first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
         )
 
         controller = Controller(

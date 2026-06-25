@@ -28,7 +28,14 @@ from aba_optimiser.training.controller import Controller
 logger = logging.getLogger(__name__)
 
 
-def _measurement_details(measurement: dict, b2_errors: Path | None) -> MeasurementDetails:
+def _first_bpm_for_beam(beam: int) -> str:
+    """Return the BPM each measurement turn is recorded from for this beam."""
+    return "BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2"
+
+
+def _measurement_details(
+    measurement: dict, b2_errors: Path | None, first_bpm: str | None
+) -> MeasurementDetails:
     """Build per-measurement MAD interface options from a squeeze descriptor."""
     return MeasurementDetails(
         interface_options={
@@ -36,6 +43,7 @@ def _measurement_details(measurement: dict, b2_errors: Path | None) -> Measureme
             "tune_knobs_file": measurement["tune_knobs_file"],
             "b2_errors": b2_errors,
         },
+        first_bpm=first_bpm,
     )
 
 
@@ -43,6 +51,7 @@ def _create_averaged_measurement_config(
     measurements: list[dict],
     temp_analysis_dir: Path,
     arc_num: int,
+    beam: int,
     b2_errors: Path | None = None,
 ) -> MeasurementConfig:
     """Load measurement parquets, average over all turns, and return a MeasurementConfig."""
@@ -53,9 +62,10 @@ def _create_averaged_measurement_config(
         avg_path = temp_analysis_dir / f"avg_orbit_arc{arc_num}_file{i}.parquet"
         avg_df.to_parquet(avg_path)
         avg_files.append(avg_path)
+    first_bpm = _first_bpm_for_beam(beam)
     return MeasurementConfig(
         {
-            avg_path: _measurement_details(m, b2_errors)
+            avg_path: _measurement_details(m, b2_errors, first_bpm)
             for avg_path, m in zip(avg_files, measurements)
         }
     )
@@ -91,10 +101,10 @@ def create_configs(
     sequence_config = SequenceConfig(
         magnet_range=magnet_range,
         bad_bpms=list(all_bad_bpms),
-        first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
     )
+    first_bpm = _first_bpm_for_beam(beam)
     measurement_config = MeasurementConfig(
-        {m["file"]: _measurement_details(m, b2_errors) for m in measurements}
+        {m["file"]: _measurement_details(m, b2_errors, first_bpm) for m in measurements}
     )
     return sequence_config, bpm_start_points, bpm_end_points, measurement_config
 
@@ -230,7 +240,7 @@ def optimise_arc(
         if not restore_bends_opt:
             logger.info("Pre-stage: averaged closed-orbit bend fit for arc %d", arc_num)
             avg_measurement_config = _create_averaged_measurement_config(
-                measurements, temp_analysis_dir, arc_num, b2_errors=b2_errors
+                measurements, temp_analysis_dir, arc_num, beam, b2_errors=b2_errors
             )
             avg_bend_ctrl = Controller(
                 LHC(

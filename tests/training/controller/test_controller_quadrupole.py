@@ -72,10 +72,7 @@ def _build_lhc_quad_controller(
         ),
         _make_optimiser_config_quad(),
         _make_simulation_config_quad(),
-        SequenceConfig(
-            magnet_range=magnet_range,
-            first_bpm=start_marker,
-        ),
+        SequenceConfig(magnet_range=magnet_range),
         create_arc_measurement_config(
             off_magnet_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file
         ),

@@ -258,7 +258,6 @@ def test_controller_bend_opt_simple(
         sequence_config = SequenceConfig(
             magnet_range=magnet_range,
             bad_bpms=bad_bpms,
-            first_bpm="MSIA.EXIT.B1",
         )
 
         measurement_config = MeasurementConfig(

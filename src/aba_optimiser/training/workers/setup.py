@@ -96,6 +96,7 @@ class WorkerSetupHelper:
         self.mad_logfile = mad_logfile
         self.python_logfile = python_logfile
         self.tracking_plan = tracking_plan
+        self.tracking_anchor_markers = set(tracking_plan.tracking_anchor_markers())
 
     @staticmethod
     def merge_bad_bpms(*bad_bpm_lists: list[str] | None) -> list[str] | None:
@@ -111,10 +112,14 @@ class WorkerSetupHelper:
 
     def bpm_supports_plane(self, bpm: str, kick_plane: KickPlane) -> bool:
         """Return whether `bpm` can measure the requested kick plane."""
+        if bpm in self.tracking_anchor_markers:
+            return True
         return bpm_supports_plane(self.accelerator, bpm, kick_plane.value)
 
     def bpm_supports_both_planes(self, bpm: str) -> bool:
         """Return whether `bpm` can measure both transverse planes."""
+        if bpm in self.tracking_anchor_markers:
+            return True
         return bpm_supports_both_planes(self.accelerator, bpm)
 
     def get_range_bpm_names(
@@ -450,7 +455,9 @@ class WorkerSetupHelper:
             debug=self.debug,
             mad_logfile=self.mad_logfile,
             python_logfile=self.python_logfile,
-            install_acd_markers=self.tracking_plan.requires_acd_markers(),
+            tracking_anchor_mode=self.tracking_plan.tracking_anchor_mode(),
+            tracking_anchor_sources=self.tracking_plan.tracking_anchor_sources(),
+            cycle_marker=self.tracking_plan.cycle_marker(),
         )
 
     @staticmethod

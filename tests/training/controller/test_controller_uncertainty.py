@@ -172,11 +172,10 @@ def test_controller_worker_hessian_matches_finite_difference_on_reduced_knob_sub
         ),
         _make_optimiser_config_quad(),
         simulation_config,
-        SequenceConfig(
-            magnet_range=magnet_range,
-            first_bpm=start_marker,
+        SequenceConfig(magnet_range=magnet_range),
+        create_arc_measurement_config(
+            measurement_file, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file
         ),
-        create_arc_measurement_config(measurement_file, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file),
         bpm_start_points,
         bpm_end_points,
         output_config=OutputConfig(

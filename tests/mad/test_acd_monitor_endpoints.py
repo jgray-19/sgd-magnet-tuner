@@ -46,10 +46,10 @@ def test_acd_endpoints_are_monitors_and_visible_to_slc_minus_4(seq_psb: Path) ->
     iface = GradientDescentMadInterface(
         accelerator=accelerator,
         bpm_range=f"{acd_after}/{acd_before}",
-        start_bpm=acd_after,
-        install_acd_markers=True,
+        tracking_anchor_mode="acd",
         discard_mad_output=True,
     )
+    iface.cycle_to_start(acd_after)
     try:
         assert "monitor" in iface.mad.MADX[acd_after].kind
         assert "monitor" in iface.mad.MADX[acd_before].kind

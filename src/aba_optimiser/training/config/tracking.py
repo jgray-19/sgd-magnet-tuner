@@ -71,9 +71,9 @@ class TrackingPlan(ABC):
         """
         return True
 
-    def requires_acd_markers(self) -> bool:
-        """Return whether ACD markers must be installed in the MAD sequence."""
-        return False
+    def tracking_anchor_mode(self) -> str | None:
+        """Return the MAD-interface preparation mode for marker-anchored tracking."""
+        return None
 
     def uses_fixed_bpm_window(self) -> bool:
         """Return whether fixed BPM start/end derivation applies to this plan."""
@@ -112,6 +112,18 @@ class TrackingPlan(ABC):
     def extra_markers(self) -> list[str]:
         """Return non-BPM markers that must be kept in measurement data."""
         return []
+
+    def tracking_anchor_markers(self) -> list[str]:
+        """Return non-BPM tracking anchors that may not appear in the BPM range."""
+        return self.extra_markers()
+
+    def tracking_anchor_sources(self) -> list[str]:
+        """Return source elements needed to prepare marker-anchored tracking."""
+        return self.tracking_anchor_markers()
+
+    def cycle_marker(self) -> str | None:
+        """Return an optional unobserved element used only for sequence cycling."""
+        return None
 
     def observation_start_bpm(self, all_bpms: list[str]) -> str | None:
         """Return the BPM used as the worker observation-range start."""
@@ -359,12 +371,22 @@ class KickerTrackingPlan(TrackingPlan):
     def extra_markers(self) -> list[str]:
         return [self.kicker_name]
 
+    def tracking_anchor_markers(self) -> list[str]:
+        return []
+
+    def tracking_anchor_sources(self) -> list[str]:
+        return [self.kicker_name]
+
+    def cycle_marker(self) -> str | None:
+        return f"{self.kicker_name}_centre"
+
+    def tracking_anchor_mode(self) -> str | None:
+        return "kicker"
+
     def observation_start_bpm(self, all_bpms: list[str]) -> str | None:
-        # In kicker mode the worker must keep the tracking range anchored at the
-        # kicker marker itself. Starting the MAD BPM range at the first real BPM
-        # shifts the returned observation order by one point relative to the
-        # measurement payload, which makes the loss nearly insensitive to the
-        # true quadrupole errors.
+        # Kicker mode compares only real BPMs. The measured kicker marker supplies
+        # the initial coordinates, while the MAD sequence is cycled to an unobserved
+        # centre marker so the observed BPM order begins just after the kicker.
         del all_bpms
         return None
 
@@ -416,8 +438,9 @@ class KickerTrackingPlan(TrackingPlan):
         fixed_start: str,
         fixed_end: str,
     ) -> list[tuple[str, str]]:
-        ring_end = all_bpms[-1]
-        return [(start, ring_end) for start in start_bpms]
+        del start_bpms, end_bpms, run_arc_by_arc, use_fixed_bpm, fixed_start, fixed_end
+        start = all_bpms[0]
+        return [(start, _bpm_behind(all_bpms, start))]
 
     def build_range_specs(
         self,
@@ -430,11 +453,9 @@ class KickerTrackingPlan(TrackingPlan):
         fixed_start: str,
         fixed_end: str,
     ) -> list[WorkerRangeSpec]:
-        ring_end = all_bpms[-1]
-        return [
-            WorkerRangeSpec(start_bpm=start_bpm, end_bpm=ring_end, sdir=1)
-            for start_bpm in start_bpms
-        ]
+        del start_bpms, end_bpms, simulation_config, use_fixed_bpm, fixed_start, fixed_end
+        start = all_bpms[0]
+        return [WorkerRangeSpec(start_bpm=start, end_bpm=_bpm_behind(all_bpms, start), sdir=1)]
 
     def get_range_bpm_names(
         self,
@@ -446,7 +467,11 @@ class KickerTrackingPlan(TrackingPlan):
         bad_bpms: list[str] | None,
     ) -> list[str]:
         excluded = set(bad_bpms or [])
-        return [bpm for bpm in all_bpms if bpm not in excluded]
+        if start_bpm not in all_bpms:
+            raise ValueError(f"Kicker tracking start BPM '{start_bpm}' not found in model BPM list")
+        start_idx = all_bpms.index(start_bpm)
+        marker_order = all_bpms[start_idx:] + all_bpms[:start_idx]
+        return [bpm for bpm in marker_order if bpm not in excluded]
 
     def n_data_points(
         self,
@@ -483,8 +508,8 @@ class ACDTrackingPlan(ArcByArcTrackingPlan):
     def allow_missing_start(self) -> bool:
         return False
 
-    def requires_acd_markers(self) -> bool:
-        return True
+    def tracking_anchor_mode(self) -> str | None:
+        return "acd"
 
     def uses_fixed_bpm_window(self) -> bool:
         return False

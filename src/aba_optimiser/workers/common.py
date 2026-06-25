@@ -60,7 +60,9 @@ class WorkerConfig:
     debug: bool = False
     mad_logfile: Path | None = None
     python_logfile: Path | None = None
-    install_acd_markers: bool = False
+    tracking_anchor_mode: str | None = None
+    tracking_anchor_sources: list[str] | None = None
+    cycle_marker: str | None = None
 
 
 @dataclass

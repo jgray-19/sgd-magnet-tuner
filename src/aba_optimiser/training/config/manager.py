@@ -63,7 +63,6 @@ class ConfigurationManager:
 
         self.mad_iface = GradientDescentMadInterface(
             accelerator=self.accelerator,
-            start_bpm=self.sequence_config.first_bpm,
             magnet_range=self.magnet_range,
             corrector_strengths=corrector_strengths,
             tune_knobs_file=tune_knobs_file,
@@ -71,20 +70,21 @@ class ConfigurationManager:
             bad_bpms=self.sequence_config.bad_bpms,
             debug=debug,
             mad_logfile=mad_logfile,
-            install_acd_markers=self.tracking_plan.requires_acd_markers(),
+            tracking_anchor_mode=self.tracking_plan.tracking_anchor_mode(),
+            tracking_anchor_markers=self.tracking_plan.tracking_anchor_sources(),
         )
         self.knob_names = self.mad_iface.knob_names
+
+        if self.tracking_plan.cycle_marker() is not None:
+            self.mad_iface.cycle_to_start(self.tracking_plan.cycle_marker())
+            self.mad_iface.bpms_in_range, self.mad_iface.nbpms, self.mad_iface.all_bpms = (
+                self.mad_iface.count_bpms(self.mad_iface.bpm_range)
+            )
 
         self.elem_spos: list[int | float] = self.mad_iface.elem_spos
 
         self.all_bpms = self.mad_iface.all_bpms
         self.bpms_in_range = self.mad_iface.bpms_in_range
-        if self.tracking_plan.init_marker is not None:
-            # Kicker mode: the interface cycled the sequence to start at the kicker.
-            # Re-read the BPM list so its order matches the cycled order MAD observes
-            # while tracking the full ring. Workers compare observables positionally,
-            # so the observation BPM order must agree with that cycled order.
-            self.all_bpms, _ = self.mad_iface.get_bpm_list("$start/$end")
         range_label = self.tracking_plan.format_range_for_log(self.magnet_range)
         LOGGER.info(
             "Total BPMs in model: %d, BPMs in configured observation range %s: %d",
@@ -93,7 +93,12 @@ class ConfigurationManager:
             len(self.bpms_in_range),
         )
 
-        allowed_starts = {self.sequence_config.first_bpm} if self.sequence_config.first_bpm else set()
+        # Marker-anchored modes (kicker/ACD) may start from installed or measured
+        # marker anchors rather than ordinary BPMs, so keep those through the
+        # BPM-range filter.
+        allowed_starts = set(self.tracking_plan.tracking_anchor_sources())
+        if self.tracking_plan.init_marker is not None:
+            allowed_starts.add(self.tracking_plan.init_marker)
         self.start_bpms = [
             bpm for bpm in self.start_bpms if bpm in self.bpms_in_range or bpm in allowed_starts
         ]

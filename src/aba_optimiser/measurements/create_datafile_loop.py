@@ -145,7 +145,13 @@ def process_single_config(
     with results_file.open("w") as f:
         f.write("Arc\tDeltap\n")
 
-    measurement_config = MeasurementConfig({measurement_file: MeasurementDetails()})
+    measurement_config = MeasurementConfig(
+        {
+            measurement_file: MeasurementDetails(
+                first_bpm="BPM.33L2.B1" if config.beam == 1 else "BPM.34R8.B2"
+            )
+        }
+    )
     results = []
     for arc in range(8):
         logger.info(f"Starting optimisation for arc {arc + 1}/8 for {config.title}")
@@ -153,7 +159,6 @@ def process_single_config(
         sequence_config = SequenceConfig(
             magnet_range=config.arc_config.magnet_ranges[arc],
             bad_bpms=bad_bpms,
-            first_bpm="BPM.33L2.B1" if config.beam == 1 else "BPM.34R8.B2",
         )
 
         controller = Controller(

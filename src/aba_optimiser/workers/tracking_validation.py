@@ -139,7 +139,8 @@ class ValidationTrackingWorker(TrackingWorker):
             debug=self.config.debug,
             mad_logfile=worker_logfile,
             py_name=PYTHON_IN_MAD,
-            install_acd_markers=self.config.install_acd_markers,
+            tracking_anchor_mode=self.config.tracking_anchor_mode,
+            tracking_anchor_markers=self.config.tracking_anchor_sources,
         )
 
         self.knob_name_set = set(mad_iface.knob_names)

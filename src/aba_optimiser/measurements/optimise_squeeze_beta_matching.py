@@ -173,7 +173,6 @@ def run_optics_optimisation_for_squeeze_step(
         sequence_config = SequenceConfig(
             magnet_range=magnet_range,
             bad_bpms=list(bad_bpms),
-            first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
         )
 
         accelerator = LHC(

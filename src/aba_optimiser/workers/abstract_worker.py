@@ -277,7 +277,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             else self.config.tracking_end_bpm
         )
         cycle_target = (
-            self.config.initial_condition_marker or tracking_init_bpm
+            self.config.cycle_marker or self.config.initial_condition_marker or tracking_init_bpm
             if self.config.cycle_sequence
             else None
         )
@@ -285,7 +285,6 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         # Use accelerator factory to create MAD interface
         mad_iface = GradientDescentMadInterface(
             accelerator=self.config.accelerator,
-            start_bpm=cycle_target,
             magnet_range=self.config.magnet_range,
             bpm_range=self.bpm_range,
             **self.config.interface_options,
@@ -294,8 +293,15 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             debug=self.config.debug,
             mad_logfile=worker_logfile,
             py_name=PYTHON_IN_MAD,
-            install_acd_markers=self.config.install_acd_markers,
+            tracking_anchor_mode=self.config.tracking_anchor_mode,
+            tracking_anchor_markers=self.config.tracking_anchor_sources,
         )
+
+        # Range-limited plans (arc-by-arc, kicker, ACD) cycle the sequence to this
+        # worker's init marker so its tracking range is one contiguous segment.
+        # Full-ring workers keep the natural $start and do not cycle.
+        if cycle_target is not None:
+            mad_iface.cycle_to_start(cycle_target)
 
         knob_names = mad_iface.knob_names
         self.knob_name_set = set(knob_names)

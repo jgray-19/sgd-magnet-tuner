@@ -82,13 +82,15 @@ if __name__ == "__main__":
     with results_file.open("w") as f:
         f.write("Arc\tDeltap\n")
 
-    measurement_config = MeasurementConfig({measurement_file: MeasurementDetails()})
+    measurement_config = MeasurementConfig(
+        {measurement_file: MeasurementDetails(first_bpm="BPM.34R8.B2")}
+    )
     results = []
     for arc in range(8):
         logger.info(f"Starting optimisation for arc {arc + 1}/8")
 
         sequence_config = SequenceConfig(
-            magnet_range=arc_config.magnet_ranges[arc], bad_bpms=bad_bpms, first_bpm="BPM.34R8.B2"
+            magnet_range=arc_config.magnet_ranges[arc], bad_bpms=bad_bpms
         )
 
         controller = Controller(

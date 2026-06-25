@@ -26,6 +26,7 @@ from .aba_mad_interface import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from pathlib import Path
 
     from pymadng_utils.accelerators import Accelerator as PyMadAccelerator
@@ -61,6 +62,11 @@ correct_elm = nil
     if iface.mad.recv() != 1:
         raise ValueError(f"Failed to replace start element {start_bpm} with a marker")
     LOGGER.info("Replaced non-BPM start element with cycle marker: %s", start_bpm)
+
+
+def _unique_names(names: Iterable[str]) -> list[str]:
+    """Return names deduplicated in first-seen order."""
+    return list(dict.fromkeys(names))
 
 
 def _absolute_name_from_dk_knob(knob_name: str) -> str | None:
@@ -119,12 +125,12 @@ class GenericMadInterface(AbaMadInterface):
         corrector_strengths: Path | None = None,
         tune_knobs_file: Path | None = None,
         b2_errors: Path | None = None,
-        start_bpm: str | None = None,
         py_name: str = "py",
         debug: bool = False,
         mad_logfile: Path | None = None,
         discard_mad_output: bool = False,
-        install_acd_markers: bool = False,
+        tracking_anchor_mode: str | None = None,
+        tracking_anchor_markers: list[str] | None = None,
     ):
         stdout, redirect_stderr = self._resolve_mad_stdout(mad_logfile, discard_mad_output)
 
@@ -147,25 +153,16 @@ class GenericMadInterface(AbaMadInterface):
         self.mad["magnet_range"] = self.magnet_range
         self.mad["bpm_range"] = self.bpm_range
 
-        not_bpms = []
-        if install_acd_markers:
-            acd_before, acd_after = self.insert_acd_markers()
-            # Include _after so _ensure_cycleable_start_element can find it
-            LOGGER.info("Installed ACD markers: before=%s, after=%s", acd_before, acd_after)
-            not_bpms = [acd_before, acd_after]
-            self.observe_elements(not_bpms)
+        anchor_markers = self.prepare_tracking_anchors(
+            mode=tracking_anchor_mode,
+            marker_names=tracking_anchor_markers,
+        )
 
-        # Don't unobserve BPMs if we just installed ACD markers
-        self.observe_bpms(bad_bpms=bad_bpms, unobserve_first=not install_acd_markers)
+        self.observe_bpms(bad_bpms=bad_bpms, unobserve_first=True)
+        for marker in anchor_markers:
+            self.observe_element(marker)
         self.bpms_in_range, self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
-        self.make_all_monitors_thin(list(set(self.all_bpms) - set(not_bpms)))
-
-        if start_bpm is not None:
-            _ensure_cycleable_start_element(self, start_bpm, self.all_bpms)
-            self.cycle_sequence(marker_name=start_bpm)
-            LOGGER.info(f"Cycled sequence to start at BPM: {start_bpm}")
-        else:
-            LOGGER.info("Skipping sequence cycling (no start BPM provided)")
+        self.make_all_monitors_thin(list(set(self.all_bpms) - set(anchor_markers)))
 
         # Apply corrector strengths if provided
         if corrector_strengths is not None:
@@ -180,6 +177,48 @@ class GenericMadInterface(AbaMadInterface):
             self._set_tune_knobs(tune_knobs_file)
         else:
             LOGGER.info("Skipping tune knobs (not provided)")
+
+    def prepare_tracking_anchors(
+        self,
+        *,
+        mode: str | None,
+        marker_names: list[str] | None,
+    ) -> list[str]:
+        """Prepare marker-anchored tracking modes through one monitor-anchor path.
+
+        Returns the observed anchor markers the caller must keep through the BPM
+        observation filter (the ACD before/after monitors; none for kicker mode).
+        """
+        anchor_markers = _unique_names(marker_names or [])
+        if mode == "acd":
+            acd_before, acd_after = self.insert_acd_markers()
+            LOGGER.info("Installed ACD markers: before=%s, after=%s", acd_before, acd_after)
+            anchor_markers = _unique_names([*anchor_markers, acd_before, acd_after])
+        elif mode == "kicker":
+            if not anchor_markers:
+                raise ValueError("Kicker tracking anchor mode requires a marker name")
+            for source_name in anchor_markers:
+                self.make_element_thin(
+                    source_name,
+                    marker_name=f"{source_name}_centre",
+                    observe_after=False,
+                )
+            anchor_markers = []
+        elif mode is not None:
+            raise ValueError(f"Unsupported tracking anchor mode: {mode!r}")
+        return anchor_markers
+
+    def cycle_to_start(self, start_marker: str) -> None:
+        """Cycle the loaded sequence so it begins at ``start_marker``.
+
+        Cycling is never done implicitly during construction; callers (e.g. a
+        worker that must track a range as one contiguous segment) request it
+        explicitly. A non-BPM start element is first replaced with a same-name
+        marker so MAD can cycle to it.
+        """
+        _ensure_cycleable_start_element(self, start_marker, self.all_bpms)
+        self.cycle_sequence(marker_name=start_marker)
+        LOGGER.info("Cycled sequence to start at: %s", start_marker)
 
     @staticmethod
     def _resolve_mad_stdout(
@@ -392,12 +431,12 @@ class GradientDescentMadInterface(GenericMadInterface):
         tune_knobs_file: Path | None = None,
         b2_errors: Path | None = None,
         initial_model_values: dict[str, float] | None = None,
-        start_bpm: str | None = None,
         py_name: str = "py",
         debug: bool = False,
         mad_logfile: Path | None = None,
         discard_mad_output: bool = False,
-        install_acd_markers: bool = False,
+        tracking_anchor_mode: str | None = None,
+        tracking_anchor_markers: list[str] | None = None,
     ):
         super().__init__(
             accelerator,
@@ -407,12 +446,12 @@ class GradientDescentMadInterface(GenericMadInterface):
             corrector_strengths,
             tune_knobs_file,
             b2_errors,
-            start_bpm,
             py_name,
             debug,
             mad_logfile,
             discard_mad_output,
-            install_acd_markers,
+            tracking_anchor_mode,
+            tracking_anchor_markers,
         )
 
         self.apply_initial_model_values(initial_model_values)

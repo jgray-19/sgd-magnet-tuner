@@ -34,6 +34,7 @@ class DataManager:
         simulation_config: SimulationConfig,
         measurement_files: list[Path],
         tracking_plan: TrackingPlan,
+        first_bpms: list[str | None] | None = None,
         extra_markers: list[str] | None = None,
         shuffle_turns: ShuffleTurns | None = None,
     ):
@@ -52,6 +53,7 @@ class DataManager:
         self.simulation_config = simulation_config
         self.measurement_files = measurement_files
         self.tracking_plan = tracking_plan
+        self.first_bpms = first_bpms or [None] * len(measurement_files)
         self.extra_markers = extra_markers or []
         self.shuffle_turns = shuffle_turns
 
@@ -91,28 +93,88 @@ class DataManager:
             )
         return df
 
+    def _cycle_ring_to_first_bpm(
+        self, file_idx: int, ring_bpms: list[str], appearance: list[str]
+    ) -> list[str]:
+        """Return ``ring_bpms`` rotated so it begins at this file's first BPM.
+
+        Logs whether the dataframe is cycled to an explicit ``first_bpm`` or left
+        in its recorded order (using its own first recorded BPM as the boundary).
+        """
+        if not ring_bpms:
+            return []
+
+        ring_set = set(ring_bpms)
+        # The data's own boundary: the first recorded name that is a ring BPM.
+        natural = next((b for b in appearance if b in ring_set), ring_bpms[0])
+        requested = self.first_bpms[file_idx] if file_idx < len(self.first_bpms) else None
+
+        if requested is not None and requested in ring_set:
+            first_bpm = requested
+            LOGGER.info(
+                "File %d: cycling measurement data to start at first BPM %s",
+                file_idx,
+                first_bpm,
+            )
+        elif requested is not None and requested in appearance:
+            # A non-BPM start marker (e.g. a kicker): the data is already recorded
+            # from it, so its first ring BPM is the boundary to cycle to.
+            first_bpm = natural
+            LOGGER.info(
+                "File %d: measurement data recorded from marker %s; first BPM is %s",
+                file_idx,
+                requested,
+                first_bpm,
+            )
+        else:
+            if requested is not None:
+                LOGGER.warning(
+                    "File %d: requested first BPM %s is not in the measurement data; "
+                    "not cycling, using %s as the first BPM",
+                    file_idx,
+                    requested,
+                    natural,
+                )
+            else:
+                LOGGER.info(
+                    "File %d: not cycling measurement data, using %s as the first BPM",
+                    file_idx,
+                    natural,
+                )
+            first_bpm = natural
+
+        pivot = ring_bpms.index(first_bpm)
+        return ring_bpms[pivot:] + ring_bpms[:pivot]
+
     def _reorder_track_dataframes(self) -> None:
-        """Reorder track dataframes into the model's ring order.
+        """Reorder track dataframes into ring order, cycled to each file's first BPM.
 
         The payload builder infers per-turn range wraps from the element order,
         assuming it follows ring order so that a contiguous tracking range maps to
         a monotonic column sequence that crosses the ring boundary exactly once.
-        A measurement file's own row order is *not* guaranteed to match ring order
-        (for example ACD marker rows may be written after all the BPMs), and an
-        element that is out of ring order makes the wrap detector count an extra
-        wrap and read one turn too far ahead. Reorder to ``all_bpms`` — the model's
-        canonical ring order, which the payload builder also uses to build the
-        observed ranges — so wrap detection is correct regardless of how the
-        measurement was written. Names present in the data but absent from
-        ``all_bpms`` are kept, appended in their original appearance order.
+        The ring boundary that matters is the one the *measurement* was generated
+        from: the BPM each recorded turn begins at. A tracking arc that straddles
+        that boundary has its early BPMs at the end of one turn and its later BPMs
+        at the start of the next, and only a wrap placed at the generation boundary
+        reads each side from the right turn.
+
+        The model's own ``$start`` is generally a different point, so we cycle the
+        model ring order to begin at the file's first BPM before reindexing. That
+        first BPM is taken from ``first_bpms`` when the caller supplied it (use this
+        when the file's own row order is unreliable, e.g. ACD marker rows written
+        after all the BPMs); otherwise it defaults to the file's first recorded BPM.
+        Names present in the data but absent from ``all_bpms`` are kept, appended in
+        their original appearance order.
         """
-        ring_rank = {name: idx for idx, name in enumerate(self.all_bpms)}
         for file_idx in self.track_data:
             all_turns = sorted(self.track_data[file_idx].index.get_level_values("turn").unique())
             appearance = list(
                 dict.fromkeys(self.track_data[file_idx].index.get_level_values("name"))
             )
             appearance_rank = {name: idx for idx, name in enumerate(appearance)}
+            ring_bpms = [b for b in self.all_bpms if b in appearance_rank]
+            ring_cycle = self._cycle_ring_to_first_bpm(file_idx, ring_bpms, appearance)
+            ring_rank = {name: idx for idx, name in enumerate(ring_cycle)}
             ordered = sorted(
                 appearance,
                 key=lambda name: (

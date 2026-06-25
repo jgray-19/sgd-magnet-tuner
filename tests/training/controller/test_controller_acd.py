@@ -33,7 +33,6 @@ pytest.importorskip("xtrack_tools")
 
 from pymadng_utils.io.utils import save_knobs
 from tmom_recon.kicker.test_utils import strip_inline_flags
-from xtrack_tools.acd import insert_ac_dipole
 from xtrack_tools.monitors import get_monitor_names_at_pattern, process_tracking_data
 from xtrack_tools.tracking import run_tracking
 
@@ -209,9 +208,6 @@ def _build_acd_controller(
         bpm_pattern=r"(?i)br3\.bpm.*",
     )
 
-    accelerator = loaded_psb_interface.accelerator
-    acd_after = accelerator.acd_marker_name("after")
-
     optimiser_config = OptimiserConfig(
         max_epochs=500,
         warmup_epochs=100,
@@ -230,11 +226,10 @@ def _build_acd_controller(
         ),
         optimiser_config,
         _make_simulation_config_quad(),
-        SequenceConfig(
-            magnet_range=magnet_range,
-            first_bpm=acd_after,
+        SequenceConfig(magnet_range=magnet_range),
+        create_arc_measurement_config(
+            off_magnet_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file
         ),
-        create_arc_measurement_config(off_magnet_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file),
         bpm_start_points=[],
         bpm_end_points=[],
         output_config=OutputConfig(

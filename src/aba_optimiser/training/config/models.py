@@ -22,12 +22,13 @@ logger = logging.getLogger(__name__)
 class SequenceConfig:
     """Configuration for the sequence segment used during optimisation.
 
-    The fields define the magnet range to expose to MAD-NG, the optional BPM
-    used as the sequence start, and any BPMs that should be ignored.
+    The fields define the magnet range to expose to MAD-NG and any BPMs that
+    should be ignored. Where measurement data starts (the BPM each recorded turn
+    begins at) is a property of the measurement, not the sequence, so it lives on
+    :class:`MeasurementDetails`.
     """
 
     magnet_range: str
-    first_bpm: str | None = None
     bad_bpms: list[str] | None = None
 
     def log_state(self) -> None:
@@ -44,10 +45,16 @@ class MeasurementDetails:
     supported (commonly ``corrector_strengths``, ``tune_knobs_file``,
     ``b2_errors``). The bunch structure is read from the ``bunch_number`` column
     of the measurement parquet, so it is not configured here.
+
+    ``first_bpm`` names the BPM each recorded turn begins at, used to cycle the
+    measurement data to the boundary it was generated from. Leave it ``None`` to
+    use the file's own first recorded BPM; set it when that row order is
+    unreliable (for example ACD marker rows written after the BPMs).
     """
 
     interface_options: dict[str, Any] = field(default_factory=dict)
     machine_deltap: float = 0.0
+    first_bpm: str | None = None
 
 
 @dataclass

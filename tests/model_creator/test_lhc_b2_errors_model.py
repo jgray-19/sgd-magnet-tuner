@@ -23,7 +23,6 @@ from pymadng_utils.madx.make_sequence import make_madx_sequence
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.mad.optimising_mad_interface import GenericMadInterface
-from aba_optimiser.measurements.b2_errors import resolve_b2_error_table
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -103,7 +102,7 @@ def _phase_advances(table: tfs.TfsDataFrame, column: str, bpms: list[str]) -> np
 
 @pytest.mark.slow
 def test_madng_b2_errors_match_omc3_best_knowledge_phase(
-    b2_model: tuple[Path, Path], tmp_path: Path
+    b2_model: tuple[Path, Path], tmp_path: Path, data_dir: Path
 ) -> None:
     sequence_file, best_knowledge_dir = b2_model
 

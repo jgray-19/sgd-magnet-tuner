@@ -68,10 +68,7 @@ def _build_kicker_controller(
         ),
         optimiser_config,
         _make_simulation_config_quad(),
-        SequenceConfig(
-            magnet_range=magnet_range,
-            first_bpm=kicker_name,
-        ),
+        SequenceConfig(magnet_range=magnet_range),
         create_arc_measurement_config(
             off_magnet_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file
         ),
