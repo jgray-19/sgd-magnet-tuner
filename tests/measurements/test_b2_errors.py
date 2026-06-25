@@ -46,7 +46,7 @@ end
 
 
 def _write_b2_error_table(path: Path, names: list[str], lengths: dict[str, float]) -> dict[str, float]:
-    k1l_values = {name: 2e-8 * float(lengths[name]) for name in names}
+    k1l_values = {name: 2e-4 * float(lengths[name]) for name in names}
     df = tfs.TfsDataFrame({"K1L": [k1l_values[name] for name in names]}, index=names)
     df.index.name = "NAME"
     tfs.write(path, df, save_index="NAME")
@@ -112,10 +112,10 @@ def test_resolve_b2_error_table_picks_closest_energy(tmp_path: Path) -> None:
 @pytest.mark.slow
 def test_lhc_b2_errors_require_tune_knobs_file(seq_b2: Path, tmp_path: Path) -> None:
     """b2 errors shift the tunes, so the MAD interface must receive a tune knobs file."""
-    error_file = tmp_path / "b2_errors.tfs"
+    error_file = tmp_path / "b2.errors"
     _write_b2_error_table(error_file, ["MB.A12L1.B2"], {"MB.A12L1.B2": 14.3})
 
-    with pytest.raises(ValueError, match="tune knobs file must be"):
+    with pytest.raises(ValueError, match="tune knobs are designed to compensate"):
         GenericMadInterface(
             accelerator=LHC(
                 beam=2,
@@ -142,7 +142,7 @@ def test_lhc_b2_errors_route_to_dknl_and_keep_twiss_stable(
     finally:
         cleanup_interface(clean)
 
-    error_file = tmp_path / "b2_errors.tfs"
+    error_file = tmp_path / "b2.errors"
     k1l_values = _write_b2_error_table(error_file, names, lengths)
 
     with_errors = GenericMadInterface(
