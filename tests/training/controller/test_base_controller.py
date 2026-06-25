@@ -9,7 +9,12 @@ from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.training.base_controller import BaseController
 from aba_optimiser.training.config.manager import ConfigurationManager
-from aba_optimiser.training.config.models import MeasurementConfig, OutputConfig, SequenceConfig
+from aba_optimiser.training.config.models import (
+    MeasurementConfig,
+    MeasurementDetails,
+    OutputConfig,
+    SequenceConfig,
+)
 
 
 class DummyController(BaseController):
@@ -80,6 +85,10 @@ def test_configuration_manager_preserves_model_defaults_for_missing_initial_knob
         def update_knob_values(self, new_values: dict[str, float]) -> None:
             self.values.update(new_values)
 
+        def apply_initial_model_values(self, values: dict[str, float] | None) -> None:
+            if values:
+                self.update_knob_values(values)
+
     manager.knob_names = list(initial_state)
     manager.mad_iface = FakeMadInterface(initial_state)  # ty:ignore[invalid-assignment]
 
@@ -93,17 +102,120 @@ def test_configuration_manager_preserves_model_defaults_for_missing_initial_knob
     np.testing.assert_allclose(manager.initial_strengths, np.array([1.25, 4.0, 0.5]))
 
 
-def test_measurement_config_expands_single_file_scoped_values(tmp_path) -> None:
-    config = MeasurementConfig(
-        measurement_files=[tmp_path / "m0.parquet", tmp_path / "m1.parquet"],
-        corrector_files=tmp_path / "correctors.tfs",
-        tune_knobs_files=None,
-        machine_deltaps=1e-4,
-    ).expanded_for_measurements()
+def _initial_model_values_manager(seq_b1):
+    accelerator = LHC(
+        beam=1,
+        kinetic_energy=6800,
+        sequence_file=seq_b1,
+        optimise_quadrupoles=True,
+    )
+    manager = ConfigurationManager(
+        accelerator=accelerator,
+        simulation_config=SimulationConfig(tracks_per_worker=1, num_workers=1, num_batches=1),
+        sequence_config=SequenceConfig("BPM.9R1.B1/BPM.9L2.B1"),
+        bpm_start_points=["BPM.9R1.B1"],
+        bpm_end_points=["BPM.9L2.B1"],
+    )
+    initial_state = {"MQ.1.dk1l": 1.25}
 
-    assert config.corrector_files == [tmp_path / "correctors.tfs", tmp_path / "correctors.tfs"]
-    assert config.tune_knobs_files == [None, None]
-    assert config.machine_deltaps == [1e-4, 1e-4]
+    class FakeMadInterface:
+        def __init__(self, initial_values: dict[str, float]) -> None:
+            self.values = initial_values.copy()
+            self.magnet_strengths: dict[str, float] = {}
+            self.initial_model_values: dict[str, float] = {}
+
+        def receive_knob_values(self) -> np.ndarray:
+            return np.asarray([self.values[name] for name in manager.knob_names], dtype=float)
+
+        def update_knob_values(self, new_values: dict[str, float]) -> None:
+            self.values.update(new_values)
+
+        def set_magnet_strengths(self, strengths: dict[str, float]) -> None:
+            self.magnet_strengths.update(strengths)
+
+        def apply_initial_model_values(self, values: dict[str, float] | None) -> None:
+            if not values:
+                return
+            self.initial_model_values.update(values)
+            self.update_knob_values(
+                {name: value for name, value in values.items() if name in manager.knob_names}
+            )
+            self.set_magnet_strengths(
+                {
+                    name: value
+                    for name, value in values.items()
+                    if name not in manager.knob_names and name != "pt"
+                }
+            )
+
+    manager.knob_names = list(initial_state)
+    manager.mad_iface = FakeMadInterface(initial_state)  # ty:ignore[invalid-assignment]
+    return manager
+
+
+def test_initialise_knob_strengths_applies_initial_model_values(seq_b1) -> None:
+    manager = _initial_model_values_manager(seq_b1)
+
+    initial_knobs, _ = manager.initialise_knob_strengths(
+        provided_initial_knobs={"MQ.1.dk1l": 2.0, "BR.BHZ101.dk0l": 5.0, "pt": 1e-4},
+    )
+
+    # The full initial state is applied to the model, but only this stage's
+    # optimisation knobs are returned to the optimiser.
+    assert initial_knobs == {"MQ.1.dk1l": 2.0}
+    assert manager.initial_model_values == {
+        "MQ.1.dk1l": 2.0,
+        "BR.BHZ101.dk0l": 5.0,
+        "pt": 1e-4,
+    }
+    np.testing.assert_allclose(manager.initial_strengths, np.array([2.0]))
+    assert manager.mad_iface.initial_model_values == manager.initial_model_values
+    assert manager.mad_iface.magnet_strengths == {"BR.BHZ101.dk0l": 5.0}
+
+
+def test_initialise_knob_strengths_still_rejects_genuinely_unknown_names(seq_b1) -> None:
+    manager = _initial_model_values_manager(seq_b1)
+
+    with pytest.raises(ValueError, match="Unknown optimisation knob names"):
+        manager.initialise_knob_strengths(provided_initial_knobs={"not_a_magnet": 1.0})
+
+
+def test_measurement_config_preserves_per_file_interface_options(tmp_path) -> None:
+    config = MeasurementConfig(
+        {
+            tmp_path / "m0.parquet": MeasurementDetails(
+                interface_options={"corrector_strengths": tmp_path / "correctors0.tfs"},
+                machine_deltap=1e-4,
+            ),
+            tmp_path / "m1.parquet": MeasurementDetails(
+                interface_options={
+                    "corrector_strengths": tmp_path / "correctors1.tfs",
+                    "tune_knobs_file": tmp_path / "tunes1.txt",
+                },
+                machine_deltap=2e-4,
+            ),
+        }
+    )
+
+    assert config.files == [tmp_path / "m0.parquet", tmp_path / "m1.parquet"]
+    assert config.details == [
+        MeasurementDetails(
+            interface_options={"corrector_strengths": tmp_path / "correctors0.tfs"},
+            machine_deltap=1e-4,
+        ),
+        MeasurementDetails(
+            interface_options={
+                "corrector_strengths": tmp_path / "correctors1.tfs",
+                "tune_knobs_file": tmp_path / "tunes1.txt",
+            },
+            machine_deltap=2e-4,
+        ),
+    ]
+
+
+def test_measurement_config_rejects_empty_mapping() -> None:
+    with pytest.raises(ValueError, match="at least one measurement file"):
+        MeasurementConfig({})
 
 
 def test_base_controller_raises_when_no_knobs_created(seq_b1) -> None:

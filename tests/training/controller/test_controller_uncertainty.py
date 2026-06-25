@@ -132,7 +132,8 @@ def test_controller_worker_hessian_matches_finite_difference_on_reduced_knob_sub
     loaded_interface,
 ) -> None:
     from aba_optimiser.accelerators import LHC
-    from aba_optimiser.training.config.models import MeasurementConfig, SequenceConfig
+    from aba_optimiser.training.config.helpers import create_arc_measurement_config
+    from aba_optimiser.training.config.models import SequenceConfig
     from tests.training.controller_test_utils import (
         _generate_nonoise_track,
         _make_optimiser_config_quad,
@@ -175,13 +176,7 @@ def test_controller_worker_hessian_matches_finite_difference_on_reduced_knob_sub
             magnet_range=magnet_range,
             first_bpm=start_marker,
         ),
-        MeasurementConfig(
-            measurement_files=measurement_file,
-            corrector_files=corrector_file,
-            tune_knobs_files=tune_knobs_file,
-            flattop_turns=flattop_turns,
-            bunches_per_file=1,
-        ),
+        create_arc_measurement_config(measurement_file, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file),
         bpm_start_points,
         bpm_end_points,
         output_config=OutputConfig(
@@ -262,7 +257,8 @@ def test_controller_worker_hessian_matches_finite_difference_for_psb_100um_noise
 ) -> None:
     from aba_optimiser.accelerators import PSB
     from aba_optimiser.config import OptimiserConfig
-    from aba_optimiser.training.config.models import MeasurementConfig, SequenceConfig
+    from aba_optimiser.training.config.helpers import create_arc_measurement_config
+    from aba_optimiser.training.config.models import SequenceConfig
     from tests.training.controller_test_utils import (
         _generate_nonoise_track,
         _make_simulation_config_quad,
@@ -322,13 +318,7 @@ def test_controller_worker_hessian_matches_finite_difference_for_psb_100um_noise
         optimiser_config,
         simulation_config,
         SequenceConfig("$start/$end"),
-        MeasurementConfig(
-            measurement_files=measurement_file,
-            corrector_files=corrector_file,
-            tune_knobs_files=tune_knobs_file,
-            flattop_turns=flattop_turns,
-            bunches_per_file=1,
-        ),
+        create_arc_measurement_config(measurement_file, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file),
         bpm_start_points,
         [],
         output_config=OutputConfig(

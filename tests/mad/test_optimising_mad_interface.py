@@ -609,3 +609,33 @@ def test_quadrupole_knob_updates_use_dknl(seq_b1: Path) -> None:
     assert np.isclose(final_dknl, 0.0)
 
     cleanup_interface(interface)
+
+
+def test_initial_model_value_is_preserved_when_quadrupole_knob_is_created(seq_b1: Path) -> None:
+    """Initial magnet values should become the created knob's constant term."""
+    accelerator = LHC(
+        beam=1,
+        kinetic_energy=KE,
+        sequence_file=str(seq_b1),
+        optimise_quadrupoles=True,
+    )
+    probe_interface = GradientDescentMadInterface(
+        accelerator=accelerator,
+        discard_mad_output=True,
+    )
+    knob_name = next(knob for knob in probe_interface.knob_names if knob.endswith(".dk1l"))
+    cleanup_interface(probe_interface)
+
+    element_name = knob_name.removesuffix(".dk1l")
+    target_delta = 2.5e-4
+    interface = GradientDescentMadInterface(
+        accelerator=accelerator,
+        initial_model_values={knob_name: target_delta},
+        discard_mad_output=True,
+    )
+
+    assert knob_name in interface.knob_name_set
+    assert np.isclose(interface.mad[f"loaded_sequence['{knob_name}']"], target_delta)
+    assert np.isclose(interface.mad.loaded_sequence[element_name].dknl[1], target_delta)
+
+    cleanup_interface(interface)

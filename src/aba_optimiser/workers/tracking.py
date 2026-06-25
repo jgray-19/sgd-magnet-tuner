@@ -408,7 +408,7 @@ end
         self, mad: MAD, knob_updates: dict[str, float], batch: int
     ) -> dict[str, np.ndarray]:
         """Run MAD-NG tracking for a single batch and return all outputs."""
-        machine_pt = knob_updates.get("pt", 0.0)
+        machine_pt = knob_updates.get("pt", getattr(self, "fixed_pt", 0.0))
 
         update_commands = [
             f"loaded_sequence['{name}']:set0({val:.15e})"

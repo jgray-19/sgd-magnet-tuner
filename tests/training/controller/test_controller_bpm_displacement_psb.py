@@ -23,8 +23,8 @@ import pytest
 
 from aba_optimiser.accelerators import PSB
 from aba_optimiser.config import OptimiserConfig
+from aba_optimiser.training.config.helpers import create_arc_measurement_config
 from aba_optimiser.training.config.models import (
-    MeasurementConfig,
     OutputConfig,
     SequenceConfig,
 )
@@ -136,13 +136,7 @@ def test_controller_bpm_dx_loss_regression_psb_ring3(
     )
 
     sequence_config = SequenceConfig("$start/$end")
-    measurement_config = MeasurementConfig(
-        measurement_files=track_path,
-        corrector_files=corrector_file,
-        tune_knobs_files=tune_knobs_file,
-        flattop_turns=flattop_turns,
-        bunches_per_file=1,
-    )
+    measurement_config = create_arc_measurement_config(track_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file)
     accelerator = PSB(
         ring=3,
         kinetic_energy=loaded_psb_interface.accelerator.kinetic_energy,

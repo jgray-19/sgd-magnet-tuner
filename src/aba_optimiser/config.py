@@ -202,6 +202,7 @@ PROTON_MASS = 938.27208816 * 1e-3  # [GeV] Proton energy-mass
 FILE_COLUMNS: tuple[str, ...] = (
     "name",
     "turn",
+    "bunch_number",
     "x",
     "px",
     "y",

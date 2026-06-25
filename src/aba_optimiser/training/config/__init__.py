@@ -6,6 +6,7 @@ from aba_optimiser.training.config.models import (
     CheckpointConfig,
     KickerConfig,
     MeasurementConfig,
+    MeasurementDetails,
     OutputConfig,
     SequenceConfig,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "KickerConfig",
     "KickerTrackingPlan",
     "MeasurementConfig",
+    "MeasurementDetails",
     "OutputConfig",
     "SequenceConfig",
     "TrackingPlan",

@@ -442,26 +442,28 @@ def process_measurements(
         pzs_combined = pd.concat(combined, ignore_index=True)
         pzs_combined["name"] = pzs_combined["name"].astype("category")
         pzs_combined["turn"] = pzs_combined["turn"].astype("int32")
+        pzs_combined["bunch_number"] = pzs_combined["bunch_number"].astype("int32")
         # Add the average dpp estimate to the headers
         dpp_est = sum(proc_res.attrs["DPP_EST"] for proc_res in combined) / len(combined)
         pzs_combined.attrs["DPP_EST"] = dpp_est
         copy_ac_dipole_attrs(combined[0], pzs_combined)
         pzs_dict: dict[str, pd.DataFrame] = {"combined": pzs_combined}
     else:
-        # Group by file: each file has multiple bunches combined
-        num_files = len(files)
-        num_bunches_per_file = len(combined) // num_files
+        # Group each file's bunches using the source-file mapping. The bunch_number
+        # column already distinguishes bunches within each written parquet, so no
+        # count inference is needed.
+        file_groups: dict[int, list[pd.DataFrame]] = {}
+        for df, file_idx in zip(combined, dataframe_file_indices):
+            file_groups.setdefault(file_idx, []).append(df)
         pzs_dict: dict[str, pd.DataFrame] = {}
-        for i in range(num_files):
-            start = i * num_bunches_per_file
-            end = (i + 1) * num_bunches_per_file
-            file_dfs = combined[start:end]
+        for file_idx, file_dfs in file_groups.items():
             file_pzs = pd.concat(file_dfs, ignore_index=True)
             file_pzs["name"] = file_pzs["name"].astype("category")
             file_pzs["turn"] = file_pzs["turn"].astype("int32")
+            file_pzs["bunch_number"] = file_pzs["bunch_number"].astype("int32")
             file_pzs.attrs["DPP_EST"] = sum(df.attrs["DPP_EST"] for df in file_dfs) / len(file_dfs)
             copy_ac_dipole_attrs(file_dfs[0], file_pzs)
-            pzs_dict[str(files[i])] = file_pzs
+            pzs_dict[str(files[file_idx])] = file_pzs
 
     mad_iface = GenericMadInterface(accelerator)
     all_bpms = set(mad_iface.all_bpms)

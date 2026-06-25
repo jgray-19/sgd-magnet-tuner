@@ -52,6 +52,17 @@ _MAGNET_STRENGTH_SUFFIXES = (
     {f".{attr}" for attr in _MULTIPOLE_ATTRS} | {f".{attr}" for attr in _MISALIGN_ATTRS} | {".kick"}
 )
 
+
+def is_magnet_strength_name(name: str) -> bool:
+    """True if ``name`` is a settable magnet-strength name (e.g. ``MQ.1.dk1l``).
+
+    These are exactly the names accepted by :meth:`AbaMadInterface.set_magnet_strengths`,
+    so callers can use this to tell a genuine magnet strength from a stray/typo'd knob
+    name before routing values to the model.
+    """
+    return any(name.endswith(suffix) for suffix in _MAGNET_STRENGTH_SUFFIXES)
+
+
 # Re-exported for use in optimising_mad_interface.py
 MULTIPOLE_ATTRS = _MULTIPOLE_ATTRS
 
@@ -84,11 +95,12 @@ class AbaMadInterface(KnobMadInterface):
     # --- multipole perturbation table helpers ---
 
     def _ensure_deferred_dk_table(self, element_name: str, dk_table: str) -> None:
-        """Initialise the dknl/dksl table on an element if it is not yet deferred."""
-        zeros = ", ".join(["0.0"] * MAX_MULTIPOLE)
+        """Initialise the dknl/dksl table as deferred without resetting values."""
+        zeros_or_old = ",\n".join([f"old[{i}] or 0.0" for i in range(1, MAX_MULTIPOLE + 1)])
         self.mad.send(f"""
 if not MAD.typeid.is_deferred(loaded_sequence['{element_name}'].{dk_table}) then
-    loaded_sequence['{element_name}'].{dk_table} = MAD.typeid.deferred {{{zeros}}}
+    local old = loaded_sequence['{element_name}'].{dk_table} or {{}}
+    loaded_sequence['{element_name}'].{dk_table} = MAD.typeid.deferred {{\n{zeros_or_old}}}
 end
         """)
 

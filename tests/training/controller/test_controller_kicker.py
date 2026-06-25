@@ -9,13 +9,13 @@ import pytest
 
 from aba_optimiser.accelerators import PSB
 from aba_optimiser.config import OptimiserConfig
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.config.helpers import create_arc_measurement_config
 from aba_optimiser.training.config.models import (
     KickerConfig,
-    MeasurementConfig,
     OutputConfig,
     SequenceConfig,
 )
+from aba_optimiser.training.controller import Controller
 from tests.training.controller_test_utils import (
     _generate_kicker_track,
     _make_simulation_config_quad,
@@ -72,12 +72,8 @@ def _build_kicker_controller(
             magnet_range=magnet_range,
             first_bpm=kicker_name,
         ),
-        MeasurementConfig(
-            measurement_files=off_magnet_path,
-            corrector_files=corrector_file,
-            tune_knobs_files=tune_knobs_file,
-            flattop_turns=flattop_turns,
-            bunches_per_file=1,
+        create_arc_measurement_config(
+            off_magnet_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file
         ),
         bpm_start_points,
         bpm_end_points,

@@ -22,8 +22,10 @@ def _make_helper(tmp_path: Path) -> WorkerSetupHelper:
         bad_bpms=None,
         file_kick_planes={0: "x", 1: "xy"},
         magnet_range="$start/$end",
-        corrector_strengths_files=[tmp_path / "corr0.tfs", tmp_path / "corr1.tfs"],
-        tune_knobs_files=[tmp_path / "knobs0.txt", tmp_path / "knobs1.txt"],
+        interface_options_per_file=[
+            {"corrector_strengths": tmp_path / "corr0.tfs", "tune_knobs_file": tmp_path / "knobs0.txt"},
+            {"corrector_strengths": tmp_path / "corr1.tfs", "tune_knobs_file": tmp_path / "knobs1.txt"},
+        ],
         debug=False,
         mad_logfile=None,
         python_logfile=None,
@@ -174,8 +176,10 @@ def test_make_worker_config_uses_file_specific_artifacts(tmp_path: Path) -> None
     assert len(plans) == 1
     config = helper.make_worker_config(plans[0])
 
-    assert config.corrector_strengths == tmp_path / "corr1.tfs"
-    assert config.tune_knobs_file == tmp_path / "knobs1.txt"
+    assert config.interface_options == {
+        "corrector_strengths": tmp_path / "corr1.tfs",
+        "tune_knobs_file": tmp_path / "knobs1.txt",
+    }
     assert config.kick_plane == "xy"
 
 

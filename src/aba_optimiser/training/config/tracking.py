@@ -9,8 +9,6 @@ from typing import TYPE_CHECKING
 from aba_optimiser.training.utils import create_bpm_range_specs, extract_bpm_range_names
 
 if TYPE_CHECKING:
-    import pandas as pd
-
     from aba_optimiser.config import SimulationConfig
     from aba_optimiser.training.config.models import KickerConfig
 
@@ -77,6 +75,36 @@ class TrackingPlan(ABC):
         """Return whether ACD markers must be installed in the MAD sequence."""
         return False
 
+    def uses_fixed_bpm_window(self) -> bool:
+        """Return whether fixed BPM start/end derivation applies to this plan."""
+        return True
+
+    def format_range_for_log(self, bpm_range: str) -> str:
+        """Return a human-readable range label for logs."""
+        if bpm_range == "$start/$end":
+            return "full cycled sequence ($start/$end)"
+        return bpm_range
+
+    def log_filtered_tracking_points(
+        self,
+        logger,
+        start_points: list[str],
+        end_points: list[str],
+    ) -> None:
+        """Log post-filter tracking boundaries using this plan's terminology."""
+        logger.info(
+            "After filtering bad BPMs, BPM tracking start points: %s; end points: %s",
+            start_points,
+            end_points,
+        )
+
+    def log_fixed_bpm_derivation_skipped(self, logger, start_points: list[str]) -> None:
+        """Log why fixed BPM derivation was skipped for this plan."""
+        logger.info(
+            "Skipping fixed BPM derivation for this tracking plan; start points: %s",
+            start_points,
+        )
+
     def observed_bpms(self, bpms_in_range: list[str], all_bpms: list[str]) -> list[str]:
         """Return the BPMs compared against measurements."""
         return bpms_in_range
@@ -107,24 +135,26 @@ class TrackingPlan(ABC):
     def select_available_turns(
         self,
         *,
-        track_data: dict[int, pd.DataFrame],
-        flattop_turns: int,
+        bunch_turns_by_file: dict[int, dict[int, list[int]]],
         simulation_config: SimulationConfig,
         available_turns: list[int],
     ) -> tuple[dict[int, set[int]], list[int]]:
-        """Return boundary turns and the filtered list of usable start turns."""
+        """Return boundary turns and the filtered list of usable start turns.
+
+        A start turn is unusable when the multi-turn track it seeds would cross a
+        bunch boundary. Each bunch's first/last turns are therefore removed, using
+        the per-file ``bunch_number`` grouping read from the measurement data.
+        """
         turns_per_sample = (
             1 if simulation_config.run_arc_by_arc else simulation_config.n_run_turns
         )
+        boundary_margin = max(1, turns_per_sample)
         turns_to_remove = set()
         boundary_turns_by_file: dict[int, set[int]] = {}
 
-        for file_idx, df in track_data.items():
-            file_turns = sorted(df.index.get_level_values("turn").unique())
-            for track_idx in range(0, len(file_turns), flattop_turns):
-                track_turns = file_turns[track_idx : track_idx + flattop_turns]
-                boundary_margin = max(1, turns_per_sample)
-                boundary_turns = _boundary_turns_for_track(track_turns, boundary_margin)
+        for file_idx, bunches in bunch_turns_by_file.items():
+            for bunch_turns in bunches.values():
+                boundary_turns = _boundary_turns_for_track(sorted(bunch_turns), boundary_margin)
                 boundary_turns_by_file.setdefault(file_idx, set()).update(boundary_turns)
                 turns_to_remove.update(boundary_turns)
 
@@ -348,19 +378,31 @@ class KickerTrackingPlan(TrackingPlan):
     ) -> tuple[int, str]:
         return num_starts, f"kicker forward-only x {num_starts} start marker(s)"
 
+    def log_filtered_tracking_points(
+        self,
+        logger,
+        start_points: list[str],
+        end_points: list[str],
+    ) -> None:
+        logger.info(
+            "After filtering bad BPMs, kicker tracking start marker(s): %s; end points: %s",
+            start_points,
+            end_points,
+        )
+
     def select_available_turns(
         self,
         *,
-        track_data: dict[int, pd.DataFrame],
-        flattop_turns: int,
+        bunch_turns_by_file: dict[int, dict[int, list[int]]],
         simulation_config: SimulationConfig,
         available_turns: list[int],
     ) -> tuple[dict[int, set[int]], list[int]]:
-        boundary_turns_by_file = {file_idx: set() for file_idx in track_data}
+        del simulation_config, available_turns
+        boundary_turns_by_file = {file_idx: set() for file_idx in bunch_turns_by_file}
         kicker_start_turns: list[int] = []
-        for df in track_data.values():
-            file_turns = sorted(df.index.get_level_values("turn").unique())
-            kicker_start_turns.extend(file_turns[::flattop_turns])
+        for bunches in bunch_turns_by_file.values():
+            for bunch_turns in bunches.values():
+                kicker_start_turns.append(min(bunch_turns))
         return boundary_turns_by_file, sorted(kicker_start_turns)
 
     def bpm_pairs(
@@ -444,6 +486,9 @@ class ACDTrackingPlan(ArcByArcTrackingPlan):
     def requires_acd_markers(self) -> bool:
         return True
 
+    def uses_fixed_bpm_window(self) -> bool:
+        return False
+
     def extra_markers(self) -> list[str]:
         return [self.acd_after, self.acd_before]
 
@@ -463,6 +508,26 @@ class ACDTrackingPlan(ArcByArcTrackingPlan):
         num_ends: int,
     ) -> tuple[int, str]:
         return 2, "ACD bidirectional (forward + backward)"
+
+    def log_filtered_tracking_points(
+        self,
+        logger,
+        start_points: list[str],
+        end_points: list[str],
+    ) -> None:
+        del start_points, end_points
+        logger.info(
+            "After filtering bad BPMs, ACD tracking start markers: forward=%s, backward=%s",
+            self.acd_after,
+            self.acd_before,
+        )
+
+    def log_fixed_bpm_derivation_skipped(self, logger, start_points: list[str]) -> None:
+        logger.info(
+            "Skipping fixed BPM derivation for ACD marker tracking; "
+            "initial conditions use tracking markers %s",
+            start_points,
+        )
 
     def bpm_pairs(
         self,

@@ -153,10 +153,8 @@ def optimise_ranges(
 
         measurement_config = create_arc_measurement_config(
             measurement_file,
-            num_tracks=1,
-            flattop_turns=3,
-            corrector_files=corrector_knobs_file,
-            tune_knobs_files=tune_knobs_file,
+            corrector_strengths=corrector_knobs_file,
+            tune_knobs_file=tune_knobs_file,
         )
 
         logger.info(
@@ -233,10 +231,8 @@ def optimise_corrector_ranges(
         meas_config = create_arc_measurement_config(
             measurement_file,
             machine_deltap=machine_deltap,
-            num_tracks=1,
-            flattop_turns=3,
-            corrector_files=corrector_knobs_file,
-            tune_knobs_files=tune_knobs_file,
+            corrector_strengths=corrector_knobs_file,
+            tune_knobs_file=tune_knobs_file,
         )
 
         controller = Controller(

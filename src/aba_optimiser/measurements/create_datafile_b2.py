@@ -12,7 +12,12 @@ from aba_optimiser.config import DPP_OPTIMISER_CONFIG, DPP_SIMULATION_CONFIG, PR
 from aba_optimiser.measurements.arc_config import arc_ranges
 from aba_optimiser.measurements.create_datafile import process_measurements, save_online_knobs
 from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
-from aba_optimiser.training.config.models import MeasurementConfig, OutputConfig, SequenceConfig
+from aba_optimiser.training.config.models import (
+    MeasurementConfig,
+    MeasurementDetails,
+    OutputConfig,
+    SequenceConfig,
+)
 from aba_optimiser.training.controller import Controller
 
 logger = logging.getLogger(__name__)
@@ -77,7 +82,7 @@ if __name__ == "__main__":
     with results_file.open("w") as f:
         f.write("Arc\tDeltap\n")
 
-    measurement_config = MeasurementConfig(measurement_files=[measurement_file])
+    measurement_config = MeasurementConfig({measurement_file: MeasurementDetails()})
     results = []
     for arc in range(8):
         logger.info(f"Starting optimisation for arc {arc + 1}/8")

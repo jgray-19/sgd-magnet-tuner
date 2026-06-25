@@ -32,12 +32,13 @@ from aba_optimiser.measurements.optimise_squeeze_quads import (
     window_from_attrs,
 )
 from aba_optimiser.measurements.reconstruction import process_single_dataframe
-from aba_optimiser.training.controller import Controller
 from aba_optimiser.training.config.models import (
     MeasurementConfig,
+    MeasurementDetails,
     OutputConfig,
     SequenceConfig,
 )
+from aba_optimiser.training.controller import Controller
 from tests.training.helpers import generate_xsuite_env_with_errors, get_twiss_without_errors
 
 if TYPE_CHECKING:
@@ -100,6 +101,7 @@ def _write_ac_dipole_measurements(
         track_df = track_df[track_df["turn"] > acd_ramp].copy()
         track_df["turn"] = track_df["turn"] - acd_ramp - 1
         track_df = track_df[track_df["turn"] < flattop_turns].copy()
+        track_df["bunch_number"] = idx
         track_df = track_df[
             ~track_df["name"].str.contains("bpmcs\\.", case=False, regex=True)
         ].copy()
@@ -260,12 +262,18 @@ def test_controller_bend_opt_simple(
         )
 
         measurement_config = MeasurementConfig(
-            measurement_files=measurement_files,
-            corrector_files=corrector_files,
-            tune_knobs_files=tune_knobs_files,
-            flattop_turns=flattop_turns,
-            machine_deltaps=machine_deltaps,
-            bunches_per_file=1,
+            {
+                measurement_file: MeasurementDetails(
+                    interface_options={
+                        "corrector_strengths": corrector,
+                        "tune_knobs_file": tune_knobs,
+                    },
+                    machine_deltap=deltap,
+                )
+                for measurement_file, corrector, tune_knobs, deltap in zip(
+                    measurement_files, corrector_files, tune_knobs_files, machine_deltaps
+                )
+            }
         )
 
         ctrl = Controller(

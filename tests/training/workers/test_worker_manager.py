@@ -111,8 +111,9 @@ def _make_manager(
         fixed_start="BPH.13208",
         fixed_end="BPV.20108",
         accelerator=_make_sps(tmp_path),
-        corrector_strengths_files=[tmp_path / "correctors.tfs"],
-        tune_knobs_files=[tmp_path / "tune_knobs.txt"],
+        interface_options_per_file=[
+            {"corrector_strengths": tmp_path / "correctors.tfs", "tune_knobs_file": tmp_path / "tune_knobs.txt"}
+        ],
         all_bpms=all_bpms or ["BPH.13208", "BPV.13308", "BPH.13608", "BPV.20108"],
     )
 
@@ -164,8 +165,7 @@ def _make_payload(
         tracking_start_bpm=start_bpm,
         tracking_end_bpm=end_bpm,
         magnet_range="$start/$end",
-        corrector_strengths=None,
-        tune_knobs_file=None,
+        interface_options={},
         sdir=sdir,
         kick_plane=kick_plane,
     )
@@ -338,8 +338,10 @@ def test_create_worker_payloads_assigns_per_file_artifacts_from_file_turn_map(tm
         n_data_points={("BPH.13208", "BPV.13108"): 3},
         all_bpms=["BPV.13108", "BPH.13208", "BPV.13308"],
     )
-    manager.corrector_strengths_files = [tmp_path / "corr0.tfs", tmp_path / "corr1.tfs"]
-    manager.tune_knobs_files = [tmp_path / "knobs0.txt", tmp_path / "knobs1.txt"]
+    manager.interface_options_per_file = [
+        {"corrector_strengths": tmp_path / "corr0.tfs", "tune_knobs_file": tmp_path / "knobs0.txt"},
+        {"corrector_strengths": tmp_path / "corr1.tfs", "tune_knobs_file": tmp_path / "knobs1.txt"},
+    ]
 
     payloads = manager.create_worker_payloads(
         track_data={
@@ -362,17 +364,11 @@ def test_create_worker_payloads_assigns_per_file_artifacts_from_file_turn_map(tm
     )
 
     assert [file_idx for _, _, file_idx in payloads] == [0, 1, 0, 1]
-    assert [config.corrector_strengths for _, config, _ in payloads] == [
-        tmp_path / "corr0.tfs",
-        tmp_path / "corr1.tfs",
-        tmp_path / "corr0.tfs",
-        tmp_path / "corr1.tfs",
-    ]
-    assert [config.tune_knobs_file for _, config, _ in payloads] == [
-        tmp_path / "knobs0.txt",
-        tmp_path / "knobs1.txt",
-        tmp_path / "knobs0.txt",
-        tmp_path / "knobs1.txt",
+    assert [config.interface_options for _, config, _ in payloads] == [
+        {"corrector_strengths": tmp_path / "corr0.tfs", "tune_knobs_file": tmp_path / "knobs0.txt"},
+        {"corrector_strengths": tmp_path / "corr1.tfs", "tune_knobs_file": tmp_path / "knobs1.txt"},
+        {"corrector_strengths": tmp_path / "corr0.tfs", "tune_knobs_file": tmp_path / "knobs0.txt"},
+        {"corrector_strengths": tmp_path / "corr1.tfs", "tune_knobs_file": tmp_path / "knobs1.txt"},
     ]
 
     init_pts = [float(data.init_pts[0]) for data, _, _ in payloads]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+import pandas as pd
 from pymadng_utils.physics import dp2pt
 from tmom_recon import ACDipoleConfig, calculate_pz
 from tmom_recon.svd import weighted_svd_clean_measurements
@@ -21,8 +22,6 @@ from aba_optimiser.measurements.variances import (
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
-
-    import pandas as pd
 
 LOGGER = logging.getLogger(__name__)
 PROTON_MASS_GEV = 0.93827208816
@@ -45,6 +44,12 @@ def process_single_dataframe(
 ) -> tuple[int, pd.DataFrame]:
     """Preprocess, weight, and reconstruct one measurement dataframe."""
     index, df = df_with_index
+    # Each input dataframe is a single bunch; preserve its identifier across the
+    # reconstruction transforms (some of which rebuild the frame and drop columns).
+    bunch_number = int(df["bunch_number"].iloc[0])
+    # Check every row has the same bunch number, otherwise the input dataframe is malformed.
+    if not (df["bunch_number"] == bunch_number).all():
+        raise ValueError(f"Input dataframe {index} contains multiple bunch numbers")
     ac_dipole_config = (
         ac_dipole_config_factory(index) if ac_dipole_config_factory is not None else None
     )
@@ -77,8 +82,11 @@ def process_single_dataframe(
         pt_override=machine_pt,
         acd=ac_dipole_config,
     )
+    if not isinstance(df, pd.DataFrame):
+        raise ValueError(f"Reconstruction returned unexpected type {type(df)} for dataframe")
     df = _scale_position_variances_after_svd(df)
     df = _drop_nan_momenta(df, dataframe_index=index)
+    df["bunch_number"] = bunch_number
     return index, df
 
 

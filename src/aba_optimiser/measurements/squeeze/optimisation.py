@@ -19,6 +19,7 @@ from aba_optimiser.measurements.squeeze.io import save_arc_estimates
 from aba_optimiser.training.config.models import (
     CheckpointConfig,
     MeasurementConfig,
+    MeasurementDetails,
     OutputConfig,
     SequenceConfig,
 )
@@ -27,10 +28,22 @@ from aba_optimiser.training.controller import Controller
 logger = logging.getLogger(__name__)
 
 
+def _measurement_details(measurement: dict, b2_errors: Path | None) -> MeasurementDetails:
+    """Build per-measurement MAD interface options from a squeeze descriptor."""
+    return MeasurementDetails(
+        interface_options={
+            "corrector_strengths": measurement["corrector_file"],
+            "tune_knobs_file": measurement["tune_knobs_file"],
+            "b2_errors": b2_errors,
+        },
+    )
+
+
 def _create_averaged_measurement_config(
     measurements: list[dict],
     temp_analysis_dir: Path,
     arc_num: int,
+    b2_errors: Path | None = None,
 ) -> MeasurementConfig:
     """Load measurement parquets, average over all turns, and return a MeasurementConfig."""
     avg_files = []
@@ -41,12 +54,10 @@ def _create_averaged_measurement_config(
         avg_df.to_parquet(avg_path)
         avg_files.append(avg_path)
     return MeasurementConfig(
-        measurement_files=avg_files,
-        corrector_files=[m["corrector_file"] for m in measurements],
-        tune_knobs_files=[m["tune_knobs_file"] for m in measurements],
-        machine_deltaps=0.0,
-        bunches_per_file=1,
-        flattop_turns=3,
+        {
+            avg_path: _measurement_details(m, b2_errors)
+            for avg_path, m in zip(avg_files, measurements)
+        }
     )
 
 
@@ -73,6 +84,7 @@ def create_configs(
     all_bad_bpms: set[str],
     measurements: list[dict],
     window: ACDipoleOptimisationWindow,
+    b2_errors: Path | None = None,
 ) -> tuple[SequenceConfig, list[str], list[str], MeasurementConfig]:
     """Build SequenceConfig and MeasurementConfig from resolved measurement descriptors."""
     magnet_range, bpm_start_points, bpm_end_points = get_ac_dipole_bpm_points(beam, window)
@@ -82,12 +94,7 @@ def create_configs(
         first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
     )
     measurement_config = MeasurementConfig(
-        measurement_files=[m["file"] for m in measurements],
-        corrector_files=[m["corrector_file"] for m in measurements],
-        tune_knobs_files=[m["tune_knobs_file"] for m in measurements],
-        flattop_turns=6600,
-        machine_deltaps=0.0,#[m["machine_deltap"] for m in measurements],
-        bunches_per_file=3,
+        {m["file"]: _measurement_details(m, b2_errors) for m in measurements}
     )
     return sequence_config, bpm_start_points, bpm_end_points, measurement_config
 
@@ -188,7 +195,7 @@ def optimise_arc(
 
     logger.info("Optimising arc %d for %s", arc_num, squeeze_step)
     sequence_config, bpm_start_points, bpm_end_points, measurement_config = create_configs(
-        beam, all_bad_bpms, measurements, window
+        beam, all_bad_bpms, measurements, window, b2_errors=b2_errors
     )
     output_cfg = OutputConfig(
         include_uncertainty=True,
@@ -223,14 +230,13 @@ def optimise_arc(
         if not restore_bends_opt:
             logger.info("Pre-stage: averaged closed-orbit bend fit for arc %d", arc_num)
             avg_measurement_config = _create_averaged_measurement_config(
-                measurements, temp_analysis_dir, arc_num
+                measurements, temp_analysis_dir, arc_num, b2_errors=b2_errors
             )
             avg_bend_ctrl = Controller(
                 LHC(
                     beam=beam,
                     kinetic_energy=energy,
                     sequence_file=sequence_path,
-                    b2_errors=b2_errors,
                     optimise_bends=True,
                     optimise_quad_dy=True,
                 ),
@@ -274,7 +280,6 @@ def optimise_arc(
             beam=beam,
             kinetic_energy=energy,
             sequence_file=sequence_path,
-            b2_errors=b2_errors,
             optimise_quadrupoles=True,
             optimise_bends=True,
             optimise_other_quadrupoles=True,
@@ -308,7 +313,6 @@ def optimise_arc(
             beam=beam,
             kinetic_energy=energy,
             sequence_file=sequence_path,
-            b2_errors=b2_errors,
             optimise_quadrupoles=True,
             optimise_bends=True,
             optimise_other_quadrupoles=True,

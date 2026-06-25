@@ -41,6 +41,7 @@ def plot_fullring_comparison(
     beam: int,
     include_best_knowledge_model: bool = True,
     deltap: float = 0.0,
+    b2_errors: Path | None = None,
 ) -> None:
     """Plot full-ring optics differences relative to the measurement."""
 
@@ -285,8 +286,8 @@ def plot_fullring_comparison(
             "Could not find dq1/dq2 in twiss headers for any full-ring model. Skipping chromaticity plot."
         )
 
-    if accelerator.b2_errors is not None:
-        b2_table = read_b2_error_table(accelerator.b2_errors)
+    if b2_errors is not None:
+        b2_table = read_b2_error_table(b2_errors)
         elem_names = list(b2_table.keys())
         elem_pos = get_element_positions(accelerator, elem_names)
         b2_with_pos = sorted(

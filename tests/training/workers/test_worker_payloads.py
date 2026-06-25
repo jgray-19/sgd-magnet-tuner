@@ -131,8 +131,7 @@ def test_attach_global_weights_normalises_all_observables(tmp_path: Path) -> Non
         tracking_start_bpm="BPH.13208",
         tracking_end_bpm="BPH.13208",
         magnet_range="$start/$end",
-        corrector_strengths=None,
-        tune_knobs_file=None,
+        interface_options={},
     )
 
     payloads = builder.attach_global_weights([(data, config, 0)], num_batches=1)
@@ -163,8 +162,7 @@ def test_attach_global_weights_ignores_unused_momentum_channels_for_position_onl
         tracking_start_bpm="BPH.13208",
         tracking_end_bpm="BPV.13308",
         magnet_range="$start/$end",
-        corrector_strengths=None,
-        tune_knobs_file=None,
+        interface_options={},
         kick_plane=KickPlane.XY,
     )
 

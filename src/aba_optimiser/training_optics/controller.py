@@ -110,8 +110,14 @@ class OpticsController(BaseController):
             tracking_start_bpm="TEMP",
             tracking_end_bpm="TEMP",
             magnet_range=sequence_config.magnet_range,
-            corrector_strengths=corrector_file,
-            tune_knobs_file=tune_knobs_file,
+            interface_options={
+                key: value
+                for key, value in (
+                    ("corrector_strengths", corrector_file),
+                    ("tune_knobs_file", tune_knobs_file),
+                )
+                if value is not None
+            },
             sdir=0,
             bad_bpms=sequence_config.bad_bpms,
             mad_logfile=self.mad_logfile,

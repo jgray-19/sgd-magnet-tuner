@@ -26,7 +26,8 @@ from aba_optimiser.measurements.create_datafile import (
     save_online_knobs,
 )
 from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
-from aba_optimiser.training.config.models import MeasurementConfig, OutputConfig, SequenceConfig
+from aba_optimiser.training.config.helpers import create_arc_measurement_config
+from aba_optimiser.training.config.models import OutputConfig, SequenceConfig
 from aba_optimiser.training.controller import Controller
 
 logger = logging.getLogger(__name__)
@@ -77,8 +78,6 @@ def optimise_ranges(
     bad_bpms: list[str],
     title: str,
     energy: float,
-    num_tracks: int,
-    flattop_turns: int,
 ) -> tuple[list[float], list[float]]:
     """Optimize for a given range configuration."""
     results = []
@@ -87,13 +86,10 @@ def optimise_ranges(
     for i in range(num_ranges):
         logger.info(f"Starting optimisation for {range_type} {i + 1}/{num_ranges} for {title}")
 
-        measurement_config = MeasurementConfig(
-            measurement_files=measurement_file,
-            corrector_files=corrector_knobs_file,
-            tune_knobs_files=tune_knobs_file,
-            machine_deltaps=0.0,
-            bunches_per_file=num_tracks,
-            flattop_turns=flattop_turns,
+        measurement_config = create_arc_measurement_config(
+            measurement_file,
+            corrector_strengths=corrector_knobs_file,
+            tune_knobs_file=tune_knobs_file,
         )
         sequence_config = SequenceConfig(
             magnet_range=range_config.magnet_ranges[i],
@@ -491,8 +487,6 @@ def process_single_config(
         bad_bpms,
         config.title,
         energy,
-        num_tracks=num_tracks,
-        flattop_turns=turns_per_bpm,
     )
 
     logger.info(f"All ir optimisations complete for {config.title}.")

@@ -100,11 +100,25 @@ class BaseController(ABC):
         if not accelerator.has_any_optimisation():
             raise ValueError("No optimisation types enabled in the accelerator configuration.")
 
+        config_manager_kwargs = self._get_configuration_manager_kwargs()
+
         # Filter bad BPMs
         bpm_start_points, bpm_end_points = filter_bad_bpms(
             bpm_start_points, bpm_end_points, sequence_config.bad_bpms
         )
-        LOGGER.warning(f"After filtering bad BPMs, using BPM start points: {bpm_start_points}, end points: {bpm_end_points}")
+        tracking_plan = config_manager_kwargs.get("tracking_plan")
+        if tracking_plan is None:
+            LOGGER.info(
+                "After filtering bad BPMs, BPM tracking start points: %s; end points: %s",
+                bpm_start_points,
+                bpm_end_points,
+            )
+        else:
+            tracking_plan.log_filtered_tracking_points(
+                LOGGER,
+                bpm_start_points,
+                bpm_end_points,
+            )
 
         # Initialize configuration manager
         self.config_manager = self._configuration_manager_cls(
@@ -114,7 +128,7 @@ class BaseController(ABC):
             bpm_start_points,
             bpm_end_points,
             optimise_knobs,
-            **self._get_configuration_manager_kwargs(),
+            **config_manager_kwargs,
         )
         mad_setup_kwargs = self._get_controller_mad_setup_kwargs()
         self.config_manager.setup_mad_interface(
@@ -134,7 +148,7 @@ class BaseController(ABC):
         )
         self._validate_knob_initialisation()
 
-        # Use initial knobs as true strengths if none provided
+        # Use initial knobs as true strengths if none provided.
         if not true_strengths_delta:
             self.filtered_true_strengths = self.initial_knobs.copy()
 

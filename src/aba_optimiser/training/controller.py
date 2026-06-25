@@ -184,13 +184,12 @@ class Controller(BaseController):
                     "bpm_start_points must be provided in standard tracking mode."
                 )
 
-        # Normalize and validate multi-config inputs
-        measurement_config = measurement_config.expanded_for_measurements()
+        # Resolve the per-file lists the training stack works with from the
+        # measurement-file-keyed config.
         self.measurement_config = measurement_config
-        self.measurement_files = measurement_config.measurement_files
-        self.corrector_files = measurement_config.corrector_files
-        self.tune_knobs_files = measurement_config.tune_knobs_files
-        self.machine_deltaps = measurement_config.machine_deltaps
+        self.measurement_files = measurement_config.files
+        self.interface_options = [d.interface_options for d in measurement_config.details]
+        self.machine_deltaps = [d.machine_deltap for d in measurement_config.details]
         self.num_configs = len(self.measurement_files)
         self.output_config = output_config if output_config is not None else OutputConfig()
         self.checkpoint_config = checkpoint_config
@@ -220,15 +219,11 @@ class Controller(BaseController):
         )
 
         # Initialize tracking-specific managers
-        self._init_data_manager(
-            measurement_config.bunches_per_file, measurement_config.flattop_turns
-        )
+        self._init_data_manager()
 
         self._init_worker_manager(
             sequence_config.magnet_range,
             sequence_config.bad_bpms,
-            measurement_config.flattop_turns,
-            measurement_config.bunches_per_file,
         )
         # Initialize OptimisationLoop and ResultManager now that _init_data_manager
         # has finalised simulation_config.num_batches.
@@ -244,6 +239,10 @@ class Controller(BaseController):
         writer = self.setup_logging("tracking_opt")
         total_turns = self.data_manager.get_total_turns()
         self.final_knobs = None  # Will be set after optimisation loop
+        initial_worker_values = {
+            **self.config_manager.initial_model_values,
+            **self.initial_knobs,
+        }
 
         try:
             self.worker_manager.start_workers(
@@ -254,14 +253,14 @@ class Controller(BaseController):
                 self.config_manager.end_bpms,
                 self.simulation_config,
                 self.machine_deltaps,
-                self.initial_knobs,
+                initial_worker_values,
                 enable_validation=self.tracking_plan.enable_validation,
             )
 
             # Pre-loop diagnostics: mask BPM and worker outliers before optimisation
             if self.simulation_config.enable_preloop_outlier_screening:
                 self.worker_manager.screen_initial_outliers(
-                    self.initial_knobs,
+                    initial_worker_values,
                     bpm_sigma_threshold=self.simulation_config.bpm_loss_outlier_sigma,
                     worker_sigma_threshold=self.simulation_config.worker_loss_outlier_sigma,
                 )
@@ -373,7 +372,7 @@ class Controller(BaseController):
         logger.info("Optimisation complete.")
         return uncertainties_abs
 
-    def _init_data_manager(self, num_tracks: int, flattop_turns: int) -> None:
+    def _init_data_manager(self) -> None:
         """Initialize data manager and load track data."""
         observed_bpms = self.tracking_plan.observed_bpms(
             self.config_manager.bpms_in_range,
@@ -384,8 +383,6 @@ class Controller(BaseController):
             self.config_manager.all_bpms,
             self.simulation_config,
             self.measurement_files,
-            num_bunches=num_tracks,
-            flattop_turns=flattop_turns,
             tracking_plan=self.tracking_plan,
             extra_markers=self.tracking_plan.extra_markers(),
         )
@@ -406,8 +403,6 @@ class Controller(BaseController):
         self,
         magnet_range: str,
         bad_bpms: list[str] | None,
-        flattop_turns: int,
-        num_tracks: int,
     ) -> None:
         """Initialize worker manager for tracking workers."""
         # Set worker logging level
@@ -424,13 +419,10 @@ class Controller(BaseController):
             fixed_start=self.config_manager.fixed_start,
             fixed_end=self.config_manager.fixed_end,
             accelerator=self.accelerator,
-            corrector_strengths_files=self.corrector_files,
-            tune_knobs_files=self.tune_knobs_files,
+            interface_options_per_file=self.interface_options,
             all_bpms=self.config_manager.all_bpms,
             file_kick_planes=self.data_manager.file_kick_planes,
             bad_bpms=bad_bpms,
-            flattop_turns=flattop_turns,
-            num_tracks=num_tracks,
             use_fixed_bpm=self.simulation_config.use_fixed_bpm,
             debug=self.debug,
             mad_logfile=self.mad_logfile,
@@ -440,10 +432,13 @@ class Controller(BaseController):
 
     def _get_controller_mad_setup_kwargs(self) -> dict:
         """Mirror the worker MAD setup when building the expected knob list."""
-        return {
-            "corrector_strengths": next((p for p in self.corrector_files if p is not None), None),
-            "tune_knobs_file": next((p for p in self.tune_knobs_files if p is not None), None),
-        }
+        merged: dict = {}
+        for key in ("corrector_strengths", "tune_knobs_file", "b2_errors"):
+            for options in self.interface_options:
+                if options.get(key) is not None:
+                    merged[key] = options[key]
+                    break
+        return merged
 
     def _get_configuration_manager_kwargs(self) -> dict:
         """Pass kicker-mode planning information into configuration setup."""

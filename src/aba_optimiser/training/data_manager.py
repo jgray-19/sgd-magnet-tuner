@@ -14,6 +14,7 @@ from aba_optimiser.training.workers.turn_planner import WorkerTurnPlanner
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from aba_optimiser.config import SimulationConfig
     from aba_optimiser.training.config.manager import ConfigurationManager
@@ -31,14 +32,16 @@ class DataManager:
         bpms_in_range: list[str],
         all_bpms: list[str],
         simulation_config: SimulationConfig,
-        measurement_files: list[str],
-        num_bunches: int,
-        flattop_turns: int,
+        measurement_files: list[Path],
         tracking_plan: TrackingPlan,
         extra_markers: list[str] | None = None,
         shuffle_turns: ShuffleTurns | None = None,
     ):
         """Create a data manager for one optimisation run.
+
+        The per-file bunch structure (how turns group into bunches) is read from
+        the ``bunch_number`` column of each measurement parquet rather than being
+        inferred from a configured turns-per-bunch count.
 
         Args:
             shuffle_turns: Optional in-place turn ordering strategy forwarded to
@@ -48,8 +51,6 @@ class DataManager:
         self.bpms_in_range = bpms_in_range
         self.simulation_config = simulation_config
         self.measurement_files = measurement_files
-        self.num_bunches = num_bunches
-        self.flattop_turns = flattop_turns
         self.tracking_plan = tracking_plan
         self.extra_markers = extra_markers or []
         self.shuffle_turns = shuffle_turns
@@ -61,6 +62,8 @@ class DataManager:
 
         # Track data per measurement file (indexed by file index)
         self.track_data: dict[int, pd.DataFrame]
+        # Per-file mapping {file_index -> {bunch_number -> sorted global turns}}
+        self.bunch_turns_by_file: dict[int, dict[int, list[int]]]
         self.boundary_turns_by_file: dict[int, set[int]]
         self.file_map: dict[int, int]  # {turn -> file_index}
         self.file_kick_planes: dict[int, str]
@@ -74,23 +77,18 @@ class DataManager:
         # Copy because we drop non-selected markers and convert from view.
         return select_markers(df, markers).copy()
 
-    def _read_parquet(
-        self, source: str, needed_turns: set[int] | None, offset: int
-    ) -> pd.DataFrame:
-        """Read a parquet with optional turn filtering and column validation."""
+    def _read_parquet(self, source: str) -> pd.DataFrame:
+        """Read a parquet's in-range marker rows and validate the column schema."""
         markers = self.bpms_in_range + self.extra_markers
         filters: list = [("name", "in", markers)]
-        if needed_turns:
-            filtered_turns = [t - offset for t in needed_turns]
-            filters.append(("turn", "in", filtered_turns))
         df = pd.read_parquet(source, columns=FILE_COLUMNS, filters=filters)
-
-        # Always apply offset to create global turn IDs
-        df["turn"] = df["turn"] + offset
 
         missing = [c for c in FILE_COLUMNS if c not in df.columns]
         if missing:
-            raise ValueError(f"Missing columns in track data: {missing}")
+            raise ValueError(
+                f"Missing columns in track data {source}: {missing}. The 'bunch_number' "
+                "column is required; regenerate the measurement parquet."
+            )
         return df
 
     def _reorder_track_dataframes(self) -> None:
@@ -183,8 +181,7 @@ class DataManager:
         """Drop boundary turns so each selected start turn has sufficient context."""
         self.boundary_turns_by_file, self.available_turns = (
             self.tracking_plan.select_available_turns(
-                track_data=self.track_data,
-                flattop_turns=self.flattop_turns,
+                bunch_turns_by_file=self.bunch_turns_by_file,
                 simulation_config=self.simulation_config,
                 available_turns=self.available_turns,
             )
@@ -203,15 +200,15 @@ class DataManager:
                 len(self.available_turns),
             )
 
-    def load_track_data(self, needed_turns: set[int] | None = None) -> None:
-        """Load track data from all measurement files and build file map.
+    def load_track_data(self) -> None:
+        """Load track data from all measurement files and build the file/bunch maps.
 
-        Each measurement file gets a unique file index and corresponding turn offset.
+        Each measurement file is read with its own (file-local) turn numbering, then
+        shifted into a disjoint global turn block so turns are unique across files.
+        The bunch structure of every file is read from the ``bunch_number`` column.
         """
         LOGGER.info(
-            "Loading track data from %d measurement file(s) (custom turns=%s)...",
-            len(self.measurement_files),
-            needed_turns is not None,
+            "Loading track data from %d measurement file(s)...", len(self.measurement_files)
         )
 
         # Determine source files - controller has already resolved None to actual files
@@ -224,30 +221,44 @@ class DataManager:
                     "measurement_files should not contain None - controller should have resolved defaults"
                 )
 
-        # Turn offsets per file (global turn space)
-        offsets = {
-            file_idx: file_idx * self.flattop_turns * self.num_bunches
-            for file_idx in range(len(sources))
-        }
-
-        # Load and reduce (parallel across files to overlap decompression)
-        file_tracks: dict[int, pd.DataFrame] = {}
-        file_kick_planes: dict[int, str] = {}
+        # Read raw frames in parallel (file-local turn numbering, includes bunch_number).
+        raw_tracks: dict[int, pd.DataFrame] = {}
         LOGGER.info(f"Loading {len(sources)} measurement file(s)...")
 
-        def _load_one(args: tuple[int, str]) -> tuple[int, pd.DataFrame, str]:
+        def _load_one(args: tuple[int, str]) -> tuple[int, pd.DataFrame]:
             file_idx, source = args
             LOGGER.debug(f"Loading file {file_idx}: {source}")
-            df = self._read_parquet(source, needed_turns, offsets[file_idx])
-            df = self._reduce_dataframe(df)
-            kick_plane = self.infer_kick_plane(df)
-            LOGGER.debug("File %d kick-plane classification: %s", file_idx, kick_plane)
-            return file_idx, df, kick_plane
+            return file_idx, self._read_parquet(source)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(sources)) as pool:
-            for file_idx, df, kick_plane in pool.map(_load_one, enumerate(sources)):
-                file_tracks[file_idx] = df
-                file_kick_planes[file_idx] = kick_plane
+            for file_idx, df in pool.map(_load_one, enumerate(sources)):
+                raw_tracks[file_idx] = df
+
+        # Shift each file into a disjoint global turn block and record its bunch
+        # structure, then reduce to the observed markers.
+        file_tracks: dict[int, pd.DataFrame] = {}
+        file_kick_planes: dict[int, str] = {}
+        self.bunch_turns_by_file = {}
+        running_offset = 0
+        for file_idx in range(len(sources)):
+            df = raw_tracks[file_idx]
+            local_min = int(df["turn"].min())
+            df["turn"] = (df["turn"] - local_min + running_offset).astype("int32")
+            running_offset = int(df["turn"].max()) + 1
+
+            bunches: dict[int, list[int]] = {}
+            per_turn = df[["turn", "bunch_number"]].drop_duplicates("turn")
+            for turn, bunch in zip(per_turn["turn"], per_turn["bunch_number"]):
+                bunches.setdefault(int(bunch), []).append(int(turn))
+            self.bunch_turns_by_file[file_idx] = {
+                bunch: sorted(turns) for bunch, turns in bunches.items()
+            }
+
+            reduced = self._reduce_dataframe(df.drop(columns=["bunch_number"]))
+            file_tracks[file_idx] = reduced
+            kick_plane = self.infer_kick_plane(reduced)
+            LOGGER.debug("File %d kick-plane classification: %s", file_idx, kick_plane)
+            file_kick_planes[file_idx] = kick_plane
 
         # Handle NaN values in track data coordinate-by-coordinate.
         # This is important for single-plane BPMs where one plane is intentionally missing:
@@ -302,7 +313,7 @@ class DataManager:
         self._filter_boundary_turns()
         if len(self.available_turns) == 0:
             raise ValueError(
-                "No turns available after removing boundary turns. Check that your flattop_turns setting leaves at least one turn per track."
+                "No turns available after removing boundary turns. Check that each bunch in the measurement data has more than one turn."
             )
 
         batch_plan = WorkerTurnPlanner(
@@ -322,7 +333,7 @@ class DataManager:
             raise ValueError(
                 f"Failed to create any batches. Available turns: {len(self.available_turns)}, "
                 f"required tracks_per_worker: {self.simulation_config.tracks_per_worker}. "
-                "Consider reducing tracks_per_worker or increasing flattop_turns."
+                "Consider reducing tracks_per_worker or using longer bunches."
             )
 
         self.num_workers = len(self.turn_batches)

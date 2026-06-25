@@ -6,40 +6,33 @@ creating controller configuration objects for common use cases.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
-from aba_optimiser.training.config.models import MeasurementConfig
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from aba_optimiser.training.config.models import MeasurementConfig, MeasurementDetails
 
 
 def create_arc_measurement_config(
     measurement_file: Path,
     machine_deltap: float = 0.0,
-    num_tracks: int = 3,
-    flattop_turns: int = 6600,
-    corrector_files: list[Path | None] | Path | None = None,
-    tune_knobs_files: list[Path | None] | Path | None = None,
+    corrector_strengths: Path | None = None,
+    tune_knobs_file: Path | None = None,
 ) -> MeasurementConfig:
-    """Create a MeasurementConfig for arc-by-arc processing.
+    """Build a single-file MeasurementConfig.
 
-    Args:
-        measurement_file: Path to measurement file
-        machine_deltap: Machine momentum offset
-        num_tracks: Number of particle tracks per measurement file
-        flattop_turns: Number of turns recorded on the flat top
-        corrector_files: Optional corrector strength file(s)
-        tune_knobs_files: Optional tune knob file(s)
-
-    Returns:
-        MeasurementConfig configured for arc processing
+    Convenience for the common one-measurement case. Multi-file runs build the
+    ``{path: MeasurementDetails(...)}`` mapping directly. The bunch structure is
+    read from the parquet's ``bunch_number`` column, so it is not configured here.
     """
+    interface_options: dict = {}
+    if corrector_strengths is not None:
+        interface_options["corrector_strengths"] = corrector_strengths
+    if tune_knobs_file is not None:
+        interface_options["tune_knobs_file"] = tune_knobs_file
     return MeasurementConfig(
-        measurement_files=measurement_file,
-        corrector_files=corrector_files,
-        tune_knobs_files=tune_knobs_files,
-        machine_deltaps=machine_deltap,
-        bunches_per_file=num_tracks,
-        flattop_turns=flattop_turns,
+        {
+            Path(measurement_file): MeasurementDetails(
+                interface_options=interface_options,
+                machine_deltap=machine_deltap,
+            )
+        }
     )

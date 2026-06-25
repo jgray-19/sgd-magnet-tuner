@@ -32,8 +32,8 @@ from xtrack_tools.tracking import run_tracking, run_tracking_without_ac_dipole
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.physics.deltap import dp2pt
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
+from aba_optimiser.training.config.helpers import create_arc_measurement_config
 from aba_optimiser.training.config.models import (
-    MeasurementConfig,
     OutputConfig,
     SequenceConfig,
 )
@@ -108,6 +108,7 @@ def _run_track_with_model(
             0,
             flattop_turns,
         )
+        df["bunch_number"] = 0
         df = df.loc[:, TRACK_COLUMNS].copy()
         df["name"] = df["name"].astype(str)
         processed_dfs.append(df)
@@ -136,6 +137,7 @@ def _run_track_with_model(
         for idx, df in enumerate(processed_dfs):
             particle_df = df.copy()
             particle_df["turn"] = particle_df["turn"] + idx * flattop_turns
+            particle_df["bunch_number"] = idx
             offset_dfs.append(particle_df)
         combined_df = pd.concat(offset_dfs, ignore_index=True)
         combined_df.to_parquet(destination, index=False)
@@ -315,6 +317,7 @@ def _generate_kicker_track(
         flattop_turns=flattop_turns + 1,
         add_variance_columns=True,
     )
+    tracking_df["bunch_number"] = 0
     tracking_df = tracking_df.loc[:, TRACK_COLUMNS].copy()
     tracking_df["name"] = tracking_df["name"].astype(str)
     # realign re-groups each turn's rows to begin just after the kicker, giving the
@@ -375,13 +378,7 @@ def _build_energy_optimisation_case(
     )
 
     sequence_config = SequenceConfig(magnet_range=magnet_range)
-    measurement_config = MeasurementConfig(
-        measurement_files=off_dpp_path,
-        corrector_files=corrector_file,
-        tune_knobs_files=tune_knobs_file,
-        flattop_turns=flattop_turns,
-        bunches_per_file=1,
-    )
+    measurement_config = create_arc_measurement_config(off_dpp_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file)
 
     accel = loaded_interface.accelerator.copy_with(optimise_energy=True)
     ctrl = Controller(
@@ -547,4 +544,5 @@ def run_madng_tracking(
     df["var_y"] = (1e-4) ** 2
     df["var_px"] = (1e-6) ** 2
     df["var_py"] = (1e-6) ** 2
+    df["bunch_number"] = 0
     df.to_parquet(destination, index=False)

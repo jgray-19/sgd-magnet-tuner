@@ -50,13 +50,10 @@ class WorkerManager:
         fixed_start: str,
         fixed_end: str,
         accelerator: Accelerator,
-        corrector_strengths_files: list[Path],
-        tune_knobs_files: list[Path],
+        interface_options_per_file: list[dict],
         all_bpms: list[str],
         file_kick_planes: dict[int, str] | None = None,
         bad_bpms: list[str] | None = None,
-        flattop_turns: int = 1000,
-        num_tracks: int = 1,
         use_fixed_bpm: bool = True,
         debug: bool = False,
         mad_logfile: Path | None = None,
@@ -73,15 +70,12 @@ class WorkerManager:
         self.fixed_start = fixed_start
         self.fixed_end = fixed_end
         self.accelerator = accelerator
-        self.corrector_strengths_files = corrector_strengths_files
-        self.tune_knobs_files = tune_knobs_files
+        self.interface_options_per_file = interface_options_per_file
         self.bad_bpms = bad_bpms
         self.all_bpms = all_bpms
         self.file_kick_planes = file_kick_planes or {}
         self.use_fixed_bpm = use_fixed_bpm
         self.kinetic_energy = accelerator.kinetic_energy
-        self.flattop_turns = flattop_turns
-        self.num_tracks = num_tracks
         self.debug = debug
         self.mad_logfile = mad_logfile
         self.python_logfile = python_logfile
@@ -112,8 +106,7 @@ class WorkerManager:
             bad_bpms=bad_bpms,
             file_kick_planes=self.file_kick_planes,
             magnet_range=magnet_range,
-            corrector_strengths_files=corrector_strengths_files,
-            tune_knobs_files=tune_knobs_files,
+            interface_options_per_file=interface_options_per_file,
             debug=debug,
             mad_logfile=mad_logfile,
             python_logfile=python_logfile,
@@ -128,8 +121,7 @@ class WorkerManager:
         """Keep helper objects aligned with mutable manager attributes."""
         self.setup_helper.bad_bpms = self.bad_bpms
         self.setup_helper.file_kick_planes = self.file_kick_planes
-        self.setup_helper.corrector_strengths_files = self.corrector_strengths_files
-        self.setup_helper.tune_knobs_files = self.tune_knobs_files
+        self.setup_helper.interface_options_per_file = self.interface_options_per_file
         self.setup_helper.tracking_plan = self.tracking_plan
         self.payload_builder.all_bpms = self.all_bpms
 
@@ -252,7 +244,7 @@ class WorkerManager:
                         len(plan.bpm_names),
                     )
 
-        self._summarise_file_usage(payloads, len(self.corrector_strengths_files))
+        self._summarise_file_usage(payloads, len(self.interface_options_per_file))
         return payloads
 
     def _build_payload_split(

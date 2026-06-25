@@ -65,6 +65,7 @@ def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path:
                 "BR3.BPM3L3",
             ],
             "turn": [1, 1, 1, 2, 2, 2],
+            "bunch_number": [0, 0, 0, 0, 0, 0],
             "x": [1e-6, 2e-6, 3e-6, 1.5e-6, 2.5e-6, 3.5e-6],
             "y": [2e-6, 3e-6, 4e-6, 2.5e-6, 3.5e-6, 4.5e-6],
         }
@@ -82,6 +83,7 @@ def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path:
     assert idx == 7
     assert {"px", "py", "var_x", "var_y", "var_px", "var_py"} <= set(result.columns)
     assert not result[["px", "py"]].isna().any().any()
+    assert set(result["bunch_number"]) == {0}
     assert set(result["name"]) == {"BR3.BPM1L3", "BR3.BPM2L3", "BR3.BPM3L3"}
 
 

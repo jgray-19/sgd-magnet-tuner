@@ -6,9 +6,9 @@ used across different worker implementations (tracking and optics modes).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -43,8 +43,9 @@ class WorkerConfig:
     tracking_start_bpm: str
     tracking_end_bpm: str
     magnet_range: str
-    corrector_strengths: Path | None
-    tune_knobs_file: Path | None
+    # Per-measurement keyword arguments forwarded to the MAD-NG interface, e.g.
+    # corrector_strengths, tune_knobs_file, b2_errors.
+    interface_options: dict[str, Any] = field(default_factory=dict)
     observation_range_start_bpm: str | None = None
     initial_condition_marker: str | None = None
     # When False the worker leaves the sequence at its natural ``$start`` instead of

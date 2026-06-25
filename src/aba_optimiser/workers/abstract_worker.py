@@ -288,8 +288,8 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             start_bpm=cycle_target,
             magnet_range=self.config.magnet_range,
             bpm_range=self.bpm_range,
-            corrector_strengths=self.config.corrector_strengths,
-            tune_knobs_file=self.config.tune_knobs_file,
+            **self.config.interface_options,
+            initial_model_values=init_knobs,
             bad_bpms=self.config.bad_bpms,
             debug=self.config.debug,
             mad_logfile=worker_logfile,
@@ -308,6 +308,12 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
                 f"Worker {self.worker_id}: {len(missing)} MAD knobs have no initial value, "
                 f"e.g. {sorted(missing)[:5]}"
             )
+
+        # Non-optimised pt is not an element strength, so keep it as a fixed tracking
+        # scalar while the optimiser updates only its own knob vector.
+        self.fixed_pt = (
+            float(init_knobs.get("pt", 0.0)) if "pt" not in self.knob_name_set else 0.0
+        )
 
         mad = mad_iface.mad
         mad["knob_names"] = knob_names
@@ -328,27 +334,6 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
 
         # Setup differential algebra maps
         self._setup_da_maps(mad)
-
-        # Apply initial values for this worker's own knobs to the DA objects (set the
-        # constant term of each knob's TPSA variable).
-        init_commands = [
-            f"loaded_sequence['{name}']:set0({val:.15e})"
-            for name, val in init_knobs.items()
-            if name != "pt" and name in self.knob_name_set
-        ]
-        if init_commands:
-            mad.send("\n".join(init_commands))
-
-        # Apply the remaining initial values directly to the magnets: these are in this
-        # worker's tracking range but are optimised elsewhere, so they are not knobs here.
-        # Setting them keeps the machine in the correct state for tracking.
-        non_knob_strengths = {
-            name: val
-            for name, val in init_knobs.items()
-            if name != "pt" and name not in self.knob_name_set
-        }
-        if non_knob_strengths:
-            mad_iface.set_magnet_strengths(non_knob_strengths)
 
         return mad, nbpms
 

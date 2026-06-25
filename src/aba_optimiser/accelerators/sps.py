@@ -9,8 +9,6 @@ from aba_optimiser.accelerators.base import Accelerator, KnobSpec
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
-
 
 class SPS(Accelerator):
     """Super Proton Synchrotron accelerator configuration.
@@ -114,10 +112,6 @@ class SPS(Accelerator):
                 "pattern": self.PATTERN_SEXTUPOLE.replace("%", "\\"),  # Change from lua to regex pattern
             },
         }
-
-    def apply_accelerator_specific_errors(self, mad_iface: AbaMadInterface) -> None:
-        """SPS has no accelerator-specific startup error tables."""
-        del mad_iface
 
     @staticmethod
     def infer_monitor_plane(bpm_name: str) -> str:

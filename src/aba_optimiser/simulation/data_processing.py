@@ -93,6 +93,9 @@ def process_track_with_queue(
         true_df["turn"] += ntrk * flattop_turns
         # Downcast for memory
         true_df["turn"] = true_df["turn"].astype(np.int32)
+        # Each track is one bunch; tag it so downstream consumers can recover the
+        # bunch structure without assuming a fixed turns-per-bunch count.
+        true_df["bunch_number"] = np.int32(ntrk)
 
         # Add a new category column that indicates if it is a x or y kick
         true_df["var_x"] = POSITION_STD_DEV**2
@@ -206,6 +209,7 @@ def prepare_track_dataframe(
     # Adjust turn count
     true_df["turn"] += ntrk * flattop_turns
     true_df["turn"] = true_df["turn"].astype(np.int32)
+    true_df["bunch_number"] = np.int32(ntrk)
 
     # Add kick plane category
     true_df["var_x"] = POSITION_STD_DEV**2

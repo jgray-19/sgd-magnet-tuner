@@ -11,8 +11,6 @@ from aba_optimiser.accelerators.base import Accelerator, KnobSpec
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
-
 
 PSB_FLAT_BOTTOM_KINETIC_ENERGY_GEV = 0.160
 
@@ -151,7 +149,3 @@ class PSB(BasePSB, Accelerator):
         if name.endswith("_AFTER") or name.endswith("_BEFORE"):
             return "HV"
         raise ValueError(f"Unsupported PSB monitor name for plane inference: {bpm_name}")
-
-    def apply_accelerator_specific_errors(self, mad_iface: AbaMadInterface) -> None:
-        """PSB has no accelerator-specific startup error tables."""
-        del mad_iface

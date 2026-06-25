@@ -14,12 +14,14 @@ import pytest
 from aba_optimiser.accelerators import LHC, SPS
 from aba_optimiser.config import OptimiserConfig
 from aba_optimiser.mad.optimising_mad_interface import GradientDescentMadInterface
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.config.helpers import create_arc_measurement_config
 from aba_optimiser.training.config.models import (
     MeasurementConfig,
+    MeasurementDetails,
     OutputConfig,
     SequenceConfig,
 )
+from aba_optimiser.training.controller import Controller
 from tests.training.controller_test_utils import (
     _generate_nonoise_track,
     _make_optimiser_config_quad,
@@ -74,12 +76,8 @@ def _build_lhc_quad_controller(
             magnet_range=magnet_range,
             first_bpm=start_marker,
         ),
-        MeasurementConfig(
-            measurement_files=off_magnet_path,
-            corrector_files=corrector_file,
-            tune_knobs_files=tune_knobs_file,
-            flattop_turns=flattop_turns,
-            bunches_per_file=1,
+        create_arc_measurement_config(
+            off_magnet_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file
         ),
         bpm_start_points,
         bpm_end_points,
@@ -234,11 +232,17 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
     sequence_config = SequenceConfig("$start/$end")
     # sequence_config = SequenceConfig("BPH.13008/BPH.13408")
     measurement_config = MeasurementConfig(
-        measurement_files=measurement_files,
-        corrector_files=corrector_file,
-        tune_knobs_files=tune_knobs_file,
-        flattop_turns=flattop_turns,
-        bunches_per_file=1,
+        {
+            f: MeasurementDetails(
+                interface_options={
+                    "corrector_strengths": corrector_file,
+                    "tune_knobs_file": tune_knobs_file,
+                }
+            )
+            for f in (
+                measurement_files if isinstance(measurement_files, list) else [measurement_files]
+            )
+        }
     )
 
     accelerator = SPS(

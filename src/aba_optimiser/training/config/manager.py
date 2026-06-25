@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.mad import GradientDescentMadInterface
+from aba_optimiser.mad import GradientDescentMadInterface, is_magnet_strength_name
 from aba_optimiser.training.config.tracking import ArcByArcTrackingPlan, TrackingPlan
 
 if TYPE_CHECKING:
@@ -38,6 +38,7 @@ class ConfigurationManager:
         self.elem_spos: list[float] = []
         self.all_bpms: list[str] = []
         self.initial_strengths: np.ndarray = np.array([])
+        self.initial_model_values: dict[str, float] = {}
         self.fixed_start: str = ""
         self.fixed_end: str = ""
 
@@ -56,6 +57,7 @@ class ConfigurationManager:
         mad_logfile: Path | None = None,
         corrector_strengths: Path | None = None,
         tune_knobs_file: Path | None = None,
+        b2_errors: Path | None = None,
     ) -> None:
         """Initialise the MAD-NG interface and get basic model parameters."""
 
@@ -65,6 +67,7 @@ class ConfigurationManager:
             magnet_range=self.magnet_range,
             corrector_strengths=corrector_strengths,
             tune_knobs_file=tune_knobs_file,
+            b2_errors=b2_errors,
             bad_bpms=self.sequence_config.bad_bpms,
             debug=debug,
             mad_logfile=mad_logfile,
@@ -82,7 +85,13 @@ class ConfigurationManager:
             # while tracking the full ring. Workers compare observables positionally,
             # so the observation BPM order must agree with that cycled order.
             self.all_bpms, _ = self.mad_iface.get_bpm_list("$start/$end")
-        LOGGER.info(f"Total BPMs in model: {len(self.all_bpms)}, BPMs in specified range {self.magnet_range}: {len(self.bpms_in_range)}")
+        range_label = self.tracking_plan.format_range_for_log(self.magnet_range)
+        LOGGER.info(
+            "Total BPMs in model: %d, BPMs in configured observation range %s: %d",
+            len(self.all_bpms),
+            range_label,
+            len(self.bpms_in_range),
+        )
 
         allowed_starts = {self.sequence_config.first_bpm} if self.sequence_config.first_bpm else set()
         self.start_bpms = [
@@ -96,8 +105,11 @@ class ConfigurationManager:
         # indicates to downstream code that no fixed BPM window should be enforced and
         # that the active BPM range should instead be taken from start_bpms/end_bpms or
         # other model-derived information.
-        if self.simulation_config.use_fixed_bpm:
-            # Use magnet_range to determine fixed start and end points
+        if self.simulation_config.use_fixed_bpm and self.tracking_plan.uses_fixed_bpm_window():
+            # Use magnet_range to determine fixed start and end points. Tracking plans
+            # that anchor on installed markers (e.g. the AC-dipole markers) ignore
+            # fixed_start/fixed_end entirely, so skip the derivation for them; otherwise
+            # a magnet_range of "$start/$end" yields a spurious "not found in model" warning.
             self.fixed_start, self.fixed_end = self.magnet_range.split("/", 1)
 
             # Validate fixed points are in the model
@@ -106,10 +118,13 @@ class ConfigurationManager:
                 or self.fixed_end not in self.bpms_in_range
             ):
                 LOGGER.warning(
-                    f"Fixed BPMs from range {self.magnet_range} not found in model, using first available"
+                    "Fixed BPMs from range %s not found in model, using first available",
+                    range_label,
                 )
                 self.fixed_start = self.start_bpms[0] if self.start_bpms else self.fixed_start
                 self.fixed_end = self.end_bpms[0] if self.end_bpms else self.fixed_end
+        elif self.simulation_config.use_fixed_bpm:
+            self.tracking_plan.log_fixed_bpm_derivation_skipped(LOGGER, self.start_bpms)
 
     @property
     def bpm_pairs(self) -> list[tuple[str, str]]:
@@ -159,22 +174,32 @@ class ConfigurationManager:
 
         knob_name_set = set(self.knob_names)
 
+        self.initial_model_values = {}
         if provided_initial_knobs is not None:
-            unknown_initial = sorted(set(provided_initial_knobs) - knob_name_set)
-            if unknown_initial:
+            # Apply every settable initial value to the model, but keep the optimiser
+            # state restricted to this stage's knob set.
+            known_initial = {k: v for k, v in provided_initial_knobs.items() if k in knob_name_set}
+            invalid_initial: list[str] = []
+            for name, value in provided_initial_knobs.items():
+                if name in knob_name_set:
+                    continue
+                if name == "pt" or is_magnet_strength_name(name):
+                    self.initial_model_values[name] = value
+                else:
+                    invalid_initial.append(name)
+            if invalid_initial:
+                invalid_initial.sort()
                 raise ValueError(
                     "Unknown optimisation knob names supplied for initialisation: "
-                    + ", ".join(unknown_initial[:10])
-                    + ("..." if len(unknown_initial) > 10 else "")
+                    + ", ".join(invalid_initial[:10])
+                    + ("..." if len(invalid_initial) > 10 else "")
                 )
+
             # Warm-start from the current model values and override only the
             # knobs that were explicitly provided.
             LOGGER.info("Using provided initial knob strengths from previous optimisation")
-            model_initial_knobs = dict(zip(self.knob_names, self.mad_iface.receive_knob_values()))
-            full_initial_knobs = model_initial_knobs
-            full_initial_knobs.update(provided_initial_knobs)
-
-            self.mad_iface.update_knob_values(full_initial_knobs)
+            self.initial_model_values.update(known_initial)
+            self.mad_iface.apply_initial_model_values(self.initial_model_values)
         initial_strengths = self.mad_iface.receive_knob_values()
 
         self.initial_strengths = initial_strengths

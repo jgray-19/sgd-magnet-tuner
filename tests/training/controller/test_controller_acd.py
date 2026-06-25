@@ -11,8 +11,8 @@ import xtrack as xt
 
 from aba_optimiser.accelerators import PSB
 from aba_optimiser.config import OptimiserConfig
+from aba_optimiser.training.config.helpers import create_arc_measurement_config
 from aba_optimiser.training.config.models import (
-    MeasurementConfig,
     OutputConfig,
     SequenceConfig,
 )
@@ -169,6 +169,7 @@ def _generate_acd_track(
         flattop_turns=flattop_turns,
         add_variance_columns=True,
     )
+    tracking_df["bunch_number"] = 0
     tracking_df = tracking_df.loc[:, TRACK_COLUMNS].copy()
     tracking_df["name"] = tracking_df["name"].astype(str)
 
@@ -233,13 +234,7 @@ def _build_acd_controller(
             magnet_range=magnet_range,
             first_bpm=acd_after,
         ),
-        MeasurementConfig(
-            measurement_files=off_magnet_path,
-            corrector_files=corrector_file,
-            tune_knobs_files=tune_knobs_file,
-            flattop_turns=flattop_turns,
-            bunches_per_file=1,
-        ),
+        create_arc_measurement_config(off_magnet_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file),
         bpm_start_points=[],
         bpm_end_points=[],
         output_config=OutputConfig(

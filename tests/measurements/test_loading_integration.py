@@ -51,6 +51,7 @@ def test_loading_round_trip_from_generated_lhc_sdds(tmp_path: Path) -> None:
     round_tripped["name"] = round_tripped["name"].astype(str)
     round_tripped = round_tripped.sort_values(["turn", "name"]).reset_index(drop=True)
 
-    assert round_tripped.shape == source.shape
+    assert set(round_tripped["bunch_number"]) == {0}
+    assert round_tripped[["turn", "name", "x", "y"]].shape == source.shape
     assert (round_tripped["x"] - source["x"]).abs().max() < 1e-12
     assert (round_tripped["y"] - source["y"]).abs().max() < 1e-12

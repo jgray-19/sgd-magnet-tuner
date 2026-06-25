@@ -9,8 +9,8 @@ import pytest
 
 from aba_optimiser.accelerators import PSB
 from aba_optimiser.config import OptimiserConfig
+from aba_optimiser.training.config.helpers import create_arc_measurement_config
 from aba_optimiser.training.config.models import (
-    MeasurementConfig,
     OutputConfig,
     SequenceConfig,
 )
@@ -74,23 +74,17 @@ def test_controller_quad_opt_psb_ring3(
         worker_loss_outlier_sigma=20,
     )
     optimiser_config = OptimiserConfig(
-        max_epochs=1000,
+        max_epochs=300,
         warmup_epochs=40,
         warmup_lr_start=1e-6,
         max_lr=3e-4,
         min_lr=3e-4,
-        gradient_converged_value=5e-15,
+        gradient_converged_value=1e-13,
         optimiser_type="adam",
     )
 
     sequence_config = SequenceConfig("$start/$end")
-    measurement_config = MeasurementConfig(
-        measurement_files=off_magnet_path,
-        corrector_files=corrector_file,
-        tune_knobs_files=tune_knobs_file,
-        flattop_turns=flattop_turns,
-        bunches_per_file=1,
-    )
+    measurement_config = create_arc_measurement_config(off_magnet_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file)
     accelerator = PSB(
         ring=3,
         kinetic_energy=loaded_psb_interface.accelerator.kinetic_energy,

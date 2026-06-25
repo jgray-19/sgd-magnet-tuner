@@ -41,6 +41,7 @@ def convert_tbt_to_dataframes(
     excluded_bpms = set(bad_bpms or [])
     converted: list[pd.DataFrame] = []
     turn_offset = 1
+    bunch_number = 0
 
     for measurement in measurements:
         if not combine_measurements:
@@ -58,6 +59,7 @@ def convert_tbt_to_dataframes(
             combined["y"] = df_y.reset_index().melt(id_vars="name", var_name="turn", value_name="y")["y"]
             combined["x"] = combined["x"] / 1000.0
             combined["y"] = combined["y"] / 1000.0
+            combined["bunch_number"] = bunch_number
 
             original_order = df_x.index.tolist()
             assert df_y.index.tolist() == original_order, "BPM order mismatch between X and Y data"
@@ -68,5 +70,6 @@ def convert_tbt_to_dataframes(
 
             converted.append(combined.sort_values(["turn", "name"]).reset_index(drop=True))
             turn_offset += df_x.shape[1]
+            bunch_number += 1
 
     return converted

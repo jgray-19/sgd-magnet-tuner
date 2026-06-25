@@ -16,7 +16,6 @@ _MISALIGNMENT_ATTRIBUTES = frozenset({"dx", "dy"})
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
     from aba_optimiser.mad.optimising_mad_interface import GradientDescentMadInterface
 
 
@@ -251,11 +250,6 @@ class Accelerator(BaseAccelerator, ABC):
         """)
         mad_iface.mad.send(element_kind)
         mad_iface.mad.send(dx_patterns).send(dy_patterns)
-
-    @abstractmethod
-    def apply_accelerator_specific_errors(self, mad_iface: AbaMadInterface) -> None:
-        """Apply accelerator-specific model errors to the loaded MAD sequence."""
-        pass
 
     def get_mad_attr_specs(self) -> dict[str, dict[str, str]]:
         """Return accelerator-specific attr name/value expressions for knob creation."""

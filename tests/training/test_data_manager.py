@@ -3,13 +3,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from aba_optimiser.config import SimulationConfig
-from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.config.tracking import (
     ArcByArcTrackingPlan,
     _boundary_turns_for_track,
 )
+from aba_optimiser.training.data_manager import DataManager
 from aba_optimiser.training.workers.turn_planner import (
     _distribute_target_batches_by_file,
     _get_range_spec_plan,
@@ -38,6 +39,10 @@ def _make_track_df(turns: list[int], bpm_name: str = "BPM.1") -> pd.DataFrame:
     ).set_index(["turn", "name"])
 
 
+def _single_bunch_by_file(*turn_lists: list[int]) -> dict[int, dict[int, list[int]]]:
+    return {file_idx: {0: turns} for file_idx, turns in enumerate(turn_lists)}
+
+
 def test_prepare_turn_batches_treats_tracks_per_worker_as_a_max(
 ) -> None:
     data_manager = DataManager(
@@ -51,13 +56,12 @@ def test_prepare_turn_batches_treats_tracks_per_worker_as_a_max(
             n_run_turns=1,
         ),
         measurement_files=["file0.parquet"],
-        num_bunches=1,
-        flattop_turns=12,
         tracking_plan=_DEFAULT_TRACKING_PLAN,
         shuffle_turns=lambda turns: None,
     )
     data_manager.track_data = {0: _make_track_df(list(range(12)))}
     data_manager.available_turns = list(range(12))
+    data_manager.bunch_turns_by_file = _single_bunch_by_file(list(range(12)))
     data_manager.file_map = dict.fromkeys(range(12), 0)
 
     data_manager.prepare_turn_batches(
@@ -87,8 +91,6 @@ def test_prepare_turn_batches_keeps_partial_batches_per_file(
             n_run_turns=1,
         ),
         measurement_files=["file0.parquet", "file1.parquet"],
-        num_bunches=1,
-        flattop_turns=7,
         tracking_plan=_DEFAULT_TRACKING_PLAN,
         shuffle_turns=lambda turns: None,
     )
@@ -97,6 +99,7 @@ def test_prepare_turn_batches_keeps_partial_batches_per_file(
         1: _make_track_df(file1_turns),
     }
     data_manager.available_turns = file0_turns + file1_turns
+    data_manager.bunch_turns_by_file = _single_bunch_by_file(file0_turns, file1_turns)
     data_manager.file_map = dict.fromkeys(file0_turns, 0) | dict.fromkeys(file1_turns, 1)
 
     data_manager.prepare_turn_batches(
@@ -137,12 +140,11 @@ def test_prepare_turn_batches_caps_at_num_workers_when_capacity_exceeds_it() -> 
             n_run_turns=1,
         ),
         measurement_files=["file0.parquet"],
-        num_bunches=1,
-        flattop_turns=total_turns,
         tracking_plan=_DEFAULT_TRACKING_PLAN,
     )
     data_manager.track_data = {0: _make_track_df(list(range(total_turns)))}
     data_manager.available_turns = list(range(total_turns))
+    data_manager.bunch_turns_by_file = _single_bunch_by_file(list(range(total_turns)))
     data_manager.file_map = dict.fromkeys(range(total_turns), 0)
 
     data_manager.prepare_turn_batches(
@@ -182,12 +184,11 @@ def test_prepare_turn_batches_num_batches_does_not_inflate_worker_groups() -> No
             n_run_turns=1,
         ),
         measurement_files=["file0.parquet"],
-        num_bunches=1,
-        flattop_turns=400,
         tracking_plan=_DEFAULT_TRACKING_PLAN,
     )
     data_manager.track_data = {0: _make_track_df(list(range(400)))}
     data_manager.available_turns = list(range(400))
+    data_manager.bunch_turns_by_file = _single_bunch_by_file(list(range(400)))
     data_manager.file_map = dict.fromkeys(range(400), 0)
 
     data_manager.prepare_turn_batches(
@@ -217,8 +218,6 @@ def test_get_total_turns_uses_real_batch_sizes() -> None:
             num_batches=2,
         ),
         measurement_files=["file0.parquet"],
-        num_bunches=1,
-        flattop_turns=10,
         tracking_plan=_DEFAULT_TRACKING_PLAN,
     )
     data_manager.turn_batches = [[1, 2, 3, 4, 5], [6, 7]]
@@ -281,3 +280,40 @@ def test_boundary_turns_for_track_short_track() -> None:
 
 def test_boundary_turns_for_track_long_track() -> None:
     assert _boundary_turns_for_track([1, 2, 3, 4, 5], margin=1) == [1, 5]
+
+
+def test_select_available_turns_removes_boundaries_per_bunch() -> None:
+    available_turns = list(range(12))
+
+    boundary_turns, selected = _DEFAULT_TRACKING_PLAN.select_available_turns(
+        bunch_turns_by_file={0: {0: [0, 1, 2, 3], 1: [4, 5, 6, 7, 8, 9, 10, 11]}},
+        simulation_config=SimulationConfig(
+            tracks_per_worker=1,
+            num_workers=1,
+            num_batches=1,
+            run_arc_by_arc=True,
+        ),
+        available_turns=available_turns,
+    )
+
+    assert boundary_turns == {0: {0, 3, 4, 11}}
+    assert selected == [1, 2, 5, 6, 7, 8, 9, 10]
+
+
+def test_load_track_data_requires_bunch_number_column(tmp_path) -> None:
+    source = tmp_path / "track.parquet"
+    _make_track_df([0, 1]).reset_index().to_parquet(source, index=False)
+    data_manager = DataManager(
+        bpms_in_range=["BPM.1"],
+        all_bpms=["BPM.1"],
+        simulation_config=SimulationConfig(
+            tracks_per_worker=1,
+            num_workers=1,
+            num_batches=1,
+        ),
+        measurement_files=[str(source)],
+        tracking_plan=_DEFAULT_TRACKING_PLAN,
+    )
+
+    with pytest.raises(ValueError, match="bunch_number"):
+        data_manager.load_track_data()

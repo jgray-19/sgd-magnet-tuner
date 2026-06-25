@@ -77,8 +77,7 @@ class WorkerSetupHelper:
         bad_bpms: list[str] | None,
         file_kick_planes: dict[int, str | KickPlane],
         magnet_range: str,
-        corrector_strengths_files: list[Path],
-        tune_knobs_files: list[Path],
+        interface_options_per_file: list[dict],
         debug: bool,
         mad_logfile: Path | None,
         python_logfile: Path | None,
@@ -92,8 +91,7 @@ class WorkerSetupHelper:
         self.bad_bpms = bad_bpms
         self.file_kick_planes = file_kick_planes
         self.magnet_range = magnet_range
-        self.corrector_strengths_files = corrector_strengths_files
-        self.tune_knobs_files = tune_knobs_files
+        self.interface_options_per_file = interface_options_per_file
         self.debug = debug
         self.mad_logfile = mad_logfile
         self.python_logfile = python_logfile
@@ -442,8 +440,7 @@ class WorkerSetupHelper:
             tracking_start_bpm=plan.range_spec.start_bpm,
             tracking_end_bpm=plan.range_spec.end_bpm,
             magnet_range=self.magnet_range,
-            corrector_strengths=self.corrector_strengths_files[plan.file_idx],
-            tune_knobs_file=self.tune_knobs_files[plan.file_idx],
+            interface_options=self.interface_options_per_file[plan.file_idx],
             observation_range_start_bpm=self.tracking_plan.observation_start_bpm(self.all_bpms),
             initial_condition_marker=plan.init_marker,
             cycle_sequence=self.tracking_plan.cycle_to_init_bpm,

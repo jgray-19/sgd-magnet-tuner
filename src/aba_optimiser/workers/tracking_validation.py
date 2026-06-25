@@ -125,7 +125,6 @@ class ValidationTrackingWorker(TrackingWorker):
 
     def setup_mad_interface(self, init_knobs: dict[str, float]) -> tuple[MAD, int]:
         """Set up a non-gradient MAD interface."""
-        del init_knobs
         LOGGER.debug("Worker %s: Setting up validation MAD interface", self.worker_id)
         LOGGER.debug("Worker %s: Using BPM range %s", self.worker_id, self.bpm_range)
 
@@ -134,8 +133,8 @@ class ValidationTrackingWorker(TrackingWorker):
             accelerator=self.config.accelerator,
             magnet_range=self.config.magnet_range,
             bpm_range=self.bpm_range,
-            corrector_strengths=self.config.corrector_strengths,
-            tune_knobs_file=self.config.tune_knobs_file,
+            **self.config.interface_options,
+            initial_model_values=init_knobs,
             bad_bpms=self.config.bad_bpms,
             debug=self.config.debug,
             mad_logfile=worker_logfile,
@@ -144,6 +143,9 @@ class ValidationTrackingWorker(TrackingWorker):
         )
 
         self.knob_name_set = set(mad_iface.knob_names)
+        self.fixed_pt = (
+            float(init_knobs.get("pt", 0.0)) if "pt" not in self.knob_name_set else 0.0
+        )
 
         mad = mad_iface.mad
         mad["nbpms"] = mad_iface.nbpms
@@ -169,7 +171,7 @@ class ValidationTrackingWorker(TrackingWorker):
         self, mad: MAD, knob_updates: dict[str, float], batch: int
     ) -> dict[str, np.ndarray]:
         """Run MAD-NG tracking for one validation batch."""
-        machine_pt = knob_updates.get("pt", 0.0)
+        machine_pt = knob_updates.get("pt", getattr(self, "fixed_pt", 0.0))
 
         update_commands = [
             f"loaded_sequence['{name}'] = {val:.15e}"

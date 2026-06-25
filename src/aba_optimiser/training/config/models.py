@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Self
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from aba_optimiser.config import TRAINING_RUNS_ROOT
 
@@ -34,47 +36,39 @@ class SequenceConfig:
 
 
 @dataclass
-class MeasurementConfig:
-    """Measurement inputs and associated machine-state files.
+class MeasurementDetails:
+    """Per-measurement model setup and momentum metadata.
 
-    Single file or scalar inputs are normalised to lists in ``__post_init__``
-    so the rest of the training stack can treat multi-file and single-file
-    runs uniformly.
+    ``interface_options`` are passed straight through as keyword arguments to the
+    MAD-NG interface for this measurement, so any MAD interface option is
+    supported (commonly ``corrector_strengths``, ``tune_knobs_file``,
+    ``b2_errors``). The bunch structure is read from the ``bunch_number`` column
+    of the measurement parquet, so it is not configured here.
     """
 
-    measurement_files: list[Path] | Path
-    corrector_files: list[Path | None] | None | Path = None
-    tune_knobs_files: list[Path | None] | None | Path = None
-    machine_deltaps: list[float] | float = 0.0
-    bunches_per_file: int = 3
-    flattop_turns: int = 6600
+    interface_options: dict[str, Any] = field(default_factory=dict)
+    machine_deltap: float = 0.0
 
-    # create a post-init method to ensure single values are converted to lists
+
+@dataclass
+class MeasurementConfig:
+    """Maps each measurement file to its :class:`MeasurementDetails`."""
+
+    measurements: dict[Path, MeasurementDetails]
+
     def __post_init__(self) -> None:
-        """Ensure attributes are lists."""
-        if isinstance(self.measurement_files, Path):
-            self.measurement_files = [self.measurement_files]
-        if self.corrector_files is None or isinstance(self.corrector_files, Path):
-            self.corrector_files = [self.corrector_files]
-        if self.tune_knobs_files is None or isinstance(self.tune_knobs_files, Path):
-            self.tune_knobs_files = [self.tune_knobs_files]
-        if isinstance(self.machine_deltaps, float | int):
-            self.machine_deltaps = [self.machine_deltaps]
+        if not self.measurements:
+            raise ValueError("MeasurementConfig requires at least one measurement file")
 
-    def expanded_for_measurements(self) -> Self:
-        """Return a validated config with file-scoped values expanded as needed."""
-        num_configs = len(self.measurement_files)
-        for name in ("corrector_files", "tune_knobs_files", "machine_deltaps"):
-            values = list(getattr(self, name))
-            if len(values) == 1:
-                setattr(self, name, values * num_configs)
-                continue
-            if len(values) != num_configs:
-                raise ValueError(
-                    f"Number of {name} ({len(values)}) must match number of "
-                    f"measurement files ({num_configs}) or be 1"
-                )
-        return self
+    @property
+    def files(self) -> list[Path]:
+        """Return the measurement files in insertion order."""
+        return list(self.measurements.keys())
+
+    @property
+    def details(self) -> list[MeasurementDetails]:
+        """Return the per-file details in measurement-file order."""
+        return list(self.measurements.values())
 
     def log_state(self) -> None:
         """Log the current measurement config settings."""

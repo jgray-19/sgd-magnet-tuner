@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 TRACK_COLUMNS = (
     "turn",
+    "bunch_number",
     "name",
     "x",
     "px",

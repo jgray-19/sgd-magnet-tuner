@@ -121,8 +121,8 @@ def test_lhc_b2_errors_require_tune_knobs_file(seq_b2: Path, tmp_path: Path) -> 
                 beam=2,
                 kinetic_energy=6800.0,
                 sequence_file=seq_b2,
-                b2_errors=error_file,
             ),
+            b2_errors=error_file,
         )
 
 
@@ -150,8 +150,8 @@ def test_lhc_b2_errors_route_to_dknl_and_keep_twiss_stable(
             beam=2,
             kinetic_energy=6800.0,
             sequence_file=seq_b2,
-            b2_errors=error_file,
         ),
+        b2_errors=error_file,
         tune_knobs_file=tune_knobs_file,
     )
     try:
