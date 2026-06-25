@@ -11,7 +11,7 @@ same b2 errors through ``dknl[2]`` -- and asserts the two twiss agree on phase
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
@@ -25,6 +25,9 @@ from aba_optimiser.accelerators import LHC
 from aba_optimiser.mad.optimising_mad_interface import GenericMadInterface
 from aba_optimiser.measurements.b2_errors import resolve_b2_error_table
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 BEAM = 1
 ENERGY_GEV = 6800.0
 NAT_TUNES = [0.28, 0.31]
@@ -37,7 +40,7 @@ KQT_MADX_NAMES = [f"kqt{fd}.a{arc}b{BEAM}" for fd in "fd" for arc in ("12", "23"
 
 
 @pytest.fixture(scope="module")
-def b2_model(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+def b2_model(tmp_path_factory: pytest.TempPathFactory, data_dir: Path) -> tuple[Path, Path]:
     """Create matching nominal and best-knowledge omc3 models (same optics modifier).
 
     Returns the nominal MAD-NG sequence and the best-knowledge model directory.
@@ -45,7 +48,8 @@ def b2_model(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     nominal_dir = tmp_path_factory.mktemp("nominal")
     create_instance_and_model(
         accel="lhc",
-        fetch="afs",
+        fetch="path",
+        path=data_dir / "acc-models-lhc",
         type="nominal",
         beam=BEAM,
         year="2025",
@@ -61,7 +65,8 @@ def b2_model(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     best_knowledge_dir = tmp_path_factory.mktemp("best_knowledge")
     create_instance_and_model(
         accel="lhc",
-        fetch="afs",
+        fetch="path",
+        path=data_dir / "acc-models-lhc",
         type="best_knowledge",
         beam=BEAM,
         year="2025",
