@@ -265,8 +265,8 @@ def test_controller_quad_opt_with_acd(
 
     if loss_regression:
         true_loss = evaluate_controller_worker_loss(ctrl, magnet_strengths)
-        assert true_loss < 1e-11, (
-            "True-strength ACD loss should be near the xsuite/MAD-NG integrator floor (~1e-12), "
+        assert true_loss < 5e-15, (
+            "True-strength ACD loss should be near the xsuite/MAD-NG integrator floor (~5e-15), "
             f"got {true_loss:.3e} (initial={initial_loss:.3e})"
         )
         assert true_loss < initial_loss * 1e-3, (
