@@ -125,7 +125,7 @@ def test_madng_b2_errors_match_omc3_best_knowledge_phase(
     interface = GenericMadInterface(
         accelerator=accelerator,
         tune_knobs_file=tune_knobs_file,
-        b2_errors=resolve_b2_error_table(BEAM, ENERGY_GEV),
+        b2_errors=data_dir / "strengths" / B2_STEM,
     )
     madng = interface.run_twiss(observe=1)
 
