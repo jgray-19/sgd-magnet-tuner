@@ -221,7 +221,7 @@ def _validate_dispersion_estimates(
     logger.info(f"Beam {beam}: Number of correctors: {n}")
     logger.info(f"Beam {beam}: Mean z-score: {mean_z:.3f}")
     logger.info(f"Beam {beam}: Std z-score: {std_z:.3f}")
-    ks_stat, p_value = stats.kstest(z_scores, "norm", args=(0, 1))
+    ks_stat, p_value = stats.kstest(z_scores, "norm") # args=(0,1)
     logger.info(f"Beam {beam}: KS test statistic: {ks_stat:.3f}, p-value: {p_value:.3f}")
 
     # Check coverage within 3σ
