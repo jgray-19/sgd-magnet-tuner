@@ -73,7 +73,7 @@ def b2_model(tmp_path_factory: pytest.TempPathFactory, data_dir: Path) -> tuple[
         energy=ENERGY_GEV,
         nat_tunes=NAT_TUNES,
         modifiers=[OPTICS_MODIFIER],
-        b2_errors=B2_STEM,
+        b2_errors=str(data_dir / "strengths" / B2_STEM),  # For some reason stem is mandatory
         outputdir=best_knowledge_dir,
     )
     return nominal_dir / f"lhcb{BEAM}_saved.seq", best_knowledge_dir
