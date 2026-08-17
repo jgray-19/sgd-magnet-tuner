@@ -31,7 +31,6 @@ import pandas as pd
 import tfs
 from omc3.model.constants import TWISS_ELEMENTS_DAT
 from omc3.optics_measurements.constants import BETA_NAME, DISPERSION_NAME
-from pymadng_utils.io.tfs import load_tfs_files
 from tmom_recon.lattice.bpms import find_common_bpms
 
 from aba_optimiser.accelerators.lhc import LHC
@@ -61,7 +60,13 @@ def load_optics_files(
     Raises:
         FileNotFoundError: If any required file is missing
     """
-    return load_tfs_files(optics_dir, file_specs)
+    loaded = {}
+    for key, (prefix, suffix) in file_specs.items():
+        path = optics_dir / f"{prefix}{suffix}.tfs"
+        if not path.exists():
+            raise FileNotFoundError(path)
+        loaded[key] = tfs.read(path, index=None if "phase" in key and "beta" not in key else "NAME")
+    return loaded
 
 
 def find_closest_bpms_for_correctors(

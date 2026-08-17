@@ -89,7 +89,7 @@ class TestPSBAccelerator:
         psb = PSB(ring=3, sequence_file=test_sequence_file)
         assert psb.get_perturbation_families() == {
             "d": {
-                "default_rel_std": 2e-3,
+                "default_rel_std": 8e-4,
                 "pattern": r"(?i)^BR\.(?:BHZ\d+|BSW\d+L\d+\.\d+)$",
             },
             "q": {
