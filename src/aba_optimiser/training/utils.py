@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pymadng_utils.io.tfs import load_tfs_files as _load_tfs_files
+import tfs
 from pymadng_utils.io.utils import read_knobs
 from tmom_recon.lattice.bpms import find_common_bpms
 
@@ -130,7 +130,13 @@ def load_tfs_files(
 ) -> dict[str, pd.DataFrame]:
     """Load TFS files, preserving phase-table NAME/NAME2 rows."""
     no_index_keys = {key for key in file_specs if "phase" in key and "beta" not in key}
-    return _load_tfs_files(directory, file_specs, no_index_keys=no_index_keys)
+    loaded = {}
+    for key, (prefix, suffix) in file_specs.items():
+        path = directory / f"{prefix}{suffix}.tfs"
+        if not path.exists():
+            raise FileNotFoundError(path)
+        loaded[key] = tfs.read(path, index=None if key in no_index_keys else "NAME")
+    return loaded
 
 
 def bpm_supports_plane(accelerator, bpm: str, kick_plane: str) -> bool:
