@@ -17,6 +17,11 @@ from aba_optimiser.config import MEASUREMENTS_ARTIFACTS_ROOT
 from aba_optimiser.measurements.ac_dipole import ACDipoleOptimisationWindow
 from aba_optimiser.measurements.b2_errors import resolve_b2_error_table
 from aba_optimiser.measurements.online_knobs import get_online_energy
+from aba_optimiser.measurements.sequence import (
+    extract_tunes_from_job_file,
+    get_or_make_sequence,
+)
+from aba_optimiser.measurements.squeeze.config import MODEL_DIRS, get_results_dir
 from aba_optimiser.measurements.squeeze.constants import MEAS_TIMES, ZEROHZ, get_beam_paths
 from aba_optimiser.measurements.squeeze.io import (
     get_central_measurement_time,
@@ -34,11 +39,7 @@ from aba_optimiser.measurements.squeeze.optimisation import (
     optimise_arc,
     resolve_restore_resume,
 )
-from aba_optimiser.measurements.squeeze_config import MODEL_DIRS
-from aba_optimiser.measurements.squeeze_helpers import (
-    extract_tunes_from_job_file,
-    get_or_make_sequence,
-    get_results_dir,
+from aba_optimiser.measurements.squeeze.reconstruction import (
     reconstruct_ac_dipole_measurements,
 )
 
@@ -63,13 +64,13 @@ def process_measurements_fresh(
     acd_corrector_knobs_files: list[Path | None] = []
     all_bad_bpms: set[str] = set()
     central_meas_time = get_central_measurement_time(meas_times_for_step, squeeze_step)
-    energy = get_online_energy(central_meas_time)
+    energy = get_online_energy(central_meas_time, beam=beam)
 
     for freq, times in meas_times_for_step.items():
         if not times:
             raise ValueError(f"No measurement times found for frequency {freq}")
         logger.info("  Frequency %s: %d measurements", freq, len(times))
-        files, tune_knobs_file, corrector_knobs_file, bad_bpms, _ = prepare_frequency_metadata(
+        files, tune_knobs, corrector_knobs, bad_bpms, _ = prepare_frequency_metadata(
             freq,
             times,
             beam,
@@ -78,10 +79,10 @@ def process_measurements_fresh(
             squeeze_step,
             energy=energy,
         )
-        freq_metadata[freq] = (files, tune_knobs_file, corrector_knobs_file)
+        freq_metadata[freq] = (files, tune_knobs, corrector_knobs)
         all_files.extend(files)
-        acd_tune_knobs_files.extend([tune_knobs_file] * len(files))
-        acd_corrector_knobs_files.extend([corrector_knobs_file] * len(files))
+        acd_tune_knobs_files.extend([tune_knobs] * len(files))
+        acd_corrector_knobs_files.extend([corrector_knobs] * len(files))
         all_bad_bpms.update(bad_bpms)
 
     logger.info("Using central beam energy %.6f GeV from %s for all measurement files", energy, central_meas_time)
@@ -176,9 +177,9 @@ def load_measurements_from_reload(
         if not times:
             continue
         logger.info("  Frequency %s: %d measurements (loading)", freq, len(times))
-        tune_knobs_file, corrector_knobs_file = get_knob_files(results_dir, squeeze_step, freq)
+        tune_knobs, corrector_knobs = get_knob_files(results_dir, squeeze_step, freq)
         all_measurements.extend(
-            load_frequency_results(freq, len(times), tune_knobs_file, corrector_knobs_file, temp_analysis_dir)
+            load_frequency_results(freq, len(times), tune_knobs, corrector_knobs, temp_analysis_dir)
         )
 
     return all_measurements, energy, window

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import tfs
 from omc3.model.constants import TWISS_AC_DAT
-from tmom_recon.physics.transverse import calculate_pz
+from tmom_recon import calculate_pz
 from turn_by_turn import read_tbt
 
 from aba_optimiser.config import PROJECT_ROOT
@@ -82,34 +82,27 @@ for i in range(num_files):
 plt.figure(figsize=(18, 6))
 plt.suptitle("All Real Data - Phase Space Plots")
 
-data_p_list = []
-data_n_list = []
+data_list = []
 for i in range(num_files):
-    data_p, data_n, _ = calculate_pz(
-        orig_data=real_data[i],
+    data = real_data[i].copy()
+    data["var_x"] = 0.0
+    data["var_y"] = 0.0
+    reconstructed = calculate_pz(
+        data,
         inject_noise=False,
-        tws=tws.loc[matching_bpms_list[i]],
+        model_tws=tws.loc[matching_bpms_list[i]],
         info=False,
     )
-    data_p_list.append(data_p)
-    data_n_list.append(data_n)
+    data_list.append(reconstructed)
 
 # X phase space
 plt.subplot(1, 2, 1)
 for i in range(num_files):
-    select_p = select_markers(data_p_list[i], BPM_START)
-    select_n = select_markers(data_n_list[i], BPM_START)
+    selected = select_markers(data_list[i], BPM_START)
     plt.scatter(
-        select_p["x"],
-        select_p["px"],
-        label=f"Data P {i + 1}",
-        alpha=0.5,
-        s=1,
-    )
-    plt.scatter(
-        select_n["x"],
-        select_n["px"],
-        label=f"Data N {i + 1}",
+        selected["x"],
+        selected["px"],
+        label=f"Data {i + 1}",
         alpha=0.5,
         s=1,
     )
@@ -121,19 +114,11 @@ plt.legend()
 # Y phase space
 plt.subplot(1, 2, 2)
 for i in range(num_files):
-    select_p = select_markers(data_p_list[i], Y_BPM_START)
-    select_n = select_markers(data_n_list[i], Y_BPM_START)
+    selected = select_markers(data_list[i], Y_BPM_START)
     plt.scatter(
-        select_p["y"],
-        select_p["py"],
-        label=f"Data P {i + 1}",
-        alpha=0.5,
-        s=1,
-    )
-    plt.scatter(
-        select_n["y"],
-        select_n["py"],
-        label=f"Data N {i + 1}",
+        selected["y"],
+        selected["py"],
+        label=f"Data {i + 1}",
         alpha=0.5,
         s=1,
     )

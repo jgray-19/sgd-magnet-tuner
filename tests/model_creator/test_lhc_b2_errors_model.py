@@ -112,8 +112,8 @@ def test_madng_b2_errors_match_omc3_best_knowledge_phase(
     # Extract the trim-quad correction from MAD-X and store it as a custom tune-knobs file.
     kqt_knobs = _extract_kqt_knobs(best_knowledge_dir / "b2_settings.madx")
     assert any(abs(value) > 0 for value in kqt_knobs.values())
-    tune_knobs_file = tmp_path / "tune_knobs.txt"
-    save_knobs(kqt_knobs, tune_knobs_file)
+    tune_knobs = tmp_path / "tune_knobs.txt"
+    save_knobs(kqt_knobs, tune_knobs)
 
     # MAD-NG: nominal sequence + the same trim quads + the same b2 errors (via dknl).
     accelerator = LHC(
@@ -123,7 +123,7 @@ def test_madng_b2_errors_match_omc3_best_knowledge_phase(
     )
     interface = GenericMadInterface(
         accelerator=accelerator,
-        tune_knobs_file=tune_knobs_file,
+        tune_knobs=tune_knobs,
         b2_errors=data_dir / "strengths" / (B2_STEM + ".errors"),
     )
     madng = interface.run_twiss(observe=1)

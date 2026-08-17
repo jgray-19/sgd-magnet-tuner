@@ -48,3 +48,13 @@ def read_b2_error_table(path: Path | str) -> dict[str, float]:
         raise KeyError(f"Column 'K1L' not found in b2 error table: {path}")
         print(f"Available columns in b2 error table: {table.columns}")
     return {str(name): float(value) for name, value in table["K1L"].items()}
+
+
+def b2_errors_to_magnet_strengths(b2_errors: dict[str, float]) -> dict[str, float]:
+    """Convert a b2 K1L error mapping to ``AcceleratorMadInterface.set_magnet_strengths`` keys.
+
+    Routes each K1L value into the quadrupole perturbation slot (``dknl[2]``),
+    leaving the dipole slot (``dknl[1]``) untouched, matching the effect of the
+    previous raw ``mad.send`` implementation.
+    """
+    return {f"{name}.dk1l": k1l for name, k1l in b2_errors.items() if k1l != 0}

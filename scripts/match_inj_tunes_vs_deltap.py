@@ -22,10 +22,11 @@ from pymadng_utils.io.utils import read_knobs
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT
 from aba_optimiser.mad import GenericMadInterface, GradientDescentMadInterface
-from aba_optimiser.measurements.squeeze_config import MODEL_DIRS, PC
-from aba_optimiser.measurements.squeeze_helpers import (
+from aba_optimiser.measurements.sequence import get_or_make_sequence
+from aba_optimiser.measurements.squeeze.config import (
+    MODEL_DIRS,
+    PC,
     get_model_dir,
-    get_or_make_sequence,
     get_results_dir,
 )
 
@@ -151,17 +152,17 @@ def autodetect_sequence_file(beam: int, squeeze_step: str) -> Path:
 
 def apply_tune_knobs_preserving_dq_definitions(
     mad: GradientDescentMadInterface,
-    tune_knobs_file: Path | None,
+    tune_knobs: Path | None,
 ) -> tuple[int, int]:
     """Apply tune-knob file while preserving dqx/dqy->kqtf/kqtd definitions.
 
     Skips only arc tune-family entries of the form kqt[fd].a[1-8][1-8]b[12],
     and applies all other knobs from the file.
     """
-    if tune_knobs_file is None:
+    if tune_knobs is None:
         return 0, 0
 
-    knob_values = read_knobs(tune_knobs_file)
+    knob_values = read_knobs(tune_knobs)
     skip_pattern = re.compile(r"^kqt[fd]\.a[1-8][1-8]b[12]$", flags=re.IGNORECASE)
 
     applied = 0
@@ -174,7 +175,7 @@ def apply_tune_knobs_preserving_dq_definitions(
         applied += 1
 
     mad.mad.send(f"{mad.py_name}:send('done')")
-    mad._check_mad_response("done", f"Failed to set tune knobs from {tune_knobs_file}")
+    mad._check_mad_response("done", f"Failed to set tune knobs from {tune_knobs}")
     return applied, skipped
 
 
@@ -321,15 +322,15 @@ def main() -> None:
     pc = args.energy if args.energy is not None else autodetect_energy(args.beam, args.squeeze_step)
 
     results_dir = get_results_dir(args.beam)
-    tune_knobs_file = (
-        args.tune_knobs_file
-        if args.tune_knobs_file is not None
+    tune_knobs = (
+        args.tune_knobs
+        if args.tune_knobs is not None
         else _autodetect_knob_file(results_dir, args.squeeze_step, "tune_knobs")
     )
-    corrector_knobs_file = (
-        args.corrector_knobs_file
-        if args.corrector_knobs_file is not None
-        else _autodetect_knob_file(results_dir, args.squeeze_step, "corrector_strengths")
+    corrector_knobs = (
+        args.corrector_knobs
+        if args.corrector_knobs is not None
+        else _autodetect_knob_file(results_dir, args.squeeze_step, "corrector_knobs")
     )
 
     checkpoint_knobs = load_checkpoint_knobs(checkpoint_file)
@@ -347,16 +348,16 @@ def main() -> None:
     )
     baseline_mad = GenericMadInterface(
         accelerator,
-        corrector_strengths=None,
-        tune_knobs_file=None,
+        corrector_knobs=None,
+        tune_knobs=None,
     )
 
     mad = GradientDescentMadInterface(
         accelerator,
-        corrector_strengths=corrector_knobs_file,
+        corrector_knobs=corrector_knobs,
     )
     applied_tune_knobs, skipped_tune_knobs = apply_tune_knobs_preserving_dq_definitions(
-        mad, tune_knobs_file
+        mad, tune_knobs
     )
     resolved_knobs, unresolved_knobs = resolve_checkpoint_knobs(mad, checkpoint_knobs)
     if not resolved_knobs:
@@ -379,8 +380,8 @@ def main() -> None:
     print(f"Auto sequence: {sequence_file}")
     print(f"Auto quad checkpoint: {checkpoint_file}")
     print(f"Auto energy [GeV]: {pc}")
-    print(f"Auto tune knobs file: {tune_knobs_file}")
-    print(f"Auto corrector knobs file: {corrector_knobs_file}")
+    print(f"Auto tune knobs file: {tune_knobs}")
+    print(f"Auto corrector knobs file: {corrector_knobs}")
     print(
         "Manual tune knob apply: "
         f"{applied_tune_knobs} applied, {skipped_tune_knobs} skipped "

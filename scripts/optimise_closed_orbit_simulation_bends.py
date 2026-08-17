@@ -11,13 +11,13 @@ import pandas as pd
 import tfs
 from matplotlib import pyplot as plt
 from pymadng_utils.io.utils import save_knobs
-from tmom_recon import calculate_transverse_pz
+from tmom_recon import calculate_pz
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
 from aba_optimiser.mad import AbaMadInterface, GradientDescentMadInterface
 from aba_optimiser.noise import assign_bpm_variances
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.tracking_fitter import ArcByArcFitter
 from aba_optimiser.training.controller_config import SequenceConfig
 from aba_optimiser.training.controller_helpers import (
     create_arc_measurement_config,
@@ -266,7 +266,7 @@ def generate_track_with_errors(
     # Apply BPM-specific noise variances using the noise module
     variance_df = assign_bpm_variances(after_tws.copy(), "lhc")
     tracking_df = create_tracking_dataframe(variance_df, turns=3)
-    tracking_df = calculate_transverse_pz(tracking_df, before_tws, inject_noise=False)
+    tracking_df = calculate_pz(tracking_df, model_tws=before_tws, inject_noise=False)
 
     # Check for nans for any bpms, remove that bpm add a warning and add to bad_bpms
     nans = tracking_df.isna().any(axis=1)
@@ -285,8 +285,8 @@ def optimise_ranges(
     accelerator: LHC,
     optimiser_config: OptimiserConfig,
     simulation_config: SimulationConfig,
-    corrector_knobs_file: Path,
-    tune_knobs_file: Path,
+    corrector_knobs: Path,
+    tune_knobs: Path,
     measurement_file: Path,
     actual_knobs: dict[str, float] | None,
     bad_bpms: list[str],
@@ -303,10 +303,8 @@ def optimise_ranges(
         measurement_config = create_arc_measurement_config(
             measurement_file,
             machine_deltap=0.0,
-            num_tracks=1,
-            flattop_turns=flattop_turns,
-            corrector_files=corrector_knobs_file,
-            tune_knobs_files=tune_knobs_file,
+            corrector_knobs=corrector_knobs,
+            tune_knobs=tune_knobs,
         )
 
         sequence_config = SequenceConfig(
@@ -314,7 +312,7 @@ def optimise_ranges(
             bad_bpms=bad_bpms,
         )
 
-        controller = Controller(
+        controller = ArcByArcFitter(
             accelerator=accelerator,
             optimiser_config=optimiser_config,
             simulation_config=simulation_config,
@@ -350,7 +348,6 @@ def create_optimiser_config() -> OptimiserConfig:
 
 def create_simulation_config(no_fixed_bpm: bool) -> SimulationConfig:
     return SimulationConfig(
-        tracks_per_worker=1,
         num_workers=1,
         num_batches=1,
         optimise_momenta=False,
@@ -397,8 +394,8 @@ def run_optimisation(
     accelerator: LHC,
     optimiser_config: OptimiserConfig,
     simulation_config: SimulationConfig,
-    corrector_knobs_file: Path,
-    tune_knobs_file: Path,
+    corrector_knobs: Path,
+    tune_knobs: Path,
     measurement_file: Path,
     actual_knobs: dict[str, float] | None,
     bad_bpms: list[str],
@@ -410,8 +407,8 @@ def run_optimisation(
         accelerator=accelerator,
         optimiser_config=optimiser_config,
         simulation_config=simulation_config,
-        corrector_knobs_file=corrector_knobs_file,
-        tune_knobs_file=tune_knobs_file,
+        corrector_knobs=corrector_knobs,
+        tune_knobs=tune_knobs,
         measurement_file=measurement_file,
         actual_knobs=actual_knobs,
         bad_bpms=bad_bpms,
@@ -441,8 +438,8 @@ def generate_plots(
     logger.info("Generating closed orbit comparison plot with bends optimisation")
     mad_iface = GradientDescentMadInterface(
         accelerator,
-        corrector_strengths=corrector_path,
-        tune_knobs_file=tune_knobs_path,
+        corrector_knobs=corrector_path,
+        tune_knobs=tune_knobs_path,
     )
     if accelerator.optimise_bends:
         mad_iface.set_madx_variables(**results)

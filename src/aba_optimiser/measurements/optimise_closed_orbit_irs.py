@@ -8,6 +8,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -19,19 +20,22 @@ from omc3.machine_data_extraction.nxcals_knobs import get_energy
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import (
     MEASUREMENTS_ARTIFACTS_ROOT,
+    PROTON_MASS,
     OptimiserConfig,
     SimulationConfig,
 )
-from aba_optimiser.measurements.create_datafile import (
-    process_measurements,
-    save_online_knobs,
-)
-from aba_optimiser.measurements.squeeze_helpers import get_or_make_sequence
+from aba_optimiser.measurements.create_datafile import process_measurements
+from aba_optimiser.measurements.online_knobs import save_online_knobs
+from aba_optimiser.measurements.output import measurement_output_config
+from aba_optimiser.measurements.sequence import get_or_make_sequence
+from aba_optimiser.physics.deltap import deltap_wrt_reference_total_energy
 from aba_optimiser.training.config.helpers import create_arc_measurement_config
-from aba_optimiser.training.config.models import OutputConfig, SequenceConfig
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.config.models import SequenceConfig
+from aba_optimiser.training.tracking_fitter import ArcByArcFitter
 
 logger = logging.getLogger(__name__)
+
+IRMode = Literal["averaged", "all-points"]
 
 
 @dataclass
@@ -73,12 +77,13 @@ def optimise_ranges(
     sequence_file: Path,
     optimiser_config: OptimiserConfig,
     simulation_config: SimulationConfig,
-    corrector_knobs_file: Path,
-    tune_knobs_file: Path,
+    corrector_knobs: Path,
+    tune_knobs: Path,
     measurement_file: Path,
     bad_bpms: list[str],
     title: str,
-    energy: float,
+    kinetic_energy: float,
+    output_dir: Path,
 ) -> tuple[list[float], list[float]]:
     """Optimize for a given range configuration."""
     results = []
@@ -89,8 +94,8 @@ def optimise_ranges(
 
         measurement_config = create_arc_measurement_config(
             measurement_file,
-            corrector_strengths=corrector_knobs_file,
-            tune_knobs_file=tune_knobs_file,
+            corrector_knobs=corrector_knobs,
+            tune_knobs=tune_knobs,
         )
         sequence_config = SequenceConfig(
             magnet_range=range_config.magnet_ranges[i],
@@ -100,11 +105,11 @@ def optimise_ranges(
         accelerator = LHC(
             beam=beam,
             sequence_file=sequence_file,
-            kinetic_energy=energy,
+            kinetic_energy=kinetic_energy,
             optimise_energy=True,
         )
 
-        controller = Controller(
+        fitter = ArcByArcFitter(
             accelerator=accelerator,
             optimiser_config=optimiser_config,
             simulation_config=simulation_config,
@@ -114,23 +119,38 @@ def optimise_ranges(
             bpm_end_points=range_config.bpm_end_points[i],
             initial_knob_strengths=None,
             true_strengths=None,
-            output_config=OutputConfig(show_plots=False),
+            output_config=measurement_output_config(
+                output_dir,
+                f"{title}_{range_type}_{i + 1}",
+                include_uncertainty=True,
+                parallel_hessian=True,
+            ),
         )
-        final_knobs, uncs = controller.run()
-        fitted_deltap = final_knobs["deltap"]
-        # Convert to reference energy 6800 GeV (assume beta is 1 and in GeV)
-        e_ref = 6800
-        e_meas = energy * (1 + fitted_deltap)
-        deltap_wrt_6800 = (e_meas - e_ref) / e_ref
+        _, uncs = fitter.run()
+        optimised_pt = fitter.optimisation_loop.best_knobs["pt"]
+        machine_deltap = fitter.config_manager.mad_iface.pt2dp(optimised_pt)
+        deltap_wrt_6800 = deltap_wrt_reference_total_energy(
+            kinetic_energy,
+            machine_deltap,
+            6800.0,
+            PROTON_MASS,
+        )
         results.append(deltap_wrt_6800)
-        uncertainties.append(uncs["deltap"])  # Assuming uncs is a dict with 'deltap'
-        logger.info(f"{range_type.capitalize()} {i + 1}: deltap = {results[-1]}")
+        uncertainties.append(uncs["pt"])
+        logger.info(
+            "%s %d: optimised pt = %s, machine deltap = %s, reference deltap = %s",
+            range_type.capitalize(),
+            i + 1,
+            optimised_pt,
+            machine_deltap,
+            results[-1],
+        )
         logger.info(f"Finished optimisation for {range_type} {i + 1}/{num_ranges} for {title}")
     return results, uncertainties
 
 
 def get_bpm_ranges_from_model(
-    model_dir: str, beam: int
+    model_dir: str, beam: int, mode: IRMode = "averaged"
 ) -> tuple[list[str], list[list[str]], list[list[str]]]:
     """Extract BPM ranges from twiss.dat file for IR optimisation.
 
@@ -168,16 +188,18 @@ def get_bpm_ranges_from_model(
     before_side = "L" if beam == 1 else "R"
     after_side = "R" if beam == 1 else "L"
     for ip in ip_range:
-        # Include BPMs from position 4 onwards to get more measurement points
+        # Include BPMs from position 4 onwards to get more measurement points.
+        # The all-points workflow kept a stricter beam-1 cut.
+        pos_num = 6 if mode == "all-points" and beam == 1 else 4
         before_bpms = [
             bpm
             for bpm, ip_num, side, from_ip in matches
-            if ip_num == ip and side == before_side and from_ip >= 4
+            if ip_num == ip and side == before_side and from_ip >= pos_num
         ]
         after_bpms = [
             bpm
             for bpm, ip_num, side, from_ip in matches
-            if ip_num == ip and side == after_side and from_ip >= 4
+            if ip_num == ip and side == after_side and from_ip >= pos_num
         ]
 
         # Remove all bpms with W in their names
@@ -194,13 +216,13 @@ def get_bpm_ranges_from_model(
     return magnet_ranges, bpm_starts, bpm_end_points
 
 
-def create_beam1_configs(folder: str, name_prefix: str) -> list[IterationConfig]:
+def create_beam1_configs(folder: str, name_prefix: str, mode: IRMode = "averaged") -> list[IterationConfig]:
     """Create measurement configurations for beam 1."""
     model_dir_b1 = "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB1/Models/2025-11-07_B1_12cm_right_knobs/"
 
     # Get BPM ranges from model
     ir_magnet_ranges_b1, ir_bpm_starts_b1, ir_bpm_end_points_b1 = get_bpm_ranges_from_model(
-        model_dir_b1, 1
+        model_dir_b1, 1, mode
     )
 
     ir_config_b1 = RangeConfig(
@@ -273,14 +295,14 @@ def create_beam1_configs(folder: str, name_prefix: str) -> list[IterationConfig]
     ]
 
 
-def create_beam2_configs(folder: str, name_prefix: str) -> list[IterationConfig]:
+def create_beam2_configs(folder: str, name_prefix: str, mode: IRMode = "averaged") -> list[IterationConfig]:
     """Create measurement configurations for beam 2."""
     model_dir_b2 = (
         "/user/slops/data/LHC_DATA/OP_DATA/Betabeat/2025-11-07/LHCB2/Models/2025-11-07_B2_12cm"
     )
     # Ir settings
     ir_magnet_ranges_b2, ir_bpm_starts_b2, ir_bpm_end_points_b2 = get_bpm_ranges_from_model(
-        model_dir_b2, 2
+        model_dir_b2, 2, mode
     )
 
     ir_config_b2 = RangeConfig(
@@ -344,6 +366,7 @@ def process_single_config(
     date: str,
     skip_reload: bool,
     use_fixed_bpm: bool = False,
+    mode: IRMode = "averaged",
 ) -> None:
     """Process a single measurement configuration.
 
@@ -355,10 +378,13 @@ def process_single_config(
         use_fixed_bpm: If True, use fixed reference BPM approach.
                        If False (default for IRs), create all combinations of start/end BPMs (Cartesian product)
                        to provide more measurement constraints.
+        mode: ``averaged`` creates one averaged orbit per BPM; ``all-points`` fits
+              all raw measurement turns directly.
     """
-    results_dir = MEASUREMENTS_ARTIFACTS_ROOT / "results" / f"b{config.beam}ir_results"
-    tune_knobs_file = results_dir / f"tune_knobs_{config.title}.txt"
-    corrector_knobs_file = results_dir / f"corrector_knobs_{config.title}.txt"
+    results_name = "ir_results" if mode == "averaged" else "ir_allpoints_results"
+    results_dir = MEASUREMENTS_ARTIFACTS_ROOT / "results" / f"b{config.beam}{results_name}"
+    tune_knobs = results_dir / f"tune_knobs_{config.title}.txt"
+    corrector_knobs = results_dir / f"corrector_knobs_{config.title}.txt"
     results_dir.mkdir(exist_ok=True)
 
     # Copy bad bpms from co results
@@ -385,7 +411,7 @@ def process_single_config(
 
     # Get beam energy from NXCALS
     spark = get_or_create()
-    energy, _ = get_energy(spark, meas_time)
+    energy, _ = get_energy(spark, meas_time, beam=config.beam)
     measurement_filename = "pz_data.parquet"
     measurement_file = temp_analysis_dir / measurement_filename
 
@@ -399,8 +425,8 @@ def process_single_config(
         save_online_knobs(
             meas_time,
             beam=config.beam,
-            tune_knobs_file=tune_knobs_file,
-            corrector_knobs_file=corrector_knobs_file,
+            tune_knobs=tune_knobs,
+            corrector_knobs=corrector_knobs,
         )
 
     # Generate files from times
@@ -417,6 +443,9 @@ def process_single_config(
         temp_analysis_dir,
         config.model_dir,
         accelerator=accelerator,
+        # No blank orbit is acquired by this workflow, so the model closed orbit is
+        # the reference. See aba_optimiser.measurements.reference for the cost.
+        reference_closed_orbit="model",
         filename=None,
         bad_bpms=bad_bpms,
         use_uniform_vars=False,
@@ -425,43 +454,65 @@ def process_single_config(
     ana_dir = output_paths["combined"]
     file_path = ana_dir / measurement_filename
 
-    # Compute averages per BPM
-    averaged = (
-        pzs.groupby("name")[["x", "px", "y", "py", "var_x", "var_y", "var_px", "var_py"]]
-        .mean()
-        .reset_index()
-    )
-    print(
-        averaged["var_x"].describe(),
-        averaged["var_y"].describe(),
-        averaged["var_px"].describe(),
-        averaged["var_py"].describe(),
-    )
+    if mode == "averaged":
+        averaged = (
+            pzs.groupby("name")[["x", "px", "y", "py", "var_x", "var_y", "var_px", "var_py"]]
+            .mean()
+            .reset_index()
+        )
+        print(
+            averaged["var_x"].describe(),
+            averaged["var_y"].describe(),
+            averaged["var_px"].describe(),
+            averaged["var_py"].describe(),
+        )
 
-    # Create new DataFrame with 3 turns, each with averaged values
-    new_rows = []
-    for turn in [1, 2, 3]:
-        for _, row in averaged.iterrows():
-            new_rows.append(
-                {
-                    "name": row["name"],
-                    "turn": turn,
-                    "x": row["x"],
-                    "y": row["y"],
-                    "px": row["px"],
-                    "py": row["py"],
-                    "var_x": row["var_x"],
-                    "var_y": row["var_y"],
-                    "var_px": row["var_px"],
-                    "var_py": row["var_py"],
-                }
-            )
-    new_df = pd.DataFrame(new_rows)
-    new_df["name"] = new_df["name"].astype("category")
-    new_df["turn"] = new_df["turn"].astype("int32")
+        new_rows = []
+        for turn in [1, 2, 3]:
+            for _, row in averaged.iterrows():
+                new_rows.append(
+                    {
+                        "name": row["name"],
+                        "turn": turn,
+                        "x": row["x"],
+                        "y": row["y"],
+                        "px": row["px"],
+                        "py": row["py"],
+                        "var_x": row["var_x"],
+                        "var_y": row["var_y"],
+                        "var_px": row["var_px"],
+                        "var_py": row["var_py"],
+                    }
+                )
+        processed_pzs = pd.DataFrame(new_rows)
+        processed_pzs["name"] = processed_pzs["name"].astype("category")
+        processed_pzs["turn"] = processed_pzs["turn"].astype("int32")
+        # The three replicated turns form a single bunch; boundary-turn removal
+        # then leaves the one averaged orbit per BPM for the fit.
+        processed_pzs["bunch_number"] = 0
+        num_workers = 1
+        num_batches = 1
+        different_turns_per_range = False
+    else:
+        logger.info("Using all %d measurement points for optimisation", len(pzs))
+        logger.info("Number of unique BPMs: %d", pzs["name"].nunique())
+        logger.info("Number of turns: %d", pzs["turn"].nunique())
+        print(
+            "Variance statistics:",
+            pzs["var_x"].describe(),
+            pzs["var_y"].describe(),
+            pzs["var_px"].describe(),
+            pzs["var_py"].describe(),
+        )
+        processed_pzs = pzs
+        num_tracks = len(files)
+        turns_per_bpm = pzs.groupby("name")["turn"].nunique().iloc[0] if len(pzs) > 0 else 3
+        num_workers = min(num_tracks, 5)
+        num_batches = 20
+        different_turns_per_range = True
+        logger.info("optimisation config: %d tracks, %d turns per track", num_tracks, turns_per_bpm)
 
-    # Overwrite the measurement file
-    new_df.to_parquet(file_path)
+    processed_pzs.to_parquet(file_path)
 
     optimiser_config = OptimiserConfig(
         max_epochs=1000,
@@ -473,11 +524,10 @@ def process_single_config(
         optimiser_type="lbfgs",
     )
     simulation_config = SimulationConfig(
-        # For pre trimmed data
-        tracks_per_worker=1,
-        num_batches=1,
-        num_workers=1,
+        num_batches=num_batches,
+        num_workers=num_workers,
         use_fixed_bpm=use_fixed_bpm,
+        different_turns_per_range=different_turns_per_range,
     )
 
     results_irs, uncs_irs = optimise_ranges(
@@ -487,12 +537,13 @@ def process_single_config(
         sequence_file,
         optimiser_config,
         simulation_config,
-        corrector_knobs_file,
-        tune_knobs_file,
+        corrector_knobs,
+        tune_knobs,
         measurement_file,
         bad_bpms,
         config.title,
         energy,
+        results_dir,
     )
 
     logger.info(f"All ir optimisations complete for {config.title}.")
@@ -550,6 +601,12 @@ def main():
         action="store_true",
         help="Enable fixed BPM for start/end points (default: disabled)",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["averaged", "all-points"],
+        default="averaged",
+        help="Measurement handling mode for IR optimisation",
+    )
     args = parser.parse_args()
 
     # Define date
@@ -560,19 +617,27 @@ def main():
 
     # Get configurations based on beam
     if args.beam == 1:
-        configs = create_beam1_configs(folder, name_prefix)
+        configs = create_beam1_configs(folder, name_prefix, args.mode)
     else:
-        configs = create_beam2_configs(folder, name_prefix)
+        configs = create_beam2_configs(folder, name_prefix, args.mode)
 
     # Temporary analysis directory
-    temp_analysis_dir = MEASUREMENTS_ARTIFACTS_ROOT / "temp" / f"temp_analysis_co_{args.beam}"
+    temp_name = "temp_analysis_co" if args.mode == "averaged" else "temp_analysis_allpoints"
+    temp_analysis_dir = MEASUREMENTS_ARTIFACTS_ROOT / "temp" / f"{temp_name}_{args.beam}"
 
     # Determine use_fixed_bpm from args (default False)
     use_fixed_bpm = args.fixed_bpm
 
     # Process each configuration
     for config in configs:
-        process_single_config(config, temp_analysis_dir, date, args.skip_reload, use_fixed_bpm)
+        process_single_config(
+            config,
+            temp_analysis_dir,
+            date,
+            args.skip_reload,
+            use_fixed_bpm,
+            args.mode,
+        )
 
     # Delete temp_analysis_dir if not skipping reload
     if not args.skip_reload:

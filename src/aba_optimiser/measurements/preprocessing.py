@@ -124,7 +124,17 @@ def _subtract_average_closed_orbit_and_trim_to_kick(
     n_turns_free: int,
     kicker_name: str | None,
 ) -> pd.DataFrame:
-    """Subtract the pre-kick average orbit and keep only post-kick samples."""
+    """Subtract the pre-kick average orbit and keep only post-kick samples.
+
+    The subtraction is a per-BPM turn mean, so it removes every static contribution
+    *exactly*: the dispersive orbit, the error orbit, BPM reading offsets, and any
+    constant per-BPM momentum bias. That exactness is the point --- the turn-varying
+    part needs no reference orbit, no momentum estimate and no dispersion model --- but
+    it also means no downstream check can ever see those quantities. A real per-BPM
+    constant px bias of ~5.9e-4 rad, larger than the horizontal signal itself, hid
+    under precisely this subtraction. Anything that has to be diagnosed in absolute
+    terms must be looked at before this runs.
+    """
     if _starts_at_kicker(df, kicker_name):
         LOGGER.info("Skipping kick search because the dataframe already starts at kicker %s.", kicker_name)
         return df.copy()

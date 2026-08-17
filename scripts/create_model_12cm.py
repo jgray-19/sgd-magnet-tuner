@@ -10,7 +10,6 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "src"))
 
 from omc3.hole_in_one import hole_in_one_entrypoint
-
 from pymadng_utils.model_creator.create_models import create_lhc_model
 
 

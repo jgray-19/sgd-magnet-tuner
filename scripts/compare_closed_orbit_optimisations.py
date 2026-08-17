@@ -82,15 +82,15 @@ def generate_closed_orbit(
     beam: int,
     deltap: float,
     corrector_file: Path | None,
-    tune_knobs_file: Path | None,
+    tune_knobs: Path | None,
     new_magnet_strengths: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """Generate closed orbit (name, s, x, y) from MAD-NG twiss."""
     accelerator = LHC(beam=beam, kinetic_energy=PC, sequence_file=sequence_file)
     mad_iface = GenericMadInterface(
         accelerator,
-        corrector_strengths=corrector_file,
-        tune_knobs_file=tune_knobs_file,
+        corrector_knobs=corrector_file,
+        tune_knobs=tune_knobs,
     )
     if new_magnet_strengths:
         mad_iface.set_magnet_strengths(new_magnet_strengths)
@@ -171,17 +171,17 @@ def main() -> None:
     analysis_dir = args.analysis_dir
     point = args.point
     deltap_results_file = analysis_dir / f"{point}.txt"
-    tune_knobs_file = analysis_dir / f"tune_knobs_{point}.txt"
-    corrector_knobs_file = analysis_dir / f"corrector_knobs_{point}.txt"
+    tune_knobs = analysis_dir / f"tune_knobs_{point}.txt"
+    corrector_knobs = analysis_dir / f"corrector_knobs_{point}.txt"
     corrector_optimised_file = analysis_dir / f"corrector_knobs_{point}_optimised.txt"
     measurement_file = PROJECT_ROOT / f"temp_analysis_co_{args.beam}" / "pz_data.parquet"
 
     if not deltap_results_file.exists():
         raise FileNotFoundError(f"Missing deltap results file: {deltap_results_file}")
-    if not tune_knobs_file.exists():
-        raise FileNotFoundError(f"Missing tune knobs file: {tune_knobs_file}")
-    if not corrector_knobs_file.exists():
-        raise FileNotFoundError(f"Missing corrector knobs file: {corrector_knobs_file}")
+    if not tune_knobs.exists():
+        raise FileNotFoundError(f"Missing tune knobs file: {tune_knobs}")
+    if not corrector_knobs.exists():
+        raise FileNotFoundError(f"Missing corrector knobs file: {corrector_knobs}")
     if not corrector_optimised_file.exists():
         raise FileNotFoundError(f"Missing optimised corrector file: {corrector_optimised_file}")
 
@@ -199,9 +199,9 @@ def main() -> None:
         None,
     )
 
-    corrector_strengths = read_knobs(corrector_optimised_file)
-    for k in corrector_strengths:
-        corrector_strengths[k] *= 1
+    corrector_knobs = read_knobs(corrector_optimised_file)
+    for k in corrector_knobs:
+        corrector_knobs[k] *= 1
 
     after_corrector = generate_closed_orbit(
         args.sequence_file,
@@ -209,7 +209,7 @@ def main() -> None:
         deltap_avg,
         None,
         None,
-        new_magnet_strengths=corrector_strengths,
+        new_magnet_strengths=corrector_knobs,
     )
 
     real_data = None

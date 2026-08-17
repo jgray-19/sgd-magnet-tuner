@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
-from aba_optimiser.measurements.squeeze_config import BETABEAT_DIR, get_measurement_date
+from aba_optimiser.measurements.squeeze.config import BETABEAT_DIR, get_measurement_date
 
 ZEROHZ = "0Hz"
 PLUS_50HZ = "+50Hz"
@@ -84,7 +84,7 @@ MEAS_TIMES = {
             # MINUS_50HZ: ["17_44_16_396"],
             # PLUS_50HZ: ["17_45_33_318"],
         },
-        "inj": {  # This has a special date in the squeeze_helpers.py
+        "inj": {  # This measurement set uses a special date (see squeeze.config)
             ZEROHZ: ["16_52_08_398"],  # "16_49_56_490", "16_51_01_464",
             PLUS_50HZ: ["17_00_27_504"],  # "16_58_06_419", "16_59_12_366",
             PLUS_100HZ: ["17_05_53_444"],  # "17_03_16_394", "17_04_25_452",
@@ -151,7 +151,7 @@ MEAS_TIMES = {
             MINUS_50HZ: ["17_44_33_344"],
             PLUS_50HZ: ["17_45_48_406"],
         },
-        "inj": {  # This has a special date in the squeeze_helpers.py
+        "inj": {  # This measurement set uses a special date (see squeeze.config)
             ZEROHZ: ["16_50_23_408", "16_51_29_457", "16_52_34_444"],
             # PLUS_50HZ: ["16_58_39_378", "16_59_45_316", "17_00_51_406"],
             # PLUS_100HZ: ["17_03_42_327", "17_04_51_372", "17_06_00_423"],

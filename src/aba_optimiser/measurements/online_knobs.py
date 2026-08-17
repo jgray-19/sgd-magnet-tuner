@@ -21,7 +21,7 @@ def build_dict_from_nxcal_result(result: list) -> dict[str, float]:
     return {res.name: res.value for res in result}
 
 
-def get_online_energy(meas_time: datetime, keep_spark_session: bool = False) -> float:
+def get_online_energy(meas_time: datetime, beam: int, keep_spark_session: bool = False) -> float:
     """Return the beam energy from NXCALS for a measurement timestamp."""
 
     try:
@@ -31,7 +31,7 @@ def get_online_energy(meas_time: datetime, keep_spark_session: bool = False) -> 
 
     spark = get_or_create()
     try:
-        energy, _ = get_energy(spark, meas_time)
+        energy, _ = get_energy(spark, meas_time, beam=beam)
     finally:
         if not keep_spark_session:
             spark.stop()
@@ -42,8 +42,8 @@ def get_online_energy(meas_time: datetime, keep_spark_session: bool = False) -> 
 def save_online_knobs(
     meas_time: datetime,
     beam: int,
-    tune_knobs_file: Path | None = None,
-    corrector_knobs_file: Path | None = None,
+    tune_knobs: Path | None = None,
+    corrector_knobs: Path | None = None,
     energy: float | None = None,
 ) -> float:
     """Download and save knob data from NXCALS for the given measurement time.
@@ -63,7 +63,7 @@ def save_online_knobs(
     from pymadng_utils.io.utils import save_knobs
 
     if energy is None:
-        energy = get_online_energy(meas_time, keep_spark_session=True)
+        energy = get_online_energy(meas_time, beam=beam, keep_spark_session=True)
     spark = get_or_create()
 
 
@@ -84,7 +84,7 @@ def save_online_knobs(
     }
     corrector_knobs = build_dict_from_nxcal_result(corrector_results)
 
-    save_knobs(main_magnet_knobs, tune_knobs_file or TUNE_KNOBS_FILE)
-    save_knobs(corrector_knobs, corrector_knobs_file or CORRECTOR_STRENGTHS)
+    save_knobs(main_magnet_knobs, tune_knobs or TUNE_KNOBS_FILE)
+    save_knobs(corrector_knobs, corrector_knobs or CORRECTOR_STRENGTHS)
 
     return float(energy)

@@ -27,7 +27,6 @@ workflow scripts rather than stable reusable API:
 * most of ``aba_optimiser.measurements``
 * ``aba_optimiser.matching``
 * most of ``aba_optimiser.simulation``
-* ``aba_optimiser.training_optics``
 * physics modules whose tests are skipped or rely on optional environments
 
 
@@ -140,5 +139,7 @@ Tested Measurement Utilities
 
    aba_optimiser.measurements.b2_errors
    aba_optimiser.measurements.create_datafile
+   aba_optimiser.measurements.loading
    aba_optimiser.measurements.plot_quad_diffs_and_phases
+   aba_optimiser.measurements.sequence
    aba_optimiser.measurements.utils

@@ -16,9 +16,9 @@ import sys
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 from pymadng_utils.io.utils import save_knobs
 
@@ -30,6 +30,7 @@ from aba_optimiser.accelerators import LHC, SPS
 from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 from tests.training.controller_test_utils import _run_track_with_model
 from tests.training.helpers import generate_xsuite_env_with_errors
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -99,7 +100,7 @@ def main() -> None:
     corrector_file = (
         args.output_dir / "corrector_strengths.tfs" if args.apply_orbit_correction else None
     )
-    tune_knobs_file = args.output_dir / "tune_knobs.txt"
+    tune_knobs = args.output_dir / "tune_knobs.txt"
 
     env, magnet_strengths, matched_tunes, _corrector_table = generate_xsuite_env_with_errors(
         base_interface,
@@ -111,7 +112,7 @@ def main() -> None:
         target_qx=args.target_qx,
         target_qy=args.target_qy,
     )
-    save_knobs(matched_tunes, tune_knobs_file)
+    save_knobs(matched_tunes, tune_knobs)
 
     _run_track_with_model(
         env=env,
@@ -142,6 +143,7 @@ def main() -> None:
             "py": xsuite_results.loc[args.start_bpm, "py"],
         },
         range=f"'{args.start_bpm}/{args.end_bpm}'",
+        method=6,
     )
     ng_result = base_interface.mad.tbl.to_df().set_index("name")
     print("MAD-NG results:")

@@ -1,13 +1,19 @@
 """Environment configuration for LHC squeeze measurement workflows.
 
 Path roots, per-beam model/analysis directory names, measurement dates and the
-beam momentum. Kept as a dependency-free leaf module so both ``squeeze_helpers``
-and the ``squeeze`` package can import it without creating an import cycle.
+beam momentum, plus the directory-lookup helpers that resolve them. Kept as a
+low-dependency leaf so ``squeeze.constants`` and ``squeeze.io`` can import it
+without creating an import cycle.
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+from aba_optimiser.config import MEASUREMENTS_ARTIFACTS_ROOT
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MEASUREMENT_DATE = "2025-04-27"
 BETABEAT_DIR = Path("/user/slops/data/LHC_DATA/OP_DATA/Betabeat/")
@@ -65,3 +71,52 @@ MEASUREMENT_DATES = {
 def get_measurement_date(squeeze_step: str) -> str:
     """Return the measurement date for a squeeze step (e.g. "1.2m" -> "2025-04-27")."""
     return MEASUREMENT_DATES.get(squeeze_step, DEFAULT_MEASUREMENT_DATE)
+
+
+def get_model_dir(beam: int, squeeze_step: str) -> Path:
+    """Get model directory for a given beam and squeeze step.
+
+    Raises:
+        ValueError: If squeeze_step is not found for the beam, or the directory is absent.
+    """
+    if squeeze_step not in MODEL_DIRS.get(beam, {}):
+        raise ValueError(
+            f"Model directory not defined for beam {beam}, squeeze_step {squeeze_step}"
+        )
+
+    meas_date = get_measurement_date(squeeze_step)
+    model_dir = BETABEAT_DIR / meas_date / f"LHCB{beam}/Models/" / MODEL_DIRS[beam][squeeze_step]
+    if not model_dir.exists():
+        raise ValueError(f"Model directory not found: {model_dir}")
+
+    logger.info(f"Using model directory: {model_dir}")
+    return model_dir
+
+
+def get_analysis_dir(beam: int, squeeze_step: str) -> Path:
+    """Get analysis directory for a given beam and squeeze step.
+
+    Raises:
+        ValueError: If squeeze_step is not found for the beam, or the directory is absent.
+    """
+    if squeeze_step not in ANALYSIS_DIRS.get(beam, {}):
+        raise ValueError(
+            f"Analysis directory not defined for beam {beam}, squeeze_step {squeeze_step}"
+        )
+
+    meas_date = get_measurement_date(squeeze_step)
+    analysis_dir = (
+        BETABEAT_DIR / meas_date / f"LHCB{beam}/Results/" / ANALYSIS_DIRS[beam][squeeze_step]
+    )
+    if not analysis_dir.exists():
+        raise ValueError(f"Analysis directory not found: {analysis_dir}")
+
+    logger.info(f"Using analysis directory: {analysis_dir}")
+    return analysis_dir
+
+
+def get_results_dir(beam: int) -> Path:
+    """Get (and create) the results directory for a given beam."""
+    results_dir = MEASUREMENTS_ARTIFACTS_ROOT / "results" / f"b{beam}_squeeze_results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    return results_dir

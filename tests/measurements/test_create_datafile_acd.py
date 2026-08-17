@@ -7,9 +7,13 @@ import pandas as pd
 import pytest
 import tfs
 
+from aba_optimiser.accelerators import PSB
 from aba_optimiser.measurements.loading import build_dataframe_file_indices
 from aba_optimiser.measurements.preprocessing import preprocess_measurement_dataframe
-from aba_optimiser.measurements.reconstruction import process_single_dataframe
+from aba_optimiser.measurements.reconstruction import (
+    _scale_position_variances_after_svd,
+    process_single_dataframe,
+)
 from aba_optimiser.measurements.variances import (
     assign_known_noise_variances,
     assign_uniform_variances,
@@ -30,6 +34,8 @@ def test_build_dataframe_file_indices_tracks_source_file() -> None:
 def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path: Path) -> None:
     pytest.importorskip("tmom_recon")
     pytest.importorskip("omc3")
+
+    from tmom_recon import ModelDetails
 
     base_dir = Path("tests/data/model_creator")
     analysis_dir = generate_fake_analysis_dir_from_twiss(
@@ -71,6 +77,8 @@ def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path:
         }
     )
 
+    model_details = ModelDetails(accelerator=PSB(ring=3, sequence_file=base_dir / "psb3_saved.seq"))
+
     idx, result = process_single_dataframe(
         df_with_index=(7, df),
         twiss=twiss,
@@ -78,6 +86,8 @@ def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path:
         analysis_dir=analysis_dir,
         use_uniform_vars=True,
         beam=1,
+        model_details=model_details,
+        reference_closed_orbit="model",
     )
 
     assert idx == 7
@@ -85,6 +95,28 @@ def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path:
     assert not result[["px", "py"]].isna().any().any()
     assert set(result["bunch_number"]) == {0}
     assert set(result["name"]) == {"BR3.BPM1L3", "BR3.BPM2L3", "BR3.BPM3L3"}
+
+
+def test_post_svd_variance_scaling_follows_rank_over_bpm_count() -> None:
+    """The SVD gain is rank/n_bpms, so PSB (16 BPMs, rank 2) gets 1/8, not 1/100."""
+    df = pd.DataFrame({"var_x": [4.0, 4.0], "var_y": [9.0, 9.0], "px": [0.0, 0.0]})
+
+    psb = _scale_position_variances_after_svd(df, n_bpms=16, svd_ranks=(2, 2))
+    lhc = _scale_position_variances_after_svd(df, n_bpms=500, svd_ranks=(5, 5))
+
+    assert psb["var_x"].tolist() == pytest.approx([0.5, 0.5])
+    assert psb["var_y"].tolist() == pytest.approx([9.0 / 8.0, 9.0 / 8.0])
+    # The LHC geometry reproduces the factor of 100 this used to hardcode.
+    assert lhc["var_x"].tolist() == pytest.approx([0.04, 0.04])
+
+
+def test_post_svd_variance_scaling_leaves_variances_alone_without_a_rank() -> None:
+    df = pd.DataFrame({"var_x": [4.0], "var_y": [9.0]})
+
+    result = _scale_position_variances_after_svd(df, n_bpms=16, svd_ranks=(None, 0))
+
+    assert result["var_x"].tolist() == pytest.approx([4.0])
+    assert result["var_y"].tolist() == pytest.approx([9.0])
 
 
 def test_assign_uniform_variances_zero_weights_bad_bpms() -> None:

@@ -51,6 +51,9 @@ from aba_optimiser.measurements.squeeze.pipeline import (
     process_measurements_fresh,
     process_squeeze_step,
 )
+from aba_optimiser.measurements.squeeze.reconstruction import (
+    reconstruct_ac_dipole_measurements,
+)
 
 __all__ = [
     "MEAS_TIMES",
@@ -88,6 +91,7 @@ __all__ = [
     "get_ac_dipole_bpm_points",
     "get_default_simulation_config",
     "optimise_arc",
+    "reconstruct_ac_dipole_measurements",
     "resolve_restore_resume",
     "window_from_attrs",
     "load_measurements_from_reload",

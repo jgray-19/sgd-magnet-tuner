@@ -28,13 +28,13 @@ import tfs
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT
 from aba_optimiser.mad import GenericMadInterface, GradientDescentMadInterface
-from aba_optimiser.measurements.squeeze_config import ANALYSIS_DIRS
-from aba_optimiser.measurements.squeeze_helpers import (
+from aba_optimiser.measurements.sequence import get_or_make_sequence
+from aba_optimiser.measurements.squeeze.config import (
+    ANALYSIS_DIRS,
     get_model_dir,
-    get_or_make_sequence,
     get_results_dir,
-    load_estimates,
 )
+from aba_optimiser.measurements.squeeze.io import load_estimates
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ def resolve_file_paths(
 
     Returns:
         Dictionary with keys: parquet_file, sequence_file, estimates_file,
-                             tune_knobs_file, analysis_dir, model_dir
+                             tune_knobs, analysis_dir, model_dir
     """
     # Model directory
     model_dir = get_model_dir(beam, squeeze_step)
@@ -115,10 +115,10 @@ def resolve_file_paths(
     logger.info(f"Using estimates file: {estimates_file}")
 
     # Tune knobs file
-    tune_knobs_file = results_dir / f"tune_knobs_{squeeze_step}_{frequency}.txt"
-    if not tune_knobs_file.exists():
-        raise ValueError(f"Tune knobs file not found: {tune_knobs_file}")
-    logger.info(f"Using tune knobs file: {tune_knobs_file}")
+    tune_knobs = results_dir / f"tune_knobs_{squeeze_step}_{frequency}.txt"
+    if not tune_knobs.exists():
+        raise ValueError(f"Tune knobs file not found: {tune_knobs}")
+    logger.info(f"Using tune knobs file: {tune_knobs}")
 
     # Corrector file (optional)
     correctors_file = results_dir / f"corrector_strengths_{squeeze_step}_{frequency}.txt"
@@ -128,7 +128,7 @@ def resolve_file_paths(
             "parquet_file": parquet_file,
             "sequence_file": sequence_file,
             "estimates_file": estimates_file,
-            "tune_knobs_file": tune_knobs_file,
+            "tune_knobs": tune_knobs,
             "correctors_file": correctors_file if correctors_file.exists() else None,
             "analysis_dir": analysis_dir,
             "model_dir": model_dir,
@@ -328,7 +328,7 @@ def track_particles_through_arc1(
     accelerator: LHC,
     initial_coords: pd.DataFrame,
     magnet_strengths: dict[str, float] | None = None,
-    tune_knobs_file: Path | None = None,
+    tune_knobs: Path | None = None,
     corrector_file: Path | None = None,
     deltap: float = 0.0,
 ) -> pd.DataFrame:
@@ -338,27 +338,27 @@ def track_particles_through_arc1(
         accelerator: Shared accelerator instance
         initial_coords: DataFrame with initial particle coordinates (x, px, y, py)
         magnet_strengths: Optional dictionary of magnet strengths to apply
-        tune_knobs_file: Optional path to tune knobs file
+        tune_knobs: Optional path to tune knobs file
         corrector_file: Optional path to corrector strengths file
         deltap: Relative momentum deviation (delta p/p)
     Returns:
         DataFrame with tracking results at Arc1 end
     """
     logger.info(f"Setting up tracking through Arc1 ({'with' if magnet_strengths else 'without'} optimized magnets)")
-    print("tune knobs file:", tune_knobs_file)
+    print("tune knobs file:", tune_knobs)
 
     # Setup MAD interface for Arc1
     mad_iface = GradientDescentMadInterface(
         accelerator,
         magnet_range=f"{ARC1_START_BPM}/{ARC1_END_BPM}",
         bpm_range=f"{ARC1_START_BPM}/{ARC1_END_BPM}",
-        corrector_strengths=corrector_file,
-        tune_knobs_file=tune_knobs_file,
-        start_bpm=ARC1_START_BPM,
+        corrector_knobs=corrector_file,
+        tune_knobs=tune_knobs,
         py_name="py",
         # debug=True,
         # mad_logfile=Path("mad_arc1_tracking.log"),
     )
+    mad_iface.cycle_to_start(ARC1_START_BPM)
 
     # Apply optimized magnet strengths if provided
     if magnet_strengths is not None:
@@ -568,12 +568,12 @@ def main():
     assert file_paths["parquet_file"] is not None
     assert file_paths["sequence_file"] is not None
     assert file_paths["estimates_file"] is not None
-    assert file_paths["tune_knobs_file"] is not None
+    assert file_paths["tune_knobs"] is not None
 
     parquet_file = file_paths["parquet_file"]
     sequence_file = file_paths["sequence_file"]
     estimates_file = file_paths["estimates_file"]
-    tune_knobs_file = file_paths["tune_knobs_file"]
+    tune_knobs = file_paths["tune_knobs"]
 
     accelerator = LHC(
         beam=args.beam,
@@ -625,7 +625,7 @@ def main():
         accelerator,
         initial_coords,
         magnet_strengths=None,
-        tune_knobs_file=tune_knobs_file,
+        tune_knobs=tune_knobs,
         corrector_file=correctors_file,
         deltap=deltap,
     )
@@ -638,7 +638,7 @@ def main():
         accelerator,
         initial_coords,
         magnet_strengths=estimates if estimates else None,
-        tune_knobs_file=tune_knobs_file,
+        tune_knobs=tune_knobs,
         corrector_file=correctors_file,
         deltap=deltap,
     )

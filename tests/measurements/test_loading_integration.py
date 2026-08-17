@@ -39,7 +39,7 @@ def test_loading_round_trip_from_generated_lhc_sdds(tmp_path: Path) -> None:
 
     sdds_path = write_lhc_sdds_from_long_dataframe(source, tmp_path / "synthetic_measurement.sdds")
 
-    measurements = load_measurement_files([sdds_path])
+    measurements = load_measurement_files([sdds_path], beam=1)
     assert len(measurements) == 1
     assert measurements[0].nturns == int(source["turn"].max())
     assert build_dataframe_file_indices(measurements) == [0]

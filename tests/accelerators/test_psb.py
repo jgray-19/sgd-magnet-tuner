@@ -28,7 +28,7 @@ class TestPSBAccelerator:
         assert psb.sequence_file == test_sequence_file
         assert psb.kinetic_energy == pytest.approx(0.160)
         assert psb.energy == pytest.approx(0.160 + 0.9382720813)
-        assert psb.bpm_pattern == "^BR3%.BPM"
+        assert psb.bpm_pattern == "^BR3%.BPM%d+L3$"
         assert psb.optimise_quadrupoles is False
         assert psb.optimise_correctors is False
         assert psb.optimise_energy is False
@@ -85,11 +85,15 @@ class TestPSBAccelerator:
         assert ("vkicker", "kick", "^B[RE]%d+%.DVT%d+L%d+$", None, True, "correctors") in psb.get_supported_knob_specs()
 
     def test_get_perturbation_families(self, test_sequence_file: Path) -> None:
-        """Test PSB perturbation metadata is available for quadrupoles."""
+        """Test PSB perturbation metadata is available for bends and quadrupoles."""
         psb = PSB(ring=3, sequence_file=test_sequence_file)
         assert psb.get_perturbation_families() == {
+            "d": {
+                "default_rel_std": 2e-3,
+                "pattern": r"(?i)^BR\.(?:BHZ\d+|BSW\d+L\d+\.\d+)$",
+            },
             "q": {
-                "default_rel_std": 2e-4,
+                "default_rel_std": 2e-3,
                 "pattern": r"(?i)^BR\.Q(?:FO\d+|DE\d+)$",
             },
         }
@@ -166,35 +170,35 @@ class TestPSBAccelerator:
         """Test PSB returns the correct BPM pattern for ring 3."""
         psb = PSB(ring=3, sequence_file=test_sequence_file)
         patterns = psb.bpm_misalignment_patterns
-        assert patterns["dx"] == ("^BR3%.BPM",)
-        assert patterns["dy"] == ("^BR3%.BPM",)
+        assert patterns["dx"] == ("^BR3%.BPM%d+L3$",)
+        assert patterns["dy"] == ("^BR3%.BPM%d+L3$",)
 
     @pytest.mark.parametrize("ring", [1, 2, 4])
     def test_bpm_misalignment_patterns_other_rings(self, test_sequence_file: Path, ring: int) -> None:
         """Test PSB returns ring-specific BPM patterns."""
         psb = PSB(ring=ring, sequence_file=test_sequence_file)
         patterns = psb.bpm_misalignment_patterns
-        assert patterns["dx"] == (f"^BR{ring}%.BPM",)
-        assert patterns["dy"] == (f"^BR{ring}%.BPM",)
+        assert patterns["dx"] == (f"^BR{ring}%.BPM%d+L{ring}$",)
+        assert patterns["dy"] == (f"^BR{ring}%.BPM%d+L{ring}$",)
 
     def test_get_supported_knob_specs_bpm_dx(self, test_sequence_file: Path) -> None:
         """Test BPM horizontal displacement spec is included when enabled."""
         psb = PSB(ring=3, sequence_file=test_sequence_file, optimise_bpm_dx=True)
         specs = psb.get_supported_knob_specs()
-        assert ("monitor", "dx", "^BR3%.BPM", None, True, "BPM horizontal offsets") in specs
+        assert ("monitor", "dx", "^BR3%.BPM%d+L3$", None, True, "BPM horizontal offsets") in specs
 
     def test_get_supported_knob_specs_bpm_dy(self, test_sequence_file: Path) -> None:
         """Test BPM vertical displacement spec is included when enabled."""
         psb = PSB(ring=3, sequence_file=test_sequence_file, optimise_bpm_dy=True)
         specs = psb.get_supported_knob_specs()
-        assert ("monitor", "dy", "^BR3%.BPM", None, True, "BPM vertical offsets") in specs
+        assert ("monitor", "dy", "^BR3%.BPM%d+L3$", None, True, "BPM vertical offsets") in specs
 
     def test_get_supported_knob_specs_bpm_disabled(self, test_sequence_file: Path) -> None:
         """Test BPM displacement specs are present but disabled when flags are off."""
         psb = PSB(ring=3, sequence_file=test_sequence_file)
         specs = psb.get_supported_knob_specs()
-        assert ("monitor", "dx", "^BR3%.BPM", None, False, "BPM horizontal offsets") in specs
-        assert ("monitor", "dy", "^BR3%.BPM", None, False, "BPM vertical offsets") in specs
+        assert ("monitor", "dx", "^BR3%.BPM%d+L3$", None, False, "BPM horizontal offsets") in specs
+        assert ("monitor", "dy", "^BR3%.BPM%d+L3$", None, False, "BPM vertical offsets") in specs
 
     def test_has_any_optimisation_bpm_dx(self, test_sequence_file: Path) -> None:
         """Test BPM horizontal displacement contributes to has_any_optimisation."""

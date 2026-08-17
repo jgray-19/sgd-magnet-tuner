@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from pymadng_utils.io.utils import read_knobs
 
-from aba_optimiser.accelerators import LHC
+from aba_optimiser.accelerators import LHC, PSB
 from aba_optimiser.mad.optimising_mad_interface import (
     GenericMadInterface,
     GradientDescentMadInterface,
@@ -420,8 +420,8 @@ class TestOptimisationMadInterfaceInit:
         )
         interface = interface_cls(
             accelerator=accelerator,
-            corrector_strengths=corrector_file if apply_correctors else None,
-            tune_knobs_file=None,
+            corrector_knobs=corrector_file if apply_correctors else None,
+            tune_knobs=None,
         )
         if apply_correctors:
             check_corrector_strengths(interface, corrector_table)
@@ -431,11 +431,11 @@ class TestOptimisationMadInterfaceInit:
         cleanup_interface(interface)
 
     def test_knob_files(
-        self, seq_b1: Path, corrector_knobs_file: Path, tune_knobs_file: Path
+        self, seq_b1: Path, corrector_knobs: Path, tune_knobs: Path
     ) -> None:
         """Test initialization with knob for tunes and corrector files."""
-        corrector_knob_file = corrector_knobs_file
-        tune_knob_file = tune_knobs_file
+        corrector_knob_file = corrector_knobs
+        tune_knob_file = tune_knobs
 
         accelerator = LHC(
             beam=1,
@@ -444,15 +444,15 @@ class TestOptimisationMadInterfaceInit:
         )
         no_knob_interface = GenericMadInterface(
             accelerator=accelerator,
-            corrector_strengths=None,
-            tune_knobs_file=None,
+            corrector_knobs=None,
+            tune_knobs=None,
         )
         original_mqt_strength = no_knob_interface.mad["loaded_sequence['MQT.14R3.B1'].k1"]
 
         knob_interface = GenericMadInterface(
             accelerator=accelerator,
-            corrector_strengths=corrector_knob_file,
-            tune_knobs_file=tune_knob_file,
+            corrector_knobs=corrector_knob_file,
+            tune_knobs=tune_knob_file,
         )
         corrector_knobs = read_knobs(corrector_knob_file)
         tune_knobs = read_knobs(tune_knob_file)
@@ -467,6 +467,38 @@ class TestOptimisationMadInterfaceInit:
 
         cleanup_interface(knob_interface)
         cleanup_interface(no_knob_interface)
+
+    def test_knob_mappings(
+        self, seq_b1: Path, corrector_knobs: Path, tune_knobs: Path
+    ) -> None:
+        """A dict of knob name/value pairs should apply identically to the equivalent knob file."""
+        accelerator = LHC(
+            beam=1,
+            kinetic_energy=KE,
+            sequence_file=str(seq_b1),
+        )
+        corrector_mapping = read_knobs(corrector_knobs)
+        tune_mapping = read_knobs(tune_knobs)
+
+        file_interface = GenericMadInterface(
+            accelerator=accelerator,
+            corrector_knobs=corrector_knobs,
+            tune_knobs=tune_knobs,
+        )
+        mapping_interface = GenericMadInterface(
+            accelerator=accelerator,
+            corrector_knobs=corrector_mapping,
+            tune_knobs=tune_mapping,
+        )
+
+        all_knobs = {**corrector_mapping, **tune_mapping}
+        for name in all_knobs:
+            assert mapping_interface.mad[f"MADX['{name}']"] == pytest.approx(
+                file_interface.mad[f"MADX['{name}']"]
+            )
+
+        cleanup_interface(file_interface)
+        cleanup_interface(mapping_interface)
 
     @pytest.mark.parametrize(
         "bad_bpms",
@@ -488,8 +520,8 @@ class TestOptimisationMadInterfaceInit:
         )
         interface = GenericMadInterface(
             accelerator=accelerator,
-            corrector_strengths=None,
-            tune_knobs_file=None,
+            corrector_knobs=None,
+            tune_knobs=None,
             bad_bpms=bad_bpms,
         )
 
@@ -588,6 +620,7 @@ def test_quadrupole_knob_updates_use_dknl(seq_b1: Path) -> None:
     initial_strength = interface.get_magnet_strengths([absolute_name])[absolute_name]
     assert np.isclose(initial_strength, initial_strength_base)
     initial_k1 = float(interface.mad.loaded_sequence[element_name].k1)
+    length = float(interface.mad.loaded_sequence[element_name].l)
 
     step = 1e-4
     interface.mad.send(f"loaded_sequence['{knob_name}'] = {step}")
@@ -596,7 +629,12 @@ def test_quadrupole_knob_updates_use_dknl(seq_b1: Path) -> None:
     updated_k1 = float(interface.mad.loaded_sequence[element_name].k1)
     updated_dknl = float(interface.mad.loaded_sequence[element_name].dknl[1])
 
-    assert np.isclose(updated_strength, initial_strength + step)
+    # dknl is an *integrated* strength (dk1l == delta of knl = k1*l), so a knob
+    # value of ``step`` raises the effective per-metre k1 by step/length, not by
+    # step. This matches the forward model (a dknl of X is equivalent to k1 += X/l,
+    # verified by tune equivalence). The stored dknl equals the knob value exactly
+    # and the base k1 is untouched.
+    assert np.isclose(updated_strength, initial_strength + step / length)
     assert np.isclose(updated_k1, initial_k1)
     assert np.isclose(updated_dknl, step)
 
@@ -639,3 +677,33 @@ def test_initial_model_value_is_preserved_when_quadrupole_knob_is_created(seq_b1
     assert np.isclose(interface.mad.loaded_sequence[element_name].dknl[1], target_delta)
 
     cleanup_interface(interface)
+
+
+def test_observed_tracking_anchor_markers_overrides_default_anchor_observation(
+    seq_psb: Path,
+) -> None:
+    """``observed_tracking_anchor_markers`` replaces, rather than adds to, the default set."""
+    accelerator = PSB(ring=3, sequence_file=seq_psb, optimise_quadrupoles=True)
+    acd_after = accelerator.acd_marker_name("after")
+    acd_before = accelerator.acd_marker_name("before")
+
+    default_interface = GradientDescentMadInterface(
+        accelerator=accelerator,
+        tracking_anchor_mode="acd",
+        discard_mad_output=True,
+    )
+    overridden_interface = GradientDescentMadInterface(
+        accelerator=accelerator,
+        tracking_anchor_mode="acd",
+        observed_tracking_anchor_markers=[],
+        discard_mad_output=True,
+    )
+    try:
+        assert acd_after in default_interface.all_bpms
+        assert acd_before in default_interface.all_bpms
+
+        assert acd_after not in overridden_interface.all_bpms
+        assert acd_before not in overridden_interface.all_bpms
+    finally:
+        cleanup_interface(default_interface)
+        cleanup_interface(overridden_interface)

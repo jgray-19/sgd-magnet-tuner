@@ -5,10 +5,10 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 from tmom_recon import build_twiss_from_measurements
 
 from aba_optimiser.measurements.plotting.core import (
@@ -16,12 +16,14 @@ from aba_optimiser.measurements.plotting.core import (
     BETTER_KNOWLEDGE_LABEL,
     DESIGN_OPTICS_LABEL,
     PLOT_COLORS,
-    EstimateSource,
     get_arc_ranges,
     get_twiss_through_arc,
     parse_arc_spec,
     prepare_plot_context,
 )
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 def plot_phase_advances(
@@ -31,7 +33,7 @@ def plot_phase_advances(
     analysis_dir: Path,
     squeeze_step: str,
     results_dir: Path,
-    tune_knobs_file: Path,
+    tune_knobs: Path,
     corrector_file: Path | None,
     beam: int,
     arcs: list[int] | None = None,
@@ -64,7 +66,7 @@ def plot_phase_advances(
                     arc_end,
                     meas_twiss,
                     estimated_magnets=None,
-                    tune_knobs_file=None,
+                    tune_knobs=None,
                     corrector_file=None,
                 )
                 var_x = np.sum((phase_initial["mux_err"]) ** 2)
@@ -84,7 +86,7 @@ def plot_phase_advances(
             arc_end,
             meas_twiss,
             estimated_magnets=None,
-            tune_knobs_file=None,
+            tune_knobs=None,
             corrector_file=None,
         )
         twiss_online = get_twiss_through_arc(
@@ -93,7 +95,7 @@ def plot_phase_advances(
             arc_end,
             meas_twiss,
             estimated_magnets=None,
-            tune_knobs_file=tune_knobs_file,
+            tune_knobs=tune_knobs,
             corrector_file=corrector_file,
         )
 
@@ -106,7 +108,7 @@ def plot_phase_advances(
                 arc_end,
                 meas_twiss,
                 estimated_magnets=all_estimates,
-                tune_knobs_file=tune_knobs_file,
+                tune_knobs=tune_knobs,
                 corrector_file=corrector_file,
                 deltap=deltap,
             )
@@ -304,7 +306,7 @@ def main() -> None:
         context.analysis_dir,
         context.squeeze_step,
         context.results_dir,
-        context.tune_knobs_file,
+        context.tune_knobs,
         context.corrector_file,
         context.beam,
         arcs=parse_arc_spec(args.arcs),

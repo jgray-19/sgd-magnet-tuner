@@ -271,7 +271,7 @@ class TestAcceleratorBase:
     def test_format_result_knob_names_with_energy_and_pt(
         self, test_sequence_file: Path
     ) -> None:
-        """Test format_result_knob_names converts pt to deltap when energy optimisation enabled."""
+        """Test format_result_knob_names preserves pt when energy optimisation is enabled."""
         acc = ConcreteAccelerator(
             sequence_file=test_sequence_file,
             kinetic_energy=6800.0,
@@ -279,8 +279,8 @@ class TestAcceleratorBase:
         )
         knob_names = ["K1.b1", "K2.b1", "pt"]
         result = acc.format_result_knob_names(knob_names)
-        assert "pt" not in result
-        assert "deltap" in result
+        assert "pt" in result
+        assert "deltap" not in result
         assert "K1.b1" in result
         assert "K2.b1" in result
 

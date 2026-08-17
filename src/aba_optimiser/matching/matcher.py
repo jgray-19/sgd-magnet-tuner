@@ -27,10 +27,10 @@ class BetaMatcher:
     """
     Matches computed beta functions to a target model by adjusting knob strengths.
 
-    This class is designed to be run after the Controller has estimated the main
+    This class is designed to be run after a tracking fitter has estimated the main
     quadrupole strengths from measurement. It takes:
     - A target model twiss (the betas we want to achieve)
-    - The estimated quadrupole strengths from the Controller
+    - The estimated quadrupole strengths from the fitter
     - A list of knobs that can be adjusted
 
     The workflow is:

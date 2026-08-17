@@ -9,7 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from aba_optimiser.measurements.online_knobs import save_online_knobs
-from aba_optimiser.measurements.squeeze_config import get_measurement_date
+from aba_optimiser.measurements.squeeze.config import get_measurement_date
 from aba_optimiser.measurements.utils import find_all_bad_bpms
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ def get_central_measurement_time(meas_times_for_step: dict[str, list[str]], sque
 
 
 def get_knob_files(results_dir: Path, squeeze_step: str, freq: str) -> tuple[Path, Path]:
-    """Return (tune_knobs_file, corrector_strengths_file) for a squeeze step and frequency."""
+    """Return (tune_knobs, corrector_strengths_file) for a squeeze step and frequency."""
     return (
         results_dir / f"tune_knobs_{squeeze_step}_{freq}.txt",
         results_dir / f"corrector_strengths_{squeeze_step}_{freq}.txt",
@@ -153,26 +153,26 @@ def prepare_frequency_metadata(
         raise ValueError(f"No bad BPMs found for {squeeze_step!r} {freq!r} — something is wrong.")
 
     files = [analysed_folders[i] / f"{name_prefix}{times[i]}.sdds" for i in range(len(times))]
-    tune_knobs_file, corrector_knobs_file = get_knob_files(results_dir, squeeze_step, freq)
+    tune_knobs, corrector_knobs = get_knob_files(results_dir, squeeze_step, freq)
 
     meas_time = get_measurement_time(min(times), squeeze_step)
     energy = save_online_knobs(
         meas_time,
         beam=beam,
-        tune_knobs_file=tune_knobs_file,
-        corrector_knobs_file=corrector_knobs_file,
+        tune_knobs=tune_knobs,
+        corrector_knobs=corrector_knobs,
         energy=energy,
     )
 
-    return files, tune_knobs_file, corrector_knobs_file, bad_bpms, float(energy)
+    return files, tune_knobs, corrector_knobs, bad_bpms, float(energy)
 
 
 def process_frequency_results(
     freq: str,
     file_keys: list[str],
     pzs_dict: dict,
-    tune_knobs_file: Path,
-    corrector_knobs_file: Path,
+    tune_knobs: Path,
+    corrector_knobs: Path,
     temp_analysis_dir: Path,
 ) -> list[dict]:
     """Persist parquet files for a frequency and return measurement descriptor dicts."""
@@ -188,8 +188,8 @@ def process_frequency_results(
         measurements.append(
             {
                 "file": meas_save_path,
-                "tune_knobs_file": tune_knobs_file,
-                "corrector_file": corrector_knobs_file,
+                "tune_knobs": tune_knobs,
+                "corrector_file": corrector_knobs,
                 "machine_deltap": dpp_est,
             }
         )
@@ -203,8 +203,8 @@ def process_frequency_results(
 def load_frequency_results(
     freq: str,
     num_files: int,
-    tune_knobs_file: Path,
-    corrector_knobs_file: Path,
+    tune_knobs: Path,
+    corrector_knobs: Path,
     temp_analysis_dir: Path,
 ) -> list[dict]:
     """Load previously persisted parquet files and return measurement descriptor dicts."""
@@ -215,10 +215,76 @@ def load_frequency_results(
         measurements.append(
             {
                 "file": temp_analysis_dir / f"pz_data_{freq}_{i}.parquet",
-                "tune_knobs_file": tune_knobs_file,
-                "corrector_file": corrector_knobs_file,
+                "tune_knobs": tune_knobs,
+                "corrector_file": corrector_knobs,
                 "machine_deltap": float(dpp_est),
             }
         )
     logger.info("Loaded %d processed files for %s", num_files, freq)
     return measurements
+
+
+def load_estimates_and_uncertainties(
+    estimates_file: Path,
+) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
+    """Load quadrupole estimates and uncertainties from file.
+
+    Handles both formats:
+    - JSON format: ``{"Arc 1": {"knob": {"value": ..., "uncertainty": ...}}}``
+    - Legacy text format: ``Arc X:`` headers followed by ``<magnet> <value>`` rows
+
+    Returns:
+        Tuple of (arc -> knob values, arc -> knob uncertainties).
+    """
+    if estimates_file.suffix.lower() == ".json":
+        with estimates_file.open() as f:
+            payload = json.load(f)
+        estimates = {
+            str(arc): {
+                str(magnet): float(knob_payload["value"])
+                for magnet, knob_payload in arc_payload.items()
+            }
+            for arc, arc_payload in payload.items()
+        }
+        uncertainties = {
+            str(arc): {
+                str(magnet): float(knob_payload.get("uncertainty", 0.0))
+                for magnet, knob_payload in arc_payload.items()
+            }
+            for arc, arc_payload in payload.items()
+        }
+        logger.info(
+            f"Loaded {sum(len(v) for v in estimates.values())} magnet estimates from {estimates_file.name}"
+        )
+        return estimates, uncertainties
+
+    estimates = {}
+    uncertainties = {}
+    current_arc = None
+
+    with estimates_file.open() as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("Arc"):
+                current_arc = line.rstrip(":")  # remove trailing :
+                if current_arc not in estimates:
+                    estimates[current_arc] = {}
+                    uncertainties[current_arc] = {}
+            elif line and current_arc:
+                parts = line.split()
+                if len(parts) == 2:
+                    magnet, value = parts
+                    estimates[current_arc][magnet] = float(value)
+                    uncertainties[current_arc][magnet] = 0.0
+
+    if estimates:
+        logger.info(
+            f"Loaded {sum(len(v) for v in estimates.values())} magnet estimates from {estimates_file.name}"
+        )
+    return estimates, uncertainties
+
+
+def load_estimates(estimates_file: Path) -> dict[str, dict[str, float]]:
+    """Load quadrupole estimates from file."""
+    estimates, _ = load_estimates_and_uncertainties(estimates_file)
+    return estimates

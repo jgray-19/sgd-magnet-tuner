@@ -1,19 +1,21 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
 
 import pandas as pd
+import pytest
 import tfs
 
 from aba_optimiser.measurements.create_datafile import (
+    ACDipoleReconstructionConfig,
+    average_required_attr,
     build_madng_twiss_table,
     copy_ac_dipole_attrs,
     detect_bad_bpms,
+    expand_machine_deltaps,
+    validate_ac_dipole_reconstruction_config,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def test_copy_ac_dipole_attrs_copies_only_known_metadata() -> None:
@@ -29,6 +31,26 @@ def test_copy_ac_dipole_attrs_copies_only_known_metadata() -> None:
         "ac_dipole_marker": "MKQA",
         "ac_dipole_bpm_upstream": "BPM.UP",
     }
+
+
+def test_average_required_attr_averages_required_metadata() -> None:
+    assert average_required_attr([{"PT_EST": 1.0}, {"PT_EST": 3.0}], "PT_EST") == 2.0
+
+    with pytest.raises(ValueError, match="missing required 'PT_EST'"):
+        average_required_attr([{"PT_EST": 1.0}, {}], "PT_EST")
+
+
+def test_validate_ac_dipole_reconstruction_config_rejects_mismatched_files() -> None:
+    config = ACDipoleReconstructionConfig(tune_knobs_files=[Path("a.tfs")])
+
+    with pytest.raises(ValueError, match="tune_knobs_files must match files length"):
+        validate_ac_dipole_reconstruction_config(config, file_count=2)
+
+
+def test_expand_machine_deltaps_returns_one_value_per_file() -> None:
+    assert expand_machine_deltaps(None, 2) == [None, None]
+    assert expand_machine_deltaps(1e-4, 2) == [1e-4, 1e-4]
+    assert expand_machine_deltaps([1e-4, None], 2) == [1e-4, None]
 
 
 def test_detect_bad_bpms_marks_nan_inf_and_missing_bpms() -> None:

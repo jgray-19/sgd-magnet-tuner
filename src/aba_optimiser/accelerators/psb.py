@@ -25,8 +25,9 @@ class PSB(BasePSB, Accelerator):
     PATTERN_SKEW_SEXTUPOLE = r"^BR%d+%.XSK[26]L4$"
     PATTERN_CORRECTOR_H = r"^B[RE]%d+%.DHZ%d+L%d+$"
     PATTERN_CORRECTOR_V = r"^B[RE]%d+%.DVT%d+L%d+$"
+    BEND_PERTURBATION_PATTERN = r"(?i)^BR\.(?:BHZ\d+|BSW\d+L\d+\.\d+)$"
     QUAD_PERTURBATION_PATTERN = r"(?i)^BR\.Q(?:FO\d+|DE\d+)$"
-    BPM_PATTERN_TEMPLATE = "^BR{ring}%.BPM"
+    BPM_PATTERN_TEMPLATE = "^BR{ring}%.BPM%d+L{ring}$"
 
     def __init__(
         self,
@@ -132,10 +133,14 @@ class PSB(BasePSB, Accelerator):
         }
 
     def get_perturbation_families(self) -> dict[str, dict[str, str | float | dict]]:
-        """Return perturbation metadata for PSB quadrupoles."""
+        """Return perturbation metadata for PSB ring bends and QFO/QDE quadrupoles."""
         return {
+            "d": {
+                "default_rel_std": 8e-4,
+                "pattern": self.BEND_PERTURBATION_PATTERN,
+            },
             "q": {
-                "default_rel_std": 2e-4,
+                "default_rel_std": 2e-3,
                 "pattern": self.QUAD_PERTURBATION_PATTERN,
             },
         }

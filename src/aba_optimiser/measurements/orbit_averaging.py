@@ -69,4 +69,7 @@ def compute_three_turn_averages(pzs: pd.DataFrame) -> pd.DataFrame:
     new_df = pd.DataFrame(new_rows)
     new_df["name"] = new_df["name"].astype("category")
     new_df["turn"] = new_df["turn"].astype("int32")
+    # The three replicated turns form a single bunch; boundary-turn removal then
+    # drops turns 1 and 3, leaving the one averaged orbit per BPM for the fit.
+    new_df["bunch_number"] = 0
     return new_df

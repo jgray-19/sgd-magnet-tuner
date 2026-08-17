@@ -21,7 +21,8 @@ import xtrack as xt
 
 from aba_optimiser.config import PROJECT_ROOT
 from aba_optimiser.measurements.optimise_squeeze_quads import MEAS_TIMES, get_sequence_creation_time
-from aba_optimiser.measurements.squeeze_helpers import get_model_dir, get_or_make_sequence
+from aba_optimiser.measurements.sequence import get_or_make_sequence
+from aba_optimiser.measurements.squeeze.config import get_model_dir
 
 LOGGER = logging.getLogger(__name__)
 

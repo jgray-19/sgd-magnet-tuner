@@ -19,6 +19,7 @@ dependencies = [
     "tensorboardX",
     "pymadng>=0.3.0",
     "pymadng-utils",
+    "tmom-recon",
     "matplotlib",
     "uncertainties",
 ]
@@ -28,7 +29,6 @@ test = [
     "pytest",
     "pytest-cov",
     "pytest-xdist",
-    "tmom-recon",
     "xtrack-tools",
 ]
 docs = [

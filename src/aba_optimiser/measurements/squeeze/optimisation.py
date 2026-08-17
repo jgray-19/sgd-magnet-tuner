@@ -15,15 +15,15 @@ if TYPE_CHECKING:
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.measurements.orbit_averaging import compute_three_turn_averages
+from aba_optimiser.measurements.output import measurement_output_config
 from aba_optimiser.measurements.squeeze.io import save_arc_estimates
 from aba_optimiser.training.config.models import (
     CheckpointConfig,
     MeasurementConfig,
     MeasurementDetails,
-    OutputConfig,
     SequenceConfig,
 )
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.tracking_fitter import ArcByArcFitter
 
 logger = logging.getLogger(__name__)
 
@@ -34,13 +34,13 @@ def _first_bpm_for_beam(beam: int) -> str:
 
 
 def _measurement_details(
-    measurement: dict, b2_errors: Path | None, first_bpm: str | None
+    measurement: dict, b2_errors: Path, first_bpm: str | None
 ) -> MeasurementDetails:
     """Build per-measurement MAD interface options from a squeeze descriptor."""
     return MeasurementDetails(
         interface_options={
-            "corrector_strengths": measurement["corrector_file"],
-            "tune_knobs_file": measurement["tune_knobs_file"],
+            "corrector_knobs": measurement["corrector_file"],
+            "tune_knobs": measurement["tune_knobs"],
             "b2_errors": b2_errors,
         },
         first_bpm=first_bpm,
@@ -52,7 +52,7 @@ def _create_averaged_measurement_config(
     temp_analysis_dir: Path,
     arc_num: int,
     beam: int,
-    b2_errors: Path | None = None,
+    b2_errors: Path,
 ) -> MeasurementConfig:
     """Load measurement parquets, average over all turns, and return a MeasurementConfig."""
     avg_files = []
@@ -94,7 +94,7 @@ def create_configs(
     all_bad_bpms: set[str],
     measurements: list[dict],
     window: ACDipoleOptimisationWindow,
-    b2_errors: Path | None = None,
+    b2_errors: Path,
 ) -> tuple[SequenceConfig, list[str], list[str], MeasurementConfig]:
     """Build SequenceConfig and MeasurementConfig from resolved measurement descriptors."""
     magnet_range, bpm_start_points, bpm_end_points = get_ac_dipole_bpm_points(beam, window)
@@ -110,12 +110,12 @@ def create_configs(
 
 
 def get_default_simulation_config(
-    tracks_per_worker: int = 300,
+    data_fraction: float = 1.0,
     num_batches: int = 20,
 ) -> SimulationConfig:
     """Return default simulation config for optimisation stages."""
     return SimulationConfig(
-        tracks_per_worker=tracks_per_worker,
+        data_fraction=data_fraction,
         num_batches=num_batches,
         num_workers=60,
         use_fixed_bpm=True,
@@ -192,9 +192,9 @@ def optimise_arc(
     energy: float,
     checkpoint_dir: Path,
     checkpoint_every_n_epochs: int,
+    b2_errors: Path,
     rewrite_file: bool = False,
     window: ACDipoleOptimisationWindow | None = None,
-    b2_errors: Path | None = None,
     restore_bends_opt: bool = False,
     restore_quads_opt: bool = False,
     hessian_parallelism: int = 1,
@@ -202,15 +202,17 @@ def optimise_arc(
     """Run bend then quadrupole optimisation for one arc."""
     if window is None:
         raise ValueError("AC-dipole window is required for squeeze optimisation")
+    if b2_errors is None:
+        raise ValueError("b2_errors is required for squeeze optimisation")
 
     logger.info("Optimising arc %d for %s", arc_num, squeeze_step)
     sequence_config, bpm_start_points, bpm_end_points, measurement_config = create_configs(
         beam, all_bad_bpms, measurements, window, b2_errors=b2_errors
     )
-    output_cfg = OutputConfig(
+    output_cfg = measurement_output_config(
+        temp_analysis_dir,
+        f"{squeeze_step}_arc_{arc_num}",
         include_uncertainty=True,
-        mad_logfile=temp_analysis_dir / "mad_log.txt",
-        python_logfile=temp_analysis_dir / "python_worker_log.txt",
         parallel_hessian=hessian_parallelism,
     )
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -242,7 +244,7 @@ def optimise_arc(
             avg_measurement_config = _create_averaged_measurement_config(
                 measurements, temp_analysis_dir, arc_num, beam, b2_errors=b2_errors
             )
-            avg_bend_ctrl = Controller(
+            avg_bend_ctrl = ArcByArcFitter(
                 LHC(
                     beam=beam,
                     kinetic_energy=energy,
@@ -254,13 +256,12 @@ def optimise_arc(
                     max_epochs=1000,
                     warmup_epochs=30,
                     warmup_lr_start=5e-7,
-                    max_lr=1e-7,
-                    min_lr=1e-7,
+                    max_lr=1e-6,
+                    min_lr=1e-6,
                     gradient_converged_value=1e-3,
                     optimiser_type="adam",
                 ),
                 SimulationConfig(
-                    tracks_per_worker=1,
                     num_batches=1,
                     num_workers=60,
                     use_fixed_bpm=True,
@@ -275,17 +276,17 @@ def optimise_arc(
                 bpm_end_points,
                 initial_knob_strengths=None,
                 true_strengths=None,
-                output_config=OutputConfig(
+                output_config=measurement_output_config(
+                    temp_analysis_dir,
+                    f"{squeeze_step}_arc_{arc_num}_averaged_bends",
                     include_uncertainty=False,
-                    mad_logfile=output_cfg.mad_logfile,
-                    python_logfile=output_cfg.python_logfile,
                     parallel_hessian=output_cfg.parallel_hessian,
                 ),
                 checkpoint_config=bend_checkpoint_cfg,
             )
             bend_estimates, _ = avg_bend_ctrl.run()
 
-    quad_ctrl_without_b2 = Controller(
+    quad_ctrl = ArcByArcFitter(
         LHC(
             beam=beam,
             kinetic_energy=energy,
@@ -293,15 +294,15 @@ def optimise_arc(
             optimise_quadrupoles=True,
             optimise_bends=True,
             optimise_other_quadrupoles=True,
-            optimise_quad_dx=True,
+            optimise_quad_dx=False,
             optimise_quad_dy=True,
         ),
         OptimiserConfig(
-            max_epochs=300,
-            warmup_epochs=5,
-            warmup_lr_start=1e-6,
-            max_lr=2e-6 if "inj" in squeeze_step else 5e-7,
-            min_lr=2e-6 if "inj" in squeeze_step else 5e-7,
+            max_epochs=1000,
+            warmup_epochs=50,
+            warmup_lr_start=1e-10,
+            max_lr=1e-7 if "inj" in squeeze_step else 2e-7,
+            min_lr=1e-7 if "inj" in squeeze_step else 5e-8,
             gradient_converged_value=1e-7,
             optimiser_type="adam",
         ),
@@ -316,42 +317,7 @@ def optimise_arc(
         checkpoint_config=quad_checkpoint_cfg,
         debug=False,
     )
-    estimates, uncertainties = quad_ctrl_without_b2.run()
-
-    quad_ctrl_with_b2 = Controller(
-        LHC(
-            beam=beam,
-            kinetic_energy=energy,
-            sequence_file=sequence_path,
-            optimise_quadrupoles=True,
-            optimise_bends=True,
-            optimise_other_quadrupoles=True,
-            optimise_quad_dx=True,
-            optimise_quad_dy=True,
-        ),
-        OptimiserConfig(
-            max_epochs=1000,
-            warmup_epochs=100,
-            warmup_lr_start=1e-14,
-            max_lr=1e-8,
-            min_lr=1e-6,
-            gradient_converged_value=1e-7,
-            optimiser_type="adam",
-        ),
-        get_default_simulation_config(num_batches=30),
-        sequence_config,
-        measurement_config,
-        bpm_start_points,
-        bpm_end_points,
-        # initial_knob_strengths=bend_estimates,
-        initial_knob_strengths=estimates,
-        true_strengths=None,
-        output_config=output_cfg,
-        checkpoint_config=quad_checkpoint_cfg,
-        # checkpoint_config=None,  # Don't checkpoint the final run with b2 errors, to avoid accidentally restoring from it
-        debug=False,
-    )
-    estimates, uncertainties = quad_ctrl_with_b2.run()
+    estimates, uncertainties = quad_ctrl.run()
 
     save_arc_estimates(
         results_dir, squeeze_step, arc_num, estimates, uncertainties, rewrite_file=rewrite_file

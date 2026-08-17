@@ -19,7 +19,7 @@ from xtrack_tools.monitors import process_tracking_data
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT, OptimiserConfig, SimulationConfig
 from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.tracking_fitter import ArcByArcFitter
 from aba_optimiser.training.controller_config import SequenceConfig
 from aba_optimiser.training.controller_helpers import (
     create_arc_measurement_config,
@@ -274,8 +274,8 @@ def optimise_ranges(
     beam: int,
     optimiser_config: OptimiserConfig,
     simulation_config: SimulationConfig,
-    corrector_knobs_file: Path,
-    tune_knobs_file: Path,
+    corrector_knobs: Path,
+    tune_knobs: Path,
     measurement_file: Path,
     bad_bpms: list[str],
     title: str,
@@ -291,10 +291,8 @@ def optimise_ranges(
         measurement_config = create_arc_measurement_config(
             measurement_file,
             machine_deltap=0.0,
-            num_tracks=1,
-            flattop_turns=flattop_turns,
-            corrector_files=corrector_knobs_file,
-            tune_knobs_files=tune_knobs_file,
+            corrector_knobs=corrector_knobs,
+            tune_knobs=tune_knobs,
         )
 
         accelerator = LHC(
@@ -310,7 +308,7 @@ def optimise_ranges(
             bad_bpms=bad_bpms,
         )
 
-        controller = Controller(
+        controller = ArcByArcFitter(
             accelerator=accelerator,
             optimiser_config=optimiser_config,
             simulation_config=simulation_config,
@@ -386,7 +384,6 @@ def main() -> None:
         expected_rel_error=0,
     )
     simulation_config = SimulationConfig(
-        tracks_per_worker=1,
         num_workers=1,
         num_batches=1,
         optimise_momenta=False,
@@ -412,8 +409,8 @@ def main() -> None:
             beam=args.beam,
             optimiser_config=optimiser_config,
             simulation_config=simulation_config,
-            corrector_knobs_file=results_dir / f"corrector_knobs_{label}.txt",
-            tune_knobs_file=results_dir / f"tune_knobs_{label}.txt",
+            corrector_knobs=results_dir / f"corrector_knobs_{label}.txt",
+            tune_knobs=results_dir / f"tune_knobs_{label}.txt",
             measurement_file=measurement_file,
             bad_bpms=[],
             title=label,

@@ -4,6 +4,20 @@ Estimate dispersion at corrector magnets using optics analysis data and MAD-NG t
 This module provides functionality to estimate horizontal and vertical dispersion
 at corrector locations by propagating optics parameters from nearby BPMs using
 MAD-NG's differential algebra tracking capabilities.
+
+Caveat on the initial condition. The propagated ``beta0`` is seeded with the
+measured ``DX``/``DY`` from omc3's ``dispersion_<plane>.tfs`` together with the
+``DPX``/``DPY`` from the same file --- but a BPM measures positions only, so omc3
+derives ``DP`` from the measured ``D`` through the *model* transfer matrix
+(``omc3.optics_measurements.dispersion._calculate_dp``, which reads model
+``BET``/``ALF``/``MU``/``DP``). The seed is therefore a mixed measured-D /
+model-D' pair, and ``tmom-recon-study`` (Section "Measured dispersion by
+differencing does not work") found that a mismatched ``(D, D')`` pair is worse
+than a consistent modelled one: the propagation is more sensitive to the
+consistency of the pair than to the accuracy of either half. The same applies to
+the measured ``BET``/``ALF`` pair, where ``ALF`` is likewise not directly
+measured. Treat the spread over nearby BPMs (the ``STD`` column) as the honest
+uncertainty; it is dominated by this inconsistency, not by BPM noise.
 """
 
 from __future__ import annotations
@@ -16,7 +30,9 @@ import numpy as np
 import pandas as pd
 import tfs
 from omc3.model.constants import TWISS_ELEMENTS_DAT
-from omc3.optics_measurements.constants import BETA_NAME, DISPERSION_NAME, EXT
+from omc3.optics_measurements.constants import BETA_NAME, DISPERSION_NAME
+from pymadng_utils.io.tfs import load_tfs_files
+from tmom_recon.lattice.bpms import find_common_bpms
 
 from aba_optimiser.accelerators.lhc import LHC
 from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
@@ -26,27 +42,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-
-def find_common_bpms(*dataframes: pd.DataFrame) -> list[str]:
-    """Find common BPMs across multiple dataframes.
-
-    Args:
-        *dataframes: Variable number of DataFrames with BPM names as index
-
-    Returns:
-        List of common BPM names in the order they appear in the first dataframe
-    """
-    if not dataframes:
-        return []
-
-    # Get common BPMs across all dataframes
-    common = set(dataframes[0].index)
-    for df in dataframes[1:]:
-        common &= set(df.index)
-
-    # Return in order of first dataframe
-    return [bpm for bpm in dataframes[0].index if bpm in common]
 
 
 def load_optics_files(
@@ -66,14 +61,7 @@ def load_optics_files(
     Raises:
         FileNotFoundError: If any required file is missing
     """
-    loaded = {}
-    for key, (prefix, suffix) in file_specs.items():
-        file_path = optics_dir / f"{prefix}{suffix}{EXT}"
-        if not file_path.exists():
-            raise FileNotFoundError(f"Required TFS file not found: {file_path}")
-        loaded[key] = tfs.read(file_path, index="NAME")
-
-    return loaded
+    return load_tfs_files(optics_dir, file_specs)
 
 
 def find_closest_bpms_for_correctors(
@@ -251,6 +239,7 @@ local _, flw = MAD.track{{
     X0 = da_x0,
     save=false,
     savemap=false,
+    method=6,
 }}
 local B1 = MAD.gphys.map2bet(flw[1], 6, nil, nil, sdir)
 py:send(B1.d{plane}, true)

@@ -51,7 +51,7 @@ from aba_optimiser.accelerators import SPS
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
 from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 from aba_optimiser.simulation.data_processing import prepare_track_dataframe
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.tracking_fitter import FullRingFitter
 from aba_optimiser.training.controller_config import MeasurementConfig, OutputConfig, SequenceConfig
 from aba_optimiser.training.data_manager import DataManager
 
@@ -648,7 +648,6 @@ def plot_initial_conditions_by_plane(
 def make_simulation_config() -> SimulationConfig:
     """Return the SPS multi-turn controller settings used for the study."""
     return SimulationConfig(
-        tracks_per_worker=2,
         num_workers=8,
         num_batches=1,
         optimise_momenta=True,
@@ -694,7 +693,7 @@ def build_controller(
     label = case.name if run_label is None else run_label
     controller_dir = output_dir / label
     controller_dir.mkdir(parents=True, exist_ok=True)
-    return Controller(
+    return FullRingFitter(
         accelerator,
         make_optimiser_config(max_epochs, accelerator),
         make_simulation_config(),
@@ -707,7 +706,6 @@ def build_controller(
             bunches_per_file=1,
         ),
         bpm_start_points=bpm_start_points,
-        bpm_end_points=[],
         show_plots=False,
         initial_knob_strengths=initial_knob_strengths,
         true_strengths=case.magnet_strengths,
@@ -780,6 +778,7 @@ def run_controller_with_diagnostics(
         ctrl.worker_manager.start_workers(
             ctrl.data_manager.track_data,
             ctrl.data_manager.turn_batches,
+            ctrl.data_manager.validation_turn_batches,
             ctrl.data_manager.file_map,
             ctrl.config_manager.start_bpms,
             ctrl.config_manager.end_bpms,
@@ -792,7 +791,9 @@ def run_controller_with_diagnostics(
         turn_batches = [list(batch) for batch in ctrl.data_manager.turn_batches]
         file_map = dict(ctrl.data_manager.file_map)
         sampling_num_workers = ctrl.data_manager.num_workers
-        sampling_tracks_per_worker = ctrl.data_manager.tracks_per_worker
+        sampling_validation_batches = [
+            list(batch) for batch in ctrl.data_manager.validation_turn_batches
+        ]
 
         initial_diagnostics = ctrl.worker_manager._request_worker_diagnostics(ctrl.initial_knobs)
         initial_loss = aggregate_loss_diagnostics(ctrl, initial_diagnostics, bpm_positions)
@@ -822,7 +823,7 @@ def run_controller_with_diagnostics(
             turn_batches,
             file_map,
             sampling_num_workers,
-            sampling_tracks_per_worker,
+            sampling_validation_batches,
         )
     except Exception:
         ctrl.worker_manager.terminate_workers()
@@ -836,6 +837,7 @@ def probe_loss_profile(ctrl: Controller, bpm_positions: pd.DataFrame) -> pd.Data
         ctrl.worker_manager.start_workers(
             ctrl.data_manager.track_data,
             ctrl.data_manager.turn_batches,
+            ctrl.data_manager.validation_turn_batches,
             ctrl.data_manager.file_map,
             ctrl.config_manager.start_bpms,
             ctrl.config_manager.end_bpms,
@@ -858,7 +860,9 @@ def copy_sampling_state(source: Controller, target: Controller) -> None:
     target.data_manager.turn_batches = [list(batch) for batch in source.data_manager.turn_batches]
     target.data_manager.file_map = dict(source.data_manager.file_map)
     target.data_manager.num_workers = source.data_manager.num_workers
-    target.data_manager.tracks_per_worker = source.data_manager.tracks_per_worker
+    target.data_manager.validation_turn_batches = [
+        list(batch) for batch in source.data_manager.validation_turn_batches
+    ]
 
 
 def apply_sampling_state(
@@ -867,13 +871,15 @@ def apply_sampling_state(
     turn_batches: list[list[int]],
     file_map: dict[int, int],
     num_workers: int,
-    tracks_per_worker: int,
+    validation_turn_batches: list[list[int]],
 ) -> None:
     """Force a probe controller to reuse a previously captured sampling state."""
     target.data_manager.turn_batches = [list(batch) for batch in turn_batches]
     target.data_manager.file_map = dict(file_map)
     target.data_manager.num_workers = num_workers
-    target.data_manager.tracks_per_worker = tracks_per_worker
+    target.data_manager.validation_turn_batches = [
+        list(batch) for batch in validation_turn_batches
+    ]
 
 
 def compute_observed_twiss(
@@ -927,7 +933,7 @@ def build_scenario_result(
         turn_batches,
         file_map,
         sampling_num_workers,
-        sampling_tracks_per_worker,
+        sampling_validation_batches,
     ) = run_controller_with_diagnostics(ctrl, bpm_positions)
     probe_ctrl = build_controller(
         sequence_file=sequence_file,
@@ -944,7 +950,7 @@ def build_scenario_result(
         turn_batches=turn_batches,
         file_map=file_map,
         num_workers=sampling_num_workers,
-        tracks_per_worker=sampling_tracks_per_worker,
+        validation_turn_batches=sampling_validation_batches,
     )
     final_loss = probe_loss_profile(probe_ctrl, bpm_positions)
     estimate_twiss = compute_observed_twiss(

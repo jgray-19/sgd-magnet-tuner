@@ -178,9 +178,6 @@ class Accelerator(BaseAccelerator, ABC):
         if not self.optimise_energy:
             return formatted
 
-        if "pt" in formatted:
-            formatted.remove("pt")
-            formatted.append("deltap")
         return formatted
 
     @abstractmethod

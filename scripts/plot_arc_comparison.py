@@ -13,16 +13,12 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 
 from aba_optimiser.config import PROJECT_ROOT
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger("plot_arc_comparison")
 
@@ -173,12 +169,11 @@ def plot_comparison(
     """Create comparison plots of arc-by-arc dpp variation."""
     # Extract arc indices and values, ensuring they're in order
     arc_indices = sorted(
-        set(int(k.replace("arc", "")) for k in sim_results.keys() | meas_results.keys())
+        {int(k.replace("arc", "")) for k in sim_results.keys() | meas_results.keys()}
     )
 
     sim_values = np.array([sim_results.get(f"arc{i}", np.nan) for i in arc_indices])
     meas_values = np.array([meas_results.get(f"arc{i}", np.nan) for i in arc_indices])
-    diffs = sim_values - meas_values
 
     x = np.arange(len(arc_indices))
     width = 0.35
@@ -188,8 +183,8 @@ def plot_comparison(
         fig, ax = plt.subplots(figsize=(12, 6))
 
         # Plot bars
-        bars1 = ax.bar(x - width / 2, sim_values * SCALE_FACTOR, width, label=label_sim)
-        bars2 = ax.bar(x + width / 2, meas_values * SCALE_FACTOR, width, label=label_meas)
+        ax.bar(x - width / 2, sim_values * SCALE_FACTOR, width, label=label_sim)
+        ax.bar(x + width / 2, meas_values * SCALE_FACTOR, width, label=label_meas)
 
         # Labels and formatting
         ax.set_xlabel("Arc")
@@ -278,14 +273,14 @@ def print_statistics(
 ) -> None:
     """Print statistics for both datasets."""
     arc_indices = sorted(
-        set(int(k.replace("arc", "")) for k in sim_results.keys() | meas_results.keys())
+        {int(k.replace("arc", "")) for k in sim_results.keys() | meas_results.keys()}
     )
 
     sim_values = np.array([sim_results.get(f"arc{i}", np.nan) for i in arc_indices])
     meas_values = np.array([meas_results.get(f"arc{i}", np.nan) for i in arc_indices])
 
     print(f"\n{'='*60}")
-    print(f"Arc-by-Arc dpp Comparison Statistics")
+    print("Arc-by-Arc dpp Comparison Statistics")
     print(f"{'='*60}")
 
     print(f"\n{label_sim}:")
@@ -301,7 +296,7 @@ def print_statistics(
     print(f"  Max:      {np.nanmax(meas_values) * SCALE_FACTOR:>12.3f} x 10⁻⁵  (Arc {arc_indices[np.nanargmax(meas_values)]})")
 
     # Print arc-by-arc comparison
-    print(f"\nArc-by-Arc Values:")
+    print("\nArc-by-Arc Values:")
     print(f"{'Arc':<8} {label_sim:<25} {label_meas:<25} {'Diff':<15}")
     print("-" * 75)
     for i in arc_indices:

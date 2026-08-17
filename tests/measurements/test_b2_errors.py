@@ -7,7 +7,10 @@ import tfs
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.mad.optimising_mad_interface import GenericMadInterface
-from aba_optimiser.measurements.b2_errors import resolve_b2_error_table
+from aba_optimiser.measurements.b2_errors import (
+    b2_errors_to_magnet_strengths,
+    resolve_b2_error_table,
+)
 from tests.mad.helpers import cleanup_interface
 
 if TYPE_CHECKING:
@@ -109,6 +112,18 @@ def test_resolve_b2_error_table_picks_closest_energy(tmp_path: Path) -> None:
     )
 
 
+def test_b2_errors_to_magnet_strengths_routes_k1l_to_dk1l_suffix() -> None:
+    strengths = b2_errors_to_magnet_strengths({"MB.A12L1.B2": 14.3, "MB.B7R4.B2": -2.1})
+
+    assert strengths == {"MB.A12L1.B2.dk1l": 14.3, "MB.B7R4.B2.dk1l": -2.1}
+
+
+def test_b2_errors_to_magnet_strengths_drops_zero_entries() -> None:
+    strengths = b2_errors_to_magnet_strengths({"MB.A12L1.B2": 0.0, "MB.B7R4.B2": 3.5})
+
+    assert strengths == {"MB.B7R4.B2.dk1l": 3.5}
+
+
 @pytest.mark.slow
 def test_lhc_b2_errors_require_tune_knobs_file(seq_b2: Path, tmp_path: Path) -> None:
     """b2 errors shift the tunes, so the MAD interface must receive a tune knobs file."""
@@ -128,7 +143,7 @@ def test_lhc_b2_errors_require_tune_knobs_file(seq_b2: Path, tmp_path: Path) -> 
 
 @pytest.mark.slow
 def test_lhc_b2_errors_route_to_dknl_and_keep_twiss_stable(
-    seq_b2: Path, tune_knobs_file: Path, tmp_path: Path
+    seq_b2: Path, tune_knobs: Path, tmp_path: Path
 ) -> None:
     clean = GenericMadInterface(
         accelerator=LHC(beam=2, kinetic_energy=6800.0, sequence_file=seq_b2)
@@ -152,7 +167,7 @@ def test_lhc_b2_errors_route_to_dknl_and_keep_twiss_stable(
             sequence_file=seq_b2,
         ),
         b2_errors=error_file,
-        tune_knobs_file=tune_knobs_file,
+        tune_knobs=tune_knobs,
     )
     try:
         # Each errored bend carries its K1L in the dknl[2] (quadrupole) slot.

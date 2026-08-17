@@ -9,6 +9,8 @@ from aba_optimiser.measurements.loading import (
     build_dataframe_file_indices,
     convert_tbt_to_dataframes,
     load_measurement_files,
+    read_lhc_bpm_tbt,
+    tbt_xy_to_long_dataframe,
 )
 from aba_optimiser.measurements.preprocessing import (
     ClosedOrbitInput,
@@ -29,5 +31,7 @@ __all__ = [
     "load_measurement_files",
     "preprocess_measurement_dataframe",
     "process_single_dataframe",
+    "read_lhc_bpm_tbt",
     "run_measurement_analysis",
+    "tbt_xy_to_long_dataframe",
 ]

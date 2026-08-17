@@ -27,11 +27,13 @@ from pymadng_utils.madx import convert_tfs_to_madx
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import PROJECT_ROOT
 from aba_optimiser.mad import GradientDescentMadInterface
-from aba_optimiser.measurements.create_datafile import save_online_knobs
-from aba_optimiser.measurements.squeeze_config import MODEL_DIRS, PC, get_measurement_date
-from aba_optimiser.measurements.squeeze_helpers import (
+from aba_optimiser.measurements.online_knobs import save_online_knobs
+from aba_optimiser.measurements.sequence import get_or_make_sequence
+from aba_optimiser.measurements.squeeze.config import (
+    MODEL_DIRS,
+    PC,
+    get_measurement_date,
     get_model_dir,
-    get_or_make_sequence,
 )
 
 if TYPE_CHECKING:
@@ -218,8 +220,8 @@ def download_knobs_for_frequency(
     save_online_knobs(
         meas_time,
         beam=beam,
-        tune_knobs_file=tune_file,
-        corrector_knobs_file=corrector_file,
+        tune_knobs=tune_file,
+        corrector_knobs=corrector_file,
         energy=pc,
     )
     if drop_ks_knobs:
@@ -243,8 +245,8 @@ def build_madx_twiss_for_frequency(
     pc: float,
     sequence_file: Path,
     checkpoint_knobs: dict[str, float],
-    tune_knobs_file: Path,
-    corrector_knobs_file: Path,
+    tune_knobs: Path,
+    corrector_knobs: Path,
     deltap: float,
     match_model_tunes: bool,
     model_twiss_onmom: bool,
@@ -261,8 +263,8 @@ def build_madx_twiss_for_frequency(
         beam,
         deltap,
         sequence_file,
-        tune_knobs_file,
-        corrector_knobs_file,
+        tune_knobs,
+        corrector_knobs,
     )
     accelerator_meas = LHC(
         beam=beam,
@@ -278,8 +280,8 @@ def build_madx_twiss_for_frequency(
 
     mad_meas = GradientDescentMadInterface(
         accelerator_meas,
-        corrector_strengths=corrector_knobs_file,
-        tune_knobs_file=tune_knobs_file,
+        corrector_knobs=corrector_knobs,
+        tune_knobs=tune_knobs,
     )
 
     resolved_knobs, unresolved_knobs = resolve_checkpoint_knobs(mad_meas, checkpoint_knobs)
@@ -314,8 +316,8 @@ def build_madx_twiss_for_frequency(
 
     mad_model = GradientDescentMadInterface(
         accelerator_model,
-        corrector_strengths=None,
-        tune_knobs_file=None,
+        corrector_knobs=None,
+        tune_knobs=None,
     )
 
     if match_model_tunes:
@@ -460,8 +462,8 @@ def main() -> None:
             pc=pc,
             sequence_file=sequence_file,
             checkpoint_knobs=checkpoint_knobs,
-            tune_knobs_file=tune_snapshot,
-            corrector_knobs_file=corrector_snapshot,
+            tune_knobs=tune_snapshot,
+            corrector_knobs=corrector_snapshot,
             deltap=deltap,
             match_model_tunes=args.match_model_tunes,
             model_twiss_onmom=args.model_twiss_onmom,

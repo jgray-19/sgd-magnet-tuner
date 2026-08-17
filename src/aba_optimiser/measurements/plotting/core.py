@@ -17,17 +17,15 @@ import pandas as pd
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import MEASUREMENTS_ARTIFACTS_ROOT, PROJECT_ROOT
 from aba_optimiser.mad import GradientDescentMadInterface
-from aba_optimiser.measurements.squeeze_config import (
+from aba_optimiser.measurements.sequence import get_or_make_sequence
+from aba_optimiser.measurements.squeeze.config import (
     ANALYSIS_DIRS,
     BETABEAT_DIR,
     MODEL_DIRS,
     get_measurement_date,
-)
-from aba_optimiser.measurements.squeeze_helpers import (
-    get_or_make_sequence,
     get_results_dir,
-    load_estimates_and_uncertainties,
 )
+from aba_optimiser.measurements.squeeze.io import load_estimates_and_uncertainties
 
 LOGGER = logging.getLogger(__name__)
 
@@ -56,10 +54,11 @@ class PlotContext:
     analysis_dir: Path
     squeeze_step: str
     results_dir: Path
-    tune_knobs_file: Path
+    tune_knobs: Path
     corrector_file: Path | None
     beam: int
     deltap: float
+    b2_errors: Path | None
 
 
 def parse_arc_spec(arcs: str | None) -> list[int] | None:
@@ -137,7 +136,6 @@ def prepare_plot_context(
         beam=beam,
         kinetic_energy=kinetic_energy,
         sequence_file=seq_file,
-        # b2_errors=b2_errors,
         optimise_bends=True,
         optimise_quadrupoles=True,
         optimise_other_quadrupoles=True,
@@ -164,10 +162,10 @@ def prepare_plot_context(
             arc: dict.fromkeys(arc_estimates, 0.0) for arc, arc_estimates in estimates.items()
         }
 
-    tune_knobs_file = results_dir / f"tune_knobs_{squeeze_step}_0Hz.txt"
-    if not tune_knobs_file.exists():
-        raise FileNotFoundError(f"Tune knobs file not found: {tune_knobs_file}")
-    print(f"Using tune knobs file: {tune_knobs_file}")
+    tune_knobs = results_dir / f"tune_knobs_{squeeze_step}_0Hz.txt"
+    if not tune_knobs.exists():
+        raise FileNotFoundError(f"Tune knobs file not found: {tune_knobs}")
+    print(f"Using tune knobs file: {tune_knobs}")
 
     corrector_file = results_dir / f"corrector_strengths_{squeeze_step}_{frequency}.txt"
     if not corrector_file.exists():
@@ -180,7 +178,7 @@ def prepare_plot_context(
         )
         all_estimates = None
     else:
-        actual = find_true_values(accelerator, estimates, tune_knobs_file)
+        actual = find_true_values(accelerator, estimates, tune_knobs)
         estimates, uncertainties, actual = filter_estimates_by_max_uncertainty(
             estimates,
             uncertainties,
@@ -211,10 +209,11 @@ def prepare_plot_context(
         analysis_dir=analysis_dir,
         squeeze_step=squeeze_step,
         results_dir=results_dir,
-        tune_knobs_file=tune_knobs_file,
+        tune_knobs=tune_knobs,
         corrector_file=corrector_file,
         beam=beam,
         deltap=deltap,
+        b2_errors=b2_errors,
     )
 
 
@@ -295,36 +294,51 @@ def get_twiss_without_errors(
     accelerator: LHC,
     just_bpms: bool,
     estimated_magnets: dict[str, float] | None = None,
-    tune_knobs_file: Path | None = None,
+    tune_knobs: Path | None = None,
     corrector_file: Path | None = None,
     deltap: float = 0.0,
+    b2_errors: Path | None = None,
 ) -> pd.DataFrame:
     """Get twiss data from a model with optional tune knobs and estimated magnets."""
     mad = GradientDescentMadInterface(
         accelerator,
-        corrector_strengths=corrector_file,
-        tune_knobs_file=tune_knobs_file,
+        corrector_knobs=corrector_file,
+        tune_knobs=tune_knobs,
+        b2_errors=b2_errors,
     )
     if estimated_magnets is not None:
-        mad.update_knob_values(estimated_magnets)
+        # Saved estimates can reference knobs absent from this optics (e.g. a dy offset
+        # on a quad whose k1 is zero here, so no misalignment knob was created). Such a
+        # knob has no optical effect, so drop it rather than fail the whole plot.
+        known = {n: v for n, v in estimated_magnets.items() if n in mad.knob_name_set}
+        dropped = sorted(set(estimated_magnets) - set(known))
+        if dropped:
+            LOGGER.warning(
+                "Ignoring %d estimate knob(s) not present in the loaded model: %s",
+                len(dropped),
+                ", ".join(dropped[:10]) + ("..." if len(dropped) > 10 else ""),
+            )
+        mad.update_knob_values(known)
     return mad.run_twiss(deltap=deltap, observe=int(just_bpms), chrom=True)
 
 
 def get_fullring_twiss(
     accelerator: LHC,
     estimated_magnets: dict[str, float] | None = None,
-    tune_knobs_file: Path | None = None,
+    tune_knobs: Path | None = None,
     corrector_file: Path | None = None,
     deltap: float = 0.0,
+    b2_errors: Path | None = None,
 ) -> pd.DataFrame:
     """Get full-ring twiss data at BPMs with column names aligned to measurement data."""
     twiss = get_twiss_without_errors(
         accelerator,
         just_bpms=True,
         estimated_magnets=estimated_magnets,
-        tune_knobs_file=tune_knobs_file,
+        tune_knobs=tune_knobs,
         corrector_file=corrector_file,
         deltap=deltap,
+        b2_errors=b2_errors,
     )
     return twiss.rename(columns={"mu1": "mux", "mu2": "muy", "beta11": "betx", "beta22": "bety"})
 
@@ -332,33 +346,33 @@ def get_fullring_twiss(
 def find_true_values(
     accelerator: LHC,
     estimates: dict[str, dict[str, float]],
-    tune_knobs_file: Path,
+    tune_knobs: Path,
     corrector_file: Path | None = None,
 ) -> dict[str, dict[str, float]]:
     """Return zero-reference values for optimisation-space plots."""
-    del accelerator, tune_knobs_file, corrector_file
+    del accelerator, tune_knobs, corrector_file
     return {arc: dict.fromkeys(mags, 0.0) for arc, mags in estimates.items()}
 
 
 def convert_estimates_to_optimisation_space(
     accelerator: LHC,
     estimates: dict[str, dict[str, float]],
-    tune_knobs_file: Path,
+    tune_knobs: Path,
     corrector_file: Path | None = None,
 ) -> dict[str, dict[str, float]]:
     """Return saved result values unchanged because outputs are already in optimisation space."""
-    del accelerator, tune_knobs_file, corrector_file
+    del accelerator, tune_knobs, corrector_file
     return {arc: mags.copy() for arc, mags in estimates.items()}
 
 
 def convert_uncertainties_to_optimisation_space(
     accelerator: LHC,
     uncertainties: dict[str, dict[str, float]],
-    tune_knobs_file: Path,
+    tune_knobs: Path,
     corrector_file: Path | None = None,
 ) -> dict[str, dict[str, float]]:
     """Return saved uncertainties unchanged because outputs are already in optimisation space."""
-    del accelerator, tune_knobs_file, corrector_file
+    del accelerator, tune_knobs, corrector_file
     return {arc: mags.copy() for arc, mags in uncertainties.items()}
 
 
@@ -915,15 +929,15 @@ def get_twiss_through_arc(
     arc_end: str,
     meas_twiss: pd.DataFrame,
     estimated_magnets: dict[str, float] | None = None,
-    tune_knobs_file: Path | None = None,
+    tune_knobs: Path | None = None,
     corrector_file: Path | None = None,
     deltap: float = 0.0,
 ) -> pd.DataFrame:
     """Get twiss data (phase and beta) through an arc using measurement beta0 as initial conditions."""
     mad = GradientDescentMadInterface(
         accelerator=accelerator,
-        corrector_strengths=corrector_file,
-        tune_knobs_file=tune_knobs_file,
+        corrector_knobs=corrector_file,
+        tune_knobs=tune_knobs,
     )
 
     if estimated_magnets is not None:

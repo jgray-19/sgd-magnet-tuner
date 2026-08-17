@@ -24,7 +24,7 @@ def test_arc_magnet_ranges_beam2_matches_original_expression() -> None:
 
 
 def test_beam1_dense_ranges_match_create_datafile_loop() -> None:
-    # create_datafile_loop used the first five BPMs (indices 9..13).
+    # The batch deltap-optimisation campaigns use the first five BPMs (indices 9..13).
     indices = range(9, 14)
     rc = arc_ranges(1, indices, indices)
     assert rc.magnet_ranges == [f"BPM.9R{s}.B1/BPM.9L{s % 8 + 1}.B1" for s in range(1, 9)]

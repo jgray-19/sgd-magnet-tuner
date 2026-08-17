@@ -1,0 +1,109 @@
+! run_closed_twiss_init.mad
+!
+! Sets up a parametric *closed* twiss: the optimisation knobs become TPSA
+! parameters on the sequence, so twiss returns the periodic solution together
+! with the derivative of every optical function with respect to every knob.
+!
+! There is no seeded starting point. twiss runs cofind for the parametric closed
+! orbit and then normalises the parametric one-turn map, so the closed orbit,
+! beta, alpha, phase and dispersion at every BPM are the periodic solution of the
+! ring as a function of the knobs. Nothing is taken from the measurement except
+! the targets themselves.
+!
+! The optical functions come from twiss's own ``trkopt``: each requested name is
+! added as an mtable column and filled with ``optfun(m, name, ..., mt, nf0)`` as
+! the map is tracked. That is strictly better than reading them back out of
+! ``savemap`` afterwards - twiss shares one memoisation table per element (so the
+! beta/phase TPSA is built once, not once per knob), it references the phase to
+! the normal form at the origin, and the results arrive as plain columns instead
+! of one damap per BPM. Encoding the knob monomial in the requested name is what
+! turns each column into a derivative: ``beta11_`` is the value and
+! ``beta11_0..010..0`` is d(beta11)/d(knob i).
+!
+! The closed orbit is the exception: ``x``/``y`` are not optical functions, so
+! their knob derivatives are read from the saved map's linear part instead.
+!
+! Assumes the following globals are already defined (set by the worker):
+!   loaded_sequence   : the sequence to compute the closed twiss of
+!   knob_names        : ordered table of optimisation-knob variable names
+!   optics_columns    : ordered table of trkopt names (values then derivatives)
+!   orbit_coords      : ordered table of closed-orbit coordinates to report
+!
+! After this script runs the worker drives it with, per iteration:
+!   loaded_sequence['<knob>']:set0(value)   -- update the knob constant part
+!   compute_closed_twiss()                  -- returns success flag
+!   <read optics_columns via twiss_tbl:to_df>
+!   send_orbit_jacobian()                   -- one matrix per orbit coordinate
+
+local tblcat in MAD.utility
+local matrix, vector in MAD
+
+num_knobs = #knob_names
+
+! Identity parametric map over the 6 phase-space coords + one parameter per knob.
+!
+! mo=2 (not 1) is required: the optical functions are first order in the phase
+! space variables, so their knob derivatives are order-2 monomials (one
+! coordinate slot times one parameter slot). gphys asserts this directly, e.g.
+! nf_bet: "damap order is too low %d < %d" for maxord < 1 + mon:ord(). po=1 keeps
+! the parameters first order, so no knob-knob cross terms are carried - the
+! Gauss-Newton Hessian only ever needs the first derivatives.
+coord_names = {'x', 'px', 'y', 'py', 't', 'pt'}
+x0map = MAD.damap {
+    nv = #coord_names,
+    np = num_knobs,
+    mo = 2,
+    po = 1,
+    vn = tblcat(coord_names, knob_names),
+}
+
+! Make each knob a TPSA (value + 1*parameter) so its derivative propagates, and
+! remember the monomial that selects d/d(knob_i) from a coordinate TPSA. The
+! monomial is kept in the string form that ``tpsa:get`` parses itself.
+knob_mono = {}
+for i, param in ipairs(knob_names) do
+    loaded_sequence[param] = loaded_sequence[param] + x0map[param]
+    knob_mono[i] = "000000" .. string.rep("0", i - 1) .. "1"
+end
+
+! Compute the parametric closed twiss. cofind can fail (lose the particle) when
+! the knobs are driven into an unstable region; report success so the worker can
+! flag the step as recoverable instead of using a stale/NaN table.
+function compute_closed_twiss()
+    -- Capture into a local first: when twiss fails it returns nil, and reading
+    -- an undeclared/nil global twiss_tbl would trip MAD-NG's strict-mode warning.
+    local tws = twiss{
+        sequence = loaded_sequence,
+        observe  = 1,
+        X0       = x0map,
+        trkopt   = optics_columns,
+        savemap  = #orbit_coords > 0,
+    }
+    twiss_tbl = tws
+    local ok = tws ~= nil and (tws.lost == nil or tws.lost == 0)
+    python:send(ok and true or false, true)
+end
+
+! Send d(orbit coordinate)/d(knob) as one (nbpm x nknob) matrix per coordinate.
+! The scalar orbit is already a plain twiss column, so only the Jacobian needs
+! the saved maps.
+! Rows are filled through a vector and ``setrow``. ``matrix:seti`` takes a single
+! *linear* index, so ``jacobian:seti(row, col, value)`` silently writes ``col`` as
+! the value at position ``row`` - it does not error, it just returns the loop
+! counter everywhere.
+function send_orbit_jacobian()
+    local maps = twiss_tbl:getcol('__map')
+    local nbpm = #twiss_tbl
+    for _, coord in ipairs(orbit_coords) do
+        local jacobian = matrix(nbpm, num_knobs)
+        local row = vector(num_knobs)
+        for r = 1, nbpm do
+            local tpsa = maps[r][coord]
+            for i = 1, num_knobs do
+                row:seti(i, tpsa:get(knob_mono[i]))
+            end
+            jacobian:setrow(r, row)
+        end
+        python:send(jacobian, true)
+    end
+end

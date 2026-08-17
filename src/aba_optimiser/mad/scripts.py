@@ -8,8 +8,7 @@ from pathlib import Path
 mad_dir = Path(__file__).absolute().parent
 MAD_SCRIPTS_DIR = mad_dir / "mad_scripts"
 
-TRACK_OPTICS_INIT = MAD_SCRIPTS_DIR / "run_optics_track_init.mad"
-TRACK_OPTICS_SCRIPT = MAD_SCRIPTS_DIR / "run_optics_track.mad"
+CLOSED_TWISS_INIT = MAD_SCRIPTS_DIR / "run_closed_twiss_init.mad"
 
 TRACKING_OBSERVABLES = ("x", "y", "px", "py")
 LOGGER = logging.getLogger(__name__)
@@ -152,6 +151,7 @@ def _track_call(*, x0: str, atexit: str, level: int = 0) -> str:
         "range=tracking_range",
         "dir=sdir",
         "aperture={kind='circle', 100}",
+        "method=6",
     ]
     return _join_lines(
         [

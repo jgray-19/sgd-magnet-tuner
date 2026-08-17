@@ -22,7 +22,7 @@ from typing import NamedTuple
 import numpy as np
 import pandas as pd
 from pymadng import MAD
-from tmom_recon.physics.transverse import calculate_pz
+from tmom_recon import calculate_pz
 from tqdm.contrib.concurrent import process_map
 
 from aba_optimiser.config import REL_K1_STD_DEV
@@ -102,7 +102,7 @@ def build_track_command(
         return (
             f"trk, mflw = track{{sequence=MADX['{LHCB1_SEQ_NAME}'], "
             f"X0={{x={x_init:.16e}, px={px_init:.16e}, y={y_init:.16e}, py={py_init:.16e}, t=0, pt=0}}, "
-            f"nturn={config.nturns}}}"
+            f"nturn={config.nturns}, method=6}}"
         )
     start_bpm = config.bpm_range.split("/")[0]
 
@@ -123,7 +123,7 @@ def build_track_command(
     return (
         f"trk, _ = track{{sequence=MADX['{LHCB1_SEQ_NAME}'], "
         f"X0={{x={x0:.16e}, px={px0:.16e}, y={y0:.16e}, py={py0:.16e}, t=0, pt=0}}, "
-        f"nturn={config.nturns}}}\n"
+        f"nturn={config.nturns}, method=6}}\n"
     )
 
 
@@ -418,10 +418,17 @@ end
 
         df = run_single_turn()
 
-        recon_from_prev, recon_from_next = calculate_pz(df, inject_noise=True, tws=self.simulator.df_twiss, info=False, rng=rng)
-        assert (recon_from_next.iloc[0] == recon_from_prev.iloc[0]).all(), "Reconstruction from previous and next turns should match at the start."
+        df["var_x"] = 0.0
+        df["var_y"] = 0.0
+        reconstructed = calculate_pz(
+            df,
+            inject_noise=True,
+            model_tws=self.simulator.df_twiss,
+            info=False,
+            rng=rng,
+        )
 
-        initial_coords = tuple(recon_from_prev[["x", "px", "y", "py"]].iloc[0])
+        initial_coords = tuple(reconstructed[["x", "px", "y", "py"]].iloc[0])
 
         # Print the error on px and py:
         # print("Error on px:", initial_coords[1] - df.iloc[0]["px"])
