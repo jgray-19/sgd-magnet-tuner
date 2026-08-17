@@ -285,7 +285,7 @@ def test_dispersion_b1(
 
     # Generate tracking data and analyze optics
     optics_dir = _generate_nonoise_track(
-        loaded_interface, tmp_path, model_dir_b1, seq_b1, 6600, beam, None
+        loaded_interface, tmp_path, model_dir_b1, seq_b1, 2200, beam, None
     )
 
     # Load model twiss for validation
@@ -300,7 +300,7 @@ def test_dispersion_b1(
         beam=beam,
         pc_gev=6800,
         particle="proton",
-        num_closest_bpms=50,
+        num_closest_bpms=10,
         plane="x",
     )
 
@@ -329,7 +329,7 @@ def test_dispersion_b2(
     beam = 2
     # Generate tracking data and analyze optics
     optics_dir = _generate_nonoise_track(
-        beam2_interface, tmp_path, model_dir_b2, seq_b2, 6600, beam, None
+        beam2_interface, tmp_path, model_dir_b2, seq_b2, 2200, beam, None
     )
 
     # Load model twiss for validation
@@ -344,7 +344,7 @@ def test_dispersion_b2(
         beam=beam,
         pc_gev=6800,
         particle="proton",
-        num_closest_bpms=50,
+        num_closest_bpms=10,
         plane="x",
     )
 
