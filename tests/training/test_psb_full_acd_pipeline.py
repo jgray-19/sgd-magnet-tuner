@@ -609,12 +609,15 @@ def _create_psb_omc3_model(
         driven_tunes[0],
         driven_tunes[1],
     )
+    # CI does not provide CERN AFS.  Use the minimal repository-local copy of
+    # the PSB files referenced by omc3's model creator instead.
+    local_acc_model = Path(__file__).resolve().parents[1] / "data" / "acc-models-psb"
     create_instance_and_model(
         outputdir=model_dir,
         type="nominal",
         logfile=model_dir / "madx.log",
-        fetch="afs",
-        path=None,
+        fetch="path",
+        path=local_acc_model,
         list_choices=False,
         show_help=False,
         accel="psbooster",
