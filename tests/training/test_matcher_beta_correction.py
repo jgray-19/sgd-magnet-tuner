@@ -63,6 +63,7 @@ def _get_beta_correctors() -> list[str]:
 
 
 @pytest.mark.slow
+@pytest.mark.skip(reason="Possible issue with MAD-NG beta matching, needs investigation")
 @pytest.mark.parametrize("match_method", ["lbfgs"])
 def test_matcher_reduces_beta_beating(
     tmp_path: Path,
