@@ -33,6 +33,16 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 
+def _largest_divisor_at_most(value: int, limit: int) -> int:
+    """Return the largest positive divisor of ``value`` not exceeding ``limit``."""
+    if value <= 0:
+        return 0
+    for candidate in range(min(value, limit), 0, -1):
+        if value % candidate == 0:
+            return candidate
+    return 1
+
+
 class ValidationTrackingWorker(TrackingWorker):
     """Validation worker for one payload."""
 
@@ -72,10 +82,16 @@ class ValidationTrackingWorker(TrackingWorker):
     def prepare_data(self, data: TrackingData) -> None:
         """Prepare one validation payload."""
         observables = self._resolve_observables_for_config(self.config, self.include_momentum)
-        num_batches = min(self.simulation_config.num_batches, len(data.init_coords))
+        num_batches = _largest_divisor_at_most(
+            len(data.init_coords),
+            self.simulation_config.num_batches,
+        )
         if num_batches <= 0:
             raise ValueError(f"Worker {self.worker_id}: No initial coordinates available")
 
+        # The MAD track script iterates a single fixed ``batch_size`` over every
+        # sub-batch. Pick a divisor batch count so validation keeps all held-out
+        # turns while preserving equal-size MAD batches.
         n_init = len(data.init_coords)
         init_coords = data.init_coords
         if np.isnan(init_coords).any():
@@ -141,6 +157,7 @@ class ValidationTrackingWorker(TrackingWorker):
             py_name=PYTHON_IN_MAD,
             tracking_anchor_mode=self.config.tracking_anchor_mode,
             tracking_anchor_markers=self.config.tracking_anchor_sources,
+            observed_tracking_anchor_markers=self.config.observed_tracking_anchor_markers,
         )
 
         self.knob_name_set = set(mad_iface.knob_names)
@@ -197,13 +214,30 @@ end
         raise NotImplementedError("ValidationTrackingWorker does not compute gradients")
 
     def compute_validation_loss(self, mad: MAD, knob_updates: dict[str, float]) -> float:
-        """Return validation loss with the same per-payload normalization as training."""
+        """Return a per-turn, per-BPM-point validation loss.
+
+        Uses the same normalisation as the training worker's reported loss
+        (divide by BPM points and by the number of turns in the batch) so the
+        held-out validation loss is directly comparable to the training loss,
+        independent of how many turns each worker holds.
+        """
         total_loss = 0.0
         for batch in range(self.num_batches):
             results = self._run_tracking_batch(mad, knob_updates, batch)
             batch_loss, _ = self._compute_loss_and_bpm_contributions(results, batch)
-            total_loss += batch_loss / self.normalisation_points
+            n_turns = max(1, len(self.init_coords[batch]))
+            total_loss += batch_loss / (self.normalisation_points * n_turns)
         return total_loss / max(1, self.num_batches)
+
+    def _send_init_condition_update(self, mad: MAD, new_px: np.ndarray, new_py: np.ndarray) -> None:
+        """Keep update arrays aligned with this worker's prepared particles.
+
+        Validation normally keeps every held-out turn. The slice also keeps older
+        or externally rebuilt payload chunks compatible if their update arrays are
+        longer than this worker's prepared coordinate table.
+        """
+        n_init = len(self._init_coords_np)
+        super()._send_init_condition_update(mad, new_px.ravel()[:n_init], new_py.ravel()[:n_init])
 
     def _replace_validation_payloads(
         self,

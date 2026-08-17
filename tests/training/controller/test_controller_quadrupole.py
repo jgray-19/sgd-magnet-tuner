@@ -21,7 +21,7 @@ from aba_optimiser.training.config.models import (
     OutputConfig,
     SequenceConfig,
 )
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.tracking_fitter import ArcByArcFitter, FullRingFitter
 from tests.training.controller_test_utils import (
     _generate_nonoise_track,
     _make_optimiser_config_quad,
@@ -45,7 +45,7 @@ def _build_lhc_quad_controller(
     seq_b1: Path,
     loaded_interface: AbaMadInterface,
     start_marker: str,
-) -> tuple[Controller, dict[str, float]]:
+) -> tuple[ArcByArcFitter, dict[str, float]]:
     magnet_range = "BPM.13R1.B1/BPM.13L2.B1"
     bpm_start_points = [f"BPM.{i}R1.B1" for i in range(13, 14)]
     bpm_end_points = [f"BPM.{i}L2.B1" for i in range(13, 14)]
@@ -53,7 +53,7 @@ def _build_lhc_quad_controller(
     flattop_turns = 100
     off_magnet_path = tmp_path / "track_off_magnet.parquet"
 
-    corrector_file, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
+    corrector_file, magnet_strengths, tune_knobs = _generate_nonoise_track(
         loaded_interface,
         flattop_turns,
         off_magnet_path,
@@ -62,7 +62,7 @@ def _build_lhc_quad_controller(
         perturb_quads=True,
     )
 
-    ctrl = Controller(
+    ctrl = ArcByArcFitter(
         LHC(
             beam=1,
             kinetic_energy=6800,
@@ -74,7 +74,7 @@ def _build_lhc_quad_controller(
         _make_simulation_config_quad(),
         SequenceConfig(magnet_range=magnet_range),
         create_arc_measurement_config(
-            off_magnet_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file
+            off_magnet_path, corrector_knobs=corrector_file, tune_knobs=tune_knobs
         ),
         bpm_start_points,
         bpm_end_points,
@@ -190,7 +190,7 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
     no_error = loaded_sps_interface.run_twiss()
     loaded_sps_interface.unobserve_elements([loaded_sps_interface.accelerator.bpm_pattern])
 
-    corrector_file, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
+    corrector_file, magnet_strengths, tune_knobs = _generate_nonoise_track(
         loaded_sps_interface,
         flattop_turns,
         off_magnet_path,
@@ -207,7 +207,6 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
     base_sim = _make_simulation_config_quad()
     simulation_config = dataclasses.replace(
         base_sim,
-        tracks_per_worker=2,
         num_workers=8,
         num_batches=1,
         optimise_momenta=True,
@@ -232,8 +231,8 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
         {
             f: MeasurementDetails(
                 interface_options={
-                    "corrector_strengths": corrector_file,
-                    "tune_knobs_file": tune_knobs_file,
+                    "corrector_knobs": corrector_file,
+                    "tune_knobs": tune_knobs,
                 }
             )
             for f in (
@@ -266,20 +265,18 @@ def test_controller_quad_opt_sps_multi_turn_all_quads(
 
     # # Combine h and v BPMs for start points
     bpm_start_points = h_bpms_selected + v_bpms_selected
-    bpm_end_points = []
     # bpm_start_points = ['BPH.13008', "BPV.13108", "BPH.13208"]
     # bpm_end_points = ["BPH.13208", "BPV.13308", "BPH.13408"]
 
     all_errors = loaded_sps_interface.run_twiss()
 
-    ctrl = Controller(
+    ctrl = FullRingFitter(
         accelerator,
         optimiser_config,
         simulation_config,
         sequence_config,
         measurement_config,
         bpm_start_points=bpm_start_points,
-        bpm_end_points=bpm_end_points,
         output_config=OutputConfig(
             mad_logfile=tmp_path / "controller_quad_opt_sps_multi_turn.log",
             write_tensorboard_logs=False,

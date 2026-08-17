@@ -16,7 +16,7 @@ from aba_optimiser.training.config.models import (
     OutputConfig,
     SequenceConfig,
 )
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.tracking_fitter import ACDMarkerFitter
 from tests.training.controller_test_utils import (
     _load_mad_twiss_for_tracking,
     _make_simulation_config_quad,
@@ -41,6 +41,9 @@ from tests.training.helpers import TRACK_COLUMNS, generate_xsuite_env_with_error
 logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.serial
 
+PSB_HORIZONTAL_ACD_VOLTAGE = 7.65803463522e-05
+PSB_VERTICAL_ACD_VOLTAGE = 4.86557716491e-05
+
 
 def _generate_acd_track(
     interface_with_beam: AbaMadInterface,
@@ -54,10 +57,10 @@ def _generate_acd_track(
 ) -> tuple[Path | None, dict[str, float], Path | None]:
     """Generate a parquet file with ACD-style tracking data (pre/post-kick markers)."""
     corrector_file: Path | None = None
-    tune_knobs_file: Path | None = None
+    tune_knobs: Path | None = None
     if apply_orbit_correction:
         corrector_file = destination.parent / f"corrector_{destination.stem}.tfs"
-    tune_knobs_file = destination.parent / f"tune_knobs_{destination.stem}.txt"
+    tune_knobs = destination.parent / f"tune_knobs_{destination.stem}.txt"
 
     env, magnet_strengths, matched_tunes, _ = generate_xsuite_env_with_errors(
         interface_with_beam,
@@ -69,7 +72,7 @@ def _generate_acd_track(
         target_qy=target_qy,
         rel_error=0.02,
     )
-    save_knobs(matched_tunes, tune_knobs_file)
+    save_knobs(matched_tunes, tune_knobs)
 
     accelerator = interface_with_beam.accelerator
     acd_elem = accelerator.ac_dipole_name
@@ -124,14 +127,14 @@ def _generate_acd_track(
     ]
     acd_line.env.elements[f"{elem_name_lower}h"] = xt.ACDipole(
         plane="x",
-        volt=1e-3,
+        volt=PSB_HORIZONTAL_ACD_VOLTAGE,
         freq=driven_tunes[0],
         lag=0,
         ramp=ramp_profile,
     )
     acd_line.env.elements[f"{elem_name_lower}v"] = xt.ACDipole(
         plane="y",
-        volt=1e-3,
+        volt=PSB_VERTICAL_ACD_VOLTAGE,
         freq=driven_tunes[1],
         lag=0,
         ramp=ramp_profile,
@@ -187,7 +190,7 @@ def _generate_acd_track(
     print(f"All BPMs in tracking data: {set(tracking_df['name'])}")
 
     tracking_df.to_parquet(destination, index=False)
-    return corrector_file, magnet_strengths, tune_knobs_file
+    return corrector_file, magnet_strengths, tune_knobs
 
 
 def _build_acd_controller(
@@ -196,11 +199,11 @@ def _build_acd_controller(
     seq_psb: Path,
     loaded_psb_interface: AbaMadInterface,
     flattop_turns: int = 10,
-) -> tuple[Controller, dict[str, float]]:
+) -> tuple[ACDMarkerFitter, dict[str, float]]:
     magnet_range = "$start/$end"
     off_magnet_path = tmp_path / "track_acd_off_magnet.parquet"
 
-    corrector_file, magnet_strengths, tune_knobs_file = _generate_acd_track(
+    corrector_file, magnet_strengths, tune_knobs = _generate_acd_track(
         loaded_psb_interface,
         flattop_turns,
         off_magnet_path,
@@ -217,7 +220,7 @@ def _build_acd_controller(
         gradient_converged_value=1e-12,
     )
 
-    ctrl = Controller(
+    ctrl = ACDMarkerFitter(
         PSB(
             ring=3,
             kinetic_energy=loaded_psb_interface.accelerator.kinetic_energy,
@@ -228,16 +231,13 @@ def _build_acd_controller(
         _make_simulation_config_quad(),
         SequenceConfig(magnet_range=magnet_range),
         create_arc_measurement_config(
-            off_magnet_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file
+            off_magnet_path, corrector_knobs=corrector_file, tune_knobs=tune_knobs
         ),
-        bpm_start_points=[],
-        bpm_end_points=[],
         output_config=OutputConfig(
             mad_logfile=tmp_path / "mad_logfile_acd.log",
             write_tensorboard_logs=False,
         ),
         true_strengths=magnet_strengths.copy(),
-        use_acd=True,
     )
     return ctrl, magnet_strengths.copy()
 

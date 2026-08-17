@@ -1,22 +1,27 @@
-"""Helper functions for creating controller configurations.
+"""Helper functions for creating fitter configurations.
 
 This module provides convenience functions to reduce duplication when
-creating controller configuration objects for common use cases.
+creating fitter configuration objects for common use cases.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from aba_optimiser.training.config.models import MeasurementConfig, MeasurementDetails
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 def create_arc_measurement_config(
     measurement_file: Path,
     machine_deltap: float = 0.0,
-    corrector_strengths: Path | None = None,
-    tune_knobs_file: Path | None = None,
+    corrector_knobs: Mapping[str, float] | Path | None = None,
+    tune_knobs: Mapping[str, float] | Path | None = None,
     first_bpm: str | None = None,
+    b2_errors: Path | None = None,
 ) -> MeasurementConfig:
     """Build a single-file MeasurementConfig.
 
@@ -24,13 +29,16 @@ def create_arc_measurement_config(
     ``{path: MeasurementDetails(...)}`` mapping directly. The bunch structure is
     read from the parquet's ``bunch_number`` column, so it is not configured here.
     ``first_bpm`` names the BPM the recorded turns begin at; leave it ``None`` to
-    use the file's own first recorded BPM.
+    use the file's own first recorded BPM. ``b2_errors`` optionally applies an LHC
+    dipole b2 error table during optimisation (requires ``tune_knobs``).
     """
     interface_options: dict = {}
-    if corrector_strengths is not None:
-        interface_options["corrector_strengths"] = corrector_strengths
-    if tune_knobs_file is not None:
-        interface_options["tune_knobs_file"] = tune_knobs_file
+    if corrector_knobs is not None:
+        interface_options["corrector_knobs"] = corrector_knobs
+    if tune_knobs is not None:
+        interface_options["tune_knobs"] = tune_knobs
+    if b2_errors is not None:
+        interface_options["b2_errors"] = b2_errors
     return MeasurementConfig(
         {
             Path(measurement_file): MeasurementDetails(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+from functools import partial
 from types import SimpleNamespace
 
 import numpy as np
@@ -8,31 +9,16 @@ import pandas as pd
 import pytest
 
 from aba_optimiser.training.config.models import OutputConfig
-from aba_optimiser.training.controller import (
-    HESSIAN_MIN_EIGENVALUE,
-    Controller,
-    _estimate_uncertainties_from_hessian,
+from aba_optimiser.training.tracking_fitter import (
+    ArcByArcFitter,
+    FullRingFitter,
+    TrackingFitter,
 )
-from aba_optimiser.workers.common import WeightProcessor
-
-
-def test_estimate_uncertainties_from_hessian_handles_negative_mode() -> None:
-    hessian = np.array(
-        [
-            [4.0, 0.0],
-            [0.0, -1e-12],
-        ],
-        dtype=np.float64,
-    )
-
-    uncertainties = _estimate_uncertainties_from_hessian(hessian)
-
-    assert np.isclose(uncertainties[0], 0.5)
-    assert np.isclose(uncertainties[1], 1.0 / np.sqrt(HESSIAN_MIN_EIGENVALUE))
+from aba_optimiser.workers.common import HESSIAN_MIN_EIGENVALUE, WeightProcessor
 
 
 def test_finalise_results_uses_finite_non_negative_uncertainties_for_indefinite_hessian() -> None:
-    ctrl = Controller.__new__(Controller)
+    ctrl = TrackingFitter.__new__(TrackingFitter)
     ctrl.output_config = OutputConfig(include_uncertainty=True)
     ctrl.final_knobs = {"kq1": 1.0, "kq2": 2.0}
     ctrl.filtered_true_strengths = {"kq1": 1.1, "kq2": 2.1}
@@ -60,7 +46,7 @@ def test_finalise_results_uses_finite_non_negative_uncertainties_for_indefinite_
     assert np.isclose(uncertainties[1], 1.0 / np.sqrt(HESSIAN_MIN_EIGENVALUE))
 
 
-def _collect_epoch_gradient(ctrl: Controller, knob_updates: dict[str, float]) -> np.ndarray:
+def _collect_epoch_gradient(ctrl: TrackingFitter, knob_updates: dict[str, float]) -> np.ndarray:
     """Return the raw aggregated training gradient summed over all workers and batches."""
     gradient = np.zeros(len(ctrl.config_manager.knob_names), dtype=np.float64)
     channels = ctrl.worker_manager._channels()
@@ -74,17 +60,25 @@ def _collect_epoch_gradient(ctrl: Controller, knob_updates: dict[str, float]) ->
     return gradient
 
 
-def _compute_training_weight_normaliser(ctrl: Controller) -> float:
-    """Rebuild the worker payload weights and return the global gradient normaliser."""
-    payloads = ctrl.worker_manager.create_worker_payloads(
+def _compute_training_weight_normaliser(ctrl: TrackingFitter) -> float:
+    """Rebuild the worker payload weights and return the global gradient normaliser.
+
+    Production normalises weights over the training *and* validation payloads at once
+    (see ``WorkerManager._build_payload_split``), so the normaliser is computed over the
+    same combined set here.
+    """
+    build = partial(
+        ctrl.worker_manager.create_worker_payloads,
         ctrl.data_manager.track_data,
-        ctrl.data_manager.turn_batches,
-        ctrl.data_manager.file_map,
-        ctrl.config_manager.start_bpms,
-        ctrl.config_manager.end_bpms,
-        ctrl.simulation_config,
-        ctrl.machine_deltaps,
+        file_turn_map=ctrl.data_manager.file_map,
+        start_bpms=ctrl.config_manager.start_bpms,
+        end_bpms=ctrl.config_manager.end_bpms,
+        simulation_config=ctrl.simulation_config,
+        machine_deltaps=ctrl.machine_deltaps,
     )
+    payloads = build(ctrl.data_manager.turn_batches)
+    if ctrl.data_manager.validation_turn_batches:
+        payloads = payloads + build(ctrl.data_manager.validation_turn_batches)
     if not payloads:
         raise AssertionError("Expected at least one worker payload")
 
@@ -147,7 +141,7 @@ def test_controller_worker_hessian_matches_finite_difference_on_reduced_knob_sub
     start_marker = "MSIA.EXIT.B1"
     measurement_file = tmp_path / "track_off_magnet.parquet"
 
-    corrector_file, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
+    corrector_file, magnet_strengths, tune_knobs = _generate_nonoise_track(
         loaded_interface,
         flattop_turns,
         measurement_file,
@@ -158,11 +152,10 @@ def test_controller_worker_hessian_matches_finite_difference_on_reduced_knob_sub
 
     simulation_config = dataclasses.replace(
         _make_simulation_config_quad(),
-        tracks_per_worker=4,
         num_workers=4,
         num_batches=2,
     )
-    ctrl = Controller(
+    ctrl = ArcByArcFitter(
         LHC(
             beam=1,
             kinetic_energy=6800,
@@ -174,7 +167,7 @@ def test_controller_worker_hessian_matches_finite_difference_on_reduced_knob_sub
         simulation_config,
         SequenceConfig(magnet_range=magnet_range),
         create_arc_measurement_config(
-            measurement_file, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file
+            measurement_file, corrector_knobs=corrector_file, tune_knobs=tune_knobs
         ),
         bpm_start_points,
         bpm_end_points,
@@ -191,6 +184,7 @@ def test_controller_worker_hessian_matches_finite_difference_on_reduced_knob_sub
         ctrl.worker_manager.start_workers(
             ctrl.data_manager.track_data,
             ctrl.data_manager.turn_batches,
+            ctrl.data_manager.validation_turn_batches,
             ctrl.data_manager.file_map,
             ctrl.config_manager.start_bpms,
             ctrl.config_manager.end_bpms,
@@ -272,7 +266,7 @@ def test_controller_worker_hessian_matches_finite_difference_for_psb_100um_noise
         "BR3.BPM13L3",
     ]
 
-    corrector_file, magnet_strengths, tune_knobs_file = _generate_nonoise_track(
+    corrector_file, magnet_strengths, tune_knobs = _generate_nonoise_track(
         loaded_psb_interface,
         flattop_turns,
         measurement_file,
@@ -290,7 +284,6 @@ def test_controller_worker_hessian_matches_finite_difference_for_psb_100um_noise
 
     simulation_config = dataclasses.replace(
         _make_simulation_config_quad(),
-        tracks_per_worker=1,
         num_workers=4,
         num_batches=4,
         run_arc_by_arc=False,
@@ -307,7 +300,7 @@ def test_controller_worker_hessian_matches_finite_difference_for_psb_100um_noise
         gradient_converged_value=5e-15,
         optimiser_type="adam",
     )
-    ctrl = Controller(
+    ctrl = FullRingFitter(
         PSB(
             ring=3,
             kinetic_energy=loaded_psb_interface.accelerator.kinetic_energy,
@@ -317,9 +310,10 @@ def test_controller_worker_hessian_matches_finite_difference_for_psb_100um_noise
         optimiser_config,
         simulation_config,
         SequenceConfig("$start/$end"),
-        create_arc_measurement_config(measurement_file, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file),
+        create_arc_measurement_config(
+            measurement_file, corrector_knobs=corrector_file, tune_knobs=tune_knobs
+        ),
         bpm_start_points,
-        [],
         output_config=OutputConfig(
             mad_logfile=tmp_path / "controller_psb_hessian.log",
             write_tensorboard_logs=False,
@@ -333,6 +327,7 @@ def test_controller_worker_hessian_matches_finite_difference_for_psb_100um_noise
         ctrl.worker_manager.start_workers(
             ctrl.data_manager.track_data,
             ctrl.data_manager.turn_batches,
+            ctrl.data_manager.validation_turn_batches,
             ctrl.data_manager.file_map,
             ctrl.config_manager.start_bpms,
             ctrl.config_manager.end_bpms,
@@ -402,7 +397,3 @@ def test_controller_worker_hessian_matches_finite_difference_for_psb_100um_noise
     assert np.linalg.norm(predicted) > 0.0
     assert np.linalg.norm(difference) / reference_scale < 0.25
     assert np.allclose(fd_matrix, predicted, rtol=0.25, atol=1e-2)
-
-    uncertainties = _estimate_uncertainties_from_hessian(total_hessian)
-    assert np.all(np.isfinite(uncertainties))
-    assert np.all(uncertainties > 0.0)

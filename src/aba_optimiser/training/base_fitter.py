@@ -1,4 +1,4 @@
-"""Base controller class with shared functionality for all controllers."""
+"""Base fitter class with shared functionality for all fitters."""
 
 from __future__ import annotations
 
@@ -30,8 +30,8 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 
-class BaseController(ABC):
-    """Base class for all optimisation controllers.
+class BaseFitter(ABC):
+    """Base class for all optimisation fitters.
 
     Provides shared functionality for:
     - Configuration management
@@ -45,7 +45,7 @@ class BaseController(ABC):
 
     Subclasses that need to complete their own setup before ``_init_managers`` is
     called should set ``_defer_managers = True`` as a class attribute.  They are
-    then responsible for calling ``BaseController._init_managers(self)`` explicitly
+    then responsible for calling ``BaseFitter._init_managers(self)`` explicitly
     once their setup is complete.
     """
 
@@ -66,7 +66,7 @@ class BaseController(ABC):
         optimise_knobs: list[str] | None = None,
         output_config: OutputConfig | None = None,
     ):
-        """Initialize base controller.
+        """Initialize base fitter.
 
         User inputs (initial_knob_strengths, true_strengths) are expected in
         optimisation space and are passed through unchanged.
@@ -107,18 +107,17 @@ class BaseController(ABC):
             bpm_start_points, bpm_end_points, sequence_config.bad_bpms
         )
         tracking_plan = config_manager_kwargs.get("tracking_plan")
-        if tracking_plan is None:
-            LOGGER.info(
-                "After filtering bad BPMs, BPM tracking start points: %s; end points: %s",
-                bpm_start_points,
-                bpm_end_points,
-            )
-        else:
-            tracking_plan.log_filtered_tracking_points(
-                LOGGER,
-                bpm_start_points,
-                bpm_end_points,
-            )
+        start_point_label = (
+            tracking_plan.start_point_label
+            if tracking_plan is not None
+            else "BPM tracking start points"
+        )
+        LOGGER.info(
+            "After filtering bad BPMs, %s: %s; end points: %s",
+            start_point_label,
+            bpm_start_points,
+            bpm_end_points,
+        )
 
         # Initialize configuration manager
         self.config_manager = self._configuration_manager_cls(
@@ -130,14 +129,14 @@ class BaseController(ABC):
             optimise_knobs,
             **config_manager_kwargs,
         )
-        mad_setup_kwargs = self._get_controller_mad_setup_kwargs()
+        mad_setup_kwargs = self._get_mad_setup_kwargs()
         self.config_manager.setup_mad_interface(
             debug,
             self.mad_logfile,
             **mad_setup_kwargs,
         )
 
-        # Keep user-space inputs in optimisation space throughout the controller.
+        # Keep user-space inputs in optimisation space throughout the fitter.
         true_strengths_dict = normalise_true_strengths(true_strengths)
         true_strengths_delta = self.convert_deltap_to_pt(true_strengths_dict)
         initial_knobs_delta = self.convert_deltap_to_pt(initial_knob_strengths)
@@ -169,13 +168,6 @@ class BaseController(ABC):
             )
         return initial_knob_strengths
 
-    def convert_pt_to_deltap(self, knob_strengths: dict[str, float]) -> dict[str, float]:
-        """Convert knob strengths from optimisation space back to user space."""
-        knob_strengths = knob_strengths.copy()
-        if "pt" in knob_strengths:
-            knob_strengths["deltap"] = self.config_manager.mad_iface.pt2dp(knob_strengths.pop("pt"))
-        return knob_strengths
-
     def _init_managers(self) -> None:
         """Initialize optimisation loop and result manager."""
         self.optimisation_loop = OptimisationLoop(
@@ -193,11 +185,11 @@ class BaseController(ABC):
         self.output_knob_names = output_knob_names
 
     def _validate_knob_initialisation(self) -> None:
-        """Validate that controller setup produced a usable knob set."""
+        """Validate that fitter setup produced a usable knob set."""
         knob_names = self.config_manager.knob_names
         if not knob_names:
             raise ValueError(
-                "No optimisation knobs were created for this controller configuration. "
+                "No optimisation knobs were created for this fitter configuration. "
                 f"Optimisation is enabled, but the MAD model returned zero knobs for "
                 f"magnet range '{self.config_manager.magnet_range}'. Check that the "
                 "selected optimisation flags match elements present in the loaded "
@@ -210,8 +202,8 @@ class BaseController(ABC):
                 f"{len(knob_names)} knob names but {len(self.initial_knobs)} initial values."
             )
 
-    def _get_controller_mad_setup_kwargs(self) -> dict:
-        """Return extra kwargs for controller-side MAD interface setup."""
+    def _get_mad_setup_kwargs(self) -> dict:
+        """Return extra kwargs for fitter-side MAD interface setup."""
         return {}
 
     def _get_configuration_manager_kwargs(self) -> dict:

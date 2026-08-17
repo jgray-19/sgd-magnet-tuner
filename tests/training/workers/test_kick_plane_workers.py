@@ -27,7 +27,7 @@ def _make_manager(tmp_path, *, file_kick_planes: dict[int, str] | None = None) -
         fixed_end="BPV.20108",
         accelerator=_make_sps(tmp_path),
         interface_options_per_file=[
-            {"corrector_strengths": tmp_path / "correctors.tfs", "tune_knobs_file": tmp_path / "tune_knobs.txt"}
+            {"corrector_knobs": tmp_path / "correctors.tfs", "tune_knobs": tmp_path / "tune_knobs.txt"}
         ],
         all_bpms=["BPV.13108", "BPH.13208", "BPV.13308"],
         file_kick_planes=file_kick_planes,
@@ -93,7 +93,7 @@ def test_create_worker_payloads_skips_single_plane_file_for_mismatched_start_pla
         fixed_end="BPH.13008",
         accelerator=_make_sps(tmp_path),
         interface_options_per_file=[
-            {"corrector_strengths": tmp_path / "correctors.tfs", "tune_knobs_file": tmp_path / "tune_knobs.txt"}
+            {"corrector_knobs": tmp_path / "correctors.tfs", "tune_knobs": tmp_path / "tune_knobs.txt"}
         ],
         all_bpms=["BPH.13008", "BPV.13108", "BPH.13208", "BPV.13308"],
         file_kick_planes={0: "x"},
@@ -125,7 +125,6 @@ def test_create_worker_payloads_skips_single_plane_file_for_mismatched_start_pla
         start_bpms=["BPH.13208", "BPV.13308"],
         end_bpms=[],
         simulation_config=SimulationConfig(
-            tracks_per_worker=1,
             num_workers=2,
             num_batches=1,
             run_arc_by_arc=False,
@@ -151,7 +150,7 @@ def test_create_worker_payloads_keeps_single_plane_file_for_dual_plane_bpm(tmp_p
         fixed_end="BPV.13108",
         accelerator=_make_sps(tmp_path),
         interface_options_per_file=[
-            {"corrector_strengths": tmp_path / "correctors.tfs", "tune_knobs_file": tmp_path / "tune_knobs.txt"}
+            {"corrector_knobs": tmp_path / "correctors.tfs", "tune_knobs": tmp_path / "tune_knobs.txt"}
         ],
         all_bpms=["BPV.13108", "BPH.13208"],
         file_kick_planes={0: "x"},
@@ -179,7 +178,6 @@ def test_create_worker_payloads_keeps_single_plane_file_for_dual_plane_bpm(tmp_p
         start_bpms=["BPH.13208"],
         end_bpms=[],
         simulation_config=SimulationConfig(
-            tracks_per_worker=1,
             num_workers=2,
             num_batches=1,
             run_arc_by_arc=False,

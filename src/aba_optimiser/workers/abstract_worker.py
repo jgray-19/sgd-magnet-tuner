@@ -295,6 +295,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
             py_name=PYTHON_IN_MAD,
             tracking_anchor_mode=self.config.tracking_anchor_mode,
             tracking_anchor_markers=self.config.tracking_anchor_sources,
+            observed_tracking_anchor_markers=self.config.observed_tracking_anchor_markers,
         )
 
         # Range-limited plans (arc-by-arc, kicker, ACD) cycle the sequence to this

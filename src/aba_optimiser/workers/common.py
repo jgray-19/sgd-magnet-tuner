@@ -6,6 +6,7 @@ used across different worker implementations (tracking and optics modes).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -16,6 +17,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from aba_optimiser.accelerators import Accelerator
+
+logger = logging.getLogger(__name__)
+
+# Eigenvalues of the normal matrix below this floor are treated as unconstrained
+# directions: flooring them keeps the inverted covariance finite and non-negative
+# instead of exploding (or going negative through numerical noise).
+HESSIAN_MIN_EIGENVALUE = 1e-35
 
 class KickPlane(str, Enum):
     """Kick-plane options for worker routing and payload selection."""
@@ -44,7 +52,7 @@ class WorkerConfig:
     tracking_end_bpm: str
     magnet_range: str
     # Per-measurement keyword arguments forwarded to the MAD-NG interface, e.g.
-    # corrector_strengths, tune_knobs_file, b2_errors.
+    # corrector_knobs, tune_knobs, b2_errors.
     interface_options: dict[str, Any] = field(default_factory=dict)
     observation_range_start_bpm: str | None = None
     initial_condition_marker: str | None = None
@@ -62,6 +70,7 @@ class WorkerConfig:
     python_logfile: Path | None = None
     tracking_anchor_mode: str | None = None
     tracking_anchor_sources: list[str] | None = None
+    observed_tracking_anchor_markers: list[str] | None = None
     cycle_marker: str | None = None
 
 
@@ -102,20 +111,111 @@ class TrackingData:
     precomputed_weights: PrecomputedTrackingWeights | None
 
 
-@dataclass
-class OpticsData:
-    """Reference optics measurements for an optics worker.
+class ObservableKind(str, Enum):
+    """How a per-BPM observable is turned into a residual.
 
-    Phase advances are stored between consecutive BPMs, so those arrays have
-    ``n_bpms - 1`` rows. Beta-function arrays are defined per BPM and therefore
-    have ``n_bpms`` rows.
+    ``POINTWISE``
+        The model value at each BPM is compared directly against the measurement:
+        closed orbit, beta, alpha, dispersion.
+    ``ADVANCE``
+        Consecutive BPM values are differenced first, so a cumulative model
+        quantity is compared against a measured *advance*. Used for phase, where
+        only the BPM-to-BPM advance is measurable and the absolute value carries
+        an arbitrary origin.
     """
 
-    comparisons: np.ndarray  # Shape: (n_bpms-1, 2) - [phase_adv_x, phase_adv_y]
-    variances: np.ndarray  # Shape: (n_bpms-1, 2) - [var_phase_adv_x, var_phase_adv_y]
-    beta_comparisons: np.ndarray  # Shape: (n_bpms, 2) - [beta_x, beta_y]
-    beta_variances: np.ndarray  # Shape: (n_bpms, 2) - [var_beta_x, var_beta_y]
-    init_coords: dict[str, float]  # beta11, beta22, alfa11, alfa22, dx, dpx, dy, dpy
+    POINTWISE = "pointwise"
+    ADVANCE = "advance"
+
+
+#: Observables the MAD-NG side knows how to evaluate on the closed twiss, mapped
+#: to how their residual is formed. Names are ``gphys.optfun`` function names,
+#: except the closed-orbit coordinates which are read off the map's constant part.
+#:
+#: ``beta11``/``beta22`` are the uncoupled Ripken betas (the ``beta11``/``beta22``
+#: twiss columns). The coupled Edwards-Teng ``betx``/``bety`` are deliberately not
+#: offered: ``gphys`` routes those through ``nf_cplg``, which needs the beam's
+#: relativistic beta on the map and is unavailable on a bare saved map.
+#:
+#: ``dx``/``dy`` are ``d(x)/d(pt)`` and ``d(y)/d(pt)`` - the MAD-X ``DX`` convention.
+#: ``dpx``/``dpy`` are available but should normally be left out when fitting
+#: omc3 output: omc3 derives its ``DPY`` from ``DY`` through the *model* transfer
+#: matrix, so including both double-counts one measurement.
+OBSERVABLE_KINDS: dict[str, ObservableKind] = {
+    "x": ObservableKind.POINTWISE,
+    "y": ObservableKind.POINTWISE,
+    "px": ObservableKind.POINTWISE,
+    "py": ObservableKind.POINTWISE,
+    "beta11": ObservableKind.POINTWISE,
+    "beta22": ObservableKind.POINTWISE,
+    "alfa11": ObservableKind.POINTWISE,
+    "alfa22": ObservableKind.POINTWISE,
+    "dx": ObservableKind.POINTWISE,
+    "dy": ObservableKind.POINTWISE,
+    "dpx": ObservableKind.POINTWISE,
+    "dpy": ObservableKind.POINTWISE,
+    "mu1": ObservableKind.ADVANCE,
+    "mu2": ObservableKind.ADVANCE,
+}
+
+
+@dataclass
+class Observable:
+    """One measured observable family, aligned to ``ClosedTwissData.bpm_names``.
+
+    ``targets`` and ``variances`` have one entry per BPM for a ``POINTWISE``
+    observable and one per *interval* (``n_bpms - 1``) for an ``ADVANCE`` one.
+    A non-finite or non-positive variance drops that point from the fit, which is
+    how partially-measured planes are handled without special-casing.
+    """
+
+    name: str
+    targets: np.ndarray
+    variances: np.ndarray
+
+    @property
+    def kind(self) -> ObservableKind:
+        """Residual form for this observable."""
+        try:
+            return OBSERVABLE_KINDS[self.name]
+        except KeyError:
+            raise ValueError(
+                f"Unknown observable '{self.name}'. Known: {sorted(OBSERVABLE_KINDS)}"
+            ) from None
+
+
+@dataclass
+class ClosedTwissData:
+    """Reference closed-twiss measurements for one momentum, for one worker.
+
+    Arrays are ordered to match the model BPM ordering (the order the sequence's
+    monitors are observed by twiss). ``bpm_names`` records that order so the
+    worker can align the twiss output to these comparisons by name.
+
+    ``pt`` is the known MAD-NG momentum coordinate of this measurement.
+    It is a fixed input to twiss (``x0map.pt``), never an optimisation knob, so
+    both the off-momentum bend response and the dispersive orbit come from the
+    physics. Fitting several ``pt`` values jointly makes the per-magnet
+    Jacobians independent and lifts the single-measurement rank deficiency.
+
+    ``weight_scale`` and ``total_points`` are the *global* loss normalisation and
+    must be identical across every worker in a fit. Each worker divides its
+    inverse-variance weights by ``weight_scale`` and its loss/gradient/Hessian by
+    ``total_points``. Were these derived per worker - from its own largest weight
+    and its own point count - the optimiser would minimise
+    ``sum_w (1/(max_w * N_w)) * chi2_w`` rather than the pooled ``sum_w chi2_w``,
+    so the most precisely measured momentum would be silently down-weighted for
+    being precise, and the reported 1-sigma (built from the un-normalised
+    ``JᵀWJ``) would describe an estimator different from the one that was
+    actually minimised. They are computed once, over every worker's
+    observables, by :func:`create_worker_payloads`.
+    """
+
+    bpm_names: list[str]
+    observables: list[Observable]
+    pt: float = 0.0
+    weight_scale: float = 1.0
+    total_points: int = 1
 
 
 class WeightProcessor:
@@ -258,6 +358,48 @@ class WeightProcessor:
         v_out[valid] = np.maximum(v_out[valid], var_floor)  # ty:ignore[no-matching-overload]
 
         return v_out
+
+
+def hessian_uncertainties(
+    normal_matrix: np.ndarray,
+    *,
+    min_eigenvalue: float = HESSIAN_MIN_EIGENVALUE,
+) -> np.ndarray:
+    """1-sigma parameter uncertainties from a Gauss-Newton normal matrix.
+
+    ``normal_matrix`` must be the weighted normal matrix ``A = JᵀWJ`` built with
+    *physical* inverse-variance weights ``W = 1/σ²`` (units ``1/measurement²``).
+    Its inverse is then the parameter covariance and ``sqrt(diag(A⁻¹))`` gives the
+    1-sigma uncertainties in real parameter units - so callers must pass the
+    un-normalised, true-variance Hessian, never one rescaled by an arbitrary
+    loss-normalisation (which would put the result in a meaningless space).
+
+    Note the factor-of-2 convention: for a chi-square ``Σ w r²`` the second
+    derivative is ``2 JᵀWJ``; pass ``A = JᵀWJ`` here (half that), i.e. the normal
+    matrix / Fisher information, not the raw chi-square Hessian.
+
+    The matrix is symmetrised and its eigenvalues floored to ``min_eigenvalue`` so
+    weakly-constrained or rank-deficient directions yield large-but-finite,
+    non-negative uncertainties rather than blowing up or turning negative through
+    accumulated numerical noise.
+    """
+    matrix = np.asarray(normal_matrix, dtype=np.float64)
+    sym = 0.5 * (matrix + matrix.T)
+    eigenvalues, eigenvectors = np.linalg.eigh(sym)
+    clipped = np.maximum(eigenvalues, min_eigenvalue)
+
+    n_clipped = int(np.count_nonzero(eigenvalues < min_eigenvalue))
+    if n_clipped:
+        logger.warning(
+            "Normal matrix had %d eigenvalue(s) below %.3e; using the floor to keep "
+            "uncertainties finite and non-negative.",
+            n_clipped,
+            min_eigenvalue,
+        )
+
+    covariance = (eigenvectors / clipped) @ eigenvectors.T
+    variances = np.clip(np.diag(covariance), 0.0, None)
+    return np.sqrt(variances)
 
 
 def split_array_to_batches(array: np.ndarray, num_batches: int, axis: int = 0) -> list[np.ndarray]:

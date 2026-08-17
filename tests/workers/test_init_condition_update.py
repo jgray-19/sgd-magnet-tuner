@@ -5,7 +5,7 @@ Covers:
 - TrackingWorker._send_init_condition_update updates _init_coords_np in Python
 - TrackingWorker._handle_control_command dispatches 'update_init_coords'
 - WorkerManager.send_init_condition_updates validates shape and sends per-worker slices
-- Controller._make_epoch_end_hook returns None when no callback is given
+- TrackingFitter._make_epoch_end_hook returns None when no callback is given
 """
 
 from __future__ import annotations
@@ -107,39 +107,41 @@ def test_prepare_batches_flat_arrays_match_batched_lists() -> None:
 # _send_init_condition_update updates _init_coords_np in Python
 # ---------------------------------------------------------------------------
 
-def test_send_init_condition_update_patches_px_py_in_python() -> None:
+def test_send_init_condition_update_patches_all_four_transverse_coords_in_python() -> None:
     n = 6
     worker = _make_worker_with_init_coords(n_particles=n, num_batches=2)
-    expected_x = worker._init_coords_np[:, 0].copy()
+    expected_pt = worker._init_coords_np[:, 5].copy()
 
-    new_px = np.linspace(1.0, 2.0, n)
-    new_py = np.linspace(-1.0, -2.0, n)
+    new = {
+        "x": np.linspace(3.0, 4.0, n),
+        "px": np.linspace(1.0, 2.0, n),
+        "y": np.linspace(-3.0, -4.0, n),
+        "py": np.linspace(-1.0, -2.0, n),
+    }
 
-    worker._send_init_condition_update(FakeMAD(), new_px, new_py)  # type: ignore[arg-type]
+    worker._send_init_condition_update(FakeMAD(), *new.values())  # type: ignore[arg-type]
 
-    assert np.allclose(worker._init_coords_np[:, 1], new_px)
-    assert np.allclose(worker._init_coords_np[:, 3], new_py)
-    # x column (index 0) must be untouched.
-    assert np.allclose(worker._init_coords_np[:, 0], expected_x)
+    for column, name in enumerate(("x", "px", "y", "py")):
+        assert np.allclose(worker._init_coords_np[:, column], new[name])
+    # The longitudinal columns (t, pt) must be untouched: the update is
+    # transverse, and pt carries each file's energy offset.
+    assert np.allclose(worker._init_coords_np[:, 5], expected_pt)
 
 
 def test_send_init_condition_update_sends_column_matrices_to_mad() -> None:
     n = 4
     worker = _make_worker_with_init_coords(n_particles=n, num_batches=2)
-    new_px = np.ones(n)
-    new_py = np.ones(n) * 2
+    sent_values = [np.ones(n) * scale for scale in (3.0, 1.0, -3.0, -1.0)]
 
     mad = FakeMAD()
-    worker._send_init_condition_update(mad, new_px, new_py)  # type: ignore[arg-type]
+    worker._send_init_condition_update(mad, *sent_values)  # type: ignore[arg-type]
 
-    # The Lua script string is sent first, then px, then py.
-    assert len(mad.sent) >= 3
-    px_sent = mad.sent[-2]
-    py_sent = mad.sent[-1]
-    assert isinstance(px_sent, np.ndarray) and px_sent.shape == (n, 1)
-    assert isinstance(py_sent, np.ndarray) and py_sent.shape == (n, 1)
-    assert np.allclose(px_sent[:, 0], new_px)
-    assert np.allclose(py_sent[:, 0], new_py)
+    # The Lua script string is sent first, then x, px, y, py in that order --
+    # the order the script's four python:recv() calls read them in.
+    assert len(mad.sent) >= 5
+    for sent, expected in zip(mad.sent[-4:], sent_values):
+        assert isinstance(sent, np.ndarray) and sent.shape == (n, 1)
+        assert np.allclose(sent[:, 0], expected)
 
 
 # ---------------------------------------------------------------------------
@@ -152,14 +154,18 @@ def test_handle_control_command_update_init_coords_updates_arrays_and_acks() -> 
     conn = FakeConn()
     worker.conn = conn
 
-    new_px = np.linspace(0.1, 0.4, n)
-    new_py = np.linspace(-0.1, -0.4, n)
-    command = {"cmd": "update_init_coords", "px": new_px, "py": new_py}
+    new = {
+        "x": np.linspace(0.3, 0.6, n),
+        "px": np.linspace(0.1, 0.4, n),
+        "y": np.linspace(-0.3, -0.6, n),
+        "py": np.linspace(-0.1, -0.4, n),
+    }
+    command = {"cmd": "update_init_coords", **new}
 
     worker._handle_control_command(FakeMAD(), command)  # type: ignore[arg-type]
 
-    assert np.allclose(worker._init_coords_np[:, 1], new_px)
-    assert np.allclose(worker._init_coords_np[:, 3], new_py)
+    for column, name in enumerate(("x", "px", "y", "py")):
+        assert np.allclose(worker._init_coords_np[:, column], new[name])
     assert conn.last_sent == {"worker_id": 0, "status": "ok"}
 
 
@@ -235,8 +241,10 @@ def test_send_init_condition_updates_slices_correctly() -> None:
     wm, child_conns = _make_real_channels(counts)
 
     total = sum(counts)
-    new_px_py = np.column_stack([
+    new_coords = np.column_stack([
+        np.arange(total, dtype=float) + 0.5,
         np.arange(total, dtype=float),
+        np.arange(total, dtype=float) + 0.25,
         -np.arange(total, dtype=float),
     ])
 
@@ -248,7 +256,7 @@ def test_send_init_condition_updates_slices_correctly() -> None:
     for t in threads:
         t.start()
 
-    wm.send_init_condition_updates(new_px_py)
+    wm.send_init_condition_updates(new_coords)
 
     for t in threads:
         t.join(timeout=5.0)
@@ -259,12 +267,10 @@ def test_send_init_condition_updates_slices_correctly() -> None:
         msg = received[i]
         assert isinstance(msg, dict), f"Worker {i} received unexpected value: {msg!r}"
         assert msg["cmd"] == "update_init_coords"
-        assert isinstance(msg["px"], np.ndarray)
-        assert isinstance(msg["py"], np.ndarray)
-        assert msg["px"].shape == (n, 1)
-        assert msg["py"].shape == (n, 1)
-        assert np.allclose(msg["px"][:, 0], new_px_py[offset : offset + n, 0])
-        assert np.allclose(msg["py"][:, 0], new_px_py[offset : offset + n, 1])
+        for column, name in enumerate(("x", "px", "y", "py")):
+            assert isinstance(msg[name], np.ndarray)
+            assert msg[name].shape == (n, 1)
+            assert np.allclose(msg[name][:, 0], new_coords[offset : offset + n, column])
         offset += n
 
 
@@ -282,8 +288,10 @@ def test_send_init_condition_updates_also_updates_validation_workers() -> None:
     wm, trn_children, val_children = _make_real_channels_with_validation(trn_counts, val_counts)
 
     total = sum(trn_counts) + sum(val_counts)
-    new_px_py = np.column_stack([
+    new_coords = np.column_stack([
+        np.arange(total, dtype=float) + 0.5,
         np.arange(total, dtype=float),
+        np.arange(total, dtype=float) + 0.25,
         -np.arange(total, dtype=float),
     ])
 
@@ -297,7 +305,7 @@ def test_send_init_condition_updates_also_updates_validation_workers() -> None:
     for t in threads:
         t.start()
 
-    wm.send_init_condition_updates(new_px_py)
+    wm.send_init_condition_updates(new_coords)
 
     for t in threads:
         t.join(timeout=5.0)
@@ -308,10 +316,9 @@ def test_send_init_condition_updates_also_updates_validation_workers() -> None:
         msg = received[i]
         assert isinstance(msg, dict), f"Worker {i} received unexpected value: {msg!r}"
         assert msg["cmd"] == "update_init_coords"
-        assert msg["px"].shape == (n, 1)
-        assert msg["py"].shape == (n, 1)
-        assert np.allclose(msg["px"][:, 0], new_px_py[offset : offset + n, 0])
-        assert np.allclose(msg["py"][:, 0], new_px_py[offset : offset + n, 1])
+        for column, name in enumerate(("x", "px", "y", "py")):
+            assert msg[name].shape == (n, 1)
+            assert np.allclose(msg[name][:, 0], new_coords[offset : offset + n, column])
         offset += n
 
 
@@ -319,7 +326,7 @@ def test_send_init_condition_updates_rejects_wrong_shape_with_validation() -> No
     wm, _, _ = _make_real_channels_with_validation([3, 2], [4])
     # total should be 3+2+4=9; passing 8 must fail
     with pytest.raises(ValueError, match="shape"):
-        wm.send_init_condition_updates(np.zeros((8, 2)))
+        wm.send_init_condition_updates(np.zeros((8, 4)))
 
 
 def test_send_init_condition_updates_skips_validation_when_none() -> None:
@@ -329,7 +336,7 @@ def test_send_init_condition_updates_skips_validation_when_none() -> None:
     assert wm.validation_channels is None
 
     total = sum(counts)
-    new_px_py = np.column_stack([np.arange(total, dtype=float), np.zeros(total)])
+    new_coords = np.zeros((total, 4))
 
     received: list = [None] * len(counts)
     threads = [
@@ -339,7 +346,7 @@ def test_send_init_condition_updates_skips_validation_when_none() -> None:
     for t in threads:
         t.start()
 
-    wm.send_init_condition_updates(new_px_py)
+    wm.send_init_condition_updates(new_coords)
 
     for t in threads:
         t.join(timeout=5.0)
@@ -350,19 +357,19 @@ def test_send_init_condition_updates_skips_validation_when_none() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Controller._make_epoch_end_hook — no subprocess needed
+# TrackingFitter._make_epoch_end_hook — no subprocess needed
 # ---------------------------------------------------------------------------
 
 def test_make_epoch_end_hook_returns_none_when_no_callback() -> None:
-    from aba_optimiser.training.controller import Controller
+    from aba_optimiser.training.tracking_fitter import TrackingFitter
 
-    ctrl = object.__new__(Controller)
+    ctrl = object.__new__(TrackingFitter)
     ctrl.initial_conditions_callback = None
     assert ctrl._make_epoch_end_hook() is None
 
 
 def test_make_epoch_end_hook_calls_callback_and_dispatches() -> None:
-    from aba_optimiser.training.controller import Controller
+    from aba_optimiser.training.tracking_fitter import TrackingFitter
 
     dispatched: list[np.ndarray] = []
 
@@ -370,22 +377,23 @@ def test_make_epoch_end_hook_calls_callback_and_dispatches() -> None:
         def send_init_condition_updates(self, arr: np.ndarray) -> None:
             dispatched.append(arr)
 
-    ctrl = object.__new__(Controller)
+    ctrl = object.__new__(TrackingFitter)
     ctrl.worker_manager = FakeWorkerManager()
+    ctrl.config_manager = SimpleNamespace(initial_model_values={})
 
-    new_px_py = np.zeros((5, 2))
-    ctrl.initial_conditions_callback = lambda knobs: new_px_py
+    new_coords = np.zeros((5, 2))
+    ctrl.initial_conditions_callback = lambda knobs, best: new_coords
 
     hook = ctrl._make_epoch_end_hook()
     assert hook is not None
 
-    hook({"k1": 1.0})
+    hook({"k1": 1.0}, {"k1": 1.0})
     assert len(dispatched) == 1
-    assert dispatched[0] is new_px_py
+    assert dispatched[0] is new_coords
 
 
 def test_make_epoch_end_hook_skips_dispatch_when_callback_returns_none() -> None:
-    from aba_optimiser.training.controller import Controller
+    from aba_optimiser.training.tracking_fitter import TrackingFitter
 
     dispatched: list = []
 
@@ -393,12 +401,68 @@ def test_make_epoch_end_hook_skips_dispatch_when_callback_returns_none() -> None
         def send_init_condition_updates(self, arr: np.ndarray) -> None:
             dispatched.append(arr)
 
-    ctrl = object.__new__(Controller)
+    ctrl = object.__new__(TrackingFitter)
     ctrl.worker_manager = FakeWorkerManager()
-    ctrl.initial_conditions_callback = lambda knobs: None
+    ctrl.config_manager = SimpleNamespace(initial_model_values={})
+    ctrl.initial_conditions_callback = lambda knobs, best: None
 
     hook = ctrl._make_epoch_end_hook()
     assert hook is not None
 
-    hook({"k1": 1.0})
+    hook({"k1": 1.0}, {"k1": 1.0})
     assert len(dispatched) == 0
+
+
+def test_make_epoch_end_hook_includes_non_optimised_strengths() -> None:
+    """The callback must see fixed strengths, not just this stage's knobs.
+
+    The optimisation loop rebuilds ``current_knobs`` from the knob names alone, so
+    strengths supplied via ``initial_knob_strengths`` but not optimised only survive
+    in ``config_manager.initial_model_values``. A callback that rebuilds a model from
+    the knobs it is handed would otherwise fall back to the bare model defaults.
+    """
+    from aba_optimiser.training.tracking_fitter import TrackingFitter
+
+    seen: list[dict[str, float]] = []
+
+    class FakeWorkerManager:
+        def send_init_condition_updates(self, arr: np.ndarray) -> None:
+            pass
+
+    ctrl = object.__new__(TrackingFitter)
+    ctrl.worker_manager = FakeWorkerManager()
+    ctrl.config_manager = SimpleNamespace(
+        initial_model_values={"kfixed": 3.0, "kopt": 0.0, "pt": 1e-3}
+    )
+
+    def callback(current: dict[str, float], best: dict[str, float]) -> None:
+        seen.append(current)
+        seen.append(best)
+        return None
+
+    ctrl.initial_conditions_callback = callback
+    hook = ctrl._make_epoch_end_hook()
+
+    hook({"kopt": 1.0}, {"kopt": 2.0})
+    current, best = seen
+    assert current == {"kfixed": 3.0, "kopt": 1.0, "pt": 1e-3}
+    assert best == {"kfixed": 3.0, "kopt": 2.0, "pt": 1e-3}
+
+
+def test_make_epoch_end_hook_keeps_empty_best_knobs_empty() -> None:
+    """An empty ``best_knobs`` must stay empty so callbacks can skip early epochs."""
+    from aba_optimiser.training.tracking_fitter import TrackingFitter
+
+    seen: list[dict[str, float]] = []
+
+    class FakeWorkerManager:
+        def send_init_condition_updates(self, arr: np.ndarray) -> None:
+            pass
+
+    ctrl = object.__new__(TrackingFitter)
+    ctrl.worker_manager = FakeWorkerManager()
+    ctrl.config_manager = SimpleNamespace(initial_model_values={"kfixed": 3.0})
+    ctrl.initial_conditions_callback = lambda current, best: seen.append(best)
+
+    ctrl._make_epoch_end_hook()({"kopt": 1.0}, {})
+    assert seen == [{}]

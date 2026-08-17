@@ -37,7 +37,11 @@ from aba_optimiser.training.config.models import (
     OutputConfig,
     SequenceConfig,
 )
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.tracking_fitter import (
+    ArcByArcFitter,
+    FullRingFitter,
+    TrackingFitter,
+)
 from aba_optimiser.training.workers.screening import OutlierScreener
 from tests.training.helpers import TRACK_COLUMNS, generate_xsuite_env_with_errors
 
@@ -113,19 +117,6 @@ def _run_track_with_model(
         df["name"] = df["name"].astype(str)
         processed_dfs.append(df)
 
-    # # Debugging, plot the phase space at the first BPM:
-    # import matplotlib.pyplot as plt
-    # first_bpm = processed_dfs[0].iloc[0]["name"]
-    # for df in processed_dfs:
-    #     bpm_df = df[df["name"] == first_bpm]
-    #     plt.plot(bpm_df["x"], bpm_df["px"], "o", label="x-px")
-    #     plt.plot(bpm_df["y"], bpm_df["py"], "o", label="y-py")
-    # plt.xlabel("Position (m)")
-    # plt.ylabel("Momentum (rad)")
-    # plt.title("Phase space at first BPM")
-    # plt.legend()
-    # plt.show()
-
     if return_dataframes:
         return processed_dfs
 
@@ -174,10 +165,10 @@ def _generate_nonoise_track(
 ) -> tuple[Path | None, dict[str, float], Path | None]:
     """Generate a parquet file containing noiseless tracking data for the requested BPMs."""
     corrector_file: Path | None = None
-    tune_knobs_file: Path | None = None
+    tune_knobs: Path | None = None
     if apply_orbit_correction:
         corrector_file = destination.parent / f"corrector_{destination.stem}.tfs"
-    tune_knobs_file = destination.parent / f"tune_knobs_{destination.stem}.txt"
+    tune_knobs = destination.parent / f"tune_knobs_{destination.stem}.txt"
 
     env, magnet_strengths, matched_tunes, corrector_table = generate_xsuite_env_with_errors(
         interface_with_beam,
@@ -190,7 +181,7 @@ def _generate_nonoise_track(
         target_qy=target_qy,
     )
     del corrector_table
-    save_knobs(matched_tunes, tune_knobs_file)
+    save_knobs(matched_tunes, tune_knobs)
 
     action = 4e-7 if interface_with_beam.accelerator.seq_name.lower() == "sps" else 4e-8
     angle = 0.0
@@ -233,7 +224,7 @@ def _generate_nonoise_track(
         use_diagonal_kicks=use_diagonal_kicks,
         twiss_data=mad_twiss,
     )
-    return corrector_file, magnet_strengths, tune_knobs_file
+    return corrector_file, magnet_strengths, tune_knobs
 
 
 def _generate_kicker_track(
@@ -248,24 +239,38 @@ def _generate_kicker_track(
     apply_orbit_correction: bool = True,
     target_qx: float = 0.28,
     target_qy: float = 0.31,
+    magnet_strengths: dict[str, float] | None = None,
+    bpms: list[str] | None = None,
+    correctors: list[str] | None = None,
 ) -> tuple[Path | None, dict[str, float], Path | None, str]:
-    """Generate a parquet file containing kicker tracking data with x/px/y/py."""
+    """Generate a parquet file containing kicker tracking data with x/px/y/py.
+
+    ``magnet_strengths`` fixes the quadrupole truth instead of drawing a fresh
+    random perturbation: pass ``None`` once to perturb and capture the truth,
+    then pass that same dict back in for every other ``dpp_value`` against the
+    same ``interface_with_beam`` so all measurements describe one machine
+    viewed at different momenta, rather than compounding a new perturbation
+    on top of the previous one on each call.
+    """
     corrector_file: Path | None = None
-    tune_knobs_file: Path | None = None
+    tune_knobs: Path | None = None
     if apply_orbit_correction:
         corrector_file = destination.parent / f"corrector_{destination.stem}.tfs"
-    tune_knobs_file = destination.parent / f"tune_knobs_{destination.stem}.txt"
+    tune_knobs = destination.parent / f"tune_knobs_{destination.stem}.txt"
 
-    env, magnet_strengths, matched_tunes, _ = generate_xsuite_env_with_errors(
+    env, generated_strengths, matched_tunes, _ = generate_xsuite_env_with_errors(
         interface_with_beam,
         dpp_value=dpp_value,
         corrector_file=corrector_file,
-        perturb_quads=True,
+        perturb_quads=magnet_strengths is None,
         apply_orbit_correction=apply_orbit_correction,
         target_qx=target_qx,
         target_qy=target_qy,
+        bpms=bpms,
+        correctors=correctors,
     )
-    save_knobs(matched_tunes, tune_knobs_file)
+    magnet_strengths = magnet_strengths or generated_strengths
+    save_knobs(matched_tunes, tune_knobs)
 
     seq_name = interface_with_beam.accelerator.seq_name.lower()
     line: xt.Line = env[seq_name]
@@ -333,14 +338,13 @@ def _generate_kicker_track(
         raise ValueError(f"Kicker marker {kicker_name} missing from tracking output")
     tracking_df.to_parquet(destination, index=False)
 
-    return corrector_file, magnet_strengths, tune_knobs_file, kicker_name.upper()
+    return corrector_file, magnet_strengths, tune_knobs, kicker_name.upper()
 
 
 DPP_VALUE = 1.25e-4
 FLATTOP_TURNS = 256
 def _make_simulation_config_energy(optimise_momenta: bool = True) -> SimulationConfig:
     return SimulationConfig(
-        tracks_per_worker=2,
         num_workers=3,
         num_batches=2,
         optimise_momenta=optimise_momenta,
@@ -363,10 +367,10 @@ def _build_energy_optimisation_case(
     target_qy: float = 0.31,
     dpp_value: float = DPP_VALUE,
     flattop_turns: int = FLATTOP_TURNS,
-) -> tuple[Controller, dict[str, float]]:
+) -> tuple[TrackingFitter, dict[str, float]]:
     """Build one energy optimisation controller and its true internal knob values."""
     off_dpp_path = tmp_path / "track_off_dpp.parquet"
-    corrector_file, _, tune_knobs_file = _generate_nonoise_track(
+    corrector_file, _, tune_knobs = _generate_nonoise_track(
         loaded_interface,
         flattop_turns,
         off_dpp_path,
@@ -378,22 +382,35 @@ def _build_energy_optimisation_case(
     )
 
     sequence_config = SequenceConfig(magnet_range=magnet_range)
-    measurement_config = create_arc_measurement_config(off_dpp_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file)
+    measurement_config = create_arc_measurement_config(off_dpp_path, corrector_knobs=corrector_file, tune_knobs=tune_knobs)
 
     accel = loaded_interface.accelerator.copy_with(optimise_energy=True)
-    ctrl = Controller(
-        accel,
-        optimiser_config,
-        simulation_config,
-        sequence_config,
-        measurement_config,
-        bpm_start_points,
-        bpm_end_points,
-        output_config=OutputConfig(
-            mad_logfile=tmp_path / mad_log_name,
-            write_tensorboard_logs=False,
-        ),
+    output_config = OutputConfig(
+        mad_logfile=tmp_path / mad_log_name,
+        write_tensorboard_logs=False,
     )
+    ctrl: TrackingFitter
+    if simulation_config.run_arc_by_arc:
+        ctrl = ArcByArcFitter(
+            accel,
+            optimiser_config,
+            simulation_config,
+            sequence_config,
+            measurement_config,
+            bpm_start_points,
+            bpm_end_points,
+            output_config=output_config,
+        )
+    else:
+        ctrl = FullRingFitter(
+            accel,
+            optimiser_config,
+            simulation_config,
+            sequence_config,
+            measurement_config,
+            bpm_start_points,
+            output_config=output_config,
+        )
     true_knobs = {
         "pt": dp2pt(
             dpp_value,
@@ -452,7 +469,6 @@ def _make_optimiser_config_quad() -> OptimiserConfig:
 
 def _make_simulation_config_quad() -> SimulationConfig:
     return SimulationConfig(
-        tracks_per_worker=10,
         num_workers=8,
         num_batches=2,
         bpm_loss_outlier_sigma=4,
@@ -460,7 +476,7 @@ def _make_simulation_config_quad() -> SimulationConfig:
 
 
 def evaluate_controller_worker_loss(
-    ctrl: Controller,
+    ctrl: TrackingFitter,
     knobs: dict[str, float],
     *,
     enable_validation: bool | None = None,
@@ -474,7 +490,7 @@ def evaluate_controller_worker_loss(
 
 
 def evaluate_controller_worker_losses(
-    ctrl: Controller,
+    ctrl: TrackingFitter,
     knobs_list: list[dict[str, float]],
     *,
     enable_validation: bool | None = None,
@@ -482,15 +498,22 @@ def evaluate_controller_worker_losses(
     """Return worker diagnostic losses for several knob settings using one worker startup."""
     if enable_validation is None:
         enable_validation = ctrl.tracking_plan.enable_validation
+    if not hasattr(ctrl, "data_manager"):
+        ctrl._init_data_manager()
+    initial_worker_values = {
+        **ctrl.config_manager.initial_model_values,
+        **ctrl.initial_knobs,
+    }
     ctrl.worker_manager.start_workers(
         ctrl.data_manager.track_data,
         ctrl.data_manager.turn_batches,
+        ctrl.data_manager.validation_turn_batches,
         ctrl.data_manager.file_map,
         ctrl.config_manager.start_bpms,
         ctrl.config_manager.end_bpms,
         ctrl.simulation_config,
         ctrl.machine_deltaps,
-        ctrl.initial_knobs,
+        initial_worker_values,
         enable_validation=enable_validation,
     )
     try:
@@ -532,7 +555,6 @@ def run_madng_tracking(
         kick_plane="xy",
         starting_bpm=start_marker,
     )
-    print(f"Initial coordinates for tracking: {coords}")
     coords = {k: float(v) for k, v in coords.items()}
     interface.observe_bpms()
     interface.mad["trk", "flw"] = interface.mad.track(

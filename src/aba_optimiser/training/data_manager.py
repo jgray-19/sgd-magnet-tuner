@@ -10,7 +10,7 @@ import pandas as pd
 
 from aba_optimiser.config import FILE_COLUMNS
 from aba_optimiser.dataframes.utils import select_markers
-from aba_optimiser.training.workers.turn_planner import WorkerTurnPlanner
+from aba_optimiser.training.workers.turn_planner import WorkerTurnPlanner, group_turns_by_file
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -61,6 +61,10 @@ class DataManager:
         self.available_turns: list[int]
 
         self.turn_batches: list[list[int]]
+        # Held-out validation turns grouped into per-file batches. These turns are
+        # removed from ``turn_batches`` entirely so validation loss is genuinely
+        # out-of-sample. Empty when validation is disabled or there is too little data.
+        self.validation_turn_batches: list[list[int]] = []
 
         # Track data per measurement file (indexed by file index)
         self.track_data: dict[int, pd.DataFrame]
@@ -116,6 +120,36 @@ class DataManager:
                 file_idx,
                 first_bpm,
             )
+        elif requested is not None and requested in self.all_bpms:
+            # The turn-boundary BPM is not observed in this range. Project it to the
+            # first in-range BPM that follows it in ring order: only when this range
+            # straddles the boundary is that a different BPM from the range's own
+            # start, so only then is the data actually cycled (a turn wrap placed).
+            requested_idx = self.all_bpms.index(requested)
+            first_bpm = next(
+                (
+                    self.all_bpms[(requested_idx + offset) % len(self.all_bpms)]
+                    for offset in range(1, len(self.all_bpms) + 1)
+                    if self.all_bpms[(requested_idx + offset) % len(self.all_bpms)]
+                    in ring_set
+                ),
+                natural,
+            )
+            if first_bpm == ring_bpms[0]:
+                LOGGER.debug(
+                    "File %d: turn boundary %s is outside this range; no turn wrap "
+                    "needed, leaving measurement data in ring order",
+                    file_idx,
+                    requested,
+                )
+            else:
+                LOGGER.debug(
+                    "File %d: this range straddles turn boundary %s; placing the "
+                    "wrap at the next in-range BPM %s",
+                    file_idx,
+                    requested,
+                    first_bpm,
+                )
         elif requested is not None and requested in appearance:
             # A non-BPM start marker (e.g. a kicker): the data is already recorded
             # from it, so its first ring BPM is the boundary to cycle to.
@@ -273,14 +307,14 @@ class DataManager:
             "Loading track data from %d measurement file(s)...", len(self.measurement_files)
         )
 
-        # Determine source files - controller has already resolved None to actual files
+        # Determine source files - fitter has already resolved None to actual files
         sources = []
         for mf in self.measurement_files:
             if mf is not None:
                 sources.append(mf)
             else:
                 raise ValueError(
-                    "measurement_files should not contain None - controller should have resolved defaults"
+                    "measurement_files should not contain None - fitter should have resolved defaults"
                 )
 
         # Read raw frames in parallel (file-local turn numbering, includes bunch_number).
@@ -378,12 +412,16 @@ class DataManager:
                 "No turns available after removing boundary turns. Check that each bunch in the measurement data has more than one turn."
             )
 
+        train_turns, validation_turns = self._split_validation_turns()
+        train_turns = self._sample_training_turns(train_turns)
+        self.validation_turn_batches = self._build_validation_turn_batches(validation_turns)
+
         batch_plan = WorkerTurnPlanner(
             self.tracking_plan,
             self.simulation_config,
             shuffle_turns=self.shuffle_turns,
         ).build_turn_batches(
-            available_turns=self.available_turns,
+            available_turns=train_turns,
             file_map=self.file_map,
             num_files=len(self.track_data),
             num_starts=len(config_manager.start_bpms),
@@ -393,9 +431,10 @@ class DataManager:
 
         if len(self.turn_batches) == 0:
             raise ValueError(
-                f"Failed to create any batches. Available turns: {len(self.available_turns)}, "
-                f"required tracks_per_worker: {self.simulation_config.tracks_per_worker}. "
-                "Consider reducing tracks_per_worker or using longer bunches."
+                f"Failed to create any training batches. Available turns: {len(self.available_turns)}, "
+                f"training turns after validation split + data_fraction="
+                f"{self.simulation_config.data_fraction}: {len(train_turns)}. "
+                "Consider raising data_fraction, lowering validation_fraction, or using longer bunches."
             )
 
         self.num_workers = len(self.turn_batches)
@@ -409,17 +448,91 @@ class DataManager:
 
         total_available_turns = len(self.available_turns)
         total_used_turns = sum(len(batch) for batch in self.turn_batches)
-        unused_turns = total_available_turns - total_used_turns
+        validation_used_turns = sum(len(batch) for batch in self.validation_turn_batches)
+        # Turns neither trained nor validated: dropped by data_fraction sampling or
+        # by MAD sub-batch trimming.
+        unused_turns = total_available_turns - total_used_turns - validation_used_turns
         unused_percentage = (
             (unused_turns / total_available_turns * 100) if total_available_turns > 0 else 0
         )
         LOGGER.info(
-            f"Unused turns: {unused_turns} out of {total_available_turns} ({unused_percentage:.1f}%)"
+            "Turn usage: %d training, %d held-out validation, %d unused (%.1f%%) of %d available",
+            total_used_turns,
+            validation_used_turns,
+            unused_turns,
+            unused_percentage,
+            total_available_turns,
         )
+        if validation_used_turns == 0 and self.tracking_plan.enable_validation:
+            LOGGER.warning(
+                "No held-out validation turns were reserved (validation_fraction=%.3f, too little "
+                "data). Validation loss will fall back to training loss and CANNOT detect overfitting.",
+                self.simulation_config.validation_fraction,
+            )
+
+    def _split_validation_turns(self) -> tuple[list[int], list[int]]:
+        """Partition available turns into disjoint (training, validation) sets.
+
+        Validation turns are reserved per file (stratified) so every file keeps its
+        share of held-out data. At least one training turn is always retained per
+        file. Returns two disjoint, sorted lists whose union is ``available_turns``.
+        """
+        if (
+            not self.tracking_plan.enable_validation
+            or self.simulation_config.validation_fraction <= 0.0
+        ):
+            return sorted(self.available_turns), []
+
+        val_frac = self.simulation_config.validation_fraction
+        turns_by_file = group_turns_by_file(self.available_turns, self.file_map)
+        train_turns: list[int] = []
+        validation_turns: list[int] = []
+        for file_idx in sorted(turns_by_file):
+            turns = list(turns_by_file[file_idx])
+            self._shuffle_in_place(turns)
+            n_val = min(round(val_frac * len(turns)), len(turns) - 1)
+            n_val = max(0, n_val)
+            validation_turns.extend(turns[:n_val])
+            train_turns.extend(turns[n_val:])
+        return sorted(train_turns), sorted(validation_turns)
+
+    def _sample_training_turns(self, train_turns: list[int]) -> list[int]:
+        """Keep ``data_fraction`` of the training turns, stratified per file."""
+        frac = self.simulation_config.data_fraction
+        if frac >= 1.0:
+            return sorted(train_turns)
+
+        turns_by_file = group_turns_by_file(train_turns, self.file_map)
+        kept: list[int] = []
+        for file_idx in sorted(turns_by_file):
+            turns = list(turns_by_file[file_idx])
+            self._shuffle_in_place(turns)
+            n_keep = max(1, round(frac * len(turns)))
+            kept.extend(turns[:n_keep])
+        return sorted(kept)
+
+    def _build_validation_turn_batches(self, validation_turns: list[int]) -> list[list[int]]:
+        """Group held-out validation turns into one batch per file."""
+        if not validation_turns:
+            return []
+        turns_by_file = group_turns_by_file(validation_turns, self.file_map)
+        return [sorted(turns) for _idx, turns in sorted(turns_by_file.items()) if turns]
+
+    def _shuffle_in_place(self, seq: list[int]) -> None:
+        """Shuffle ``seq`` using the injected strategy (deterministic in tests)."""
+        if self.shuffle_turns is not None:
+            self.shuffle_turns(seq)
+        else:
+            import random
+
+            random.shuffle(seq)
 
     def get_total_turns(self) -> int:
-        """Calculate the number of turns that will actually be processed."""
+        """Calculate the number of tracked turns that will actually be processed."""
         if not self.turn_batches:
             return 0
 
-        return sum(len(batch) for batch in self.turn_batches)
+        start_turns = sum(len(batch) for batch in self.turn_batches)
+        if self.simulation_config.run_arc_by_arc:
+            return start_turns
+        return start_turns * self.simulation_config.n_run_turns

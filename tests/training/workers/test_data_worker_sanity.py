@@ -5,26 +5,33 @@ from __future__ import annotations
 import numpy as np
 
 from aba_optimiser.training.workers.payloads import WorkerPayloadBuilder
-from aba_optimiser.training.workers.turn_planner import _distribute_target_batches_by_file
+from aba_optimiser.training.workers.turn_planner import _allocate_batches_per_file
 
 
-def test_distribute_target_batches_spreads_across_files() -> None:
-    """Batch allocator should not starve files when budget allows."""
+def test_allocate_batches_spreads_across_files() -> None:
+    """Batch allocator should not starve files when the budget allows both."""
     turns_by_file = {
         0: list(range(20)),
         1: list(range(20, 40)),
     }
 
-    target_batches_by_file, _use_balanced, effective = _distribute_target_batches_by_file(
-        turns_by_file=turns_by_file,
-        tracks_per_worker=10,
-        num_turn_batches=4,
-        per_worker_batches=1,
-    )
+    batches_per_file = _allocate_batches_per_file(turns_by_file, num_turn_batches=4)
 
-    assert effective == 4
-    assert target_batches_by_file[0] >= 1
-    assert target_batches_by_file[1] >= 1
+    assert sum(batches_per_file.values()) == 4
+    # Equal-sized files should get an equal share.
+    assert batches_per_file[0] == 2
+    assert batches_per_file[1] == 2
+
+
+def test_allocate_batches_never_exceeds_one_turn_per_batch() -> None:
+    """A file cannot be split into more batches than it has turns."""
+    turns_by_file = {0: [1, 2], 1: list(range(20, 30))}
+
+    # Ask for more batches than file 0 can supply; the surplus must land on file 1.
+    batches_per_file = _allocate_batches_per_file(turns_by_file, num_turn_batches=8)
+
+    assert batches_per_file[0] <= 2
+    assert sum(batches_per_file.values()) == 8
 
 
 def test_diagnostic_loss_per_bpm_reduces_multiturn() -> None:

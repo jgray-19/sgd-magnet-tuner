@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aba_optimiser.accelerators import SPS
+from aba_optimiser.accelerators import PSB, SPS
 from aba_optimiser.config import SimulationConfig
-from aba_optimiser.training.config.tracking import FullRingBpmTrackingPlan
+from aba_optimiser.training.config.tracking import ACDTrackingPlan, FullRingBpmTrackingPlan
 from aba_optimiser.training.workers.setup import WorkerRangeSpec, WorkerSetupHelper
+from aba_optimiser.workers.common import KickPlane
 
 
 def _make_helper(tmp_path: Path) -> WorkerSetupHelper:
@@ -23,8 +24,8 @@ def _make_helper(tmp_path: Path) -> WorkerSetupHelper:
         file_kick_planes={0: "x", 1: "xy"},
         magnet_range="$start/$end",
         interface_options_per_file=[
-            {"corrector_strengths": tmp_path / "corr0.tfs", "tune_knobs_file": tmp_path / "knobs0.txt"},
-            {"corrector_strengths": tmp_path / "corr1.tfs", "tune_knobs_file": tmp_path / "knobs1.txt"},
+            {"corrector_knobs": tmp_path / "corr0.tfs", "tune_knobs": tmp_path / "knobs0.txt"},
+            {"corrector_knobs": tmp_path / "corr1.tfs", "tune_knobs": tmp_path / "knobs1.txt"},
         ],
         debug=False,
         mad_logfile=None,
@@ -40,7 +41,6 @@ def test_build_range_specs_for_multi_turn_creates_forward_and_backward_ranges(tm
         start_bpms=["BPH.13208"],
         end_bpms=[],
         simulation_config=SimulationConfig(
-            tracks_per_worker=1,
             num_workers=2,
             num_batches=1,
             run_arc_by_arc=False,
@@ -65,7 +65,6 @@ def test_build_observation_plan_filters_single_plane_bpms_and_requires_measurabl
         start_bpms=["BPH.13208"],
         end_bpms=[],
         simulation_config=SimulationConfig(
-            tracks_per_worker=1,
             num_workers=2,
             num_batches=1,
             run_arc_by_arc=False,
@@ -117,7 +116,6 @@ def test_build_observation_plans_split_dual_plane_data_across_single_plane_bpms(
         start_bpms=["BPH.13208", "BPV.13308"],
         end_bpms=[],
         simulation_config=SimulationConfig(
-            tracks_per_worker=1,
             num_workers=4,
             num_batches=1,
             run_arc_by_arc=False,
@@ -177,10 +175,78 @@ def test_make_worker_config_uses_file_specific_artifacts(tmp_path: Path) -> None
     config = helper.make_worker_config(plans[0])
 
     assert config.interface_options == {
-        "corrector_strengths": tmp_path / "corr1.tfs",
-        "tune_knobs_file": tmp_path / "knobs1.txt",
+        "corrector_knobs": tmp_path / "corr1.tfs",
+        "tune_knobs": tmp_path / "knobs1.txt",
     }
     assert config.kick_plane == "xy"
+
+
+def test_acd_marker_plan_uses_markers_as_initial_conditions_not_targets(tmp_path: Path) -> None:
+    seq_file = tmp_path / "psb.seq"
+    seq_file.write_text("! Dummy PSB sequence file\n")
+    accelerator = PSB(ring=3, sequence_file=seq_file, kinetic_energy=0.160)
+    accelerator.infer_monitor_plane = lambda bpm: "HV"  # type: ignore[method-assign]
+    plan = ACDTrackingPlan(acd_name="BR3.DES3L1")
+    all_bpms = [
+        "BR3.BPM1L3",
+        "BR3.BPM2L3",
+        "BR3.DES3L1_before",
+        "BR3.DES3L1_after",
+        "BR3.BPM3L3",
+        "BR3.BPM4L3",
+    ]
+    helper = WorkerSetupHelper(
+        accelerator=accelerator,
+        all_bpms=all_bpms,
+        fixed_start="$start",
+        fixed_end="$end",
+        use_fixed_bpm=False,
+        bad_bpms=None,
+        file_kick_planes={0: "xy"},
+        magnet_range="$start/$end",
+        interface_options_per_file=[{}],
+        debug=False,
+        mad_logfile=None,
+        python_logfile=None,
+        tracking_plan=plan,
+    )
+
+    specs = helper.build_range_specs(
+        start_bpms=["BR3.DES3L1_after", "BR3.DES3L1_before"],
+        end_bpms=[],
+        simulation_config=SimulationConfig(
+            num_workers=2,
+            num_batches=1,
+            run_arc_by_arc=False,
+            n_run_turns=1,
+        ),
+    )
+
+    forward = helper.get_worker_bpm_names(
+        specs[0].start_bpm, specs[0].end_bpm, specs[0].sdir, KickPlane.XY
+    )
+    backward = helper.get_worker_bpm_names(
+        specs[1].start_bpm, specs[1].end_bpm, specs[1].sdir, KickPlane.XY
+    )
+
+    assert specs == [
+        WorkerRangeSpec("BR3.DES3L1_after", "BR3.DES3L1_before", 1),
+        WorkerRangeSpec("BR3.DES3L1_after", "BR3.DES3L1_before", -1),
+    ]
+    assert forward == ["BR3.BPM3L3", "BR3.BPM4L3", "BR3.BPM1L3", "BR3.BPM2L3"]
+    assert backward == ["BR3.BPM2L3", "BR3.BPM1L3", "BR3.BPM4L3", "BR3.BPM3L3"]
+    assert all("DES3L1" not in bpm for bpm in forward + backward)
+
+    forward_plan = helper.build_observation_plans(
+        specs[0], file_idx=0, available_bpms=set(all_bpms)
+    )[0]
+    backward_plan = helper.build_observation_plans(
+        specs[1], file_idx=0, available_bpms=set(all_bpms)
+    )[0]
+    assert forward_plan.init_marker == "BR3.DES3L1_after"
+    assert backward_plan.init_marker == "BR3.DES3L1_before"
+    assert helper.make_worker_config(forward_plan).initial_condition_marker == "BR3.DES3L1_after"
+    assert helper.make_worker_config(backward_plan).initial_condition_marker == "BR3.DES3L1_before"
 
 
 def test_observation_plan_uses_plane_compatible_range_for_split_full_ring_workers(
@@ -192,7 +258,6 @@ def test_observation_plan_uses_plane_compatible_range_for_split_full_ring_worker
         start_bpms=["BPH.13208", "BPV.13308"],
         end_bpms=[],
         simulation_config=SimulationConfig(
-            tracks_per_worker=1,
             num_workers=4,
             num_batches=1,
             run_arc_by_arc=False,

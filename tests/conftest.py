@@ -70,13 +70,13 @@ def seq_psb(data_dir: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
-def tune_knobs_file(data_dir: Path) -> Path:
+def tune_knobs(data_dir: Path) -> Path:
     """Path to the tune knobs file."""
     return data_dir / "strengths" / "tune_knobs.txt"
 
 
 @pytest.fixture(scope="session")
-def corrector_knobs_file(data_dir: Path) -> Path:
+def corrector_knobs(data_dir: Path) -> Path:
     """Path to the corrector knobs file."""
     return data_dir / "correctors" / "corrector_knobs.txt"
 

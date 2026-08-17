@@ -26,7 +26,6 @@ def _make_loop(knob_names: list[str]) -> OptimisationLoop:
         optimiser_type="adam",
     )
     simulation_config = SimulationConfig(
-        tracks_per_worker=1,
         num_workers=1,
         num_batches=1,
     )
@@ -241,7 +240,7 @@ def test_epoch_end_hook_called_once_per_epoch() -> None:
 
     hook_calls: list[dict[str, float]] = []
 
-    def hook(knobs: dict[str, float]) -> None:
+    def hook(knobs: dict[str, float], _best: dict[str, float]) -> None:
         hook_calls.append(knobs.copy())
 
     loop.run_optimisation(
@@ -266,7 +265,7 @@ def test_epoch_end_hook_receives_updated_knobs() -> None:
 
     seen_knobs: list[float] = []
 
-    def hook(knobs: dict[str, float]) -> None:
+    def hook(knobs: dict[str, float], _best: dict[str, float]) -> None:
         seen_knobs.append(knobs["k1"])
 
     loop.run_optimisation(
@@ -279,6 +278,71 @@ def test_epoch_end_hook_receives_updated_knobs() -> None:
     )
 
     assert seen_knobs[0] != 0.0
+
+
+def test_epoch_end_hook_note_is_appended_to_the_epoch_log_line(caplog) -> None:
+    """What the hook returns lands on that epoch's own log line.
+
+    A hook that changes the run -- refreshing the workers' initial conditions --
+    otherwise reports into a second stream the reader has to interleave with the
+    losses by hand, which is exactly the comparison being made.
+    """
+    import logging
+
+    n_epochs, n_batches = 2, 1
+    loop = _make_loop(["k1"])
+    loop.max_epochs = n_epochs
+    loop.gradient_converged_value = -1.0
+
+    notes = iter(["dic=1.00e-09", "dic=2.00e-09"])
+
+    def hook(_knobs: dict[str, float], _best: dict[str, float]) -> str:
+        return next(notes)
+
+    with caplog.at_level(logging.INFO, logger="aba_optimiser.training.optimisation.loop"):
+        loop.run_optimisation(
+            current_knobs={"k1": 0.0},
+            channels=_make_real_channels(1, n_epochs, n_batches),
+            writer=None,
+            run_start=0.0,
+            total_turns=1,
+            epoch_end_hook=hook,
+        )
+
+    epoch_lines = [
+        record.getMessage() for record in caplog.records if "Ep " in record.getMessage()
+    ]
+    assert len(epoch_lines) == n_epochs
+    assert "dic=1.00e-09" in epoch_lines[0]
+    assert "dic=2.00e-09" in epoch_lines[1]
+    # Placed between the existing fields, not tacked past the [b]/[s] markers.
+    assert epoch_lines[0].index("dic=") < epoch_lines[0].index("lr=")
+
+
+def test_epoch_line_omits_the_note_when_the_hook_returns_none(caplog) -> None:
+    """A hook that did nothing this epoch must not leave an empty field behind."""
+    import logging
+
+    loop = _make_loop(["k1"])
+    loop.max_epochs = 1
+    loop.gradient_converged_value = -1.0
+
+    with caplog.at_level(logging.INFO, logger="aba_optimiser.training.optimisation.loop"):
+        loop.run_optimisation(
+            current_knobs={"k1": 0.0},
+            channels=_make_real_channels(1, 1, 1),
+            writer=None,
+            run_start=0.0,
+            total_turns=1,
+            epoch_end_hook=lambda _knobs, _best: None,
+        )
+
+    epoch_lines = [
+        record.getMessage() for record in caplog.records if "Ep " in record.getMessage()
+    ]
+    assert epoch_lines
+    assert ", ," not in epoch_lines[0]
+    assert "dic=" not in epoch_lines[0]
 
 
 def test_epoch_end_hook_none_does_not_raise() -> None:

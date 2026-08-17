@@ -7,7 +7,6 @@ so that `WorkerManager` stays focused on worker lifecycle management.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil, sqrt
 from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
@@ -31,20 +30,17 @@ def payload_range_points(payload: WorkerPayload) -> int:
     return int(data.position_comparisons.shape[1])
 
 
-def _validation_target_tracks(payloads: list[WorkerPayload]) -> int:
-    """Minimum validation tracks such that val >= 10% of training tracks."""
-    total_tracks = sum(payload_track_count(payload) for payload in payloads)
-    # val >= 0.1 * (total - val)  ->  val >= total / 11
-    return max(1, ceil(total_tracks / 11.0))
-
-
 @dataclass(frozen=True)
 class ValidationSplitResult:
-    """Result of selecting validation payloads from worker payloads."""
+    """Result of pairing training payloads with held-out validation payloads.
+
+    ``training_payloads`` and ``validation_payloads`` are built from disjoint turns
+    (the validation turns were removed from training upstream in ``DataManager``),
+    so validation loss is a genuine out-of-sample signal.
+    """
 
     training_payloads: list[WorkerPayload]
     validation_payloads: list[WorkerPayload]
-    duplicated_validation_payload: bool
 
 
 @dataclass(frozen=True)
@@ -55,16 +51,13 @@ class _ValidationGroup:
     start_bpm: str
     end_bpm: str
     primary_indices: list[int]
-    extra_indices: list[int]
     total_tracks: int
     max_range_points: int
 
 
 def _validation_min_groups(num_groups: int) -> int:
     """Return the minimum number of distinct groups to cover in validation."""
-    if num_groups <= 1:
-        return 1
-    return min(num_groups, max(2, ceil(sqrt(num_groups))))
+    return max(0, num_groups)
 
 
 def _spread_positions(length: int, count: int) -> list[int]:
@@ -104,7 +97,6 @@ def _build_validation_groups(
     for file_idx, start_bpm, end_bpm in sorted(grouped):
         per_dir = grouped[(file_idx, start_bpm, end_bpm)]
         primary_indices: list[int] = []
-        extra_indices: list[int] = []
 
         for sdir in (1, -1):
             dir_indices = sorted(
@@ -113,8 +105,8 @@ def _build_validation_groups(
                 reverse=True,
             )
             if dir_indices:
+                # One representative payload per direction is enough for coverage.
                 primary_indices.append(dir_indices[0])
-                extra_indices.extend(dir_indices[1:])
 
         if not primary_indices:
             continue
@@ -126,11 +118,6 @@ def _build_validation_groups(
                 start_bpm=start_bpm,
                 end_bpm=end_bpm,
                 primary_indices=primary_indices,
-                extra_indices=sorted(
-                    extra_indices,
-                    key=lambda idx: (track_counts[idx], range_points[idx]),
-                    reverse=True,
-                ),
                 total_tracks=sum(track_counts[idx] for idx in group_indices),
                 max_range_points=max(range_points[idx] for idx in group_indices),
             )
@@ -150,92 +137,54 @@ def _build_validation_groups(
 
 
 def split_validation_payloads(
-    payloads: list[WorkerPayload],
+    training_payloads: list[WorkerPayload],
+    validation_candidates: list[WorkerPayload],
     logger: logging.Logger | None = None,
 ) -> ValidationSplitResult:
-    """Select validation payloads to cover the training distribution.
+    """Retain all held-out validation candidates.
 
-    Selection rules:
-    - group payloads by file plus BPM range so opposite directions stay paired
-    - include both `sdir=+1` and `sdir=-1` for a selected range when available
-    - cover multiple ranges, not just the single largest one
-    - keep adding payloads until validation reaches at least 10% of training tracks
-    - validation payloads are selected from training payloads (not held out)
+    ``validation_candidates`` are built from turns that were removed from training
+    upstream, so every candidate is genuinely out-of-sample. Validation must cover
+    every held-out file/range/direction/plane candidate; otherwise a small ACD
+    run can silently skip one momentum file and report a non-representative loss.
+
+    ``training_payloads`` is returned unchanged.
     """
-    if not payloads:
-        raise ValueError("No worker payloads were created")
-    if len(payloads) == 1:
-        return ValidationSplitResult(payloads, [payloads[0]], True)
+    if not training_payloads:
+        raise ValueError("No training worker payloads were created")
+    if not validation_candidates:
+        return ValidationSplitResult(training_payloads, [])
 
-    range_points = {idx: payload_range_points(payload) for idx, payload in enumerate(payloads)}
-    track_counts = {idx: payload_track_count(payload) for idx, payload in enumerate(payloads)}
-    groups = _build_validation_groups(payloads, track_counts, range_points)
-
-    target_tracks = _validation_target_tracks(payloads)
-    min_groups = _validation_min_groups(len(groups))
-
-    selected_indices: list[int] = []
-    selected_set: set[int] = set()
-    selected_tracks = 0
-
-    def add_payload(idx: int) -> None:
-        nonlocal selected_tracks
-        if idx in selected_set:
-            return
-        selected_indices.append(idx)
-        selected_set.add(idx)
-        selected_tracks += track_counts[idx]
-
-    selected_group_positions = set(_spread_positions(len(groups), min_groups))
-
-    for group_idx, group in enumerate(groups):
-        if group_idx not in selected_group_positions:
-            continue
-        for idx in group.primary_indices:
-            add_payload(idx)
-
-    if selected_tracks < target_tracks:
-        for group_idx, group in enumerate(groups):
-            if group_idx in selected_group_positions:
-                continue
-            for idx in group.primary_indices:
-                add_payload(idx)
-            if selected_tracks >= target_tracks:
-                break
-
-    if selected_tracks < target_tracks:
-        for group in groups:
-            for idx in group.extra_indices:
-                add_payload(idx)
-                if selected_tracks >= target_tracks:
-                    break
-            if selected_tracks >= target_tracks:
-                break
+    range_points = {
+        idx: payload_range_points(payload) for idx, payload in enumerate(validation_candidates)
+    }
+    track_counts = {
+        idx: payload_track_count(payload) for idx, payload in enumerate(validation_candidates)
+    }
+    groups = _build_validation_groups(validation_candidates, track_counts, range_points)
+    selected_indices = list(range(len(validation_candidates)))
+    validation_payloads = list(validation_candidates)
 
     if logger is not None:
         selected_ranges = {
             (
-                payloads[idx][2],
-                payloads[idx][1].tracking_start_bpm,
-                payloads[idx][1].tracking_end_bpm,
+                validation_candidates[idx][2],
+                validation_candidates[idx][1].tracking_start_bpm,
+                validation_candidates[idx][1].tracking_end_bpm,
             )
             for idx in selected_indices
         }
         logger.info(
-            "Validation selection: payloads=%d, tracks=%d (target>=%d), covered_ranges=%d/%d",
+            "Validation selection: candidates=%d, selected=%d payloads, tracks=%d, "
+            "covered_ranges=%d/%d",
+            len(validation_candidates),
             len(selected_indices),
-            selected_tracks,
-            target_tracks,
+            sum(track_counts[idx] for idx in selected_indices),
             len(selected_ranges),
             len(groups),
         )
 
-    validation_payloads = [payload for idx, payload in enumerate(payloads) if idx in selected_set]
-    training_payloads = list(payloads)
-    duplicated_validation_payload = len(payloads) == 1
-
     return ValidationSplitResult(
         training_payloads=training_payloads,
         validation_payloads=validation_payloads,
-        duplicated_validation_payload=duplicated_validation_payload,
     )

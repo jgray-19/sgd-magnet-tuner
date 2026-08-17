@@ -1,4 +1,4 @@
-"""Learning-rate schedulers used by optimisation controllers."""
+"""Learning-rate schedulers used by optimisation fitters."""
 
 import logging
 import math

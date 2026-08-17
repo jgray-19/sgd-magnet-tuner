@@ -485,35 +485,56 @@ end
         self.keep_bpm_mask = keep_bpm_mask.astype(bool, copy=True)
         self.normalisation_points = int(np.count_nonzero(self.keep_bpm_mask))
 
-    def _send_init_condition_update(self, mad: MAD, new_px: np.ndarray, new_py: np.ndarray) -> None:
-        """Push updated px/py into the MAD-NG DAMAP objects for all particles.
+    def _send_init_condition_update(
+        self,
+        mad: MAD,
+        new_x: np.ndarray,
+        new_px: np.ndarray,
+        new_y: np.ndarray,
+        new_py: np.ndarray,
+    ) -> None:
+        """Push updated x/px/y/py into the MAD-NG DAMAP objects for all particles.
 
-        Only the constant parts of the px and py TPSA variables are touched;
-        all other coordinates (x, y, pt, …) and all DA coefficients are left
-        unchanged. The arrays are sent as binary column matrices, which is the
-        fastest serialisation path in pymadng.
+        Only the constant parts of the four transverse TPSA variables are
+        touched; the longitudinal coordinates (t, pt) and all DA coefficients are
+        left unchanged. The arrays are sent as binary column matrices, which is
+        the fastest serialisation path in pymadng.
+
+        The positions are updated alongside the momenta because a launch point
+        that sits on a closed orbit moves when the lattice does: freeing the
+        magnets that shape that orbit while holding the particle's starting x/y
+        fixed would launch it off the orbit the very knobs being fitted define.
+        A caller that only re-derives momenta passes the current positions back
+        unchanged, which costs one extra column each way and keeps one code path.
         """
-        # pymadng requires 2-D arrays for the binary matrix protocol, so px/py
-        # arrive as N x 1 column matrices (the fastest serialisation path).
-        # Indexing a MAD matrix with a single index is linear (row-major), so
-        # new_px[particle] is the scalar value for that particle directly.
+        # pymadng requires 2-D arrays for the binary matrix protocol, so the
+        # coordinates arrive as N x 1 column matrices (the fastest serialisation
+        # path). Indexing a MAD matrix with a single index is linear (row-major),
+        # so new_px[particle] is the scalar value for that particle directly.
         mad.send("""
+new_x  = python:recv()  -- N x 1 column matrix of updated x values
 new_px = python:recv()  -- N x 1 column matrix of updated px values
+new_y  = python:recv()  -- N x 1 column matrix of updated y values
 new_py = python:recv()  -- N x 1 column matrix of updated py values
 
 local particle = 0
 for batch=1,num_batches do
     for j=1,#da_x0_c[batch] do
         particle = particle + 1
+        da_x0_c[batch][j].x:set0(new_x[particle])
         da_x0_c[batch][j].px:set0(new_px[particle])
+        da_x0_c[batch][j].y:set0(new_y[particle])
         da_x0_c[batch][j].py:set0(new_py[particle])
     end
 end
 """)
-        mad.send(new_px.reshape(-1, 1)).send(new_py.reshape(-1, 1))
+        for values in (new_x, new_px, new_y, new_py):
+            mad.send(values.reshape(-1, 1))
 
         # Mirror in Python so _init_coords_np stays consistent
+        self._init_coords_np[:, 0] = new_x.ravel()
         self._init_coords_np[:, 1] = new_px.ravel()
+        self._init_coords_np[:, 2] = new_y.ravel()
         self._init_coords_np[:, 3] = new_py.ravel()
 
     def _handle_control_command(self, mad: MAD, command: dict[str, object]) -> None:
@@ -561,9 +582,13 @@ end
             return
 
         if cmd == "update_init_coords":
-            new_px = np.asarray(command["px"], dtype=np.float64)
-            new_py = np.asarray(command["py"], dtype=np.float64)
-            self._send_init_condition_update(mad, new_px, new_py)
+            self._send_init_condition_update(
+                mad,
+                *(
+                    np.asarray(command[key], dtype=np.float64)
+                    for key in ("x", "px", "y", "py")
+                ),
+            )
             self.conn.send({"worker_id": self.worker_id, "status": "ok"})
             return
 
@@ -655,11 +680,17 @@ end
                         self.conn.send((self.worker_id, np.zeros(n_knobs), 0.0))
                     else:
                         grad, loss = self.compute_gradients_and_loss(mad, knob_values, int(batch))
+                        # Report a per-turn, per-BPM-point loss so it is comparable
+                        # across workers (and to the held-out validation loss)
+                        # regardless of how many turns a worker holds. The gradient
+                        # keeps its own normalisation (per-point here, per-turn via
+                        # total_turns in the loop) and is intentionally unchanged.
+                        n_turns = max(1, len(self.init_coords[int(batch)]))
                         self.conn.send(
                             (
                                 self.worker_id,
                                 grad / normalisation_points,
-                                loss / normalisation_points,
+                                loss / (normalisation_points * n_turns),
                             )
                         )
                 except ParticleLostError as exc:

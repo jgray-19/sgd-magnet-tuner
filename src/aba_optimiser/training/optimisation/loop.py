@@ -1,4 +1,4 @@
-"""Optimisation loop management for the controller."""
+"""Optimisation loop management for the fitter."""
 
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ class OptimisationLoop:
                 shape=shape,
                 beta1=0.9,
                 beta2=0.999,
-                weight_decay=0,
+                weight_decay=optimiser_config.adam_weight_decay,
             )
         elif optimiser_type == "lbfgs":
             self.optimiser = BaseOptimiser.create(
@@ -168,7 +168,8 @@ class OptimisationLoop:
         total_turns: int,
         checkpoint_config: CheckpointConfig | None = None,
         validation_loss_fn: Callable[[dict[str, float]], float | None] | None = None,
-        epoch_end_hook: Callable[[dict[str, float]], None] | None = None,
+        epoch_end_hook: Callable[[dict[str, float], dict[str, float]], str | None]
+        | None = None,
     ) -> dict[str, float]:
         """Run the main optimisation loop."""
         checkpointer = OptimisationCheckpointer(self, checkpoint_config)
@@ -210,7 +211,11 @@ class OptimisationLoop:
 
                 # Update knobs after each batch (only when no particle loss this epoch)
                 if not epoch_had_particle_loss:
-                    current_knobs = self._update_knobs(current_knobs, batch_grad, lr)
+                    current_knobs = self._update_knobs(
+                        current_knobs,
+                        batch_grad / total_turns,
+                        lr,
+                    )
 
             if epoch_had_particle_loss:
                 LOGGER.warning(
@@ -230,9 +235,6 @@ class OptimisationLoop:
             # Calculate relative differences for rejection logic
             sum_true_diff = self._calculate_diff(current_knobs)
 
-            if epoch_end_hook is not None:
-                epoch_end_hook(current_knobs)
-
             validation_loss = (
                 validation_loss_fn(current_knobs) if validation_loss_fn is not None else None
             )
@@ -243,6 +245,10 @@ class OptimisationLoop:
                 self.best_loss = stop_loss
                 self.best_knobs = current_knobs.copy()
                 new_best = True
+
+            hook_note = None
+            if epoch_end_hook is not None:
+                hook_note = epoch_end_hook(current_knobs, self.best_knobs)
 
             stop_for_loss_change = self._should_stop_for_loss_change(epoch, stop_loss, prev_loss)
             if not stop_for_loss_change:
@@ -272,6 +278,7 @@ class OptimisationLoop:
                 new_best,
                 saved_checkpoint,
                 validation_loss,
+                hook_note,
             )
 
             if stop_for_loss_change:
@@ -377,8 +384,16 @@ class OptimisationLoop:
         new_best: bool = False,
         saved_checkpoint: bool = False,
         validation_loss: float | None = None,
+        hook_note: str | None = None,
     ) -> None:
-        """Log statistics for the current epoch."""
+        """Log statistics for the current epoch.
+
+        ``hook_note`` is whatever the epoch-end hook returned, appended to the
+        line as-is. It is how a caller whose hook changes the run -- refreshing
+        the workers' initial conditions, say -- gets that change onto the same
+        line as the loss it moved, instead of into a second stream the reader has
+        to interleave by hand.
+        """
         # Log scalars to TensorBoard
         if writer is not None:
             loss_scalars = {"train": loss}
@@ -405,6 +420,8 @@ class OptimisationLoop:
             parts.append(f"val={validation_loss:.3e}")
         parts.append(f"g={grad_norm:.3e}")
         parts.append(f"td={sum_true_diff:.3e}")
+        if hook_note:
+            parts.append(hook_note)
         parts.append(f"lr={lr:.2e}, et={epoch_time:.1f}s, tt={total_time:.1f}s")
         message = ", ".join(parts)
 

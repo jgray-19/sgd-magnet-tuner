@@ -20,9 +20,8 @@ pytest.importorskip("xtrack_tools")
 import tfs
 from omc3.scripts.fake_measurement_from_model import generate as fake_measurement
 from pymadng_utils.io.utils import save_knobs
-from tmom_recon import ACDipoleConfig
-from tmom_recon.acd.madng_driver import ACDipoleMadDriver
-from xtrack_tools.acd import run_ac_dipole_tracking_with_particles
+from tmom_recon import ACDipoleConfig, ModelDetails
+from xtrack_tools.acd import run_ac_dipole_tracking
 from xtrack_tools.monitors import line_to_dataframes
 
 from aba_optimiser.accelerators import LHC
@@ -38,7 +37,7 @@ from aba_optimiser.training.config.models import (
     OutputConfig,
     SequenceConfig,
 )
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.tracking_fitter import ArcByArcFitter
 from tests.training.helpers import generate_xsuite_env_with_errors, get_twiss_without_errors
 
 if TYPE_CHECKING:
@@ -50,6 +49,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.serial
+
+LHC_HORIZONTAL_EXCITATION = 0.000371554879506
+LHC_VERTICAL_EXCITATION = 0.000415765635123
 
 
 def _should_plot() -> bool:
@@ -78,7 +80,7 @@ def _write_ac_dipole_measurements(
     output_frames: list[pd.DataFrame] = []
 
     for idx, lag in enumerate(lags):
-        monitored_line = run_ac_dipole_tracking_with_particles(
+        monitored_line = run_ac_dipole_tracking(
             line=line,
             tws=tws,
             acd_marker="mkqa.6l4.b1",
@@ -88,13 +90,9 @@ def _write_ac_dipole_measurements(
             driven_tunes=driven_tunes,
             lag=lag,
             bpm_pattern="bpm.*[^k]",
-            particle_coords={
-                "x": [0.0],
-                "px": [0.0],
-                "y": [0.0],
-                "py": [0.0],
-                "delta": [0.0],
-            },
+            deltap=0.0,
+            horizontal_excitation=LHC_HORIZONTAL_EXCITATION,
+            vertical_excitation=LHC_VERTICAL_EXCITATION,
         )
 
         track_df = line_to_dataframes(monitored_line)[0]
@@ -152,7 +150,7 @@ def test_controller_bend_opt_simple(
     acd_ramp = 2_000
 
     corrector_file = tmp_path / "corrector_track_off_magnet.tfs"
-    tune_knobs_file = tmp_path / "tune_knobs_track_off_magnet.json"
+    tune_knobs = tmp_path / "tune_knobs_track_off_magnet.json"
 
     env, magnet_strengths, matched_tunes, _ = generate_xsuite_env_with_errors(
         loaded_interface,
@@ -163,7 +161,7 @@ def test_controller_bend_opt_simple(
     )
     twiss_errs = loaded_interface.run_twiss(observe=0)
     matched_tunes = _normalise_knob_values(matched_tunes)
-    save_knobs(matched_tunes, tune_knobs_file)
+    save_knobs(matched_tunes, tune_knobs)
 
     measurement_sources = _write_ac_dipole_measurements(
         env=env,
@@ -174,37 +172,34 @@ def test_controller_bend_opt_simple(
     analysis_dir = _generate_measurement_twiss(tmp_path, loaded_interface)
     tws_no_err = get_twiss_without_errors(seq_b1, just_bpms=True)
 
-    ac_dipole_model = ACDipoleMadDriver(
+    ac_dipole_model_details = ModelDetails(
         accelerator=LHC(beam=1, sequence_file=seq_b1, kinetic_energy=6800.0),
         pt=0.0,
-        observed_elements=loaded_interface.accelerator.get_ac_dipole_marker(),
-        discard_mad_output=True,
     )
     ac_dipole_config = ACDipoleConfig(
         ac_dipole_marker=loaded_interface.accelerator.get_ac_dipole_marker(),
-        model=ac_dipole_model,
-        dpx_tune=0.27,
-        dpy_tune=0.322,
+        driven_tunes=(0.27, 0.322),
     )
 
     processed_dir = tmp_path / "processed_measurements"
     processed_dir.mkdir(parents=True, exist_ok=True)
     processed_measurements: list[pd.DataFrame] = []
     bad_bpms: list[str] = []
-    try:
-        for idx, measurement_df in enumerate(measurement_sources):
-            _, processed_df = process_single_dataframe(
-                df_with_index=(idx, measurement_df),
-                twiss=tws_no_err,
-                bad_bpms=bad_bpms,
-                analysis_dir=analysis_dir,
-                use_uniform_vars=False,
-                beam=1,
-                ac_dipole_config_factory=lambda _idx: ac_dipole_config,
-            )
-            processed_measurements.append(processed_df)
-    finally:
-        ac_dipole_model.close()
+    for idx, measurement_df in enumerate(measurement_sources):
+        _, processed_df = process_single_dataframe(
+            df_with_index=(idx, measurement_df),
+            twiss=tws_no_err,
+            bad_bpms=bad_bpms,
+            analysis_dir=analysis_dir,
+            use_uniform_vars=False,
+            beam=1,
+            model_details=ac_dipole_model_details,
+            # This test reconstructs against the nominal model twiss, which is
+            # what the removed silent default did; now it has to say so.
+            reference_closed_orbit="model",
+            ac_dipole_inputs_factory=lambda _idx: (ac_dipole_model_details, ac_dipole_config),
+        )
+        processed_measurements.append(processed_df)
 
     measurement_files = []
     for idx, processed_df in enumerate(processed_measurements):
@@ -224,7 +219,7 @@ def test_controller_bend_opt_simple(
         for measurement in processed_measurements
     ]
     corrector_files = [corrector_file] * len(measurement_files)
-    tune_knobs_files = [tune_knobs_file] * len(measurement_files)
+    tune_knobs_files = [tune_knobs] * len(measurement_files)
 
     optimiser_config = _make_optimiser_config_bend()
     all_estimates = {}
@@ -236,8 +231,7 @@ def test_controller_bend_opt_simple(
         optimise_quadrupoles: bool,
         optimise_other_quadrupoles: bool,
     ) -> tuple[dict[str, float], dict[str, float]]:
-        tracks_per_worker = flattop_turns
-        num_batches = int(np.ceil(tracks_per_worker / turns_per_batch))
+        num_batches = int(np.ceil(flattop_turns / turns_per_batch))
 
         lhc_accelerator = LHC(
             beam=1,
@@ -248,9 +242,10 @@ def test_controller_bend_opt_simple(
         )
 
         sim_config = SimulationConfig(
-            tracks_per_worker=tracks_per_worker,
             num_batches=num_batches,
             num_workers=1,
+            # Single-worker exact-recovery test: keep every turn in training.
+            validation_fraction=0.0,
             optimise_momenta=False,
             use_fixed_bpm=True,
         )
@@ -264,8 +259,8 @@ def test_controller_bend_opt_simple(
             {
                 measurement_file: MeasurementDetails(
                     interface_options={
-                        "corrector_strengths": corrector,
-                        "tune_knobs_file": tune_knobs,
+                        "corrector_knobs": corrector,
+                        "tune_knobs": tune_knobs,
                     },
                     machine_deltap=deltap,
                 )
@@ -275,7 +270,7 @@ def test_controller_bend_opt_simple(
             }
         )
 
-        ctrl = Controller(
+        ctrl = ArcByArcFitter(
             accelerator=lhc_accelerator,
             optimiser_config=optimiser_config,
             simulation_config=sim_config,
@@ -332,7 +327,7 @@ def test_controller_bend_opt_simple(
         just_bpms=False,
         estimated_magnets=all_estimates,
         corrector_file=corrector_file,
-        tune_knobs_file=tune_knobs_file,
+        tune_knobs=tune_knobs,
     )
     tws_est_betax = (twiss_errs.loc[:, "beta11"] - tws_est.loc[:, "beta11"]) / tws_est.loc[
         :, "beta11"

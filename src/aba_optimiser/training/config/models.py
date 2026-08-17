@@ -1,7 +1,7 @@
-"""Configuration dataclasses for controller initialization.
+"""Configuration dataclasses for fitter initialization.
 
 These dataclasses group related parameters to reduce the number of
-individual arguments passed to controller constructors.
+individual arguments passed to fitter constructors.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ class MeasurementDetails:
 
     ``interface_options`` are passed straight through as keyword arguments to the
     MAD-NG interface for this measurement, so any MAD interface option is
-    supported (commonly ``corrector_strengths``, ``tune_knobs_file``,
+    supported (commonly ``corrector_knobs``, ``tune_knobs``,
     ``b2_errors``). The bunch structure is read from the ``bunch_number`` column
     of the measurement parquet, so it is not configured here.
 

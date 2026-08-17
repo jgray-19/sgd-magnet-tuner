@@ -7,7 +7,7 @@ import pytest
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
-from aba_optimiser.training.base_controller import BaseController
+from aba_optimiser.training.base_fitter import BaseFitter
 from aba_optimiser.training.config.manager import ConfigurationManager
 from aba_optimiser.training.config.models import (
     MeasurementConfig,
@@ -17,7 +17,7 @@ from aba_optimiser.training.config.models import (
 )
 
 
-class DummyController(BaseController):
+class DummyFitter(BaseFitter):
     def run(self) -> tuple[dict[str, float], dict[str, float]]:
         return {}, {}
 
@@ -27,10 +27,10 @@ class EmptyKnobConfigurationManager(ConfigurationManager):
         self,
         debug: bool = False,
         mad_logfile=None,
-        corrector_strengths=None,
-        tune_knobs_file=None,
+        corrector_knobs=None,
+        tune_knobs=None,
     ) -> None:
-        del debug, mad_logfile, corrector_strengths, tune_knobs_file
+        del debug, mad_logfile, corrector_knobs, tune_knobs
         self.mad_iface = SimpleNamespace(  # ty:ignore[invalid-assignment]
             dp2pt=lambda value: value,
             pt2dp=lambda value: value,
@@ -50,7 +50,7 @@ class EmptyKnobConfigurationManager(ConfigurationManager):
         return {}, {}
 
 
-class EmptyKnobController(DummyController):
+class EmptyKnobController(DummyFitter):
     _configuration_manager_cls = EmptyKnobConfigurationManager
 
 
@@ -62,7 +62,6 @@ def test_configuration_manager_preserves_model_defaults_for_missing_initial_knob
         optimise_quadrupoles=True,
     )
     simulation_config = SimulationConfig(
-        tracks_per_worker=1,
         num_workers=1,
         num_batches=1,
     )
@@ -111,7 +110,7 @@ def _initial_model_values_manager(seq_b1):
     )
     manager = ConfigurationManager(
         accelerator=accelerator,
-        simulation_config=SimulationConfig(tracks_per_worker=1, num_workers=1, num_batches=1),
+        simulation_config=SimulationConfig(num_workers=1, num_batches=1),
         sequence_config=SequenceConfig("BPM.9R1.B1/BPM.9L2.B1"),
         bpm_start_points=["BPM.9R1.B1"],
         bpm_end_points=["BPM.9L2.B1"],
@@ -184,13 +183,13 @@ def test_measurement_config_preserves_per_file_interface_options(tmp_path) -> No
     config = MeasurementConfig(
         {
             tmp_path / "m0.parquet": MeasurementDetails(
-                interface_options={"corrector_strengths": tmp_path / "correctors0.tfs"},
+                interface_options={"corrector_knobs": tmp_path / "correctors0.tfs"},
                 machine_deltap=1e-4,
             ),
             tmp_path / "m1.parquet": MeasurementDetails(
                 interface_options={
-                    "corrector_strengths": tmp_path / "correctors1.tfs",
-                    "tune_knobs_file": tmp_path / "tunes1.txt",
+                    "corrector_knobs": tmp_path / "correctors1.tfs",
+                    "tune_knobs": tmp_path / "tunes1.txt",
                 },
                 machine_deltap=2e-4,
             ),
@@ -200,13 +199,13 @@ def test_measurement_config_preserves_per_file_interface_options(tmp_path) -> No
     assert config.files == [tmp_path / "m0.parquet", tmp_path / "m1.parquet"]
     assert config.details == [
         MeasurementDetails(
-            interface_options={"corrector_strengths": tmp_path / "correctors0.tfs"},
+            interface_options={"corrector_knobs": tmp_path / "correctors0.tfs"},
             machine_deltap=1e-4,
         ),
         MeasurementDetails(
             interface_options={
-                "corrector_strengths": tmp_path / "correctors1.tfs",
-                "tune_knobs_file": tmp_path / "tunes1.txt",
+                "corrector_knobs": tmp_path / "correctors1.tfs",
+                "tune_knobs": tmp_path / "tunes1.txt",
             },
             machine_deltap=2e-4,
         ),
@@ -218,7 +217,7 @@ def test_measurement_config_rejects_empty_mapping() -> None:
         MeasurementConfig({})
 
 
-def test_base_controller_raises_when_no_knobs_created(seq_b1) -> None:
+def test_base_fitter_raises_when_no_knobs_created(seq_b1) -> None:
     accelerator = LHC(
         beam=1,
         kinetic_energy=6800,
@@ -234,12 +233,11 @@ def test_base_controller_raises_when_no_knobs_created(seq_b1) -> None:
         gradient_converged_value=1e-12,
     )
     simulation_config = SimulationConfig(
-        tracks_per_worker=1,
         num_workers=1,
         num_batches=1,
     )
 
-    with pytest.raises(ValueError, match="No optimisation knobs were created for this controller configuration"):
+    with pytest.raises(ValueError, match="No optimisation knobs were created for this fitter configuration"):
         EmptyKnobController(
             accelerator=accelerator,
             optimiser_config=optimiser_config,

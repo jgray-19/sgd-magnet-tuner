@@ -7,11 +7,16 @@ payload construction and multiprocessing lifecycle code.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from aba_optimiser.training.config.tracking import TrackingPlan, WorkerRangeSpec
+from aba_optimiser.training.config.tracking import (
+    RangeContext,
+    TrackingPlan,
+    WorkerRangeSpec,
+)
 from aba_optimiser.training.utils import bpm_supports_both_planes, bpm_supports_plane
 from aba_optimiser.workers import WorkerConfig
 from aba_optimiser.workers.common import KickPlane
@@ -45,7 +50,7 @@ class WorkerObservationPlan:
 
 @dataclass(frozen=True)
 class WorkerRuntimeMetadata:
-    """Controller-side metadata retained for screening and diagnostics."""
+    """Fitter-side metadata retained for screening and diagnostics."""
 
     worker_id: int
     file_idx: int
@@ -96,7 +101,7 @@ class WorkerSetupHelper:
         self.mad_logfile = mad_logfile
         self.python_logfile = python_logfile
         self.tracking_plan = tracking_plan
-        self.tracking_anchor_markers = set(tracking_plan.tracking_anchor_markers())
+        self.tracking_anchor_markers = set(tracking_plan.tracking_anchor_markers)
 
     @staticmethod
     def merge_bad_bpms(*bad_bpm_lists: list[str] | None) -> list[str] | None:
@@ -174,10 +179,7 @@ class WorkerSetupHelper:
             return self.bad_bpms
 
         # Unobserve every off-plane BPM in the *whole ring*, not just those inside
-        # the named range. A full-ring multi-turn track traverses the entire ring
-        # (and the wrap between the range end and start each turn), so any off-plane
-        # BPM left observed outside the range still fires save_data and overflows the
-        # nbpms * n_run_turns result vectors (MAD seti "index out of bounds").
+        # the named range.
         del start_bpm, end_bpm, sdir
         plane_filtered = [
             bpm for bpm in self.all_bpms if not self.bpm_supports_plane(bpm, kick_plane)
@@ -191,24 +193,21 @@ class WorkerSetupHelper:
         simulation_config: SimulationConfig,
     ) -> list[WorkerRangeSpec]:
         """Return logical worker ranges before file-specific plane filtering."""
-        if self.tracking_plan.init_marker is not None or not any(
-            not self.bpm_supports_both_planes(bpm) for bpm in self.all_bpms
-        ):
-            return self.tracking_plan.build_range_specs(
-                start_bpms=start_bpms,
-                end_bpms=end_bpms,
-                all_bpms=self.all_bpms,
-                simulation_config=simulation_config,
-                use_fixed_bpm=self.use_fixed_bpm,
-                fixed_start=self.fixed_start,
-                fixed_end=self.fixed_end,
-            )
-
-        return self._build_single_plane_range_specs(
+        ctx = RangeContext(
             start_bpms=start_bpms,
             end_bpms=end_bpms,
-            simulation_config=simulation_config,
+            all_bpms=self.all_bpms,
+            run_arc_by_arc=simulation_config.run_arc_by_arc,
+            use_fixed_bpm=self.use_fixed_bpm,
+            fixed_start=self.fixed_start,
+            fixed_end=self.fixed_end,
         )
+        if self.tracking_plan.init_marker is not None or all(
+            self.bpm_supports_both_planes(bpm) for bpm in self.all_bpms
+        ):
+            return self.tracking_plan.build_range_specs(ctx)
+
+        return self._build_single_plane_range_specs(ctx)
 
     def _plane_for_bpm(self, bpm: str) -> KickPlane | None:
         """Return the single transverse plane measured by a BPM, if any."""
@@ -257,16 +256,10 @@ class WorkerSetupHelper:
                 by_plane[plane].append(bpm)
         return by_plane
 
-    def _build_single_plane_range_specs(
-        self,
-        *,
-        start_bpms: list[str],
-        end_bpms: list[str],
-        simulation_config: SimulationConfig,
-    ) -> list[WorkerRangeSpec]:
+    def _build_single_plane_range_specs(self, ctx: RangeContext) -> list[WorkerRangeSpec]:
         """Build ranges from same-plane BPM boundaries for single-plane machines."""
-        starts_by_plane = self._single_plane_user_bpms(start_bpms, label="start")
-        ends_by_plane = self._single_plane_user_bpms(end_bpms, label="end")
+        starts_by_plane = self._single_plane_user_bpms(ctx.start_bpms, label="start")
+        ends_by_plane = self._single_plane_user_bpms(ctx.end_bpms, label="end")
         range_specs: list[WorkerRangeSpec] = []
 
         for plane in (KickPlane.X, KickPlane.Y):
@@ -282,13 +275,13 @@ class WorkerSetupHelper:
                     plane.value,
                 )
                 continue
-            if simulation_config.run_arc_by_arc and bool(starts) != bool(ends):
+            if ctx.run_arc_by_arc and bool(starts) != bool(ends):
                 raise ValueError(
                     f"Single-plane arc-by-arc ranges need both start and end BPMs for "
                     f"the {plane.value}-plane; got {len(starts)} starts and {len(ends)} ends"
                 )
 
-            if not simulation_config.run_arc_by_arc:
+            if not ctx.run_arc_by_arc:
                 # Full-ring workers track from the fixed turn-increment start ($start),
                 # so anchor every worker at the plane's first BPM rather than cycling
                 # to each user start BPM (which would be double-observed at the wrap).
@@ -305,13 +298,14 @@ class WorkerSetupHelper:
 
             range_specs.extend(
                 self.tracking_plan.build_range_specs(
-                    start_bpms=starts,
-                    end_bpms=ends,
-                    all_bpms=plane_bpms,
-                    simulation_config=simulation_config,
-                    use_fixed_bpm=self.use_fixed_bpm,
-                    fixed_start=starts[0] if self.use_fixed_bpm else self.fixed_start,
-                    fixed_end=ends[0] if self.use_fixed_bpm else self.fixed_end,
+                    dataclasses.replace(
+                        ctx,
+                        start_bpms=starts,
+                        end_bpms=ends,
+                        all_bpms=plane_bpms,
+                        fixed_start=starts[0] if self.use_fixed_bpm else self.fixed_start,
+                        fixed_end=ends[0] if self.use_fixed_bpm else self.fixed_end,
+                    )
                 )
             )
         return range_specs
@@ -362,7 +356,7 @@ class WorkerSetupHelper:
             worker_plane,
             bad_bpms,
         )
-        init_marker = self.tracking_plan.init_marker
+        init_marker = self.tracking_plan.initial_condition_marker(range_spec)
         if available_bpms is not None:
             missing_bpms = [bpm for bpm in bpm_names if bpm not in available_bpms]
             if missing_bpms:
@@ -446,7 +440,6 @@ class WorkerSetupHelper:
             tracking_end_bpm=plan.range_spec.end_bpm,
             magnet_range=self.magnet_range,
             interface_options=self.interface_options_per_file[plan.file_idx],
-            observation_range_start_bpm=self.tracking_plan.observation_start_bpm(self.all_bpms),
             initial_condition_marker=plan.init_marker,
             cycle_sequence=self.tracking_plan.cycle_to_init_bpm,
             sdir=plan.range_spec.sdir,
@@ -455,9 +448,12 @@ class WorkerSetupHelper:
             debug=self.debug,
             mad_logfile=self.mad_logfile,
             python_logfile=self.python_logfile,
-            tracking_anchor_mode=self.tracking_plan.tracking_anchor_mode(),
-            tracking_anchor_sources=self.tracking_plan.tracking_anchor_sources(),
-            cycle_marker=self.tracking_plan.cycle_marker(),
+            tracking_anchor_mode=self.tracking_plan.tracking_anchor_mode,
+            tracking_anchor_sources=list(self.tracking_plan.tracking_anchor_sources),
+            observed_tracking_anchor_markers=list(
+                self.tracking_plan.observed_tracking_anchor_markers
+            ),
+            cycle_marker=self.tracking_plan.cycle_marker,
         )
 
     @staticmethod

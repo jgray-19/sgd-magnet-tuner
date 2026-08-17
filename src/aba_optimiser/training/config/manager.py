@@ -1,4 +1,4 @@
-"""Configuration and setup management for the optimisation controller."""
+"""Configuration and setup management for the optimisation fitter."""
 
 from __future__ import annotations
 
@@ -7,8 +7,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from aba_optimiser.mad import GradientDescentMadInterface, is_magnet_strength_name
-from aba_optimiser.training.config.tracking import ArcByArcTrackingPlan, TrackingPlan
+from aba_optimiser.mad import GradientDescentMadInterface
+from aba_optimiser.mad.optimising_mad_interface import is_magnet_strength_name
+from aba_optimiser.training.config.tracking import (
+    ArcByArcTrackingPlan,
+    RangeContext,
+    TrackingPlan,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -55,8 +60,8 @@ class ConfigurationManager:
         self,
         debug: bool = False,
         mad_logfile: Path | None = None,
-        corrector_strengths: Path | None = None,
-        tune_knobs_file: Path | None = None,
+        corrector_knobs: Path | None = None,
+        tune_knobs: Path | None = None,
         b2_errors: Path | None = None,
     ) -> None:
         """Initialise the MAD-NG interface and get basic model parameters."""
@@ -64,19 +69,19 @@ class ConfigurationManager:
         self.mad_iface = GradientDescentMadInterface(
             accelerator=self.accelerator,
             magnet_range=self.magnet_range,
-            corrector_strengths=corrector_strengths,
-            tune_knobs_file=tune_knobs_file,
+            corrector_knobs=corrector_knobs,
+            tune_knobs=tune_knobs,
             b2_errors=b2_errors,
             bad_bpms=self.sequence_config.bad_bpms,
             debug=debug,
             mad_logfile=mad_logfile,
-            tracking_anchor_mode=self.tracking_plan.tracking_anchor_mode(),
-            tracking_anchor_markers=self.tracking_plan.tracking_anchor_sources(),
+            tracking_anchor_mode=self.tracking_plan.tracking_anchor_mode,
+            tracking_anchor_markers=list(self.tracking_plan.tracking_anchor_sources),
         )
         self.knob_names = self.mad_iface.knob_names
 
-        if self.tracking_plan.cycle_marker() is not None:
-            self.mad_iface.cycle_to_start(self.tracking_plan.cycle_marker())
+        if self.tracking_plan.cycle_marker is not None:
+            self.mad_iface.cycle_to_start(self.tracking_plan.cycle_marker)
             self.mad_iface.bpms_in_range, self.mad_iface.nbpms, self.mad_iface.all_bpms = (
                 self.mad_iface.count_bpms(self.mad_iface.bpm_range)
             )
@@ -85,7 +90,11 @@ class ConfigurationManager:
 
         self.all_bpms = self.mad_iface.all_bpms
         self.bpms_in_range = self.mad_iface.bpms_in_range
-        range_label = self.tracking_plan.format_range_for_log(self.magnet_range)
+        range_label = (
+            "full cycled sequence ($start/$end)"
+            if self.magnet_range == "$start/$end"
+            else self.magnet_range
+        )
         LOGGER.info(
             "Total BPMs in model: %d, BPMs in configured observation range %s: %d",
             len(self.all_bpms),
@@ -96,7 +105,7 @@ class ConfigurationManager:
         # Marker-anchored modes (kicker/ACD) may start from installed or measured
         # marker anchors rather than ordinary BPMs, so keep those through the
         # BPM-range filter.
-        allowed_starts = set(self.tracking_plan.tracking_anchor_sources())
+        allowed_starts = set(self.tracking_plan.tracking_anchor_sources)
         if self.tracking_plan.init_marker is not None:
             allowed_starts.add(self.tracking_plan.init_marker)
         self.start_bpms = [
@@ -110,7 +119,7 @@ class ConfigurationManager:
         # indicates to downstream code that no fixed BPM window should be enforced and
         # that the active BPM range should instead be taken from start_bpms/end_bpms or
         # other model-derived information.
-        if self.simulation_config.use_fixed_bpm and self.tracking_plan.uses_fixed_bpm_window():
+        if self.simulation_config.use_fixed_bpm and self.tracking_plan.uses_fixed_bpm_window:
             # Use magnet_range to determine fixed start and end points. Tracking plans
             # that anchor on installed markers (e.g. the AC-dipole markers) ignore
             # fixed_start/fixed_end entirely, so skip the derivation for them; otherwise
@@ -129,7 +138,11 @@ class ConfigurationManager:
                 self.fixed_start = self.start_bpms[0] if self.start_bpms else self.fixed_start
                 self.fixed_end = self.end_bpms[0] if self.end_bpms else self.fixed_end
         elif self.simulation_config.use_fixed_bpm:
-            self.tracking_plan.log_fixed_bpm_derivation_skipped(LOGGER, self.start_bpms)
+            LOGGER.info(
+                "Skipping fixed BPM derivation for this tracking plan; %s: %s",
+                self.tracking_plan.start_point_label,
+                self.start_bpms,
+            )
 
     @property
     def bpm_pairs(self) -> list[tuple[str, str]]:
@@ -145,9 +158,11 @@ class ConfigurationManager:
         When use_fixed_bpm is False, creates all combinations (Cartesian product)
         of start_bpms with end_bpms (every start with every end).
         """
-        if self.tracking_plan is None:
-            raise ValueError("Tracking plan must be configured before requesting BPM pairs")
-        return self.tracking_plan.bpm_pairs(
+        return self.tracking_plan.bpm_pairs(self._range_context())
+
+    def _range_context(self) -> RangeContext:
+        """Return the range-planning inputs for the tracking plan."""
+        return RangeContext(
             start_bpms=self.start_bpms,
             end_bpms=self.end_bpms,
             all_bpms=self.all_bpms,
@@ -156,13 +171,6 @@ class ConfigurationManager:
             fixed_start=self.fixed_start,
             fixed_end=self.fixed_end,
         )
-
-    def _bpm_behind(self, bpm: str) -> str:
-        """Return the BPM immediately behind `bpm` in ring order."""
-        if bpm not in self.all_bpms:
-            raise ValueError(f"Start BPM '{bpm}' not found in model BPM list")
-        idx = self.all_bpms.index(bpm)
-        return self.all_bpms[idx - 1]
 
     def initialise_knob_strengths(
         self,
@@ -230,10 +238,7 @@ class ConfigurationManager:
 
     def calculate_n_data_points(self) -> dict[tuple[str, str], int]:
         """Calculate number of data points for each BPM pair."""
-        n_data_points = {}
         n_turns = 1 if self.simulation_config.run_arc_by_arc else self.simulation_config.n_run_turns
-        if self.tracking_plan is None:
-            raise ValueError("Tracking plan must be configured before counting data points")
         n_data_points = self.tracking_plan.n_data_points(
             all_bpms=self.all_bpms,
             mad_iface=self.mad_iface,

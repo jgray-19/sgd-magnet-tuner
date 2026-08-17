@@ -1,11 +1,11 @@
-"""Controller-level tracking tests for PSB BPM displacement optimisation.
+"""FullRingFitter-level tracking tests for PSB BPM displacement optimisation.
 
 Because xtrack does not support BPM misalignment, the workflow mirrors
 what would happen in a real machine measurement:
   1. Generate clean noiseless tracking data with xtrack (perfect BPMs).
   2. Manually shift the x (or y) readings for chosen BPMs in the parquet
      file – this simulates displaced BPMs producing an offset measurement.
-  3. Run the Controller with optimise_bpm_dx=True.
+  3. Run the FullRingFitter with optimise_bpm_dx=True.
   4. Verify that the true displacements give a substantially lower worker
      loss than the default all-zero displacements.
 
@@ -28,7 +28,7 @@ from aba_optimiser.training.config.models import (
     OutputConfig,
     SequenceConfig,
 )
-from aba_optimiser.training.controller import Controller
+from aba_optimiser.training.tracking_fitter import FullRingFitter
 from tests.training.controller_test_utils import (
     _generate_nonoise_track,
     _make_simulation_config_quad,
@@ -94,13 +94,13 @@ def test_controller_bpm_dx_loss_regression_psb_ring3(
     Procedure:
       1. Generate noiseless tracking data (no BPM displacement in xtrack).
       2. Manually subtract known offsets from BPM x readings.
-      3. Build Controller with optimise_bpm_dx=True.
+      3. Build FullRingFitter with optimise_bpm_dx=True.
       4. Assert: loss(true displacements) << loss(zero displacements).
     """
     flattop_turns = 256
     track_path = tmp_path / "track_bpm_dx_psb.parquet"
 
-    corrector_file, _magnet_strengths, tune_knobs_file = _generate_nonoise_track(
+    corrector_file, _magnet_strengths, tune_knobs = _generate_nonoise_track(
         loaded_psb_interface,
         flattop_turns,
         track_path,
@@ -117,7 +117,6 @@ def test_controller_bpm_dx_loss_regression_psb_ring3(
 
     simulation_config = dataclasses.replace(
         _make_simulation_config_quad(),
-        tracks_per_worker=1,
         num_workers=4,
         num_batches=4,
         run_arc_by_arc=False,
@@ -136,7 +135,7 @@ def test_controller_bpm_dx_loss_regression_psb_ring3(
     )
 
     sequence_config = SequenceConfig("$start/$end")
-    measurement_config = create_arc_measurement_config(track_path, corrector_strengths=corrector_file, tune_knobs_file=tune_knobs_file)
+    measurement_config = create_arc_measurement_config(track_path, corrector_knobs=corrector_file, tune_knobs=tune_knobs)
     accelerator = PSB(
         ring=3,
         kinetic_energy=loaded_psb_interface.accelerator.kinetic_energy,
@@ -144,14 +143,13 @@ def test_controller_bpm_dx_loss_regression_psb_ring3(
         optimise_bpm_dx=True,
     )
 
-    ctrl = Controller(
+    ctrl = FullRingFitter(
         accelerator,
         optimiser_config,
         simulation_config,
         sequence_config,
         measurement_config,
         bpm_start_points=PSB_BPM_START_POINTS,
-        bpm_end_points=[],
         output_config=OutputConfig(
             mad_logfile=tmp_path / "controller_bpm_dx_psb.log",
             write_tensorboard_logs=False,

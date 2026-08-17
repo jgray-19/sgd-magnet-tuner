@@ -9,6 +9,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pymadng_utils.physics import PROTON_MASS_GEV as PROTON_MASS
+
 # =============================================================================
 # OPTIMISATION SETTINGS
 # =============================================================================
@@ -41,6 +43,9 @@ class OptimiserConfig:
     lbfgs_max_step_norm: float | None = field(default=1.0)
     lbfgs_powell_damping: float = field(default=0.2)
 
+    # Adam/AMSGrad-specific parameter (ignored for lbfgs)
+    adam_weight_decay: float = field(default=0.0)
+
     # Computed fields
     decay_epochs: int = field(init=False)
 
@@ -60,9 +65,21 @@ class SimulationConfig:
     physical parameters (energy, quadrupoles, bends) to optimise.
     """
 
-    tracks_per_worker: int
     num_workers: int
     num_batches: int
+
+    # Fraction of the post-validation-split training data to actually use and
+    # distribute among the workers. 1.0 (default) uses every available training
+    # turn; smaller values keep that fraction of each file's turns (per-file
+    # stratified sampling). Must be in (0, 1].
+    data_fraction: float = field(default=1.0)
+
+    # Fraction of the available turns held out per file as a genuine, disjoint
+    # validation set used only to measure generalisation (overfitting). These
+    # turns are removed from training entirely, so validation loss is a true
+    # out-of-sample signal. `data_fraction` is applied to the remaining training
+    # turns. Must be in [0, 1); 0.0 disables held-out validation.
+    validation_fraction: float = field(default=0.1)
 
     # Whether to include momenta (px, py) in loss function
     # When False, only positions (x, y) are used for optimisation
@@ -107,14 +124,18 @@ class SimulationConfig:
     bpm_loss_outlier_sigma: float = field(default=3.0)
     worker_loss_outlier_sigma: float = field(default=3.0)
 
-    # Computed fields
-    # `total_tracks` is the configured worker-capacity upper bound.
-    total_tracks: int = field(init=False)
-
     def __post_init__(self):
         if self.n_run_turns < 1:
             raise ValueError("SimulationConfig.n_run_turns must be >= 1")
-        self.total_tracks = self.tracks_per_worker * self.num_workers
+        if not 0.0 < self.data_fraction <= 1.0:
+            raise ValueError(
+                f"SimulationConfig.data_fraction must be in (0, 1], got {self.data_fraction}"
+            )
+        if not 0.0 <= self.validation_fraction < 1.0:
+            raise ValueError(
+                "SimulationConfig.validation_fraction must be in [0, 1), "
+                f"got {self.validation_fraction}"
+            )
 
     def log_state(self) -> None:
         """Log the current simulation config settings."""
@@ -147,11 +168,6 @@ DPP_OPTIMISER_CONFIG = OptimiserConfig(
 
 # Simulation configuration for dp/p optimisation
 DPP_SIMULATION_CONFIG = SimulationConfig(
-    # For pre trimmed data
-    # tracks_per_worker=447,
-    # num_workers=59,
-    # For post trimmed data
-    tracks_per_worker=219,
     num_workers=60,
     num_batches=20,
 )
@@ -177,10 +193,7 @@ QUAD_OPTIMISER_CONFIG = OptimiserConfig(
 
 # Simulation configuration for quadrupole optimisation
 QUAD_SIMULATION_CONFIG = SimulationConfig(
-    tracks_per_worker=133,
     num_workers=60,
-    # num_workers=1,
-    # num_batches=1,
     num_batches=10,
 )
 
@@ -194,9 +207,6 @@ MOMENTUM_STD_DEV = 3e-6  # Standard deviation of the momentum noise
 REL_K1_STD_DEV = 1e-4  # Standard deviation of the K1 noise
 MACHINE_DELTAP = -16e-5  # -11e-5  # The energy deviation of the machine from expected.
 DELTAP = 1e-3
-
-# Physical constants
-PROTON_MASS = 938.27208816 * 1e-3  # [GeV] Proton energy-mass
 
 # Global schema constant for data files (this is appropriate as a global)
 FILE_COLUMNS: tuple[str, ...] = (

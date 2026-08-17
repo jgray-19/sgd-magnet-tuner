@@ -86,11 +86,11 @@ class WorkerManager:
         self.validation_workers: list[mp.Process] = []
         self.validation_channels: WorkerChannels | None = None
         self.validation_metadata: list[WorkerRuntimeMetadata] = []
-        self.validation_loss_weights: list[float] = []
         self._validation_worker_particle_counts: list[int] = []
         self.channels: WorkerChannels | None = None
         self.track_data: dict[int, pd.DataFrame] = {}
         self.turn_batches: list[list[int]] = []
+        self.validation_turn_batches: list[list[int]] = []
         self.file_turn_map: dict[int, int] = {}
         self.start_bpms: list[str] = []
         self.end_bpms: list[str] = []
@@ -115,7 +115,7 @@ class WorkerManager:
         self.payload_builder = WorkerPayloadBuilder(
             accelerator=accelerator,
             all_bpms=all_bpms,
-            tracking_anchor_markers=self.tracking_plan.tracking_anchor_markers(),
+            tracking_anchor_markers=self.tracking_plan.tracking_anchor_markers,
         )
 
     def _sync_helpers(self) -> None:
@@ -125,11 +125,11 @@ class WorkerManager:
         self.setup_helper.interface_options_per_file = self.interface_options_per_file
         self.setup_helper.tracking_plan = self.tracking_plan
         self.setup_helper.tracking_anchor_markers = set(
-            self.tracking_plan.tracking_anchor_markers()
+            self.tracking_plan.tracking_anchor_markers
         )
         self.payload_builder.all_bpms = self.all_bpms
         self.payload_builder.tracking_anchor_markers = set(
-            self.tracking_plan.tracking_anchor_markers()
+            self.tracking_plan.tracking_anchor_markers
         )
 
     def _channels(self) -> WorkerChannels:
@@ -258,14 +258,21 @@ class WorkerManager:
         self,
         track_data: dict[int, pd.DataFrame],
         turn_batches: list[list[int]],
+        validation_turn_batches: list[list[int]],
         file_turn_map: dict[int, int],
         start_bpms: list[str],
         end_bpms: list[str],
         simulation_config: SimulationConfig,
         machine_deltaps: list[float],
     ) -> ValidationSplitResult:
-        """Build weighted training/validation payloads from current track data."""
-        payloads = self.create_worker_payloads(
+        """Build weighted training/validation payloads from current track data.
+
+        Training and validation payloads are built from disjoint turn sets (the
+        held-out validation turns were removed from ``turn_batches`` upstream in
+        ``DataManager``). Weights are normalised across the *combined* set so that
+        training and validation losses live on the same scale and are comparable.
+        """
+        training_payloads = self.create_worker_payloads(
             track_data,
             turn_batches,
             file_turn_map,
@@ -274,17 +281,37 @@ class WorkerManager:
             simulation_config,
             machine_deltaps,
         )
-        payloads = self.payload_builder.attach_global_weights(
-            payloads,
+        if not validation_turn_batches:
+            self.payload_builder.attach_global_weights(
+                training_payloads,
+                simulation_config.num_batches,
+                optimise_momenta=simulation_config.optimise_momenta,
+            )
+            return ValidationSplitResult(training_payloads, [])
+
+        validation_candidates = self.create_worker_payloads(
+            track_data,
+            validation_turn_batches,
+            file_turn_map,
+            start_bpms,
+            end_bpms,
+            simulation_config,
+            machine_deltaps,
+        )
+        # Normalise weights over both sets at once (attach_global_weights mutates in
+        # place) so validation loss is directly comparable to training loss.
+        self.payload_builder.attach_global_weights(
+            training_payloads + validation_candidates,
             simulation_config.num_batches,
             optimise_momenta=simulation_config.optimise_momenta,
         )
-        return split_validation_payloads(payloads, LOGGER)
+        return split_validation_payloads(training_payloads, validation_candidates, LOGGER)
 
     def start_workers(
         self,
         track_data: dict[int, pd.DataFrame],
         turn_batches: list[list[int]],
+        validation_turn_batches: list[list[int]],
         file_turn_map: dict[int, int],
         start_bpms: list[str],
         end_bpms: list[str],
@@ -293,9 +320,10 @@ class WorkerManager:
         initial_knobs: dict[str, float],
         enable_validation: bool = True,
     ) -> None:
-        """Start training workers plus one separate validation worker."""
+        """Start training workers plus held-out validation workers."""
         self.track_data = {}
         self.turn_batches = turn_batches
+        self.validation_turn_batches = validation_turn_batches
         self.file_turn_map = file_turn_map
         self.start_bpms = start_bpms
         self.end_bpms = end_bpms
@@ -305,8 +333,8 @@ class WorkerManager:
         n_run_turns = 1 if simulation_config.run_arc_by_arc else simulation_config.n_run_turns
         worker_mode = "arc-by-arc" if simulation_config.run_arc_by_arc else "multi-turn"
 
-        training_payloads, validation_payloads, duplicated_validation_payload = (
-            self._build_worker_payloads(track_data, simulation_config, enable_validation)
+        training_payloads, validation_payloads = self._build_worker_payloads(
+            track_data, simulation_config, enable_validation
         )
 
         LOGGER.info(
@@ -315,14 +343,10 @@ class WorkerManager:
             simulation_config.n_run_turns,
         )
         LOGGER.info(
-            "Starting %d trn worker(s) + %d val worker(s)",
+            "Starting %d trn worker(s) + %d held-out val worker(s)",
             len(training_payloads),
             len(validation_payloads),
         )
-        if duplicated_validation_payload:
-            LOGGER.warning(
-                "Validation payloads duplicate training payloads because a clean split would leave no training workers."
-            )
 
         spawner = WorkerSpawner(self.setup_helper)
         training = spawner.spawn_training(
@@ -336,7 +360,6 @@ class WorkerManager:
         self.validation_parent_conns = []
         self.validation_workers = []
         self.validation_metadata = []
-        self.validation_loss_weights = []
         if validation_payloads:
             validation = spawner.spawn_validation(
                 validation_payloads,
@@ -349,7 +372,6 @@ class WorkerManager:
             self.validation_parent_conns = validation.parent_conns
             self.validation_workers = validation.workers
             self.validation_metadata = validation.metadata
-            self.validation_loss_weights = validation.loss_weights
             self._validation_worker_particle_counts = validation.particle_counts
 
         self.channels = WorkerChannels(self.parent_conns, self.workers)
@@ -364,43 +386,20 @@ class WorkerManager:
         track_data: dict[int, pd.DataFrame],
         simulation_config: SimulationConfig,
         enable_validation: bool,
-    ) -> tuple[list, list, bool]:
-        """Build training (and optional validation) payloads with global weights attached."""
-        validation_split = (
-            self._build_payload_split(
-                track_data,
-                self.turn_batches,
-                self.file_turn_map,
-                self.start_bpms,
-                self.end_bpms,
-                simulation_config,
-                self.machine_deltaps,
-            )
-            if enable_validation
-            else None
-        )
-        if validation_split is not None:
-            return (
-                validation_split.training_payloads,
-                validation_split.validation_payloads,
-                validation_split.duplicated_validation_payload,
-            )
-
-        training_payloads = self.create_worker_payloads(
+    ) -> tuple[list, list]:
+        """Build training and held-out validation payloads with global weights attached."""
+        validation_batches = self.validation_turn_batches if enable_validation else []
+        split = self._build_payload_split(
             track_data,
             self.turn_batches,
+            validation_batches,
             self.file_turn_map,
             self.start_bpms,
             self.end_bpms,
             simulation_config,
             self.machine_deltaps,
         )
-        training_payloads = self.payload_builder.attach_global_weights(
-            training_payloads,
-            simulation_config.num_batches,
-            optimise_momenta=simulation_config.optimise_momenta,
-        )
-        return training_payloads, [], False
+        return split.training_payloads, split.validation_payloads
 
     @staticmethod
     def _assert_control_ack(response: object, *, command: str) -> None:
@@ -491,28 +490,41 @@ class WorkerManager:
 
         return total_loss / total_turns, agg_grad
 
-    def send_init_condition_updates(self, new_px_py: np.ndarray) -> None:
-        """Push updated initial px/py to every training and validation worker.
+    def send_init_condition_updates(self, new_coords: np.ndarray) -> None:
+        """Push updated initial ``x, px, y, py`` to every training and validation worker.
 
-        ``new_px_py`` must be a float64 array of shape ``(n_total_particles, 2)``
-        where the rows are ordered: training workers first (in creation order),
-        then validation workers (in creation order), and within each worker in
-        particle order.  The total number of rows must equal
-        ``sum(self._worker_particle_counts) + sum(self._validation_worker_particle_counts)``.
+        ``new_coords`` must be a float64 array of shape ``(n_total_particles, 4)``
+        whose columns are ``x, px, y, py`` and whose rows are ordered: training
+        workers first (in creation order), then validation workers (in creation
+        order), and within each worker in particle order.  The total number of
+        rows must equal ``sum(self._worker_particle_counts) +
+        sum(self._validation_worker_particle_counts)``.
+
+        Positions travel with the momenta because the launch point can sit on a
+        closed orbit that the fitted magnets themselves shape; see
+        ``TrackingWorker._send_init_condition_update``. A caller with nothing new
+        to say about position passes the current x/y straight back.
 
         Workers handle the update before processing the next gradient batch, so
         this method is safe to call between epochs (from the epoch_end_hook).
         """
         expected = sum(self._worker_particle_counts) + sum(self._validation_worker_particle_counts)
-        if new_px_py.shape != (expected, 2):
+        if new_coords.shape != (expected, 4):
             raise ValueError(
-                f"new_px_py must have shape ({expected}, 2), got {new_px_py.shape}"
+                f"new_coords must have shape ({expected}, 4) of x, px, y, py; "
+                f"got {new_coords.shape}"
             )
 
         def _send_to_channels(channels: WorkerChannels, counts: list[int], offset: int) -> int:
             for conn, n in zip(channels.parent_conns, counts):
-                chunk = new_px_py[offset : offset + n]
-                conn.send({"cmd": "update_init_coords", "px": chunk[:, [0]], "py": chunk[:, [1]]})
+                chunk = new_coords[offset : offset + n]
+                conn.send({
+                    "cmd": "update_init_coords",
+                    **{
+                        name: chunk[:, [column]]
+                        for column, name in enumerate(("x", "px", "y", "py"))
+                    },
+                })
                 offset += n
             for conn, worker in zip(channels.parent_conns, channels.workers):
                 WorkerChannels._recv(conn, worker)
@@ -524,21 +536,22 @@ class WorkerManager:
                 self._validation_channels(), self._validation_worker_particle_counts, offset
             )
 
-    def build_update_px_py(self, updated_track_data: dict[int, pd.DataFrame]) -> np.ndarray:
-        """Build the combined px/py array for training and validation workers.
+    def build_update_coords(self, updated_track_data: dict[int, pd.DataFrame]) -> np.ndarray:
+        """Build the combined ``x, px, y, py`` array for training and validation workers.
 
-        Returns a float64 array of shape ``(n_total_particles, 2)`` suitable for
+        Returns a float64 array of shape ``(n_total_particles, 4)`` suitable for
         passing directly to :meth:`send_init_condition_updates`.  Training worker
         rows come first, followed by validation worker rows.
 
         When there are no validation workers the result is identical to extracting
-        ``init_coords[:, [1, 3]]`` from :meth:`create_worker_payloads`.
+        ``init_coords[:, :4]`` from :meth:`create_worker_payloads`.
         """
         has_validation = bool(self._validation_worker_particle_counts)
         if has_validation:
             split = self._build_payload_split(
                 updated_track_data,
                 self.turn_batches,
+                self.validation_turn_batches,
                 self.file_turn_map,
                 self.start_bpms,
                 self.end_bpms,
@@ -557,14 +570,20 @@ class WorkerManager:
                 self.machine_deltaps,
             )
         rows = [
-            [float(data.init_coords[i, 1]), float(data.init_coords[i, 3])]
+            [float(value) for value in data.init_coords[i, :4]]
             for data, _config, _file_idx in all_payloads
             for i in range(len(data.init_coords))
         ]
         return np.asarray(rows, dtype=np.float64)
 
     def compute_validation_loss(self, current_knobs: dict[str, float]) -> float | None:
-        """Evaluate the held-out validation worker at the current knobs."""
+        """Evaluate the held-out validation workers at the current knobs.
+
+        The validation workers track turns that were removed from training, so this
+        is a genuine out-of-sample loss. Returns ``None`` when no validation workers
+        exist (validation disabled or too little data), in which case the caller
+        falls back to training loss.
+        """
         if self.validation_channels is None:
             return None
 
@@ -584,18 +603,11 @@ class WorkerManager:
         if not losses:
             return None
 
-        weights = np.asarray(self.validation_loss_weights, dtype=np.float64)
-        if weights.size != len(losses):
-            LOGGER.warning(
-                "Validation weighting mismatch (weights=%d, losses=%d), using unweighted mean",
-                weights.size,
-                len(losses),
-            )
-            return float(np.mean(np.asarray(losses, dtype=np.float64)))
-
-        if np.sum(weights) <= 0.0:
-            return float(np.mean(np.asarray(losses, dtype=np.float64)))
-        return float(np.average(np.asarray(losses, dtype=np.float64), weights=weights))
+        # Each validation worker already reports a per-turn, per-BPM-point loss, so
+        # combine them with an unweighted mean over workers -- the same reduction the
+        # training loop uses (loop.py: total_loss / n_workers). This keeps the
+        # validation number on the same scale as the reported training loss.
+        return float(np.mean(np.asarray(losses, dtype=np.float64)))
 
     def _stop_validation_workers(self) -> None:
         """Send termination signal to validation workers and wait for them to finish."""

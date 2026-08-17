@@ -1,4 +1,4 @@
-"""Shared utilities for training controllers."""
+"""Shared utilities for training fitters."""
 
 from __future__ import annotations
 
@@ -6,12 +6,25 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pymadng_utils.io.tfs import load_tfs_files as _load_tfs_files
 from pymadng_utils.io.utils import read_knobs
+from tmom_recon.lattice.bpms import find_common_bpms
 
 if TYPE_CHECKING:
     import pandas as pd
 
 LOGGER = logging.getLogger(__name__)
+
+__all__ = [
+    "bpm_supports_both_planes",
+    "bpm_supports_plane",
+    "create_bpm_range_specs",
+    "extract_bpm_range_names",
+    "filter_bad_bpms",
+    "find_common_bpms",
+    "load_tfs_files",
+    "normalise_true_strengths",
+]
 
 
 def filter_bad_bpms(
@@ -111,61 +124,13 @@ def extract_bpm_range_names(
     return extracted
 
 
-def find_common_bpms(*dataframes: pd.DataFrame) -> list[str]:
-    """Find common BPMs across multiple dataframes.
-
-    Args:
-        *dataframes: Variable number of DataFrames with BPM names as index
-
-    Returns:
-        List of common BPM names in the order they appear in the first dataframe
-    """
-    if not dataframes:
-        return []
-
-    # Get common BPMs across all dataframes
-    common = set(dataframes[0].index)
-    for df in dataframes[1:]:
-        common &= set(df.index)
-
-    # Return in order of first dataframe
-    return [bpm for bpm in dataframes[0].index if bpm in common]
-
-
 def load_tfs_files(
     directory: Path,
     file_specs: dict[str, tuple[str, str]],
 ) -> dict[str, pd.DataFrame]:
-    """Load multiple TFS files and return as a dictionary.
-
-    Args:
-        directory: Directory containing the TFS files
-        file_specs: Mapping from result keys to ``(prefix, suffix)`` tuples.
-            For example, ``{"beta_x": ("beta_phase_", "x")}`` loads the file
-            named ``beta_phase_x.tfs``.
-
-    Returns:
-        Dictionary mapping keys to loaded DataFrames
-
-    Raises:
-        FileNotFoundError: If any required file is missing
-    """
-    import tfs
-    from omc3.optics_measurements.constants import EXT
-
-    loaded = {}
-    for key, (prefix, suffix) in file_specs.items():
-        file_path = directory / f"{prefix}{suffix}{EXT}"
-        if not file_path.exists():
-            raise FileNotFoundError(f"Required TFS file not found: {file_path}")
-        # Phase files have NAME/NAME2 pairs, so don't index by NAME
-        # Other files have single BPM per row, so index by NAME
-        if "phase" in key and "beta" not in key:
-            loaded[key] = tfs.read(file_path)
-        else:
-            loaded[key] = tfs.read(file_path, index="NAME")
-
-    return loaded
+    """Load TFS files, preserving phase-table NAME/NAME2 rows."""
+    no_index_keys = {key for key in file_specs if "phase" in key and "beta" not in key}
+    return _load_tfs_files(directory, file_specs, no_index_keys=no_index_keys)
 
 
 def bpm_supports_plane(accelerator, bpm: str, kick_plane: str) -> bool:
