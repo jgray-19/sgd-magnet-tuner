@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 import tfs
+from omc3.model_creator import create_instance_and_model
+from pymadng_utils.madx.make_sequence import make_madx_sequence
 
 from aba_optimiser.accelerators import LHC, PSB, SPS
 from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
@@ -63,10 +65,42 @@ def seq_sps(data_dir: Path) -> Path:
     return data_dir / "sequences" / "sps.seq"
 
 
+def _create_psb_nominal_model(output_dir: Path, acc_models_dir: Path) -> None:
+    """Generate the PSB nominal model, including its ACD sequence, with omc3."""
+    create_instance_and_model(
+        outputdir=output_dir,
+        accel="psbooster",
+        type="nominal",
+        nat_tunes=[0.17, 0.225],
+        dpp=0.0,
+        fetch="path",
+        path=acc_models_dir,
+        scenario="lhc_indiv",
+        year="2026",
+        cycle_point="1_flat_bottom",
+        str_file="psb_fb_lhcindiv.str",
+        ring=3,
+        driven_excitation="acd",
+        drv_tunes=[0.162, 0.232],
+        list_choices=False,
+        show_help=False,
+        logfile=None,
+    )
+
+
 @pytest.fixture(scope="session")
-def seq_psb(data_dir: Path) -> Path:
-    """Path to a PSB sequence file for integration tests."""
-    return data_dir / "sequences" / "psb3_saved.seq"
+def psb_model_dir(tmp_path_factory: pytest.TempPathFactory, data_dir: Path) -> Path:
+    """Generate the PSB model and ACD sequence with omc3 from local fixtures."""
+    model_dir = tmp_path_factory.mktemp("psb_model") / "ring3_model"
+    _create_psb_nominal_model(model_dir, data_dir / "acc-models-psb")
+    make_madx_sequence(model_dir)
+    return model_dir
+
+
+@pytest.fixture(scope="session")
+def seq_psb(psb_model_dir: Path) -> Path:
+    """Path to the omc3-generated PSB ACD sequence."""
+    return psb_model_dir / "psb3_saved.seq"
 
 
 @pytest.fixture(scope="session")
