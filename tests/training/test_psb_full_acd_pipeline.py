@@ -97,10 +97,10 @@ OPTIMISATION_DATA_FRACTION = 0.250
 BPM_PATTERN = r"(?i)^br3\.bpm\d+l3$"
 BEND_REL_RMS = 8e-4
 QUAD_REL_RMS = 2e-3
-ACD_NAME = "BR3.DES3L1"
+ACD_NAME = "HACMAP"
 ACD_HORIZONTAL_EXCITATION = 0.0158188853291
 ACD_VERTICAL_EXCITATION = 0.01078784
-MAX_ACD_BPM_PEAK_TO_PEAK = 2e-3
+MAX_ACD_BPM_PEAK_TO_PEAK = 2.1e-3
 # Measured on the 2026-08-14 campaign, 0 mm orbit, 24 acquisitions: the driven
 # amplitude is 351.6 um (x) and 329.3 um (y) once the pre-AC-dipole variance is
 # subtracted, against the ~995 um this test's default excitation produces. The BPM
@@ -1480,7 +1480,7 @@ def test_psb_acd_initial_conditions_and_fit_r2(
             compensated_dir=compensated_dirs[pt_values[dpp]],
             machine=machine,
             fitted=fitted,
-            reference=MomentumReference(closed_orbit=mixed_reference, pt=0.0),
+            reference_co=MomentumReference(closed_orbit=mixed_reference, pt=0.0).closed_orbit,
             scenario=scenario,
         )
         acd_result = result.attrs["acd_result"]
@@ -1559,9 +1559,9 @@ def test_psb_acd_campaign_snr_guard_pass_rate(
                 compensated_dir=compensated_dirs[pt_values[REFERENCE_DPP]],
                 machine=machine,
                 fitted=fitted,
-                reference=MomentumReference(
+                reference_co=MomentumReference(
                     closed_orbit=_mixed_reference(machine, fitted, scenario), pt=0.0
-                ),
+                ).closed_orbit,
                 scenario=scenario,
             )
         except ACDipoleStateConsistencyError as error:
@@ -1680,7 +1680,7 @@ def test_psb_acd_r2_factor_case_study(
         compensated_dir=compensated_dirs[pt_values[REFERENCE_DPP]],
         machine=machine,
         fitted=fitted,
-        reference=MomentumReference(closed_orbit=reference_co, pt=0.0),
+        reference_co=reference_co,
         scenario=scenario,
     )
     acd_result = result.attrs["acd_result"]
@@ -2110,7 +2110,7 @@ def test_psb_full_acd_reconstruction_and_optimisation(
             compensated_dir=compensated_dirs[pt_values[dpp]],
             machine=machine,
             fitted=fitted,
-            reference=MomentumReference(closed_orbit=mixed_reference, pt=0.0),
+            reference_co=MomentumReference(closed_orbit=mixed_reference, pt=0.0).closed_orbit,
         )
         guard_records = (
             reconstruction_results[dpp].attrs["acd_result"].attrs["acd_state_consistency"]

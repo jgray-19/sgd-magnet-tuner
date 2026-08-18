@@ -186,12 +186,12 @@ def test_acd_marker_plan_uses_markers_as_initial_conditions_not_targets(tmp_path
     seq_file.write_text("! Dummy PSB sequence file\n")
     accelerator = PSB(ring=3, sequence_file=seq_file, kinetic_energy=0.160)
     accelerator.infer_monitor_plane = lambda bpm: "HV"  # type: ignore[method-assign]
-    plan = ACDTrackingPlan(acd_name="BR3.DES3L1")
+    plan = ACDTrackingPlan(acd_name="HACMAP")
     all_bpms = [
         "BR3.BPM1L3",
         "BR3.BPM2L3",
-        "BR3.DES3L1_before",
-        "BR3.DES3L1_after",
+        "HACMAP_before",
+        "HACMAP_after",
         "BR3.BPM3L3",
         "BR3.BPM4L3",
     ]
@@ -212,7 +212,7 @@ def test_acd_marker_plan_uses_markers_as_initial_conditions_not_targets(tmp_path
     )
 
     specs = helper.build_range_specs(
-        start_bpms=["BR3.DES3L1_after", "BR3.DES3L1_before"],
+        start_bpms=["HACMAP_after", "HACMAP_before"],
         end_bpms=[],
         simulation_config=SimulationConfig(
             num_workers=2,
@@ -230,8 +230,8 @@ def test_acd_marker_plan_uses_markers_as_initial_conditions_not_targets(tmp_path
     )
 
     assert specs == [
-        WorkerRangeSpec("BR3.DES3L1_after", "BR3.DES3L1_before", 1),
-        WorkerRangeSpec("BR3.DES3L1_after", "BR3.DES3L1_before", -1),
+        WorkerRangeSpec("HACMAP_after", "HACMAP_before", 1),
+        WorkerRangeSpec("HACMAP_after", "HACMAP_before", -1),
     ]
     assert forward == ["BR3.BPM3L3", "BR3.BPM4L3", "BR3.BPM1L3", "BR3.BPM2L3"]
     assert backward == ["BR3.BPM2L3", "BR3.BPM1L3", "BR3.BPM4L3", "BR3.BPM3L3"]
@@ -243,10 +243,10 @@ def test_acd_marker_plan_uses_markers_as_initial_conditions_not_targets(tmp_path
     backward_plan = helper.build_observation_plans(
         specs[1], file_idx=0, available_bpms=set(all_bpms)
     )[0]
-    assert forward_plan.init_marker == "BR3.DES3L1_after"
-    assert backward_plan.init_marker == "BR3.DES3L1_before"
-    assert helper.make_worker_config(forward_plan).initial_condition_marker == "BR3.DES3L1_after"
-    assert helper.make_worker_config(backward_plan).initial_condition_marker == "BR3.DES3L1_before"
+    assert forward_plan.init_marker == "HACMAP_after"
+    assert backward_plan.init_marker == "HACMAP_before"
+    assert helper.make_worker_config(forward_plan).initial_condition_marker == "HACMAP_after"
+    assert helper.make_worker_config(backward_plan).initial_condition_marker == "HACMAP_before"
 
 
 def test_observation_plan_uses_plane_compatible_range_for_split_full_ring_workers(
