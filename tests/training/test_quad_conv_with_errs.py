@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.serial
+pytestmark = [pytest.mark.serial, pytest.mark.slow, pytest.mark.e2e]
 
 LHC_HORIZONTAL_EXCITATION = 0.000371554879506
 LHC_VERTICAL_EXCITATION = 0.000415765635123

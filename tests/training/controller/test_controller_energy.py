@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.serial
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("optimise_momenta", [False, True], ids=["position_only", "with_momenta"])
 def test_controller_energy_opt(
     tmp_path: Path,
@@ -84,7 +83,6 @@ def test_controller_energy_opt(
     assert not unc
 
 
-@pytest.mark.slow
 def test_controller_energy_opt_sps(
     tmp_path: Path,
     seq_sps: Path,
@@ -149,7 +147,6 @@ def test_controller_energy_opt_sps(
     assert not unc
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("n_run_turns", [2, 3], ids=["2_turns", "3_turns"])
 def test_controller_energy_opt_multi_turn(
     tmp_path: Path,
@@ -214,7 +211,6 @@ def test_controller_energy_opt_multi_turn(
     assert not unc
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("n_run_turns", [2, 3], ids=["2_turns_sps", "3_turns_sps"])
 def test_controller_energy_opt_sps_multi_turn(
     tmp_path: Path,

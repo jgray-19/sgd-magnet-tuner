@@ -101,7 +101,6 @@ def _build_psb_fullring_quad_controller(
     return ctrl, magnet_strengths
 
 
-@pytest.mark.slow
 def test_controller_quad_psb_validation_loss_is_real_out_of_sample(
     tmp_path: Path,
     seq_psb: Path,
@@ -158,7 +157,6 @@ def test_controller_quad_psb_validation_loss_is_real_out_of_sample(
     )
 
 
-@pytest.mark.slow
 def test_controller_quad_opt_psb_ring3(
     tmp_path: Path,
     seq_psb: Path,

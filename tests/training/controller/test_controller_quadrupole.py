@@ -112,7 +112,6 @@ def _assert_estimate_matches_true(
         )
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("start_marker", ["MSIA.EXIT.B1", "E.CELL.12.B1"])
 def test_controller_quad_opt_simple(
     tmp_path: Path,
@@ -137,7 +136,6 @@ def test_controller_quad_opt_simple(
     _assert_estimate_matches_true(estimate, true_values, max_rel_diff=1e-5)
 
 
-@pytest.mark.slow
 def test_controller_quad_opt_simple_without_early_stopping_reaches_truth(
     tmp_path: Path,
     seq_b1: Path,
@@ -165,7 +163,6 @@ def test_controller_quad_opt_simple_without_early_stopping_reaches_truth(
     _assert_estimate_matches_true(estimate, true_values, max_rel_diff=1e-5)
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("use_diagonal_kicks", [False], ids=["separate_hv_kicks"])
 def test_controller_quad_opt_sps_multi_turn_all_quads(
     tmp_path: Path,

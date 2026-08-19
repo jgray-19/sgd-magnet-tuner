@@ -35,7 +35,6 @@ PSB_BPM_START_POINTS = [
 pytestmark = pytest.mark.serial
 
 
-@pytest.mark.slow
 @pytest.mark.xfail(strict=False, reason="PSB energy optimisation still under investigation")
 def test_controller_energy_opt_psb(
     tmp_path: Path,

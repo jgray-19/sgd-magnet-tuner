@@ -83,7 +83,6 @@ def _build_kicker_controller(
     return ctrl, magnet_strengths.copy()
 
 
-@pytest.mark.slow
 def test_controller_kicker_has_no_held_out_validation(
     tmp_path: Path,
     seq_psb: Path,
@@ -123,7 +122,6 @@ def test_controller_kicker_has_no_held_out_validation(
         ctrl.worker_manager.terminate_workers()
 
 
-@pytest.mark.slow
 def test_controller_quad_opt_with_kicker(
     tmp_path: Path,
     seq_psb: Path,

@@ -242,7 +242,6 @@ def _build_acd_controller(
     return ctrl, magnet_strengths.copy()
 
 
-@pytest.mark.slow
 def test_controller_quad_opt_with_acd(
     tmp_path: Path,
     seq_psb: Path,
