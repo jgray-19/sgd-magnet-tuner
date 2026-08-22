@@ -1,7 +1,7 @@
 """Closed-twiss optimisation training module.
 
 Fits optimisation knobs (dipole strengths, quadrupole strengths, misalignments,
-rolls) so the model's *periodic* optics solution matches a measured one. Closed
+tilts) so the model's *periodic* optics solution matches a measured one. Closed
 orbit, beta, phase and dispersion all come from a single parametric MAD-NG
 ``twiss``, so they are fitted simultaneously and consistently, with no starting
 point seeded from the measurement.

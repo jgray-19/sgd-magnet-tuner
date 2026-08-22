@@ -31,12 +31,16 @@ The physics being asserted, test by test:
 
 ``test_orbit_jacobian_matches_finite_differences``
     The same guard for the closed orbit, which takes the *other* code path (saved
-    map rather than ``trkopt``). Worth its own test: a wrong Jacobian here does
-    not error, it just quietly stops the orbit from being fitted.
+    map rather than ``trkopt``), over every steering family: ``dx``, ``dy`` and
+    ``tilt``. A wrong Jacobian here does not error, it just quietly stops the
+    orbit from being fitted.
 
 ``test_second_momentum_removes_the_null_space``
     What a second momentum actually buys, measured on the normal matrix rather
     than assumed.
+
+``test_quadrupole_tilts_recovered_from_vertical_dispersion``
+    An injected tilt pattern recovered from the vertical orbit and dispersion.
 
 ``test_all_observables_fitted_simultaneously``
     The whole point: orbit, beta, alpha, phase and dispersion driven to agreement
@@ -183,16 +187,13 @@ def test_quadrupole_gradients_recovered_from_beta_and_phase(seq_psb: Path) -> No
 
     # The perturbation must actually move the optics, or the test is vacuous.
     nominal = _fake_measurement(seq_psb, dict.fromkeys(quads, 0.0), 0.0, kwargs)
-    beta_beating = float(
-        np.max(np.abs(measurements[0.0]["BETX"] / nominal["BETX"] - 1.0))
-    )
+    beta_beating = float(np.max(np.abs(measurements[0.0]["BETX"] / nominal["BETX"] - 1.0)))
     assert beta_beating > 0.01, f"perturbation only produced {beta_beating:.1%} beta beating"
 
     optics = _fit(seq_psb, measurements, ("beta11", "beta22", "mu1", "mu2"), kwargs)
     optics_err = float(np.linalg.norm(np.array([optics[k] for k in quads]) - truth_vec))
     assert optics_err < 0.05 * truth_norm, (
-        f"beta+phase recovery error {optics_err:.3e} is not small against "
-        f"|k_true|={truth_norm:.3e}"
+        f"beta+phase recovery error {optics_err:.3e} is not small against |k_true|={truth_norm:.3e}"
     )
 
     # Control: the closed orbit alone carries no gradient information, so an
@@ -260,12 +261,10 @@ def test_vertical_dispersion_requires_a_vertical_source(seq_psb: Path) -> None:
     residual_dy = float(np.max(np.abs(refit["DY"] - measurements[0.0]["DY"])))
     residual_y = float(np.max(np.abs(refit["Y"] - measurements[0.0]["Y"])))
     assert residual_dy < 1e-3 * measured_dy_rms, (
-        f"fitted Dy residual {residual_dy:.3e} m against a measured rms of "
-        f"{measured_dy_rms:.3e} m"
+        f"fitted Dy residual {residual_dy:.3e} m against a measured rms of {measured_dy_rms:.3e} m"
     )
     assert residual_y < 1e-3 * measured_y_rms, (
-        f"fitted y residual {residual_y:.3e} m against a measured rms of "
-        f"{measured_y_rms:.3e} m"
+        f"fitted y residual {residual_y:.3e} m against a measured rms of {measured_y_rms:.3e} m"
     )
 
     # Quadrupole gradients cannot produce vertical dispersion at all: whatever the
@@ -300,9 +299,7 @@ def test_observables_are_consistent_with_an_independent_twiss(seq_psb: Path) -> 
     mad["knob_names"] = knobs
     names = ["beta11_", "dx_", "mu1_"]
     columns = names + [
-        f"{name}{'0' * i}1{'0' * (len(knobs) - i - 1)}"
-        for name in names
-        for i in range(len(knobs))
+        f"{name}{'0' * i}1{'0' * (len(knobs) - i - 1)}" for name in names for i in range(len(knobs))
     ]
     mad["optics_columns"] = columns
     mad["orbit_coords"] = []
@@ -480,30 +477,18 @@ def test_all_observables_fitted_simultaneously(seq_psb: Path) -> None:
         for column in ("MUX", "MUY"):
             target = np.diff(measurements[delta][column].to_numpy(dtype=float))
             after = np.max(np.abs(np.diff(refit[delta][column].to_numpy(dtype=float)) - target))
-            assert after < 1e-3, (
-                f"{column} advances at delta={delta} disagree by {after:.3e} turns"
-            )
+            assert after < 1e-3, f"{column} advances at delta={delta} disagree by {after:.3e} turns"
 
 
-@pytest.mark.slow
-def test_orbit_jacobian_matches_finite_differences(seq_psb: Path) -> None:
-    """d(closed orbit)/d(knob) from the saved map equals central differences of a twiss.
-
-    The closed orbit does not come through ``trkopt`` - ``x``/``y`` are not
-    optical functions - so it is read from the saved parametric map by a separate
-    path with its own indexing. Nothing about a wrong index errors: the fit simply
-    stops improving the orbit while every other family converges normally, which
-    is very easy to mistake for an identifiability limit. Pin it down directly.
-
-    Vertical misalignment knobs are used because they give a clean null result to
-    check as well: a ``dy`` knob must not move the horizontal orbit at all.
-    """
-    kwargs = {"optimise_quad_dy": True}
+def _analytic_orbit_jacobian(
+    seq_psb: Path, kwargs: dict, delta: float, n_knobs: int = 3
+) -> tuple[list[str], dict[str, np.ndarray]]:
+    """Return the first ``n_knobs`` knobs and d(orbit)/d(knob) from the saved map."""
     iface = GradientDescentMadInterface(
         PSB(ring=3, sequence_file=seq_psb, **kwargs), py_name=PYTHON_IN_MAD
     )
     mad = iface.mad
-    knobs = [k for k in iface.knob_names if k != "pt"][:3]
+    knobs = [k for k in iface.knob_names if k != "pt"][:n_knobs]
     mad["knob_names"] = knobs
     mad["optics_columns"] = []
     mad["orbit_coords"] = ["x", "y"]
@@ -514,33 +499,80 @@ def test_orbit_jacobian_matches_finite_differences(seq_psb: Path) -> None:
             if line.strip() and not line.strip().startswith(("--", "!"))
         )
     )
+    # Momentum is a pinned input on the parametric map, as in the worker; never a knob.
+    mad.send(f"x0map.pt:set0({delta:.15e})")
     mad.send("compute_closed_twiss()")
     assert mad.recv(), "parametric closed twiss failed on the nominal machine"
     n_bpms = len(mad.twiss_tbl.to_df(columns=["name"]))
 
     mad.send("send_orbit_jacobian()")
-    d_x = np.asarray(mad.recv(), dtype=float).reshape(n_bpms, len(knobs))
-    d_y = np.asarray(mad.recv(), dtype=float).reshape(n_bpms, len(knobs))
+    jacobian = {
+        plane: np.asarray(mad.recv(), dtype=float).reshape(n_bpms, len(knobs))
+        for plane in ("X", "Y")
+    }
     del iface
+    return knobs, jacobian
 
-    step = 1e-7
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("family", "driven", "delta", "step", "rtol", "null_is_exact"),
+    [
+        ("optimise_quad_dx", "X", 0.0, 1e-7, 1e-6, True),
+        ("optimise_quad_dy", "Y", 0.0, 1e-7, 1e-6, True),
+        ("optimise_quad_tilt", "Y", 3e-3, 1e-6, 1e-5, False),
+    ],
+    ids=["dx", "dy", "tilt"],
+)
+def test_orbit_jacobian_matches_finite_differences(
+    seq_psb: Path,
+    family: str,
+    driven: str,
+    delta: float,
+    step: float,
+    rtol: float,
+    null_is_exact: bool,
+) -> None:
+    """d(closed orbit)/d(knob) from the saved map equals central differences of a twiss.
+
+    Covers every steering family: they reach the map by different routes
+    (translation vs rotation) and a wrong Jacobian raises nothing. The off-plane
+    column is checked too - exactly zero for a misalignment, second order in the
+    angle for a tilt, which is why it needs ``pt != 0`` to steer at all.
+    """
+    kwargs = {family: True}
+    null = "Y" if driven == "X" else "X"
+    knobs, analytic = _analytic_orbit_jacobian(seq_psb, kwargs, delta)
+
     for i, knob in enumerate(knobs):
-        forward = _fake_measurement(seq_psb, {knob: step}, 0.0, kwargs)
-        backward = _fake_measurement(seq_psb, {knob: -step}, 0.0, kwargs)
+        forward = _fake_measurement(seq_psb, {knob: step}, delta, kwargs)
+        backward = _fake_measurement(seq_psb, {knob: -step}, delta, kwargs)
+        numeric = {
+            plane: (forward[plane].to_numpy() - backward[plane].to_numpy()) / (2 * step)
+            for plane in ("X", "Y")
+        }
 
-        numeric_y = (forward["Y"].to_numpy() - backward["Y"].to_numpy()) / (2 * step)
-        scale = float(np.max(np.abs(numeric_y)))
-        assert scale > 1e-3, f"{knob} barely moves the vertical orbit; test is vacuous"
-        assert np.max(np.abs(d_y[:, i] - numeric_y)) < 1e-6 * scale, (
-            f"d(y)/d({knob}) disagrees with finite differences"
+        scale = float(np.max(np.abs(numeric[driven])))
+        assert scale > 1e-4, f"{knob} barely moves the {driven} orbit; test is vacuous"
+        # Tolerance is the finite-difference floor: cancellation noise on a
+        # derivative of order `scale`.
+        assert np.max(np.abs(analytic[driven][:, i] - numeric[driven])) < rtol * scale, (
+            f"d({driven})/d({knob}) disagrees with finite differences"
         )
 
-        # A vertical misalignment steers nothing horizontally.
-        numeric_x = (forward["X"].to_numpy() - backward["X"].to_numpy()) / (2 * step)
-        assert np.allclose(numeric_x, 0.0, atol=1e-9)
-        assert np.allclose(d_x[:, i], 0.0, atol=1e-12), (
-            f"d(x)/d({knob}) should be identically zero for a vertical misalignment"
-        )
+        if null_is_exact:
+            # A misalignment in one plane steers nothing in the other.
+            assert np.allclose(numeric[null], 0.0, atol=1e-9)
+            assert np.allclose(analytic[null][:, i], 0.0, atol=1e-12), (
+                f"d({null})/d({knob}) should be identically zero for a misalignment"
+            )
+        else:
+            # The off-plane response is second order in the angle, so at the 1e-9 rad
+            # seed both derivatives are ~1e-10, below cofind's convergence noise.
+            assert np.max(np.abs(numeric[null])) < 1e-6 * scale
+            assert np.max(np.abs(analytic[null][:, i])) < 1e-6 * scale, (
+                f"d({null})/d({knob}) is not second order in the tilt angle"
+            )
 
 
 def test_energy_knob_is_rejected(seq_psb: Path) -> None:
@@ -550,10 +582,55 @@ def test_energy_knob_is_rejected(seq_psb: Path) -> None:
     aggregates over the unstripped list, so allowing this would silently
     mis-shape every Jacobian reshape by one column.
     """
-    accel = PSB(
-        ring=3, sequence_file=seq_psb, optimise_quadrupoles=True, optimise_energy=True
-    )
+    accel = PSB(ring=3, sequence_file=seq_psb, optimise_quadrupoles=True, optimise_energy=True)
     with pytest.raises(ValueError, match="optimise_energy"):
         ClosedTwissFitter(
             accelerator=accel, sequence_config=None, measurements={0.0: pd.DataFrame()}
         )
+
+
+@pytest.mark.slow
+def test_quadrupole_tilts_recovered_from_vertical_dispersion(seq_psb: Path) -> None:
+    """An injected tilt pattern is recovered from the vertical orbit and dispersion.
+
+    The acceptance test for the family: the knobs are usable, not merely
+    present. 48 knobs against 16 BPMs is under-determined, so the assertions are
+    on the *shape* of the pattern and on reproducing the measurement - the
+    fitted amplitude comes out at ~0.8 of truth, which is regularisation
+    shrinkage. Every observable is needed: ``y`` and ``dy`` alone recover the
+    pattern at only 0.66 correlation.
+    """
+    kwargs = {"optimise_quad_tilt": True}
+    knobs = _knob_names(seq_psb, kwargs)
+    assert len(knobs) > 2
+
+    rng = np.random.default_rng(2)
+    truth = {k: float(v) for k, v in zip(knobs, rng.normal(0.0, 1e-3, len(knobs)))}
+
+    measurements = {d: _fake_measurement(seq_psb, truth, d, kwargs) for d in DELTAS}
+
+    # The premise: tilts make Dy without a matching vertical orbit.
+    nominal = _fake_measurement(seq_psb, dict.fromkeys(knobs, 0.0), 0.0, kwargs)
+    assert np.allclose(nominal["DY"], 0.0, atol=1e-12), "ideal PSB should have Dy == 0"
+    measured_dy_rms = float(np.sqrt(np.mean(measurements[0.0]["DY"] ** 2)))
+    assert measured_dy_rms > 0.05, (
+        f"injected tilts only produced {measured_dy_rms:.3e} m of Dy; test is vacuous"
+    )
+
+    fitted = _fit(seq_psb, measurements, DEFAULT_OBSERVABLES, kwargs, prior_strength=1e-6)
+    fitted_vec = np.array([fitted[k] for k in knobs])
+    truth_vec = np.array([truth[k] for k in knobs])
+
+    correlation = float(
+        np.corrcoef(fitted_vec - fitted_vec.mean(), truth_vec - truth_vec.mean())[0, 1]
+    )
+    assert correlation > 0.9, (
+        f"recovered tilt pattern correlates only {correlation:.3f} with the injected one"
+    )
+
+    # And the refitted machine reproduces the measured Dy.
+    refit = _fake_measurement(seq_psb, fitted, 0.0, kwargs)
+    residual_dy = float(np.max(np.abs(refit["DY"] - measurements[0.0]["DY"])))
+    assert residual_dy < 1e-2 * measured_dy_rms, (
+        f"fitted Dy residual {residual_dy:.3e} m against a measured rms of {measured_dy_rms:.3e} m"
+    )
