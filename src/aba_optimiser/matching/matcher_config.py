@@ -17,7 +17,7 @@ class MatcherConfig:
 
     The matcher takes:
     - A target model twiss file (the betas we want to achieve)
-    - Estimated quadrupole strengths from the controller
+    - Estimated quadrupole strengths from the fitter
     - A list of knobs to adjust to minimise the beta difference
 
     Attributes:

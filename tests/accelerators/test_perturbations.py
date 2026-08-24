@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 
+from aba_optimiser.accelerators import PSB
+from aba_optimiser.mad import GradientDescentMadInterface
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -45,6 +48,33 @@ def test_effective_strength_matches_base_when_dknl_not_created(
         _get_effective_strength(loaded_interface, quad_name, "k1"),
         _get_element_attr(loaded_interface, quad_name, "k1"),
     )
+
+
+def test_perturbation_records_integrated_dknl_matching_readback(
+    loaded_sps_interface: AbaMadInterface,
+    seq_sps: Path,
+) -> None:
+    """The dict returned by apply_magnet_perturbations must be self-consistent.
+
+    The ``dk*l`` knob name is an *integrated* strength, so the recorded value has
+    to equal what ``get_magnet_strengths`` reads back for the same knob (which
+    returns the integrated ``dknl`` component directly). A regression here means
+    the returned "true" strengths are off by the element length.
+    """
+    del seq_sps
+    magnet_strengths, _ = loaded_sps_interface.apply_magnet_perturbations(
+        rel_error=None,
+        seed=42,
+        magnet_type="q",
+    )
+    assert magnet_strengths, "expected at least one perturbed quadrupole"
+
+    readback = loaded_sps_interface.get_magnet_strengths(list(magnet_strengths))
+    for name, recorded in magnet_strengths.items():
+        assert np.isclose(recorded, readback[name]), (
+            f"{name}: apply recorded {recorded} but get_magnet_strengths "
+            f"reads back {readback[name]}"
+        )
 
 
 @pytest.mark.parametrize(
@@ -114,6 +144,79 @@ def test_sps_quadrupole_only_perturbation(
     assert f"{quad_name}.dk1l" in magnet_strengths
     assert f"{sext_name}.dk2l" not in magnet_strengths
     assert f"{dip_name}.dk0l" not in magnet_strengths
+
+
+def test_zero_strength_selected_magnet_is_not_perturbed(
+    loaded_psb_interface: AbaMadInterface,
+    seq_psb: Path,
+) -> None:
+    """Relative perturbations should skip selected magnets that are off."""
+    del seq_psb
+    off_quad = "BR.QFO11"
+    loaded_psb_interface.mad.loaded_sequence[off_quad].k1 = 0.0
+
+    magnet_strengths, true_strengths = loaded_psb_interface.apply_magnet_perturbations(
+        rel_error=None,
+        seed=42,
+        magnet_type="q",
+    )
+
+    assert f"{off_quad}.dk1l" not in magnet_strengths
+    assert off_quad not in true_strengths
+    assert np.isclose(_get_element_dknl(loaded_psb_interface, off_quad, 1), 0.0)
+
+
+def test_psb_bend_and_qfo_qde_perturbation_families(
+    loaded_psb_interface: AbaMadInterface,
+    seq_psb: Path,
+) -> None:
+    """PSB perturbations should cover ring bends and QFO/QDE quadrupoles."""
+    del seq_psb
+
+    bend_strengths, _ = loaded_psb_interface.apply_magnet_perturbations(
+        rel_error=None,
+        seed=42,
+        magnet_type="d",
+    )
+    quad_strengths, _ = loaded_psb_interface.apply_magnet_perturbations(
+        rel_error=None,
+        seed=24,
+        magnet_type="q",
+    )
+
+    assert "BR.BHZ11.dk0l" in bend_strengths
+    assert "BR.QFO11.dk1l" in quad_strengths
+    assert "BR.QDE1.dk1l" in quad_strengths
+    assert all(not name.startswith("BI3.BSW") for name in bend_strengths)
+
+
+def test_perturbation_preserves_deferred_optimisation_knob_link(seq_psb: Path) -> None:
+    """Perturbing a GradientDescentMadInterface must not break its dk*l knobs."""
+    iface = GradientDescentMadInterface(
+        accelerator=PSB(
+            ring=3,
+            sequence_file=seq_psb,
+            optimise_bends=True,
+            optimise_quadrupoles=True,
+        ),
+        discard_mad_output=True,
+    )
+    try:
+        knob = "BR.BHZ11.dk0l"
+        magnet_strengths, _ = iface.apply_magnet_perturbations(
+            rel_error=None,
+            seed=20260811,
+            magnet_type="d",
+        )
+        knob_values = dict(zip(iface.knob_names, iface.receive_knob_values(), strict=True))
+        assert knob_values[knob] == pytest.approx(magnet_strengths[knob])
+        assert iface.get_magnet_strengths([knob])[knob] == pytest.approx(magnet_strengths[knob])
+
+        changed = 123e-6
+        iface.update_knob_values({knob: changed})
+        assert iface.get_magnet_strengths([knob])[knob] == pytest.approx(changed)
+    finally:
+        iface.close()
 
 
 def test_sps_perturbation_sets_dknl(

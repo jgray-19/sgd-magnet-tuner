@@ -7,8 +7,8 @@ import pandas as pd
 import pytest
 
 from aba_optimiser.accelerators import SPS
-from aba_optimiser.training.worker_payloads import WorkerPayloadBuilder
-from aba_optimiser.training.worker_setup import WorkerObservationPlan, WorkerRangeSpec
+from aba_optimiser.training.workers.payloads import WorkerPayloadBuilder
+from aba_optimiser.training.workers.setup import WorkerObservationPlan, WorkerRangeSpec
 from aba_optimiser.workers.common import KickPlane, TrackingData, WorkerConfig
 
 if TYPE_CHECKING:
@@ -23,7 +23,6 @@ def _make_builder(tmp_path: Path, all_bpms: list[str] | None = None) -> WorkerPa
     return WorkerPayloadBuilder(
         accelerator=accelerator,
         all_bpms=all_bpms or ["BPH.13208", "BPV.13308"],
-        kinetic_energy=450.0,
     )
 
 
@@ -132,8 +131,7 @@ def test_attach_global_weights_normalises_all_observables(tmp_path: Path) -> Non
         tracking_start_bpm="BPH.13208",
         tracking_end_bpm="BPH.13208",
         magnet_range="$start/$end",
-        corrector_strengths=None,
-        tune_knobs_file=None,
+        interface_options={},
     )
 
     payloads = builder.attach_global_weights([(data, config, 0)], num_batches=1)
@@ -164,8 +162,7 @@ def test_attach_global_weights_ignores_unused_momentum_channels_for_position_onl
         tracking_start_bpm="BPH.13208",
         tracking_end_bpm="BPV.13308",
         magnet_range="$start/$end",
-        corrector_strengths=None,
-        tune_knobs_file=None,
+        interface_options={},
         kick_plane=KickPlane.XY,
     )
 

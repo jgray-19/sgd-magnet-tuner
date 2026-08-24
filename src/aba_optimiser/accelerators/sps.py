@@ -9,8 +9,6 @@ from aba_optimiser.accelerators.base import Accelerator, KnobSpec
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
-
 
 class SPS(Accelerator):
     """Super Proton Synchrotron accelerator configuration.
@@ -115,10 +113,6 @@ class SPS(Accelerator):
             },
         }
 
-    def apply_accelerator_specific_errors(self, mad_iface: AbaMadInterface) -> None:
-        """SPS has no accelerator-specific startup error tables."""
-        del mad_iface
-
     @staticmethod
     def infer_monitor_plane(bpm_name: str) -> str:
         """Infer measurement plane from SPS BPM family name."""
@@ -132,6 +126,11 @@ class SPS(Accelerator):
     def get_ac_dipole_marker(self) -> str:
         """SPS does not use the LHC AC-dipole exciter model."""
         raise NotImplementedError("SPS does not define an AC-dipole exciter marker")
+
+    @property
+    def ac_dipole_name(self) -> str:
+        """SPS does not use an AC-dipole exciter model."""
+        raise NotImplementedError("SPS does not define an AC-dipole exciter")
 
     @property
     def ac_dipole_location(self) -> tuple[str, float]:

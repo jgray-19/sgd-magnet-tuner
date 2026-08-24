@@ -36,6 +36,34 @@ These dependencies are important because the tested end-to-end workflows in
 this repository are built around a larger accelerator-tooling stack rather than
 standalone numerical routines.
 
+Squeeze Measurement Reconstruction
+----------------------------------
+
+The LHC squeeze pipeline follows the current ``tmom-recon`` and
+``pymadng-utils`` conventions:
+
+* Batch squeeze processing uses the one-shot
+  ``tmom_recon.calculate_pz(..., acd_only=True)`` path. The
+  ``acd_only="generator"`` path is reserved for live optics updates where the
+  same cleaned measurement is recomputed many times after magnet changes.
+* The MAD-NG model is updated with both the natural tunes and the driven
+  AC-dipole tunes via ``update_model_with_madng(..., tunes=..., drv_tunes=...)``.
+* The reconstruction Twiss is expected to be on-momentum. Momentum offsets are
+  carried through MAD-NG ``pt``; using an off-momentum Twiss would subtract a
+  dispersive closed orbit from the measured positions and bias the reconstructed
+  phase space.
+* The saved squeeze parquet keeps the usual BPM rows and appends the
+  ``<acd>_before`` / ``<acd>_after`` marker rows emitted by ``tmom-recon`` so
+  downstream ACD optimisation can initialise bidirectional tracking at the
+  reconstructed marker states.
+* Tune and corrector knob files extracted for each measurement frequency are
+  passed into the ACD MAD-NG driver, matching the optics state used for the
+  corresponding turn-by-turn measurement.
+* When b2 dipole error tables are enabled, the MAD interface requires a tune
+  knob file. Applying b2 errors shifts the machine tunes, so the interface
+  applies the error table and then restores the tunes before creating
+  optimisation knobs.
+
 Companion documentation:
 
 * ``sgd-magnet-tuner``: `jgray-19.github.io/sgd-magnet-tuner <https://jgray-19.github.io/sgd-magnet-tuner/>`_

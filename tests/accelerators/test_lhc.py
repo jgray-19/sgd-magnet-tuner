@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 import pytest
-from pymadng_utils.accelerators.base import PROTON_MASS_GEV
+from pymadng_utils.physics import PROTON_MASS_GEV
 
 from aba_optimiser.accelerators import LHC
 
@@ -323,7 +323,7 @@ class TestLHCAccelerator:
         assert isinstance(result, dict)
 
     def test_format_result_knob_names_with_energy(self, test_sequence_file: Path) -> None:
-        """Test format_result_knob_names converts pt to deltap."""
+        """Test format_result_knob_names preserves controller-space pt."""
         lhc = LHC(
             beam=1,
             kinetic_energy=6800.0,
@@ -332,8 +332,8 @@ class TestLHCAccelerator:
         )
         knob_names = ["K1.b1", "pt"]
         result = lhc.format_result_knob_names(knob_names)
-        assert "deltap" in result
-        assert "pt" not in result
+        assert "pt" in result
+        assert "deltap" not in result
 
     def test_format_result_knob_names_without_energy(self, test_sequence_file: Path) -> None:
         """Test format_result_knob_names leaves knobs unchanged without energy."""

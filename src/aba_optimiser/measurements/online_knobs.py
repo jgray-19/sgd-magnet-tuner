@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from omc3.machine_data_extraction.nxcals_knobs import get_energy
+
 from aba_optimiser.config import CORRECTOR_STRENGTHS, TUNE_KNOBS_FILE
 
 if TYPE_CHECKING:
@@ -19,11 +21,29 @@ def build_dict_from_nxcal_result(result: list) -> dict[str, float]:
     return {res.name: res.value for res in result}
 
 
+def get_online_energy(meas_time: datetime, beam: int, keep_spark_session: bool = False) -> float:
+    """Return the beam energy from NXCALS for a measurement timestamp."""
+
+    try:
+        from nxcals.spark_session_builder import get_or_create
+    except ImportError as e:
+        raise ImportError("nxcals is required for get_online_energy but is not installed.") from e
+
+    spark = get_or_create()
+    try:
+        energy, _ = get_energy(spark, meas_time, beam=beam)
+    finally:
+        if not keep_spark_session:
+            spark.stop()
+            del spark
+    return float(energy)
+
+
 def save_online_knobs(
     meas_time: datetime,
     beam: int,
-    tune_knobs_file: Path | None = None,
-    corrector_knobs_file: Path | None = None,
+    tune_knobs: Path | None = None,
+    corrector_knobs: Path | None = None,
     energy: float | None = None,
 ) -> float:
     """Download and save knob data from NXCALS for the given measurement time.
@@ -31,9 +51,7 @@ def save_online_knobs(
     Returns the beam energy in GeV.
     """
     try:
-        from nxcals.spark_session_builder import get_or_create
         from omc3.machine_data_extraction.mqt_extraction import get_mqt_vals
-        from omc3.machine_data_extraction.nxcals_knobs import get_energy
 
         from aba_optimiser.measurements import knob_extraction
     except ImportError as e:
@@ -41,11 +59,13 @@ def save_online_knobs(
             "nxcals is required for save_online_knobs but is not installed."
         ) from e
 
+    from nxcals.spark_session_builder import get_or_create
     from pymadng_utils.io.utils import save_knobs
 
-    spark = get_or_create()
     if energy is None:
-        energy, _ = get_energy(spark, meas_time)
+        energy = get_online_energy(meas_time, beam=beam, keep_spark_session=True)
+    spark = get_or_create()
+
 
     mq_results = knob_extraction.get_mq_vals(spark, meas_time, beam, energy=energy)
     mqt_results = get_mqt_vals(spark, meas_time, beam, energy=energy)
@@ -64,7 +84,7 @@ def save_online_knobs(
     }
     corrector_knobs = build_dict_from_nxcal_result(corrector_results)
 
-    save_knobs(main_magnet_knobs, tune_knobs_file or TUNE_KNOBS_FILE)
-    save_knobs(corrector_knobs, corrector_knobs_file or CORRECTOR_STRENGTHS)
+    save_knobs(main_magnet_knobs, tune_knobs or TUNE_KNOBS_FILE)
+    save_knobs(corrector_knobs, corrector_knobs or CORRECTOR_STRENGTHS)
 
     return float(energy)

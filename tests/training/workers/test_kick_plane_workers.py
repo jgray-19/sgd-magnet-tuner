@@ -6,7 +6,8 @@ import pandas as pd
 from aba_optimiser.accelerators import SPS
 from aba_optimiser.config import SimulationConfig
 from aba_optimiser.training.data_manager import DataManager
-from aba_optimiser.training.worker_manager import WorkerManager
+from aba_optimiser.training.workers.manager import WorkerManager
+from aba_optimiser.training.workers.spawning import WorkerSpawner
 from aba_optimiser.workers.tracking import TrackingWorker
 from aba_optimiser.workers.tracking_position_only import PositionOnlyTrackingWorker
 
@@ -25,8 +26,9 @@ def _make_manager(tmp_path, *, file_kick_planes: dict[int, str] | None = None) -
         fixed_start="BPH.13208",
         fixed_end="BPV.20108",
         accelerator=_make_sps(tmp_path),
-        corrector_strengths_files=[tmp_path / "correctors.tfs"],
-        tune_knobs_files=[tmp_path / "tune_knobs.txt"],
+        interface_options_per_file=[
+            {"corrector_knobs": tmp_path / "correctors.tfs", "tune_knobs": tmp_path / "tune_knobs.txt"}
+        ],
         all_bpms=["BPV.13108", "BPH.13208", "BPV.13308"],
         file_kick_planes=file_kick_planes,
     )
@@ -84,41 +86,45 @@ def test_infer_kick_plane_classifies_single_and_dual_plane_files() -> None:
 
 def test_create_worker_payloads_skips_single_plane_file_for_mismatched_start_plane(tmp_path) -> None:
     manager = WorkerManager(
-        n_data_points={("BPH.13208", "BPV.13108"): 2},
+        n_data_points={("BPH.13208", "BPH.13008"): 2},
         ybpm="BPV.13108",
         magnet_range="$start/$end",
         fixed_start="BPH.13208",
-        fixed_end="BPV.13108",
+        fixed_end="BPH.13008",
         accelerator=_make_sps(tmp_path),
-        corrector_strengths_files=[tmp_path / "correctors.tfs"],
-        tune_knobs_files=[tmp_path / "tune_knobs.txt"],
-        all_bpms=["BPV.13108", "BPH.13208"],
+        interface_options_per_file=[
+            {"corrector_knobs": tmp_path / "correctors.tfs", "tune_knobs": tmp_path / "tune_knobs.txt"}
+        ],
+        all_bpms=["BPH.13008", "BPV.13108", "BPH.13208", "BPV.13308"],
         file_kick_planes={0: "x"},
     )
     manager.accelerator.infer_monitor_plane = lambda bpm: "H" if "BPH" in bpm else "V"  # type: ignore[method-assign]
-    payloads = manager.create_worker_payloads(
-        track_data={
-            0: pd.DataFrame(
+    names = ["BPH.13008", "BPV.13108", "BPH.13208", "BPV.13308"]
+    rows: list[dict[str, object]] = []
+    for turn in (1, 2, 3):
+        for name in names:
+            is_h = name.startswith("BPH")
+            rows.append(
                 {
-                    "turn": [1, 1, 2, 2, 3, 3],
-                    "name": ["BPV.13108", "BPH.13208"] * 3,
-                    "x": [0.0, 1.0, 0.0, 2.0, 0.0, 3.0],
-                    "y": [3.0, 0.0, 4.0, 0.0, 5.0, 0.0],
-                    "px": [0.0, 0.1, 0.0, 0.2, 0.0, 0.3],
-                    "py": [0.3, 0.0, 0.4, 0.0, 0.5, 0.0],
-                    "var_x": [np.inf, 1.0, np.inf, 1.0, np.inf, 1.0],
-                    "var_y": [1.0, np.inf, 1.0, np.inf, 1.0, np.inf],
-                    "var_px": [np.inf, 1.0, np.inf, 1.0, np.inf, 1.0],
-                    "var_py": [1.0, np.inf, 1.0, np.inf, 1.0, np.inf],
+                    "turn": turn,
+                    "name": name,
+                    "x": float(turn) if is_h else 0.0,
+                    "y": 0.0 if is_h else float(turn),
+                    "px": 0.1 * turn if is_h else 0.0,
+                    "py": 0.0 if is_h else 0.1 * turn,
+                    "var_x": 1.0 if is_h else np.inf,
+                    "var_y": np.inf if is_h else 1.0,
+                    "var_px": 1.0 if is_h else np.inf,
+                    "var_py": np.inf if is_h else 1.0,
                 }
-            ).set_index(["turn", "name"])
-        },
+            )
+    payloads = manager.create_worker_payloads(
+        track_data={0: pd.DataFrame(rows).set_index(["turn", "name"])},
         turn_batches=[[2]],
         file_turn_map={1: 0, 2: 0, 3: 0},
-        start_bpms=["BPH.13208"],
+        start_bpms=["BPH.13208", "BPV.13308"],
         end_bpms=[],
         simulation_config=SimulationConfig(
-            tracks_per_worker=1,
             num_workers=2,
             num_batches=1,
             run_arc_by_arc=False,
@@ -127,7 +133,10 @@ def test_create_worker_payloads_skips_single_plane_file_for_mismatched_start_pla
         machine_deltaps=[0.0],
     )
 
+    # File 0 only carries x-plane data, so the y-plane workers spawned by the
+    # BPV start are dropped; the x-plane start keeps its forward/backward pair.
     assert [(config.tracking_start_bpm, config.kick_plane) for _, config, _ in payloads] == [
+        ("BPH.13208", "x"),
         ("BPH.13208", "x"),
     ]
 
@@ -140,8 +149,9 @@ def test_create_worker_payloads_keeps_single_plane_file_for_dual_plane_bpm(tmp_p
         fixed_start="BPH.13208",
         fixed_end="BPV.13108",
         accelerator=_make_sps(tmp_path),
-        corrector_strengths_files=[tmp_path / "correctors.tfs"],
-        tune_knobs_files=[tmp_path / "tune_knobs.txt"],
+        interface_options_per_file=[
+            {"corrector_knobs": tmp_path / "correctors.tfs", "tune_knobs": tmp_path / "tune_knobs.txt"}
+        ],
         all_bpms=["BPV.13108", "BPH.13208"],
         file_kick_planes={0: "x"},
     )
@@ -168,7 +178,6 @@ def test_create_worker_payloads_keeps_single_plane_file_for_dual_plane_bpm(tmp_p
         start_bpms=["BPH.13208"],
         end_bpms=[],
         simulation_config=SimulationConfig(
-            tracks_per_worker=1,
             num_workers=2,
             num_batches=1,
             run_arc_by_arc=False,
@@ -184,9 +193,7 @@ def test_create_worker_payloads_keeps_single_plane_file_for_dual_plane_bpm(tmp_p
 
 
 def test_select_worker_class_reuses_generic_tracking_workers(tmp_path) -> None:
-    manager = _make_manager(tmp_path)
-
-    assert manager._select_worker_class("xy", True) is TrackingWorker
-    assert manager._select_worker_class("xy", False) is PositionOnlyTrackingWorker
-    assert manager._select_worker_class("x", True) is TrackingWorker
-    assert manager._select_worker_class("y", False) is PositionOnlyTrackingWorker
+    assert WorkerSpawner.select_worker_class("xy", True) is TrackingWorker
+    assert WorkerSpawner.select_worker_class("xy", False) is PositionOnlyTrackingWorker
+    assert WorkerSpawner.select_worker_class("x", True) is TrackingWorker
+    assert WorkerSpawner.select_worker_class("y", False) is PositionOnlyTrackingWorker

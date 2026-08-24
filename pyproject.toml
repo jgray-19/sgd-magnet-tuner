@@ -19,6 +19,7 @@ dependencies = [
     "tensorboardX",
     "pymadng>=0.3.0",
     "pymadng-utils",
+    "tmom-recon",
     "matplotlib",
     "uncertainties",
 ]
@@ -27,7 +28,7 @@ dependencies = [
 test = [
     "pytest",
     "pytest-cov",
-    "tmom-recon",
+    "pytest-xdist",
     "xtrack-tools",
 ]
 docs = [
@@ -52,6 +53,7 @@ dev = [
 all = [
     "pytest",
     "pytest-cov",
+    "pytest-xdist",
     "sphinx>=7.0",
     "sphinx-autodoc-typehints>=2.0",
     "myst-parser>=2.0",
@@ -68,9 +70,9 @@ all = [
 ]
 
 [tool.uv.sources]
-pymadng-utils = { git = "https://github.com/jgray-19/pymadng-utils.git" }
-tmom-recon = { git = "https://github.com/jgray-19/tmom-recon.git" }
-xtrack-tools = { git = "https://github.com/jgray-19/xtrack_tools.git" }
+pymadng-utils = { path = "../pymadng-utils", editable = true }
+tmom-recon = { path = "../tmom-recon", editable = true }
+xtrack-tools = { path = "../xtrack-tools", editable = true }
 
 
 [tool.setuptools]
@@ -90,13 +92,20 @@ relative_files = true
 testpaths = ["tests"]
 norecursedirs = ["tests/data"]
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "slow: computationally expensive tests",
+    "regression: fast behavioural regression contracts",
+    "integration: multi-component integration tests",
+    "convergence: full optimiser convergence tests",
+    "e2e: full machine-to-optimisation end-to-end tests",
+    "lhc: LHC-specific tests",
+    "sps: SPS-specific tests",
+    "psb: PSB-specific tests",
+    "serial: test must not run in parallel",
 ]
-addopts = [
-    "--log-cli-format=%(levelname)s %(name)s %(message)s",
-    "-s",
-]
-
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)"
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
 
 # ----- Dev Tools Configuration ----- #
 

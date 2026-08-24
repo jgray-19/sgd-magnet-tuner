@@ -9,14 +9,15 @@ import pandas as pd
 
 from aba_optimiser.accelerators import SPS
 from aba_optimiser.config import SimulationConfig
-from aba_optimiser.training.validation_selection import (
-    payload_track_count,
+from aba_optimiser.training.workers.manager import WorkerManager
+from aba_optimiser.training.workers.screening import OutlierScreener
+from aba_optimiser.training.workers.setup import WorkerRuntimeMetadata
+from aba_optimiser.training.workers.validation import (
     split_validation_payloads,
 )
-from aba_optimiser.training.worker_manager import WorkerManager
-from aba_optimiser.training.worker_setup import WorkerRuntimeMetadata
 from aba_optimiser.workers import TrackingData, WorkerConfig
-from aba_optimiser.workers.common import KickPlane
+from aba_optimiser.workers.common import KickPlane, PrecomputedTrackingWeights
+from aba_optimiser.workers.tracking_validation import ValidationTrackingWorker
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -49,11 +50,29 @@ class _FakeChannels:
 class _FakeWorker:
     def __init__(self) -> None:
         self.join_calls = 0
+        self.terminate_calls = 0
         self.exitcode = 0
         self.pid = 1234
 
-    def join(self) -> None:
+    def join(self, timeout: float | None = None) -> None:
         self.join_calls += 1
+
+    def is_alive(self) -> bool:
+        return False
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+
+
+class _ConnThatMustNotPoll:
+    def send(self, payload: object) -> None:
+        self.sent = payload
+
+    def poll(self, timeout: float | None = None) -> bool:
+        raise AssertionError(f"Validation cleanup should not poll for payloads, got {timeout}")
+
+    def recv(self) -> object:
+        raise AssertionError("Validation cleanup should not receive a final payload")
 
 
 def _start_pipe_worker(child_conn: multiprocessing.connection.Connection, responses: list[object]) -> threading.Thread:
@@ -92,8 +111,9 @@ def _make_manager(
         fixed_start="BPH.13208",
         fixed_end="BPV.20108",
         accelerator=_make_sps(tmp_path),
-        corrector_strengths_files=[tmp_path / "correctors.tfs"],
-        tune_knobs_files=[tmp_path / "tune_knobs.txt"],
+        interface_options_per_file=[
+            {"corrector_knobs": tmp_path / "correctors.tfs", "tune_knobs": tmp_path / "tune_knobs.txt"}
+        ],
         all_bpms=all_bpms or ["BPH.13208", "BPV.13308", "BPH.13608", "BPV.20108"],
     )
 
@@ -145,8 +165,7 @@ def _make_payload(
         tracking_start_bpm=start_bpm,
         tracking_end_bpm=end_bpm,
         magnet_range="$start/$end",
-        corrector_strengths=None,
-        tune_knobs_file=None,
+        interface_options={},
         sdir=sdir,
         kick_plane=kick_plane,
     )
@@ -156,40 +175,17 @@ def _make_payload(
 def test_create_worker_payloads_multi_turn_creates_forward_and_backward_workers(
     tmp_path: Path,
 ) -> None:
+    all_bpms = ["BPH.13008", "BPV.13108", "BPH.13208", "BPV.13308"]
     manager = _make_manager(
         tmp_path,
         n_data_points={
-            ("BPH.13208", "BPV.13108"): 3,
+            ("BPH.13208", "BPH.13008"): 3,
         },
-        all_bpms=["BPV.13108", "BPH.13208", "BPV.13308"],
+        all_bpms=all_bpms,
     )
     manager.accelerator.infer_monitor_plane = lambda bpm: "H" if "BPH" in bpm else "V"  # type: ignore[method-assign]
-    df = pd.DataFrame(
-        {
-            "turn": [1, 1, 1, 2, 2, 2, 3, 3, 3],
-            "name": [
-                "BPV.13108",
-                "BPH.13208",
-                "BPV.13308",
-                "BPV.13108",
-                "BPH.13208",
-                "BPV.13308",
-                "BPV.13108",
-                "BPH.13208",
-                "BPV.13308",
-            ],
-            "x": [0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 3.0, 0.0],
-            "y": [3.0, 0.0, 4.0, 5.0, 0.0, 6.0, 7.0, 0.0, 8.0],
-            "px": [0.0, 0.1, 0.0, 0.0, 0.2, 0.0, 0.0, 0.3, 0.0],
-            "py": [0.3, 0.0, 0.4, 0.5, 0.0, 0.6, 0.7, 0.0, 0.8],
-            "var_x": [np.inf, 1.0, np.inf, np.inf, 1.0, np.inf, np.inf, 1.0, np.inf],
-            "var_y": [1.0, np.inf, 1.0, 1.0, np.inf, 1.0, 1.0, np.inf, 1.0],
-            "var_px": [np.inf, 1.0, np.inf, np.inf, 1.0, np.inf, np.inf, 1.0, np.inf],
-            "var_py": [1.0, np.inf, 1.0, 1.0, np.inf, 1.0, 1.0, np.inf, 1.0],
-        }
-    ).set_index(["turn", "name"])
+    df = _make_track_df(all_bpms, [1, 2, 3])
     simulation_config = SimulationConfig(
-        tracks_per_worker=1,
         num_workers=2,
         num_batches=1,
         optimise_momenta=False,
@@ -207,6 +203,9 @@ def test_create_worker_payloads_multi_turn_creates_forward_and_backward_workers(
         machine_deltaps=[0.0],
     )
 
+    # Single-plane machines build same-plane ranges: the x-plane start spawns a
+    # forward and backward worker that both observe the x-plane, ending at the
+    # previous x-plane BPM.
     assert len(payloads) == 2
     assert [
         (
@@ -217,32 +216,31 @@ def test_create_worker_payloads_multi_turn_creates_forward_and_backward_workers(
         )
         for _, config, _ in payloads
     ] == [
-        ("BPH.13208", "BPV.13108", 1, "x"),
-        ("BPH.13208", "BPV.13108", -1, "y"),
+        ("BPH.13208", "BPH.13008", 1, "x"),
+        ("BPH.13208", "BPH.13008", -1, "x"),
     ]
 
     forward_data = payloads[0][0]
     backward_data = payloads[1][0]
     assert np.isfinite(forward_data.position_variances[0, :, 0]).any()
     assert not np.isfinite(forward_data.position_variances[0, :, 1]).any()
-    assert not np.isfinite(backward_data.position_variances[0, :, 0]).any()
-    assert np.isfinite(backward_data.position_variances[0, :, 1]).any()
+    assert np.isfinite(backward_data.position_variances[0, :, 0]).any()
+    assert not np.isfinite(backward_data.position_variances[0, :, 1]).any()
 
 
 def test_create_worker_payloads_multi_turn_supports_mixed_start_planes(tmp_path: Path) -> None:
-    all_bpms = ["BPV.13108", "BPH.13208", "BPV.13308"]
+    all_bpms = ["BPH.13008", "BPV.13108", "BPH.13208", "BPV.13308"]
     manager = _make_manager(
         tmp_path,
         n_data_points={
-            ("BPH.13208", "BPV.13108"): 3,
-            ("BPV.13308", "BPH.13208"): 3,
+            ("BPH.13208", "BPH.13008"): 3,
+            ("BPV.13308", "BPV.13108"): 3,
         },
         all_bpms=all_bpms,
     )
     manager.accelerator.infer_monitor_plane = lambda bpm: "H" if "BPH" in bpm else "V"  # type: ignore[method-assign]
     df = _make_track_df(all_bpms, [1, 2, 3])
     simulation_config = SimulationConfig(
-        tracks_per_worker=1,
         num_workers=4,
         num_batches=1,
         optimise_momenta=False,
@@ -260,44 +258,45 @@ def test_create_worker_payloads_multi_turn_supports_mixed_start_planes(tmp_path:
         machine_deltaps=[0.0],
     )
 
+    # Each single-plane start spawns a forward and backward worker confined to
+    # its own plane, so the x-plane and y-plane starts give four workers total.
     assert len(payloads) == 4
 
     payload_by_key = {
         (config.tracking_start_bpm, config.tracking_end_bpm, config.sdir): (data, config)
         for data, config, _ in payloads
     }
-    forward_h, forward_h_config = payload_by_key[("BPH.13208", "BPV.13108", 1)]
-    backward_h, backward_h_config = payload_by_key[("BPH.13208", "BPV.13108", -1)]
-    forward_v, forward_v_config = payload_by_key[("BPV.13308", "BPH.13208", 1)]
-    backward_v, backward_v_config = payload_by_key[("BPV.13308", "BPH.13208", -1)]
+    forward_h, forward_h_config = payload_by_key[("BPH.13208", "BPH.13008", 1)]
+    backward_h, backward_h_config = payload_by_key[("BPH.13208", "BPH.13008", -1)]
+    forward_v, forward_v_config = payload_by_key[("BPV.13308", "BPV.13108", 1)]
+    backward_v, backward_v_config = payload_by_key[("BPV.13308", "BPV.13108", -1)]
 
     assert forward_h_config.kick_plane == "x"
-    assert backward_h_config.kick_plane == "y"
+    assert backward_h_config.kick_plane == "x"
     assert forward_v_config.kick_plane == "y"
-    assert backward_v_config.kick_plane == "x"
+    assert backward_v_config.kick_plane == "y"
     assert np.isfinite(forward_h.position_variances[0, :, 0]).any()
     assert not np.isfinite(forward_h.position_variances[0, :, 1]).any()
-    assert not np.isfinite(backward_h.position_variances[0, :, 0]).any()
-    assert np.isfinite(backward_h.position_variances[0, :, 1]).any()
+    assert np.isfinite(backward_h.position_variances[0, :, 0]).any()
+    assert not np.isfinite(backward_h.position_variances[0, :, 1]).any()
     assert not np.isfinite(forward_v.position_variances[0, :, 0]).any()
     assert np.isfinite(forward_v.position_variances[0, :, 1]).any()
-    assert np.isfinite(backward_v.position_variances[0, :, 0]).any()
-    assert not np.isfinite(backward_v.position_variances[0, :, 1]).any()
+    assert not np.isfinite(backward_v.position_variances[0, :, 0]).any()
+    assert np.isfinite(backward_v.position_variances[0, :, 1]).any()
 
 
 def test_create_worker_payloads_arc_by_arc_uses_configured_fixed_pairs(tmp_path: Path) -> None:
-    all_bpms = ["BPH.13208", "BPV.13308", "BPV.20108"]
+    all_bpms = ["BPH.13008", "BPV.13108", "BPH.13208", "BPV.13308"]
     manager = _make_manager(
         tmp_path,
         n_data_points={
-            ("BPH.13208", "BPV.20108"): 3,
-            ("BPH.13208", "BPV.13308"): 2,
+            ("BPH.13208", "BPH.13008"): 3,
         },
         all_bpms=all_bpms,
     )
+    manager.accelerator.infer_monitor_plane = lambda bpm: "H" if "BPH" in bpm else "V"  # type: ignore[method-assign]
     df = _make_track_df(all_bpms, [1, 2, 3])
     simulation_config = SimulationConfig(
-        tracks_per_worker=1,
         num_workers=2,
         num_batches=1,
         optimise_momenta=False,
@@ -309,11 +308,13 @@ def test_create_worker_payloads_arc_by_arc_uses_configured_fixed_pairs(tmp_path:
         turn_batches=[[2]],
         file_turn_map={2: 0},
         start_bpms=["BPH.13208"],
-        end_bpms=["BPV.13308"],
+        end_bpms=["BPH.13008"],
         simulation_config=simulation_config,
         machine_deltaps=[0.0],
     )
 
+    # Single-plane arc-by-arc ranges pair the same-plane start/end BPMs as the
+    # fixed forward/backward boundaries, keeping both workers on the x-plane.
     assert [
         (
             config.tracking_start_bpm,
@@ -323,8 +324,8 @@ def test_create_worker_payloads_arc_by_arc_uses_configured_fixed_pairs(tmp_path:
         )
         for _, config, _ in payloads
     ] == [
-        ("BPH.13208", "BPV.20108", 1, "x"),
-        ("BPH.13208", "BPV.13308", -1, "y"),
+        ("BPH.13208", "BPH.13008", 1, "x"),
+        ("BPH.13208", "BPH.13008", -1, "x"),
     ]
 
 
@@ -334,8 +335,10 @@ def test_create_worker_payloads_assigns_per_file_artifacts_from_file_turn_map(tm
         n_data_points={("BPH.13208", "BPV.13108"): 3},
         all_bpms=["BPV.13108", "BPH.13208", "BPV.13308"],
     )
-    manager.corrector_strengths_files = [tmp_path / "corr0.tfs", tmp_path / "corr1.tfs"]
-    manager.tune_knobs_files = [tmp_path / "knobs0.txt", tmp_path / "knobs1.txt"]
+    manager.interface_options_per_file = [
+        {"corrector_knobs": tmp_path / "corr0.tfs", "tune_knobs": tmp_path / "knobs0.txt"},
+        {"corrector_knobs": tmp_path / "corr1.tfs", "tune_knobs": tmp_path / "knobs1.txt"},
+    ]
 
     payloads = manager.create_worker_payloads(
         track_data={
@@ -347,7 +350,6 @@ def test_create_worker_payloads_assigns_per_file_artifacts_from_file_turn_map(tm
         start_bpms=["BPH.13208"],
         end_bpms=[],
         simulation_config=SimulationConfig(
-            tracks_per_worker=1,
             num_workers=2,
             num_batches=1,
             optimise_momenta=False,
@@ -358,17 +360,11 @@ def test_create_worker_payloads_assigns_per_file_artifacts_from_file_turn_map(tm
     )
 
     assert [file_idx for _, _, file_idx in payloads] == [0, 1, 0, 1]
-    assert [config.corrector_strengths for _, config, _ in payloads] == [
-        tmp_path / "corr0.tfs",
-        tmp_path / "corr1.tfs",
-        tmp_path / "corr0.tfs",
-        tmp_path / "corr1.tfs",
-    ]
-    assert [config.tune_knobs_file for _, config, _ in payloads] == [
-        tmp_path / "knobs0.txt",
-        tmp_path / "knobs1.txt",
-        tmp_path / "knobs0.txt",
-        tmp_path / "knobs1.txt",
+    assert [config.interface_options for _, config, _ in payloads] == [
+        {"corrector_knobs": tmp_path / "corr0.tfs", "tune_knobs": tmp_path / "knobs0.txt"},
+        {"corrector_knobs": tmp_path / "corr1.tfs", "tune_knobs": tmp_path / "knobs1.txt"},
+        {"corrector_knobs": tmp_path / "corr0.tfs", "tune_knobs": tmp_path / "knobs0.txt"},
+        {"corrector_knobs": tmp_path / "corr1.tfs", "tune_knobs": tmp_path / "knobs1.txt"},
     ]
 
     init_pts = [float(data.init_pts[0]) for data, _, _ in payloads]
@@ -392,13 +388,14 @@ def test_build_bpm_masks_from_diagnostics_aggregates_multi_turn_losses(tmp_path:
         )
     ]
 
-    masks = manager._build_bpm_masks_from_diagnostics(
+    masks = OutlierScreener(manager.payload_builder).build_bpm_masks_from_diagnostics(
         diagnostics=[
             {
                 "worker_id": 0,
                 "loss_per_bpm": [1.0, 50.0, 1.0, 50.0],
             }
         ],
+        worker_metadata=manager.worker_metadata,
         bpm_sigma_threshold=0.5,
     )
 
@@ -434,7 +431,9 @@ def test_apply_screening_actions_expands_masks_across_turns(tmp_path: Path) -> N
         ),
     ]
 
-    manager._apply_screening_actions(
+    OutlierScreener(manager.payload_builder).apply_screening_actions(
+        parent_conns=manager.parent_conns,
+        worker_metadata=manager.worker_metadata,
         bpm_masks=[np.array([True, False]), np.array([False, True])],
         worker_disabled=[False, True],
     )
@@ -470,10 +469,11 @@ def test_summarise_screening_losses_logs_pre_and_projected_loss(tmp_path: Path, 
     ]
 
     with caplog.at_level("INFO"):
-        manager._summarise_screening_losses(
+        OutlierScreener(manager.payload_builder).summarise_screening_losses(
             diagnostics=[{"worker_id": 0, "loss_per_bpm": [1.0, 9.0, 1.0, 9.0]}],
             bpm_masks=[np.array([True, False])],
             worker_disabled=[False],
+            worker_metadata=manager.worker_metadata,
         )
 
     assert "Pre-screening loss summary" in caplog.text
@@ -482,7 +482,7 @@ def test_summarise_screening_losses_logs_pre_and_projected_loss(tmp_path: Path, 
     assert "total=2.000000e+00" in caplog.text
 
 
-def test_split_validation_payloads_covers_multiple_ranges_when_available(
+def test_split_validation_payloads_keeps_all_held_out_candidates(
     tmp_path: Path,
 ) -> None:
     accelerator = _make_sps(tmp_path)
@@ -529,27 +529,17 @@ def test_split_validation_payloads_covers_multiple_ranges_when_available(
         ),
     ]
 
-    split = split_validation_payloads(payloads)
+    # Candidates are built from held-out turns upstream; here we exercise the
+    # coverage selection over them. Training is returned unchanged.
+    split = split_validation_payloads(payloads, payloads)
     training_payloads = split.training_payloads
     validation_payloads = split.validation_payloads
-    duplicated = split.duplicated_validation_payload
 
-    assert duplicated is False
-    assert {
-        (p[1].tracking_start_bpm, p[1].tracking_end_bpm) for p in validation_payloads
-    } == {
-        ("BPH.13008", "BPH.13408"),
-        ("BPH.14008", "BPH.14408"),
-    }
-    assert {p[1].sdir for p in validation_payloads} == {1, -1}
-    assert len(training_payloads) > 0
-
-    validation_tracks = sum(payload_track_count(payload) for payload in validation_payloads)
-    training_tracks = sum(payload_track_count(payload) for payload in training_payloads)
-    assert validation_tracks * 10 >= training_tracks
+    assert training_payloads is payloads
+    assert validation_payloads == payloads
 
 
-def test_split_validation_payloads_pairs_opposite_directions_with_mixed_planes(
+def test_split_validation_payloads_keeps_all_mixed_plane_candidates(
     tmp_path: Path,
 ) -> None:
     accelerator = _make_sps(tmp_path)
@@ -586,8 +576,9 @@ def test_split_validation_payloads_pairs_opposite_directions_with_mixed_planes(
         ),
     ]
 
-    split = split_validation_payloads(payloads)
+    split = split_validation_payloads(payloads, payloads)
 
+    assert split.validation_payloads == payloads
     assert len(split.validation_payloads) == 3
     assert {(p[1].sdir, p[1].kick_plane) for p in split.validation_payloads} == {
         (1, "x"),
@@ -619,17 +610,57 @@ def test_split_validation_payloads_spreads_across_sorted_range_groups(
         _make_payload(accelerator, start_bpm="BPH.14008", end_bpm="BPH.14408", sdir=-1, kick_plane="x", file_idx=0, n_tracks=5, n_points=70),
     ]
 
-    split = split_validation_payloads(payloads)
+    split = split_validation_payloads(payloads, payloads)
 
-    assert {
-        (p[1].tracking_start_bpm, p[1].tracking_end_bpm)
-        for p in split.validation_payloads
-    } == {
-        ("BPH.10008", "BPH.10408"),
-        ("BPH.12008", "BPH.12408"),
-        ("BPH.14008", "BPH.14408"),
-    }
+    assert split.validation_payloads == payloads
     assert {p[1].sdir for p in split.validation_payloads} == {1, -1}
+
+
+def test_validation_worker_keeps_all_held_out_turns_with_nondividing_batch_count(
+    tmp_path: Path,
+) -> None:
+    accelerator = _make_sps(tmp_path)
+    n_tracks = 10
+    n_points = 3
+    shape = (n_tracks, n_points)
+    data = TrackingData(
+        position_comparisons=np.zeros((n_tracks, n_points, 2), dtype=np.float64),
+        momentum_comparisons=np.zeros((n_tracks, n_points, 2), dtype=np.float64),
+        position_variances=np.ones((n_tracks, n_points, 2), dtype=np.float64),
+        momentum_variances=np.ones((n_tracks, n_points, 2), dtype=np.float64),
+        init_coords=np.zeros((n_tracks, 6), dtype=np.float64),
+        init_pts=np.zeros((n_tracks,), dtype=np.float64),
+        precomputed_weights=PrecomputedTrackingWeights(
+            x=np.ones(shape, dtype=np.float64),
+            y=np.ones(shape, dtype=np.float64),
+            px=np.ones(shape, dtype=np.float64),
+            py=np.ones(shape, dtype=np.float64),
+            hessian_x=np.ones((n_points,), dtype=np.float64),
+            hessian_y=np.ones((n_points,), dtype=np.float64),
+            hessian_px=np.ones((n_points,), dtype=np.float64),
+            hessian_py=np.ones((n_points,), dtype=np.float64),
+        ),
+    )
+    config = WorkerConfig(
+        accelerator=accelerator,
+        tracking_start_bpm="BPH.13008",
+        tracking_end_bpm="BPH.13408",
+        magnet_range="$start/$end",
+        interface_options={},
+        sdir=1,
+        kick_plane="xy",
+    )
+
+    worker = ValidationTrackingWorker(
+        conn=_FakeConn([]),  # type: ignore[arg-type]
+        worker_id=0,
+        payloads=[(data, config, 0)],
+        simulation_config=SimulationConfig(num_workers=1, num_batches=8),
+    )
+
+    assert worker.track_count == n_tracks
+    assert worker.num_batches == 5
+    assert [len(batch) for batch in worker.init_coords] == [2, 2, 2, 2, 2]
 
 
 def test_termination_and_hessian_parallel_uses_broadcast_shutdown(tmp_path: Path) -> None:
@@ -650,6 +681,38 @@ def test_termination_and_hessian_parallel_uses_broadcast_shutdown(tmp_path: Path
     np.testing.assert_allclose(total, 3.0 * np.eye(2, dtype=np.float64))
     assert manager.channels.sent == [(None, None)]
     assert [worker.join_calls for worker in manager.workers] == [1, 1]
+
+
+def test_terminate_workers_kills_training_and_validation_workers(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    training = [_FakeWorker(), _FakeWorker()]
+    validation = [_FakeWorker()]
+    manager.workers = training  # type: ignore[assignment]
+    manager.validation_workers = validation  # type: ignore[assignment]
+    manager.parent_conns = []
+    manager.validation_parent_conns = []
+    manager.channels = None
+    manager.validation_channels = None
+
+    manager.terminate_workers()
+
+    for worker in (*training, *validation):
+        assert worker.terminate_calls == 1
+        assert worker.join_calls == 1
+
+
+def test_stop_validation_workers_does_not_wait_for_final_payload(tmp_path: Path) -> None:
+    manager = _make_manager(tmp_path)
+    worker = _FakeWorker()
+    conn = _ConnThatMustNotPoll()
+    manager.validation_channels = None
+    manager.validation_workers = [worker]  # type: ignore[list-item]
+    manager.validation_parent_conns = [conn]  # type: ignore[list-item]
+
+    manager._stop_validation_workers()
+
+    assert conn.sent == (None, None)
+    assert worker.join_calls == 1
 
 
 def test_termination_and_hessian_serial_stops_workers_one_by_one(tmp_path: Path) -> None:

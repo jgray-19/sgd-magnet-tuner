@@ -1,6 +1,13 @@
 import numpy as np
+import pytest
 
-from src.aba_optimiser.physics.deltap import dp2pt, get_beam_beta, kinetic_to_total_energy
+from src.aba_optimiser.physics.deltap import (
+    deltap_wrt_reference_total_energy,
+    dp2pt,
+    get_beam_beta,
+    kinetic_to_total_energy,
+    momentum_to_total_energy,
+)
 
 
 class TestGetBeamBeta:
@@ -77,12 +84,44 @@ class TestDp2pt:
         assert np.isclose(pt, dp, rtol=1e-3, atol=1e-6)
 
 
-class TestKineticToTotalEnergy:
-    def test_zero_kinetic(self):
-        """Zero kinetic term returns rest mass."""
-        assert np.isclose(kinetic_to_total_energy(0.0, 0.938), 0.938)
+class TestMomentumToTotalEnergy:
+    def test_zero_momentum_raises(self):
+        """Zero momentum is not a valid canonical momentum."""
+        with pytest.raises(ValueError):
+            momentum_to_total_energy(0.0, 0.938)
 
     def test_matches_psb_convention(self):
         """Conversion follows sqrt(p^2 + m^2) convention used by PSB."""
         expected = np.sqrt(0.160**2 + 0.93827208816**2)
-        assert np.isclose(kinetic_to_total_energy(0.160, 0.93827208816), expected)
+        assert np.isclose(momentum_to_total_energy(0.160, 0.93827208816), expected)
+
+
+class TestKineticToTotalEnergy:
+    def test_adds_rest_mass(self):
+        assert kinetic_to_total_energy(6800.0, 0.93827208816) == pytest.approx(
+            6800.93827208816
+        )
+
+
+class TestDeltapWrtReferenceTotalEnergy:
+    def test_uses_total_energy_for_reference_offset(self):
+        result = deltap_wrt_reference_total_energy(
+            kinetic_energy=6800.0,
+            machine_deltap=1e-4,
+            reference_kinetic_energy=6800.0,
+            mass=0.93827208816,
+        )
+
+        assert result == pytest.approx(1e-4)
+
+    def test_includes_rest_mass_when_reference_kinetic_energy_differs(self):
+        mass = 0.93827208816
+        result = deltap_wrt_reference_total_energy(
+            kinetic_energy=450.0,
+            machine_deltap=0.0,
+            reference_kinetic_energy=6800.0,
+            mass=mass,
+        )
+        expected = ((450.0 + mass) - (6800.0 + mass)) / (6800.0 + mass)
+
+        assert result == pytest.approx(expected)

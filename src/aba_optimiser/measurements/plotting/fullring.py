@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tmom_recon import build_twiss_from_measurements
 
+from aba_optimiser.measurements.b2_errors import read_b2_error_table
 from aba_optimiser.measurements.plotting.core import (
     BEST_KNOWLEDGE_LABEL,
     BETTER_KNOWLEDGE_LABEL,
@@ -18,6 +19,7 @@ from aba_optimiser.measurements.plotting.core import (
     MEASUREMENT_LABEL,
     PLOT_COLORS,
     add_ip_positions_to_plot,
+    get_element_positions,
     get_fullring_twiss,
     get_ip_positions,
     prepare_plot_context,
@@ -34,11 +36,12 @@ def plot_fullring_comparison(
     analysis_dir: Path,
     squeeze_step: str,
     results_dir: Path,
-    tune_knobs_file: Path,
+    tune_knobs: Path,
     corrector_file: Path | None,
     beam: int,
     include_best_knowledge_model: bool = True,
     deltap: float = 0.0,
+    b2_errors: Path | None = None,
 ) -> None:
     """Plot full-ring optics differences relative to the measurement."""
 
@@ -56,28 +59,49 @@ def plot_fullring_comparison(
                 continue
         return None
 
+    def _fmt_tune(value: float | None) -> str:
+        return "n/a" if value is None else f"{value:.5f}"
+
     meas_twiss, _ = build_twiss_from_measurements(
         analysis_dir, include_errors=True, reverse_bpm_order=beam == 2
     )
     meas_twiss.columns = [col.lower() for col in meas_twiss.columns]
 
+    # The design model is bare; the best/better-knowledge models carry the known b2
+    # dipole errors together with the tune knobs that compensate them.
     twiss_basic = get_fullring_twiss(design_accelerator, deltap=deltap)
     twiss_online = get_fullring_twiss(
         accelerator,
-        tune_knobs_file=tune_knobs_file,
+        tune_knobs=tune_knobs,
         corrector_file=corrector_file,
         deltap=deltap,
+        b2_errors=b2_errors,
     )
     twiss_eff_online = None
     if all_estimates is not None:
         twiss_eff_online = get_fullring_twiss(
             accelerator,
             estimated_magnets=all_estimates,
-            tune_knobs_file=tune_knobs_file,
+            tune_knobs=tune_knobs,
             corrector_file=corrector_file,
             deltap=deltap,
+            b2_errors=b2_errors,
         )
     ip_positions = get_ip_positions(accelerator)
+
+    tune_rows = [
+        (MEASUREMENT_LABEL, meas_twiss),
+        (DESIGN_OPTICS_LABEL, twiss_basic),
+        (BEST_KNOWLEDGE_LABEL, twiss_online),
+    ]
+    if twiss_eff_online is not None:
+        tune_rows.append((BETTER_KNOWLEDGE_LABEL, twiss_eff_online))
+    tune_summary = ", ".join(
+        f"{label}: Q1={_fmt_tune(_header_float(df, 'q1', 'Q1'))} "
+        f"Q2={_fmt_tune(_header_float(df, 'q2', 'Q2'))}"
+        for label, df in tune_rows
+    )
+    logging.getLogger(__name__).warning("Full-ring tunes -> %s", tune_summary)
 
     common_bpms = meas_twiss.index.intersection(twiss_basic.index).intersection(twiss_online.index)
     if twiss_eff_online is not None:
@@ -100,14 +124,6 @@ def plot_fullring_comparison(
     fig, axes = plt.subplots(2, 2, figsize=(16, 10), sharex=True)
     xvals = meas_full["s"]
 
-    def _diff(model, model_err, measurement, measurement_err):
-        delta = model - measurement
-        if model_err is None and measurement_err is None:
-            return delta, None
-        model_err_vals = model_err if model_err is not None else 0.0
-        meas_err_vals = measurement_err if measurement_err is not None else 0.0
-        return delta, np.sqrt(model_err_vals**2 + meas_err_vals**2)
-
     def _rel_diff(model, model_err, measurement, measurement_err):
         rel_delta = (model - measurement) / measurement * 100.0
         if model_err is None and measurement_err is None:
@@ -128,8 +144,8 @@ def plot_fullring_comparison(
     if est_full is not None:
         series_to_plot.append((BETTER_KNOWLEDGE_LABEL, est_full, "d-", 1.0))
     plot_specs = [
-        (axes[0, 0], "mux", "phase", r"$\Delta \mu_x$ [2$\pi$turns]"),
-        (axes[0, 1], "muy", "phase", r"$\Delta \mu_y$ [2$\pi$turns]"),
+        (axes[0, 0], "mux", "phase", r"$\Delta(\Delta \mu_x)$ [2$\pi$turns]"),
+        (axes[0, 1], "muy", "phase", r"$\Delta(\Delta \mu_y)$ [2$\pi$turns]"),
         (axes[1, 0], "betx", "beta", r"$\Delta \beta_x / \beta_{x,\mathrm{meas}}$ [%]"),
         (axes[1, 1], "bety", "beta", r"$\Delta \beta_y / \beta_{y,\mathrm{meas}}$ [%]"),
     ]
@@ -149,16 +165,47 @@ def plot_fullring_comparison(
         )
 
     for ax, column, plot_type, ylabel in plot_specs:
-        meas_err_col = {"mux": "errmux", "muy": "errmuy", "betx": "errbetx", "bety": "errbety"}.get(column)
-        meas_err = meas_full.get(meas_err_col) if meas_err_col is not None else None
-        for label, df, fmt, linewidth in series_to_plot:
-            if plot_type == "phase":
-                yvals, yerr = _diff(df[column], df.get(f"{column}_err"), meas_full[column], meas_err)
-                plot_label = label
+        if plot_type == "phase":
+            # Phase advance *between* BPMs, using the measured NAME -> NAME2 segments and
+            # their raw errors (PHASE{X,Y}/ERRPHASE{X,Y}) straight from the phase file.
+            # The model segment is the model's cumulative-phase difference over that pair.
+            plane = "x" if column == "mux" else "y"
+            edges = _read_phase_edges(analysis_dir, plane)
+            if edges is None:
+                ax.text(
+                    0.5,
+                    0.5,
+                    f"phase_{plane}.tfs segments unavailable",
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                )
             else:
+                edges = edges[edges.index.isin(common_bpms) & edges["NAME2"].isin(common_bpms)]
+                bpm1, bpm2 = edges.index, edges["NAME2"].to_numpy()
+                seg_s = edges["S"].to_numpy(dtype=float)
+                meas_seg = edges[f"PHASE{plane.upper()}"].to_numpy(dtype=float)
+                meas_seg_err = edges[f"ERRPHASE{plane.upper()}"].to_numpy(dtype=float)
+                for label, df, fmt, linewidth in series_to_plot:
+                    delta = (
+                        df[column].loc[bpm2].to_numpy() - df[column].loc[bpm1].to_numpy()
+                    ) - meas_seg
+                    _plot(
+                        ax,
+                        seg_s,
+                        delta,
+                        meas_seg_err,
+                        label,
+                        _rms_label(label, delta, r"2$\pi$"),
+                        fmt,
+                        linewidth,
+                    )
+        else:
+            meas_err_col = {"betx": "errbetx", "bety": "errbety"}.get(column)
+            meas_err = meas_full.get(meas_err_col) if meas_err_col is not None else None
+            for label, df, fmt, linewidth in series_to_plot:
                 yvals, yerr = _rel_diff(df[column], df.get(f"{column}_err"), meas_full[column], meas_err)
-                plot_label = _rms_label(label, yvals, "%")
-            _plot(ax, xvals, yvals, yerr, label, plot_label, fmt, linewidth)
+                _plot(ax, xvals, yvals, yerr, label, _rms_label(label, yvals, "%"), fmt, linewidth)
         ax.axhline(0.0, color="k", linewidth=0.8, alpha=0.5)
         ax.set_ylabel(ylabel)
         ax.grid(visible=True, alpha=0.3)
@@ -283,7 +330,56 @@ def plot_fullring_comparison(
             "Could not find dq1/dq2 in twiss headers for any full-ring model. Skipping chromaticity plot."
         )
 
+    if b2_errors is not None:
+        b2_table = read_b2_error_table(b2_errors)
+        elem_names = list(b2_table.keys())
+        elem_pos = get_element_positions(accelerator, elem_names)
+        b2_with_pos = sorted(
+            ((name, b2_table[name], pos) for name, pos in elem_pos.items() if name in b2_table),
+            key=lambda t: t[2],
+        )
+        if b2_with_pos:
+            fig_b2, ax_b2 = plt.subplots(figsize=(16, 4))
+            ax_b2.bar(
+                [pos for _, _, pos in b2_with_pos],
+                [k1l for _, k1l, _ in b2_with_pos],
+                width=20.0,
+                color="tab:purple",
+                alpha=0.7,
+            )
+            ax_b2.axhline(0.0, color="k", linewidth=0.8, alpha=0.5)
+            ax_b2.set_xlabel("S (m)")
+            ax_b2.set_ylabel(r"$K_1 L$ [m$^{-1}$]")
+            ax_b2.set_title("Dipole b2 errors")
+            ax_b2.grid(visible=True, alpha=0.3)
+            add_ip_positions_to_plot(ax_b2, ip_positions)
+            plt.tight_layout()
+            _path = results_dir / f"b2_errors_{squeeze_step}_fullring.png"
+            plt.savefig(_path, dpi=150)
+            print(f"Saved plot: {_path.resolve()}")
+
     plt.show()
+
+
+def _read_phase_edges(analysis_dir: Path, plane: str) -> pd.DataFrame | None:
+    """Read the measured per-segment (NAME -> NAME2) phase advance for one plane.
+
+    The between-BPM phase advance and its error (PHASE{X,Y}/ERRPHASE{X,Y}) are the raw
+    measured quantities in ``phase_{x,y}.tfs``; the cumulative phase/error are just
+    running sums of these, so the segment values and errors come straight from the file.
+    Returns a frame indexed by the upstream BPM (NAME) with NAME2/S/PHASE/ERRPHASE columns.
+    """
+    import tfs
+
+    path = Path(analysis_dir) / f"phase_{plane}.tfs"
+    phase_col = f"PHASE{plane.upper()}"
+    err_col = f"ERRPHASE{plane.upper()}"
+    if not path.exists():
+        return None
+    df = tfs.read(path, index="NAME")
+    if not {"NAME2", phase_col, err_col}.issubset(df.columns):
+        return None
+    return df
 
 
 def _normalize_phase(df: pd.DataFrame, columns: tuple[str, str], start_bpm: str) -> pd.DataFrame:
@@ -329,11 +425,12 @@ def main() -> None:
         context.analysis_dir,
         context.squeeze_step,
         context.results_dir,
-        context.tune_knobs_file,
+        context.tune_knobs,
         context.corrector_file,
         context.beam,
         include_best_knowledge_model=not args.without_best_knowledge,
         deltap=context.deltap,
+        b2_errors=context.b2_errors,
     )
 
 

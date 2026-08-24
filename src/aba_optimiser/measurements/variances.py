@@ -10,6 +10,7 @@ from aba_optimiser.noise import assign_bpm_variances
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
 
 def assign_uniform_variances(
@@ -32,26 +33,7 @@ def assign_known_noise_variances(
     *,
     nan_variance_patterns: str | Sequence[str] | None = None,
     accelerator_type: str = "lhc",
-) -> pd.DataFrame:
-    """Assign BPM variances from the known noise model.
-
-    Names matching ``nan_variance_patterns`` receive ``NaN`` variances instead of
-    triggering a missing-noise-table error.
-    """
-    return assign_known_noise_variances_with_exclusions(
-        df,
-        bad_bpms,
-        nan_variance_patterns=nan_variance_patterns,
-        accelerator_type=accelerator_type,
-    )
-
-
-def assign_known_noise_variances_with_exclusions(
-    df: pd.DataFrame,
-    bad_bpms: list[str],
-    *,
-    nan_variance_patterns: str | Sequence[str] | None = None,
-    accelerator_type: str = "lhc",
+    noise_file: Path | None = None,
 ) -> pd.DataFrame:
     """Assign known BPM noise variances, allowing selected names to become NaN-weight rows.
 
@@ -59,10 +41,15 @@ def assign_known_noise_variances_with_exclusions(
     patterns matched against the BPM names held in the index or ``name`` column.
     Matching rows receive ``NaN`` in ``var_x`` and ``var_y`` instead of raising when
     they are absent from the packaged noise table.
+
+    ``noise_file`` overrides the packaged table, for callers holding a resolution
+    measured on the campaign being analysed rather than the shipped default.
     """
     patterns = _normalise_patterns(nan_variance_patterns)
     if not patterns:
-        return assign_bpm_variances(df, accelerator_type=accelerator_type, bad_bpms=bad_bpms)
+        return assign_bpm_variances(
+            df, accelerator_type=accelerator_type, bad_bpms=bad_bpms, noise_file=noise_file
+        )
 
     indexed = _ensure_name_index(df)
     nan_mask = _build_nan_variance_mask(indexed.index.astype(str), patterns)
@@ -71,6 +58,7 @@ def assign_known_noise_variances_with_exclusions(
         indexed.loc[~nan_mask].copy(),
         accelerator_type=accelerator_type,
         bad_bpms=bad_bpms,
+        noise_file=noise_file,
     )
     excluded = indexed.loc[nan_mask].copy()
     excluded["var_x"] = float("nan")

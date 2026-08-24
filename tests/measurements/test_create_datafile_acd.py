@@ -7,9 +7,12 @@ import pandas as pd
 import pytest
 import tfs
 
+from aba_optimiser.accelerators import PSB
 from aba_optimiser.measurements.loading import build_dataframe_file_indices
-from aba_optimiser.measurements.preprocessing import preprocess_measurement_dataframe
-from aba_optimiser.measurements.reconstruction import process_single_dataframe
+from aba_optimiser.measurements.reconstruction import (
+    _scale_position_variances_after_svd,
+    process_single_dataframe,
+)
 from aba_optimiser.measurements.variances import (
     assign_known_noise_variances,
     assign_uniform_variances,
@@ -31,6 +34,8 @@ def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path:
     pytest.importorskip("tmom_recon")
     pytest.importorskip("omc3")
 
+    from tmom_recon import ModelDetails, ReconstructionFrame
+
     base_dir = Path("tests/data/model_creator")
     analysis_dir = generate_fake_analysis_dir_from_twiss(
         tmp_path / "analysis",
@@ -50,6 +55,9 @@ def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path:
     )
     twiss.index = twiss.index.astype(str)
     twiss.index.name = "name"
+    # The fixture twiss predates vertical dispersion; PSB dy is ~0 and the
+    # MAD-NG twiss table used in production includes it, so supply it here.
+    twiss["dy"] = 0.0
 
     df = pd.DataFrame(
         {
@@ -62,9 +70,17 @@ def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path:
                 "BR3.BPM3L3",
             ],
             "turn": [1, 1, 1, 2, 2, 2],
+            "bunch_number": [0, 0, 0, 0, 0, 0],
             "x": [1e-6, 2e-6, 3e-6, 1.5e-6, 2.5e-6, 3.5e-6],
             "y": [2e-6, 3e-6, 4e-6, 2.5e-6, 3.5e-6, 4.5e-6],
         }
+    )
+
+    model_details = ModelDetails(accelerator=PSB(ring=3, sequence_file=base_dir / "psb3_saved.seq"))
+    orbit_zero = pd.DataFrame(
+        0.0,
+        index=pd.Index(df["name"].unique(), name="name"),
+        columns=["x", "y"],
     )
 
     idx, result = process_single_dataframe(
@@ -74,12 +90,37 @@ def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path:
         analysis_dir=analysis_dir,
         use_uniform_vars=True,
         beam=1,
+        model_details=model_details,
+        frame=ReconstructionFrame(orbit_zero, dynamic_planes=("x", "y")),
     )
 
     assert idx == 7
     assert {"px", "py", "var_x", "var_y", "var_px", "var_py"} <= set(result.columns)
     assert not result[["px", "py"]].isna().any().any()
+    assert set(result["bunch_number"]) == {0}
     assert set(result["name"]) == {"BR3.BPM1L3", "BR3.BPM2L3", "BR3.BPM3L3"}
+
+
+def test_post_svd_variance_scaling_follows_rank_over_bpm_count() -> None:
+    """The SVD gain is rank/n_bpms, so PSB (16 BPMs, rank 2) gets 1/8, not 1/100."""
+    df = pd.DataFrame({"var_x": [4.0, 4.0], "var_y": [9.0, 9.0], "px": [0.0, 0.0]})
+
+    psb = _scale_position_variances_after_svd(df, n_bpms=16, svd_ranks=(2, 2))
+    lhc = _scale_position_variances_after_svd(df, n_bpms=500, svd_ranks=(5, 5))
+
+    assert psb["var_x"].tolist() == pytest.approx([0.5, 0.5])
+    assert psb["var_y"].tolist() == pytest.approx([9.0 / 8.0, 9.0 / 8.0])
+    # The LHC geometry reproduces the factor of 100 this used to hardcode.
+    assert lhc["var_x"].tolist() == pytest.approx([0.04, 0.04])
+
+
+def test_post_svd_variance_scaling_leaves_variances_alone_without_a_rank() -> None:
+    df = pd.DataFrame({"var_x": [4.0], "var_y": [9.0]})
+
+    result = _scale_position_variances_after_svd(df, n_bpms=16, svd_ranks=(None, 0))
+
+    assert result["var_x"].tolist() == pytest.approx([4.0])
+    assert result["var_y"].tolist() == pytest.approx([9.0])
 
 
 def test_assign_uniform_variances_zero_weights_bad_bpms() -> None:
@@ -117,82 +158,3 @@ def test_assign_known_noise_variances_allows_nan_variance_patterns_on_real_data(
     assert pd.isna(result.loc["BR3.BPMT3L1", "var_y"])
     assert result.loc["BR3.BPM2L3", "var_x"] > 0.0
     assert result.loc["BR3.BPM2L3", "var_y"] > 0.0
-
-
-def test_preprocess_measurement_dataframe_requires_x_and_y() -> None:
-    tws = pd.DataFrame({"x": [0.1], "y": [0.2]}, index=pd.Index(["BPM1"], name="name"))
-    df = pd.DataFrame({"name": ["BPM1"], "turn": [1], "x": [1.0], "y": [2.0]})
-
-    with pytest.raises(ValueError, match="both x and y"):
-        preprocess_measurement_dataframe(
-            df,
-            tws,
-            remove_closed_orbit={"BPM1": {"x": 0.5}},
-        )
-
-
-def test_preprocess_measurement_dataframe_requires_px_and_py_together() -> None:
-    tws = pd.DataFrame({"x": [0.1], "y": [0.2]}, index=pd.Index(["BPM1"], name="name"))
-    df = pd.DataFrame({"name": ["BPM1"], "turn": [1], "x": [1.0], "y": [2.0]})
-
-    with pytest.raises(ValueError, match="both px and py"):
-        preprocess_measurement_dataframe(
-            df,
-            tws,
-            remove_closed_orbit={"BPM1": {"x": 0.5, "y": 0.25, "px": 1e-6}},
-        )
-
-
-def test_preprocess_measurement_dataframe_accepts_name_column_and_warns_without_momenta() -> None:
-    tws = pd.DataFrame({"x": [0.0], "y": [0.0]}, index=pd.Index(["BPM1"], name="name"))
-    df = pd.DataFrame({"name": ["BPM1"], "turn": [1], "x": [1.0], "y": [2.0]})
-    orbit = pd.DataFrame({"NAME": ["BPM1"], "x": [0.25], "y": [0.5]})
-
-    with pytest.warns(UserWarning, match="px/py"):
-        result = preprocess_measurement_dataframe(
-            df,
-            tws,
-            remove_closed_orbit=orbit,
-        )
-
-    assert result.loc[0, "x"] == pytest.approx(0.75)
-    assert result.loc[0, "y"] == pytest.approx(1.5)
-
-
-def test_preprocess_measurement_dataframe_average_trims_from_kick() -> None:
-    tws = pd.DataFrame(
-        {"s": [1.0, 2.0, 3.0]},
-        index=pd.Index(["BPM1", "BPM2", "BPM3"], name="name"),
-    )
-    df = pd.DataFrame(
-        {
-            "name": ["BPM1", "BPM2", "BPM3"] * 5,
-            "turn": [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5],
-            "x": [0.0] * 9 + [0.0, 1e-3, 8e-4, -2e-4, 9e-4, 7e-4],
-            "y": [0.0] * 15,
-        }
-    )
-
-    result = preprocess_measurement_dataframe(
-        df,
-        tws,
-        remove_closed_orbit="average",
-        n_turns_free=3,
-    )
-
-    assert list(result["name"]) == ["BPM2", "BPM3", "BPM1", "BPM2", "BPM3"]
-    assert list(result["turn"]) == [1, 1, 2, 2, 2]
-    assert result.iloc[0]["x"] == pytest.approx(1e-3)
-
-def test_preprocess_measurement_dataframe_average_skips_already_aligned() -> None:
-    tws = pd.DataFrame({"s": [0.0]}, index=pd.Index(["KICKER"], name="name"))
-    df = pd.DataFrame({"name": ["KICKER"], "turn": [1], "x": [0.0], "y": [0.0]})
-
-    result = preprocess_measurement_dataframe(
-        df,
-        tws,
-        remove_closed_orbit="average",
-        kicker_name="KICKER",
-    )
-
-    pd.testing.assert_frame_equal(result, df)

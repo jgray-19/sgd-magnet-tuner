@@ -7,16 +7,27 @@ import logging
 import shutil
 from typing import TYPE_CHECKING
 
+import pandas as pd
 from pymadng_utils.accelerators.lhc import LHC as MadngLHCAccelerator  # noqa: N811
 from pymadng_utils.model_creator.madng_utils import update_model_with_madng
+from tmom_recon import ReconstructionFrame
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-from aba_optimiser.config import PROJECT_ROOT
+from aba_optimiser.config import MEASUREMENTS_ARTIFACTS_ROOT
+from aba_optimiser.measurements.ac_dipole import ACDipoleOptimisationWindow
 from aba_optimiser.measurements.b2_errors import resolve_b2_error_table
+from aba_optimiser.measurements.loading import read_lhc_bpm_tbt, tbt_xy_to_long_dataframe
+from aba_optimiser.measurements.online_knobs import get_online_energy
+from aba_optimiser.measurements.sequence import (
+    extract_tunes_from_job_file,
+    get_or_make_sequence,
+)
+from aba_optimiser.measurements.squeeze.config import MODEL_DIRS, get_results_dir
 from aba_optimiser.measurements.squeeze.constants import MEAS_TIMES, ZEROHZ, get_beam_paths
 from aba_optimiser.measurements.squeeze.io import (
+    get_central_measurement_time,
     get_knob_files,
     get_sequence_creation_time,
     load_bad_bpms,
@@ -28,19 +39,27 @@ from aba_optimiser.measurements.squeeze.io import (
     update_metadata,
 )
 from aba_optimiser.measurements.squeeze.optimisation import (
-    ACDipoleOptimisationWindow,
     optimise_arc,
     resolve_restore_resume,
 )
-from aba_optimiser.measurements.squeeze_helpers import (
-    MODEL_DIRS,
-    extract_tunes_from_job_file,
-    get_or_make_sequence,
-    get_results_dir,
+from aba_optimiser.measurements.squeeze.reconstruction import (
     reconstruct_ac_dipole_measurements,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _measured_zero_frame(files: list[Path], beam: int) -> ReconstructionFrame:
+    """Build the dynamic x/y frame from the campaign's measured zero setting."""
+    samples = []
+    for path in files:
+        tbt_data = read_lhc_bpm_tbt(path, beam=beam)
+        for matrix in tbt_data.matrices:
+            samples.append(tbt_xy_to_long_dataframe(matrix.X, matrix.Y))
+    if not samples:
+        raise ValueError("The zero-setting campaign contains no BPM samples")
+    orbit_zero = pd.concat(samples, ignore_index=True).groupby("name")[["x", "y"]].mean()
+    return ReconstructionFrame(orbit_zero=orbit_zero, dynamic_planes=("x", "y"))
 
 
 def process_measurements_fresh(
@@ -58,35 +77,52 @@ def process_measurements_fresh(
     freq_metadata: dict[str, tuple[list[Path], Path, Path]] = {}
     all_files: list[Path] = []
     acd_tune_knobs_files: list[Path | None] = []
+    acd_corrector_knobs_files: list[Path | None] = []
     all_bad_bpms: set[str] = set()
-    energy = 0.0
+    central_meas_time = get_central_measurement_time(meas_times_for_step, squeeze_step)
+    energy = get_online_energy(central_meas_time, beam=beam)
 
     for freq, times in meas_times_for_step.items():
         if not times:
             raise ValueError(f"No measurement times found for frequency {freq}")
         logger.info("  Frequency %s: %d measurements", freq, len(times))
-        files, tune_knobs_file, corrector_knobs_file, bad_bpms, freq_energy = prepare_frequency_metadata(
-            freq, times, beam, meas_base_dir, results_dir, squeeze_step
+        files, tune_knobs, corrector_knobs, bad_bpms, _ = prepare_frequency_metadata(
+            freq,
+            times,
+            beam,
+            meas_base_dir,
+            results_dir,
+            squeeze_step,
+            energy=energy,
         )
-        if freq == ZEROHZ:
-            energy = freq_energy
-        freq_metadata[freq] = (files, tune_knobs_file, corrector_knobs_file)
+        freq_metadata[freq] = (files, tune_knobs, corrector_knobs)
         all_files.extend(files)
-        acd_tune_knobs_files.extend([tune_knobs_file] * len(files))
+        acd_tune_knobs_files.extend([tune_knobs] * len(files))
+        acd_corrector_knobs_files.extend([corrector_knobs] * len(files))
         all_bad_bpms.update(bad_bpms)
 
+    logger.info("Using central beam energy %.6f GeV from %s for all measurement files", energy, central_meas_time)
+
     b2_errors = resolve_b2_error_table(beam, energy)
-    update_metadata(temp_analysis_dir, energy=energy, b2_errors=str(b2_errors))
+    update_metadata(
+        temp_analysis_dir,
+        energy=energy,
+        energy_source_time=central_meas_time.isoformat(),
+        b2_errors=str(b2_errors),
+    )
 
     logger.info("Processing %d measurement files with AC-dipole reconstruction...", len(all_files))
+    frame = _measured_zero_frame(freq_metadata[ZEROHZ][0], beam)
     pzs_dict = reconstruct_ac_dipole_measurements(
         measurement_files=all_files,
         model_dir=model_dir,
         sequence_path=sequence_path,
         beam=beam,
         energy=energy,
+        frame=frame,
         use_weighted_svd=use_weighted_svd,
         tune_knobs_files=acd_tune_knobs_files or None,
+        corrector_knobs_files=acd_corrector_knobs_files or None,
         num_workers=8,
     )
 
@@ -159,9 +195,9 @@ def load_measurements_from_reload(
         if not times:
             continue
         logger.info("  Frequency %s: %d measurements (loading)", freq, len(times))
-        tune_knobs_file, corrector_knobs_file = get_knob_files(results_dir, squeeze_step, freq)
+        tune_knobs, corrector_knobs = get_knob_files(results_dir, squeeze_step, freq)
         all_measurements.extend(
-            load_frequency_results(freq, len(times), tune_knobs_file, corrector_knobs_file, temp_analysis_dir)
+            load_frequency_results(freq, len(times), tune_knobs, corrector_knobs, temp_analysis_dir)
         )
 
     return all_measurements, energy, window
@@ -188,8 +224,12 @@ def process_squeeze_step(
     if ZEROHZ not in meas_times[squeeze_step]:
         raise NotImplementedError("Please include 0Hz measurements to build the closed-orbit reference.")
 
-    results_dir.mkdir(exist_ok=True)
-    temp_analysis_dir = PROJECT_ROOT / f"temp_analysis_squeeze_b{beam}_{squeeze_step.replace('.', '_')}"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    temp_analysis_dir = (
+        MEASUREMENTS_ARTIFACTS_ROOT
+        / "temp"
+        / f"temp_analysis_squeeze_b{beam}_{squeeze_step.replace('.', '_')}"
+    )
     bad_bpms_file = results_dir / f"bad_bpms_{squeeze_step}.txt"
     meas_times_for_step = meas_times[squeeze_step]
 
@@ -201,7 +241,7 @@ def process_squeeze_step(
             )
         logger.info("Using existing temp directory: %s", temp_analysis_dir)
     else:
-        temp_analysis_dir.mkdir(exist_ok=True)
+        temp_analysis_dir.mkdir(parents=True, exist_ok=True)
 
     madng_model_dir = temp_analysis_dir / "madng_model"
 
@@ -218,7 +258,13 @@ def process_squeeze_step(
         shutil.copytree(model_dir, madng_model_dir, symlinks=True)
         sequence_path = get_or_make_sequence(beam, madng_model_dir, time=sequence_time)
         madng_accel = MadngLHCAccelerator(beam=beam, sequence_file=sequence_path)
-        update_model_with_madng(madng_accel, madng_model_dir, tunes=[nat_x, nat_y], convert_to_madx=False)
+        update_model_with_madng(
+            madng_accel,
+            madng_model_dir,
+            tunes=[nat_x, nat_y],
+            drv_tunes=[drv_x, drv_y],
+            convert_to_madx=False,
+        )
 
     if skip_reload:
         all_measurements, energy, window = load_measurements_from_reload(

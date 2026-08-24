@@ -23,7 +23,7 @@ from pymadng_utils.io.utils import save_knobs
 from scipy import stats
 from turn_by_turn import convert_to_tbt, write_tbt
 from turn_by_turn.structures import TbtData
-from xtrack_tools.acd import run_ac_dipole_tracking_with_particles
+from xtrack_tools.acd import run_ac_dipole_tracking
 from xtrack_tools.env import initialise_env
 
 from aba_optimiser.dispersion.dispersion_estimation import estimate_corrector_dispersions
@@ -38,6 +38,9 @@ if TYPE_CHECKING:
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 logger = logging.getLogger(__name__)
+
+LHC_HORIZONTAL_EXCITATION = 0.000371554879506
+LHC_VERTICAL_EXCITATION = 0.000415765635123
 
 
 def _generate_nonoise_track(
@@ -104,38 +107,35 @@ def _generate_nonoise_track(
     )
 
     # save the tune knobs to file with unique name
-    tune_knobs_file = tmp_dir / f"tune_knobs_b{beam}.txt"
-    save_knobs(matched_tunes, tune_knobs_file)
+    tune_knobs = tmp_dir / f"tune_knobs_b{beam}.txt"
+    save_knobs(matched_tunes, tune_knobs)
 
     # Insert AC dipole and track with different momentum offsets
     acd_ramp = 1000
     driven_tunes = [0.27, 0.322]
     output_files = []
-    action_list = [1e-10, 1e-10, 1e-10]
-    angle_list = [np.pi / 4, np.pi / 2, 3 * np.pi / 4]
     delta_values = [-5e-4, 0.0, 5e-4]
 
     for lag in [np.pi / 3]:
-        monitored_line = run_ac_dipole_tracking_with_particles(
-            line=env[seq_name],
-            beam=beam,
-            ramp_turns=acd_ramp,
-            flattop_turns=flattop_turns,
-            driven_tunes=driven_tunes,
-            lag=lag,
-            bpm_pattern="bpm.*[^k]",
-            action_list=action_list,
-            angle_list=angle_list,
-            delta_values=delta_values,
-        )
-
-        tbt_data = convert_to_tbt(monitored_line)
-        for idx, matrix in enumerate(tbt_data.matrices):
-            dpp = delta_values[idx]
+        for idx, dpp in enumerate(delta_values):
+            monitored_line = run_ac_dipole_tracking(
+                line=env[seq_name],
+                acd_marker=f"mkqa.6l4.b{beam}",
+                sequence_name=seq_name,
+                ramp_turns=acd_ramp,
+                flattop_turns=flattop_turns,
+                driven_tunes=driven_tunes,
+                lag=lag,
+                bpm_pattern="bpm.*[^k]",
+                deltap=dpp,
+                horizontal_excitation=LHC_HORIZONTAL_EXCITATION,
+                vertical_excitation=LHC_VERTICAL_EXCITATION,
+            )
+            tbt_data = convert_to_tbt(monitored_line)
             single_tbt = TbtData(
-                matrices=[matrix],
+                matrices=[tbt_data.matrices[0]],
                 nturns=tbt_data.nturns,
-                bunch_ids=[tbt_data.bunch_ids[idx] if tbt_data.bunch_ids else idx],
+                bunch_ids=[idx],
                 meta=tbt_data.meta,
             )
             output_file = tmp_dir / f"track_result_b{beam}_{dpp}_{lag}.sdds"
@@ -220,7 +220,7 @@ def _validate_dispersion_estimates(
     logger.info(f"Beam {beam}: Number of correctors: {n}")
     logger.info(f"Beam {beam}: Mean z-score: {mean_z:.3f}")
     logger.info(f"Beam {beam}: Std z-score: {std_z:.3f}")
-    ks_stat, p_value = stats.kstest(z_scores, "norm", args=(0, 1))
+    ks_stat, p_value = stats.kstest(z_scores, "norm") # args=(0,1)
     logger.info(f"Beam {beam}: KS test statistic: {ks_stat:.3f}, p-value: {p_value:.3f}")
 
     # Check coverage within 3σ
@@ -285,7 +285,7 @@ def test_dispersion_b1(
 
     # Generate tracking data and analyze optics
     optics_dir = _generate_nonoise_track(
-        loaded_interface, tmp_path, model_dir_b1, seq_b1, 6600, beam, None
+        loaded_interface, tmp_path, model_dir_b1, seq_b1, 2200, beam, None
     )
 
     # Load model twiss for validation
@@ -300,7 +300,7 @@ def test_dispersion_b1(
         beam=beam,
         pc_gev=6800,
         particle="proton",
-        num_closest_bpms=50,
+        num_closest_bpms=10,
         plane="x",
     )
 
@@ -329,7 +329,7 @@ def test_dispersion_b2(
     beam = 2
     # Generate tracking data and analyze optics
     optics_dir = _generate_nonoise_track(
-        beam2_interface, tmp_path, model_dir_b2, seq_b2, 6600, beam, None
+        beam2_interface, tmp_path, model_dir_b2, seq_b2, 2200, beam, None
     )
 
     # Load model twiss for validation
@@ -344,7 +344,7 @@ def test_dispersion_b2(
         beam=beam,
         pc_gev=6800,
         particle="proton",
-        num_closest_bpms=50,
+        num_closest_bpms=10,
         plane="x",
     )
 

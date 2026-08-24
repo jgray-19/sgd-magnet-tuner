@@ -108,7 +108,7 @@ def get_dispersion_for_element(elm_name: str, dispersion_df: tfs.TfsDataFrame) -
 
 
 def calculate_dpp_from_correctors(
-    correctors: list[NXCalResult],
+    correctors: list,
     dispersion_getter: callable,
     mom_compaction: float,
     ring_length: float,
@@ -188,7 +188,7 @@ def get_dispersion_from_model(
 
 
 def calculate_dpp_from_dispersion(
-    correctors: list[NXCalResult],
+    correctors: list,
     dispersion_df: tfs.TfsDataFrame,
     mom_compaction: float,
     ring_length: float,
@@ -205,7 +205,7 @@ def calculate_dpp_from_dispersion(
 
 
 def calculate_dpp_from_model_dispersion(
-    correctors: list[NXCalResult],
+    correctors: list,
     twiss_elements: tfs.TfsDataFrame,
     mom_compaction: float,
     ring_length: float,
@@ -248,7 +248,7 @@ def estimate_dpp_for_times(
         sequence_file=sequence_file,
         model_dir=model_dir,
         seq_name=f"lhcb{beam}",
-        beam_energy_gev=6800,
+        pc_gev=6800,
         particle="proton",
         num_closest_bpms=15,
         plane="x",

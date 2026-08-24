@@ -32,9 +32,9 @@ PSB_BPM_START_POINTS = [
     "BR1.BPM9L3",
     "BR1.BPM13L3",
 ]
+pytestmark = pytest.mark.serial
 
 
-@pytest.mark.slow
 @pytest.mark.xfail(strict=False, reason="PSB energy optimisation still under investigation")
 def test_controller_energy_opt_psb(
     tmp_path: Path,
@@ -95,8 +95,10 @@ def test_controller_energy_opt_psb(
         dpp_value=PSB_DPP_VALUE,
     )
 
-    assert np.allclose(estimate.pop("deltap"), PSB_DPP_VALUE, rtol=5e-2, atol=1e-10)
-    uncertainty = unc.pop("deltap")
+    assert np.allclose(
+        estimate.pop("pt"), loaded_psb_interface.dp2pt(PSB_DPP_VALUE), rtol=5e-2, atol=1e-10
+    )
+    uncertainty = unc.pop("pt")
     assert 0 < uncertainty < 5e-4
     assert not estimate
     assert not unc

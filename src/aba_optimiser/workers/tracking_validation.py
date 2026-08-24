@@ -14,8 +14,13 @@ from aba_optimiser.mad.scripts import (
     build_validation_script,
 )
 from aba_optimiser.workers.abstract_worker import AbstractWorker
-from aba_optimiser.workers.common import TrackingData, WorkerConfig, split_array_to_batches
+from aba_optimiser.workers.common import (
+    TrackingData,
+    WorkerConfig,
+    split_array_to_batches,
+)
 from aba_optimiser.workers.tracking import OBSERVABLE_SPECS, TrackingWorker
+from aba_optimiser.workers.tracking_position_only import PositionOnlyConfigMixin
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -26,6 +31,16 @@ if TYPE_CHECKING:
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _largest_divisor_at_most(value: int, limit: int) -> int:
+    """Return the largest positive divisor of ``value`` not exceeding ``limit``."""
+    if value <= 0:
+        return 0
+    for candidate in range(min(value, limit), 0, -1):
+        if value % candidate == 0:
+            return candidate
+    return 1
 
 
 class ValidationTrackingWorker(TrackingWorker):
@@ -67,14 +82,23 @@ class ValidationTrackingWorker(TrackingWorker):
     def prepare_data(self, data: TrackingData) -> None:
         """Prepare one validation payload."""
         observables = self._resolve_observables_for_config(self.config, self.include_momentum)
-        num_batches = min(self.simulation_config.num_batches, len(data.init_coords))
+        num_batches = _largest_divisor_at_most(
+            len(data.init_coords),
+            self.simulation_config.num_batches,
+        )
         if num_batches <= 0:
             raise ValueError(f"Worker {self.worker_id}: No initial coordinates available")
 
+        # The MAD track script iterates a single fixed ``batch_size`` over every
+        # sub-batch. Pick a divisor batch count so validation keeps all held-out
+        # turns while preserving equal-size MAD batches.
         n_init = len(data.init_coords)
         init_coords = data.init_coords
         if np.isnan(init_coords).any():
             raise ValueError(f"Worker {self.worker_id}: NaNs found in initial coordinates")
+        # Keep the flat python copy in sync with MAD so per-epoch init-coord
+        # updates (update_init_coords) can mirror the new px/py here too.
+        self._init_coords_np = np.ascontiguousarray(init_coords, dtype=np.float64)
         if data.precomputed_weights is None:
             raise ValueError("Precomputed weights must be provided for ValidationTrackingWorker")
 
@@ -117,7 +141,6 @@ class ValidationTrackingWorker(TrackingWorker):
 
     def setup_mad_interface(self, init_knobs: dict[str, float]) -> tuple[MAD, int]:
         """Set up a non-gradient MAD interface."""
-        del init_knobs
         LOGGER.debug("Worker %s: Setting up validation MAD interface", self.worker_id)
         LOGGER.debug("Worker %s: Using BPM range %s", self.worker_id, self.bpm_range)
 
@@ -126,12 +149,20 @@ class ValidationTrackingWorker(TrackingWorker):
             accelerator=self.config.accelerator,
             magnet_range=self.config.magnet_range,
             bpm_range=self.bpm_range,
-            corrector_strengths=self.config.corrector_strengths,
-            tune_knobs_file=self.config.tune_knobs_file,
+            **self.config.interface_options,
+            initial_model_values=init_knobs,
             bad_bpms=self.config.bad_bpms,
             debug=self.config.debug,
             mad_logfile=worker_logfile,
             py_name=PYTHON_IN_MAD,
+            tracking_anchor_mode=self.config.tracking_anchor_mode,
+            tracking_anchor_markers=self.config.tracking_anchor_sources,
+            observed_tracking_anchor_markers=self.config.observed_tracking_anchor_markers,
+        )
+
+        self.knob_name_set = set(mad_iface.knob_names)
+        self.fixed_pt = (
+            float(init_knobs.get("pt", 0.0)) if "pt" not in self.knob_name_set else 0.0
         )
 
         mad = mad_iface.mad
@@ -158,12 +189,12 @@ class ValidationTrackingWorker(TrackingWorker):
         self, mad: MAD, knob_updates: dict[str, float], batch: int
     ) -> dict[str, np.ndarray]:
         """Run MAD-NG tracking for one validation batch."""
-        machine_pt = knob_updates.get("pt", 0.0)
+        machine_pt = knob_updates.get("pt", getattr(self, "fixed_pt", 0.0))
 
         update_commands = [
             f"loaded_sequence['{name}'] = {val:.15e}"
             for name, val in knob_updates.items()
-            if name != "pt"
+            if name != "pt" and name in self.knob_name_set
         ]
         if update_commands:
             mad.send("\n".join(update_commands))
@@ -183,13 +214,30 @@ end
         raise NotImplementedError("ValidationTrackingWorker does not compute gradients")
 
     def compute_validation_loss(self, mad: MAD, knob_updates: dict[str, float]) -> float:
-        """Return validation loss with the same per-payload normalization as training."""
+        """Return a per-turn, per-BPM-point validation loss.
+
+        Uses the same normalisation as the training worker's reported loss
+        (divide by BPM points and by the number of turns in the batch) so the
+        held-out validation loss is directly comparable to the training loss,
+        independent of how many turns each worker holds.
+        """
         total_loss = 0.0
         for batch in range(self.num_batches):
             results = self._run_tracking_batch(mad, knob_updates, batch)
             batch_loss, _ = self._compute_loss_and_bpm_contributions(results, batch)
-            total_loss += batch_loss / self.normalisation_points
+            n_turns = max(1, len(self.init_coords[batch]))
+            total_loss += batch_loss / (self.normalisation_points * n_turns)
         return total_loss / max(1, self.num_batches)
+
+    def _send_init_condition_update(self, mad: MAD, new_px: np.ndarray, new_py: np.ndarray) -> None:
+        """Keep update arrays aligned with this worker's prepared particles.
+
+        Validation normally keeps every held-out turn. The slice also keeps older
+        or externally rebuilt payload chunks compatible if their update arrays are
+        longer than this worker's prepared coordinate table.
+        """
+        n_init = len(self._init_coords_np)
+        super()._send_init_condition_update(mad, new_px.ravel()[:n_init], new_py.ravel()[:n_init])
 
     def _replace_validation_payloads(
         self,
@@ -240,6 +288,7 @@ end
             self.mad, self.nbpms = self.setup_mad_interface(knob_values)
             self.send_initial_conditions(self.mad)
             self._initialise_mad_computation(self.mad)
+            self.run_preflight_check(self.mad, self.nbpms)
             LOGGER.debug(
                 "Worker %s: Ready for validation file=%d range=%s/%s sdir=%d kick_plane=%s tracks=%d bpms=%d",
                 self.worker_id,
@@ -279,6 +328,13 @@ end
                     self.conn.send({"worker_id": self.worker_id, "status": "ok"})
                     continue
 
+                if cmd == "update_init_coords":
+                    new_px = np.asarray(message["px"], dtype=np.float64)
+                    new_py = np.asarray(message["py"], dtype=np.float64)
+                    self._send_init_condition_update(self.mad, new_px, new_py)
+                    self.conn.send({"worker_id": self.worker_id, "status": "ok"})
+                    continue
+
                 if cmd != "validate":
                     raise ValueError(f"Worker {self.worker_id}: unknown command {cmd}")
 
@@ -301,9 +357,5 @@ end
                 self.mad = None
 
 
-class PositionOnlyValidationTrackingWorker(ValidationTrackingWorker):
+class PositionOnlyValidationTrackingWorker(PositionOnlyConfigMixin, ValidationTrackingWorker):
     """Validation worker that compares only x/y position observables."""
-
-    observables = ("x", "y")
-    include_momentum = False
-    hessian_weight_order = ("x", "y")

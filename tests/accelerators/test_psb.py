@@ -28,10 +28,36 @@ class TestPSBAccelerator:
         assert psb.sequence_file == test_sequence_file
         assert psb.kinetic_energy == pytest.approx(0.160)
         assert psb.energy == pytest.approx(0.160 + 0.9382720813)
-        assert psb.bpm_pattern == "^BR3%.BPM"
+        assert psb.bpm_pattern == "^BR3%.BPM%d+L3$"
         assert psb.optimise_quadrupoles is False
         assert psb.optimise_correctors is False
         assert psb.optimise_energy is False
+        assert psb.group_quadrupoles_by_cell is False
+
+    def test_group_quadrupoles_by_cell_is_copied(self, test_sequence_file: Path) -> None:
+        psb = PSB(
+            ring=3,
+            sequence_file=test_sequence_file,
+            group_quadrupoles_by_cell=True,
+        )
+        assert psb.copy_with().group_quadrupoles_by_cell is True
+        assert psb.copy_with(group_quadrupoles_by_cell=False).group_quadrupoles_by_cell is False
+
+    def test_grouped_results_are_expanded_to_physical_magnets(
+        self, test_sequence_file: Path
+    ) -> None:
+        psb = PSB(
+            ring=3,
+            sequence_file=test_sequence_file,
+            group_quadrupoles_by_cell=True,
+        )
+        assert psb.format_result_knobs(
+            {"BR.QFOCELL1.dk1l": 2e-4, "BR.QDE1.dk1l": -1e-4}
+        ) == {
+            "BR.QFO11.dk1l": 2e-4,
+            "BR.QFO12.dk1l": 2e-4,
+            "BR.QDE1.dk1l": -1e-4,
+        }
 
     @pytest.mark.parametrize("ring", [1, 2, 3, 4])
     def test_seq_name_uses_ring_number(self, test_sequence_file: Path, ring: int) -> None:
@@ -85,11 +111,15 @@ class TestPSBAccelerator:
         assert ("vkicker", "kick", "^B[RE]%d+%.DVT%d+L%d+$", None, True, "correctors") in psb.get_supported_knob_specs()
 
     def test_get_perturbation_families(self, test_sequence_file: Path) -> None:
-        """Test PSB perturbation metadata is available for quadrupoles."""
+        """Test PSB perturbation metadata is available for bends and quadrupoles."""
         psb = PSB(ring=3, sequence_file=test_sequence_file)
         assert psb.get_perturbation_families() == {
+            "d": {
+                "default_rel_std": 8e-4,
+                "pattern": r"(?i)^BR\.(?:BHZ\d+|BSW\d+L\d+\.\d+)$",
+            },
             "q": {
-                "default_rel_std": 2e-4,
+                "default_rel_std": 2e-3,
                 "pattern": r"(?i)^BR\.Q(?:FO\d+|DE\d+)$",
             },
         }
@@ -143,3 +173,80 @@ class TestPSBAccelerator:
         psb = PSB(ring=3, sequence_file=test_sequence_file)
         assert psb.format_result_knob_names(["br3.xnoh0.4l1.knl[3]"]) == ["br3.xnoh0.4l1.dk2l"]
         assert psb.format_result_knob_names(["br3.osk4l1.ksl[3]"]) == ["br3.osk4l1.dk2sl"]
+
+    def test_init_with_optimise_bpm_dx(self, test_sequence_file: Path) -> None:
+        """Test initialization with BPM horizontal displacement optimization."""
+        psb = PSB(ring=3, sequence_file=test_sequence_file, optimise_bpm_dx=True)
+        assert psb.optimise_bpm_dx is True
+        assert psb.optimise_bpm_dy is False
+
+    def test_init_with_optimise_bpm_dy(self, test_sequence_file: Path) -> None:
+        """Test initialization with BPM vertical displacement optimization."""
+        psb = PSB(ring=3, sequence_file=test_sequence_file, optimise_bpm_dy=True)
+        assert psb.optimise_bpm_dy is True
+        assert psb.optimise_bpm_dx is False
+
+    def test_init_bpm_flags_default_false(self, test_sequence_file: Path) -> None:
+        """Test BPM displacement flags default to False."""
+        psb = PSB(ring=3, sequence_file=test_sequence_file)
+        assert psb.optimise_bpm_dx is False
+        assert psb.optimise_bpm_dy is False
+
+    def test_bpm_misalignment_patterns_ring3(self, test_sequence_file: Path) -> None:
+        """Test PSB returns the correct BPM pattern for ring 3."""
+        psb = PSB(ring=3, sequence_file=test_sequence_file)
+        patterns = psb.bpm_misalignment_patterns
+        assert patterns["dx"] == ("^BR3%.BPM%d+L3$",)
+        assert patterns["dy"] == ("^BR3%.BPM%d+L3$",)
+
+    @pytest.mark.parametrize("ring", [1, 2, 4])
+    def test_bpm_misalignment_patterns_other_rings(self, test_sequence_file: Path, ring: int) -> None:
+        """Test PSB returns ring-specific BPM patterns."""
+        psb = PSB(ring=ring, sequence_file=test_sequence_file)
+        patterns = psb.bpm_misalignment_patterns
+        assert patterns["dx"] == (f"^BR{ring}%.BPM%d+L{ring}$",)
+        assert patterns["dy"] == (f"^BR{ring}%.BPM%d+L{ring}$",)
+
+    def test_get_supported_knob_specs_bpm_dx(self, test_sequence_file: Path) -> None:
+        """Test BPM horizontal displacement spec is included when enabled."""
+        psb = PSB(ring=3, sequence_file=test_sequence_file, optimise_bpm_dx=True)
+        specs = psb.get_supported_knob_specs()
+        assert ("monitor", "dx", "^BR3%.BPM%d+L3$", None, True, "BPM horizontal offsets") in specs
+
+    def test_get_supported_knob_specs_bpm_dy(self, test_sequence_file: Path) -> None:
+        """Test BPM vertical displacement spec is included when enabled."""
+        psb = PSB(ring=3, sequence_file=test_sequence_file, optimise_bpm_dy=True)
+        specs = psb.get_supported_knob_specs()
+        assert ("monitor", "dy", "^BR3%.BPM%d+L3$", None, True, "BPM vertical offsets") in specs
+
+    def test_get_supported_knob_specs_bpm_disabled(self, test_sequence_file: Path) -> None:
+        """Test BPM displacement specs are present but disabled when flags are off."""
+        psb = PSB(ring=3, sequence_file=test_sequence_file)
+        specs = psb.get_supported_knob_specs()
+        assert ("monitor", "dx", "^BR3%.BPM%d+L3$", None, False, "BPM horizontal offsets") in specs
+        assert ("monitor", "dy", "^BR3%.BPM%d+L3$", None, False, "BPM vertical offsets") in specs
+
+    def test_has_any_optimisation_bpm_dx(self, test_sequence_file: Path) -> None:
+        """Test BPM horizontal displacement contributes to has_any_optimisation."""
+        psb = PSB(ring=3, sequence_file=test_sequence_file, optimise_bpm_dx=True)
+        assert psb.has_any_optimisation() is True
+
+    def test_has_any_optimisation_bpm_dy(self, test_sequence_file: Path) -> None:
+        """Test BPM vertical displacement contributes to has_any_optimisation."""
+        psb = PSB(ring=3, sequence_file=test_sequence_file, optimise_bpm_dy=True)
+        assert psb.has_any_optimisation() is True
+
+    def test_copy_with_bpm_flags(self, test_sequence_file: Path) -> None:
+        """Test copy_with correctly copies and overrides BPM displacement flags."""
+        psb = PSB(ring=3, sequence_file=test_sequence_file, optimise_bpm_dx=True, optimise_bpm_dy=False)
+        copy = psb.copy_with(optimise_bpm_dy=True)
+        assert copy.optimise_bpm_dx is True
+        assert copy.optimise_bpm_dy is True
+
+    def test_copy_with_preserves_bpm_flags(self, test_sequence_file: Path) -> None:
+        """Test copy_with preserves BPM displacement flags when not overridden."""
+        psb = PSB(ring=3, sequence_file=test_sequence_file, optimise_bpm_dx=True, optimise_bpm_dy=True)
+        copy = psb.copy_with(optimise_quadrupoles=True)
+        assert copy.optimise_bpm_dx is True
+        assert copy.optimise_bpm_dy is True
+        assert copy.optimise_quadrupoles is True

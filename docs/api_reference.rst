@@ -27,7 +27,6 @@ workflow scripts rather than stable reusable API:
 * most of ``aba_optimiser.measurements``
 * ``aba_optimiser.matching``
 * most of ``aba_optimiser.simulation``
-* ``aba_optimiser.training_optics``
 * physics modules whose tests are skipped or rely on optional environments
 
 
@@ -85,18 +84,23 @@ Optimisation Runtime
 
    aba_optimiser.training
    aba_optimiser.training.base_controller
-   aba_optimiser.training.configuration_manager
+   aba_optimiser.training.config
    aba_optimiser.training.controller
-   aba_optimiser.training.controller_config
+   aba_optimiser.training.config.helpers
+   aba_optimiser.training.config.manager
+   aba_optimiser.training.config.models
+   aba_optimiser.training.config.tracking
    aba_optimiser.training.data_manager
-   aba_optimiser.training.optimisation_loop
+   aba_optimiser.training.optimisation
+   aba_optimiser.training.optimisation.loop
    aba_optimiser.training.result_manager
-   aba_optimiser.training.scheduler
-   aba_optimiser.training.validation_selection
-   aba_optimiser.training.worker_lifecycle
-   aba_optimiser.training.worker_manager
-   aba_optimiser.training.worker_payloads
-   aba_optimiser.training.worker_setup
+   aba_optimiser.training.optimisation.scheduler
+   aba_optimiser.training.workers
+   aba_optimiser.training.workers.lifecycle
+   aba_optimiser.training.workers.manager
+   aba_optimiser.training.workers.payloads
+   aba_optimiser.training.workers.setup
+   aba_optimiser.training.workers.validation
 
 
 Workers
@@ -135,5 +139,7 @@ Tested Measurement Utilities
 
    aba_optimiser.measurements.b2_errors
    aba_optimiser.measurements.create_datafile
+   aba_optimiser.measurements.loading
    aba_optimiser.measurements.plot_quad_diffs_and_phases
+   aba_optimiser.measurements.sequence
    aba_optimiser.measurements.utils

@@ -3,41 +3,72 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+import pandas as pd
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from aba_optimiser.measurements.ac_dipole import ACDipoleOptimisationWindow
+
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.config import OptimiserConfig, SimulationConfig
+from aba_optimiser.measurements.orbit_averaging import compute_three_turn_averages
+from aba_optimiser.measurements.output import measurement_output_config
 from aba_optimiser.measurements.squeeze.io import save_arc_estimates
-from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import (
+from aba_optimiser.training.config.models import (
     CheckpointConfig,
     MeasurementConfig,
-    OutputConfig,
+    MeasurementDetails,
     SequenceConfig,
 )
+from aba_optimiser.training.tracking_fitter import ArcByArcFitter
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class ACDipoleOptimisationWindow:
-    """Window definition for full-turn arc-by-arc tracking around the AC dipole."""
-
-    bpm_upstream: str
-    bpm_downstream: str
+def _first_bpm_for_beam(beam: int) -> str:
+    """Return the BPM each measurement turn is recorded from for this beam."""
+    return "BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2"
 
 
-def window_from_attrs(attrs: dict) -> ACDipoleOptimisationWindow | None:
-    """Build an ACDipoleOptimisationWindow from a DataFrame's attrs, or None if metadata is absent."""
-    upstream = attrs.get("ac_dipole_bpm_upstream")
-    downstream = attrs.get("ac_dipole_bpm_downstream")
-    if not upstream or not downstream:
-        return None
-    return ACDipoleOptimisationWindow(bpm_upstream=str(upstream), bpm_downstream=str(downstream))
+def _measurement_details(
+    measurement: dict, b2_errors: Path, first_bpm: str | None
+) -> MeasurementDetails:
+    """Build per-measurement MAD interface options from a squeeze descriptor."""
+    return MeasurementDetails(
+        interface_options={
+            "corrector_knobs": measurement["corrector_file"],
+            "tune_knobs": measurement["tune_knobs"],
+            "b2_errors": b2_errors,
+        },
+        first_bpm=first_bpm,
+    )
+
+
+def _create_averaged_measurement_config(
+    measurements: list[dict],
+    temp_analysis_dir: Path,
+    arc_num: int,
+    beam: int,
+    b2_errors: Path,
+) -> MeasurementConfig:
+    """Load measurement parquets, average over all turns, and return a MeasurementConfig."""
+    avg_files = []
+    for i, m in enumerate(measurements):
+        df = pd.read_parquet(m["file"])
+        avg_df = compute_three_turn_averages(df)
+        avg_path = temp_analysis_dir / f"avg_orbit_arc{arc_num}_file{i}.parquet"
+        avg_df.to_parquet(avg_path)
+        avg_files.append(avg_path)
+    first_bpm = _first_bpm_for_beam(beam)
+    return MeasurementConfig(
+        {
+            avg_path: _measurement_details(m, b2_errors, first_bpm)
+            for avg_path, m in zip(avg_files, measurements)
+        }
+    )
 
 
 def get_ac_dipole_bpm_points(
@@ -63,32 +94,28 @@ def create_configs(
     all_bad_bpms: set[str],
     measurements: list[dict],
     window: ACDipoleOptimisationWindow,
+    b2_errors: Path,
 ) -> tuple[SequenceConfig, list[str], list[str], MeasurementConfig]:
     """Build SequenceConfig and MeasurementConfig from resolved measurement descriptors."""
     magnet_range, bpm_start_points, bpm_end_points = get_ac_dipole_bpm_points(beam, window)
     sequence_config = SequenceConfig(
         magnet_range=magnet_range,
         bad_bpms=list(all_bad_bpms),
-        first_bpm="BPM.33L2.B1" if beam == 1 else "BPM.34R8.B2",
     )
+    first_bpm = _first_bpm_for_beam(beam)
     measurement_config = MeasurementConfig(
-        measurement_files=[m["file"] for m in measurements],
-        corrector_files=[m["corrector_file"] for m in measurements],
-        tune_knobs_files=[m["tune_knobs_file"] for m in measurements],
-        flattop_turns=6600,
-        machine_deltaps=0.0,#[m["machine_deltap"] for m in measurements],
-        bunches_per_file=3,
+        {m["file"]: _measurement_details(m, b2_errors, first_bpm) for m in measurements}
     )
     return sequence_config, bpm_start_points, bpm_end_points, measurement_config
 
 
 def get_default_simulation_config(
-    tracks_per_worker: int = 300,
+    data_fraction: float = 1.0,
     num_batches: int = 20,
 ) -> SimulationConfig:
     """Return default simulation config for optimisation stages."""
     return SimulationConfig(
-        tracks_per_worker=tracks_per_worker,
+        data_fraction=data_fraction,
         num_batches=num_batches,
         num_workers=60,
         use_fixed_bpm=True,
@@ -165,9 +192,9 @@ def optimise_arc(
     energy: float,
     checkpoint_dir: Path,
     checkpoint_every_n_epochs: int,
+    b2_errors: Path,
     rewrite_file: bool = False,
     window: ACDipoleOptimisationWindow | None = None,
-    b2_errors: Path | None = None,
     restore_bends_opt: bool = False,
     restore_quads_opt: bool = False,
     hessian_parallelism: int = 1,
@@ -175,15 +202,17 @@ def optimise_arc(
     """Run bend then quadrupole optimisation for one arc."""
     if window is None:
         raise ValueError("AC-dipole window is required for squeeze optimisation")
+    if b2_errors is None:
+        raise ValueError("b2_errors is required for squeeze optimisation")
 
     logger.info("Optimising arc %d for %s", arc_num, squeeze_step)
     sequence_config, bpm_start_points, bpm_end_points, measurement_config = create_configs(
-        beam, all_bad_bpms, measurements, window
+        beam, all_bad_bpms, measurements, window, b2_errors=b2_errors
     )
-    output_cfg = OutputConfig(
+    output_cfg = measurement_output_config(
+        temp_analysis_dir,
+        f"{squeeze_step}_arc_{arc_num}",
         include_uncertainty=True,
-        mad_logfile=temp_analysis_dir / "mad_log.txt",
-        python_logfile=temp_analysis_dir / "python_worker_log.txt",
         parallel_hessian=hessian_parallelism,
     )
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -209,58 +238,75 @@ def optimise_arc(
             arc_num,
         )
     else:
-        bend_ctrl = Controller(
-            LHC(
-                beam=beam,
-                kinetic_energy=energy,
-                sequence_file=sequence_path,
-                # b2_errors=b2_errors, # This makes the bend optimisation unstable and lose particles, we first want to get a good baseline without it
-                optimise_bends=True,
-                optimise_quad_dy=True,
-            ),
-            OptimiserConfig(
-                max_epochs=100,
-                warmup_epochs=50,
-                warmup_lr_start=1e-6,
-                max_lr=1e-6,
-                min_lr=3e-6,
-                gradient_converged_value=1e-6,
-                optimiser_type="adam",
-            ),
-            get_default_simulation_config(num_batches=5, tracks_per_worker=50),
-            sequence_config,
-            measurement_config,
-            bpm_start_points,
-            bpm_end_points,
-            initial_knob_strengths=None,
-            true_strengths=None,
-            output_config=output_cfg,
-            checkpoint_config=bend_checkpoint_cfg,
-        )
-        bend_estimates, _ = bend_ctrl.run()
+        bend_estimates: dict[str, float] | None = None
+        if not restore_bends_opt:
+            logger.info("Pre-stage: averaged closed-orbit bend fit for arc %d", arc_num)
+            avg_measurement_config = _create_averaged_measurement_config(
+                measurements, temp_analysis_dir, arc_num, beam, b2_errors=b2_errors
+            )
+            avg_bend_ctrl = ArcByArcFitter(
+                LHC(
+                    beam=beam,
+                    kinetic_energy=energy,
+                    sequence_file=sequence_path,
+                    optimise_bends=True,
+                    optimise_quad_dy=True,
+                ),
+                OptimiserConfig(
+                    max_epochs=1000,
+                    warmup_epochs=30,
+                    warmup_lr_start=5e-7,
+                    max_lr=1e-6,
+                    min_lr=1e-6,
+                    gradient_converged_value=1e-3,
+                    optimiser_type="adam",
+                ),
+                SimulationConfig(
+                    num_batches=1,
+                    num_workers=60,
+                    use_fixed_bpm=True,
+                    run_arc_by_arc=True,
+                    optimise_momenta=False,
+                    bpm_loss_outlier_sigma=5,
+                    enable_preloop_outlier_screening=False,
+                ),
+                sequence_config,
+                avg_measurement_config,
+                bpm_start_points,
+                bpm_end_points,
+                initial_knob_strengths=None,
+                true_strengths=None,
+                output_config=measurement_output_config(
+                    temp_analysis_dir,
+                    f"{squeeze_step}_arc_{arc_num}_averaged_bends",
+                    include_uncertainty=False,
+                    parallel_hessian=output_cfg.parallel_hessian,
+                ),
+                checkpoint_config=bend_checkpoint_cfg,
+            )
+            bend_estimates, _ = avg_bend_ctrl.run()
 
-    quad_ctrl_without_b2 = Controller(
+    quad_ctrl = ArcByArcFitter(
         LHC(
             beam=beam,
             kinetic_energy=energy,
             sequence_file=sequence_path,
-            # b2_errors=b2_errors,
             optimise_quadrupoles=True,
             optimise_bends=True,
             optimise_other_quadrupoles=True,
-            optimise_quad_dx=True,
+            optimise_quad_dx=False,
             optimise_quad_dy=True,
         ),
         OptimiserConfig(
-            max_epochs=300,
-            warmup_epochs=5,
+            max_epochs=1000,
+            warmup_epochs=50,
             warmup_lr_start=1e-10,
-            max_lr=2e-6,
-            min_lr=2e-6,
+            max_lr=1e-7 if "inj" in squeeze_step else 2e-7,
+            min_lr=1e-7 if "inj" in squeeze_step else 5e-8,
             gradient_converged_value=1e-7,
             optimiser_type="adam",
         ),
-        get_default_simulation_config(100),
+        get_default_simulation_config(num_batches=30),
         sequence_config,
         measurement_config,
         bpm_start_points,
@@ -271,41 +317,7 @@ def optimise_arc(
         checkpoint_config=quad_checkpoint_cfg,
         debug=False,
     )
-    estimates, uncertainties = quad_ctrl_without_b2.run()
-
-    quad_ctrl_with_b2 = Controller(
-        LHC(
-            beam=beam,
-            kinetic_energy=energy,
-            sequence_file=sequence_path,
-            b2_errors=b2_errors,
-            optimise_quadrupoles=True,
-            optimise_bends=True,
-            optimise_other_quadrupoles=True,
-            optimise_quad_dx=True,
-            optimise_quad_dy=True,
-        ),
-        OptimiserConfig(
-            max_epochs=1000,
-            warmup_epochs=100,
-            warmup_lr_start=1e-14,
-            max_lr=1e-8,
-            min_lr=1e-6,
-            gradient_converged_value=1e-7,
-            optimiser_type="adam",
-        ),
-        get_default_simulation_config(),
-        sequence_config,
-        measurement_config,
-        bpm_start_points,
-        bpm_end_points,
-        initial_knob_strengths=estimates,
-        true_strengths=None,
-        output_config=output_cfg,
-        checkpoint_config=None,  # Don't checkpoint the final run with b2 errors, to avoid accidentally restoring from it
-        debug=False,
-    )
-    estimates, uncertainties = quad_ctrl_with_b2.run()
+    estimates, uncertainties = quad_ctrl.run()
 
     save_arc_estimates(
         results_dir, squeeze_step, arc_num, estimates, uncertainties, rewrite_file=rewrite_file

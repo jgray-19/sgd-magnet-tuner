@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pymadng_utils.accelerators.lhc import LHC as BaseLHC  # noqa: N811
 
 from aba_optimiser.accelerators.base import Accelerator, KnobSpec
-from aba_optimiser.measurements.b2_errors import read_b2_error_table
-from aba_optimiser.physics.lhc_bends import normalise_lhcbend_magnets
+from aba_optimiser.accelerators.magnet_grouping import normalise_lhcbend_magnets
 
 LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
+    from pathlib import Path
+
     from aba_optimiser.mad.optimising_mad_interface import GradientDescentMadInterface
 
 
@@ -66,7 +65,6 @@ class LHC(BaseLHC, Accelerator):
         optimise_other_quadrupoles: bool = False,
         optimise_quad_dx: bool = False,
         optimise_quad_dy: bool = False,
-        b2_errors: Path | str | None = None,
         custom_knobs_to_optimise: list[str] | None = None,
     ):
         """Initialise LHC accelerator for a specific beam.
@@ -109,7 +107,6 @@ class LHC(BaseLHC, Accelerator):
         self.normalise_bends = normalise_bends
         self.optimise_correctors = optimise_correctors
         self.optimise_other_quadrupoles = optimise_other_quadrupoles
-        self.b2_errors = None if b2_errors is None else Path(b2_errors)
         self.bend_lengths: dict[str, float] | None = None
 
     def copy_with(self, **overrides) -> LHC:
@@ -130,7 +127,6 @@ class LHC(BaseLHC, Accelerator):
             optimise_other_quadrupoles=o.get("optimise_other_quadrupoles", self.optimise_other_quadrupoles),
             optimise_quad_dx=o.get("optimise_quad_dx", self.optimise_quad_dx),
             optimise_quad_dy=o.get("optimise_quad_dy", self.optimise_quad_dy),
-            b2_errors=o.get("b2_errors", self.b2_errors),
             custom_knobs_to_optimise=o.get("custom_knobs_to_optimise", self.custom_knobs_to_optimise),
         )
 
@@ -205,67 +201,13 @@ class LHC(BaseLHC, Accelerator):
             normalised_names = normalise_lhcbend_magnets(true_strengths_dict, self.bend_lengths)
             mad_iface.mad.send(normalised_names)
 
-    def apply_accelerator_specific_errors(self, mad_iface: AbaMadInterface) -> None:
-        """Apply the configured LHC b2 dipole error table to the loaded sequence."""
-        if self.b2_errors is None:
-            return
-
-        b2_errors = read_b2_error_table(self.b2_errors)
-        if not b2_errors:
-            LOGGER.warning("No entries found in b2 error table %s", self.b2_errors)
-            return
-
-        mad_iface.mad.send(
-            f"""
-local b2_errors = {mad_iface.py_name}:recv()
-local applied = {{}}
-local missing = {{}}
-
-for name, k1l in pairs(b2_errors) do
-    local element = loaded_sequence[name]
-    if element == nil then
-        table.insert(missing, name)
-    elseif element.knl ~= nil and k1l ~= 0 then
-        element.knl = {{
-            element.knl[1] or 0,
-            element.knl[2] or 0,
-            element.knl[3] or 0,
-            element.knl[4] or 0,
-        }}
-        element.knl[2] = element.knl[2] + k1l
-        applied[name] = element.knl[2]
-    elseif k1l ~= 0 then
-        error("Element has no knl table for K1L b2 application: " .. name)
-    end
-end
-
-loaded_sequence:update()
-{mad_iface.py_name}:send(applied, true)
-{mad_iface.py_name}:send(missing, true)
-"""
-        )
-        mad_iface.mad.send(b2_errors)
-        applied = mad_iface.mad.recv()
-        missing = mad_iface.mad.recv()
-
-        if missing:
-            preview = ", ".join(sorted(str(name) for name in missing[:8]))
-            raise ValueError(
-                f"B2 error table {self.b2_errors} contains elements not present in the loaded "
-                f"sequence {self.seq_name}: {preview}"
-            )
-
-        LOGGER.info("Applied %d b2 dipole error entries from %s", len(applied), self.b2_errors)
-
-    def get_mad_attr_specs(self) -> dict[str, dict[str, str]]:
+    def get_mad_attr_spec(self, kind: str, attribute: str) -> dict[str, str]:
         """Return LHC-specific attr naming/value expressions."""
-        if not self.normalise_bends:
+        if not self.normalise_bends or kind != "sbend" or attribute != "k0":
             return {}
         return {
-            "sbend": {
-                "name_expr": 'string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".dk0l"',
-                "mad_value": "bend_dict[k_str_name]",
-            },
+            "name_expr": 'string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".dk0l"',
+            "mad_value": "bend_dict[k_str_name]",
         }
 
     @staticmethod

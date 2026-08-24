@@ -4,20 +4,39 @@ Coordinated loops orchestrate gradient evaluation, learning rate scheduling,
 and checkpointing for the optimisation workflow.
 """
 
-from aba_optimiser.training.base_controller import BaseController
-from aba_optimiser.training.configuration_manager import ConfigurationManager
-from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import (
+from aba_optimiser.training.base_fitter import BaseFitter
+from aba_optimiser.training.config import (
+    ACDArcByArcTrackingPlan,
+    ACDTrackingPlan,
+    ArcByArcTrackingPlan,
+    CheckpointConfig,
+    ConfigurationManager,
+    FullRingBpmTrackingPlan,
+    KickerConfig,
+    KickerTrackingPlan,
     MeasurementConfig,
+    MeasurementDetails,
     OutputConfig,
     SequenceConfig,
-)
-from aba_optimiser.training.controller_helpers import (
+    TrackingModeSetup,
+    TrackingPlan,
+    WorkerRangeSpec,
+    acd_marker_setup,
+    arc_by_arc_setup,
     create_arc_measurement_config,
+    full_ring_setup,
+    kicker_setup,
 )
 from aba_optimiser.training.data_manager import DataManager
-from aba_optimiser.training.optimisation_loop import OptimisationLoop
-from aba_optimiser.training.scheduler import LRScheduler
+from aba_optimiser.training.optimisation.loop import OptimisationLoop
+from aba_optimiser.training.optimisation.scheduler import LRScheduler
+from aba_optimiser.training.tracking_fitter import (
+    ACDMarkerFitter,
+    ArcByArcFitter,
+    FullRingFitter,
+    KickerFitter,
+    TrackingFitter,
+)
 from aba_optimiser.training.utils import (
     bpm_supports_both_planes,
     bpm_supports_plane,
@@ -27,17 +46,36 @@ from aba_optimiser.training.utils import (
     load_tfs_files,
     normalise_true_strengths,
 )
-from aba_optimiser.training.worker_lifecycle import WorkerLifecycleManager
-from aba_optimiser.training.worker_manager import WorkerManager
+from aba_optimiser.training.workers.lifecycle import WorkerLifecycleManager
+from aba_optimiser.training.workers.manager import WorkerManager
 
 __all__ = [
-    "BaseController",
+    "BaseFitter",
+    "ACDArcByArcTrackingPlan",
+    "ACDTrackingPlan",
+    "ACDMarkerFitter",
+    "ArcByArcFitter",
+    "ArcByArcTrackingPlan",
+    "CheckpointConfig",
     "ConfigurationManager",
-    "Controller",
+    "FullRingBpmTrackingPlan",
+    "FullRingFitter",
+    "KickerConfig",
+    "KickerFitter",
+    "KickerTrackingPlan",
     "MeasurementConfig",
+    "MeasurementDetails",
     "OutputConfig",
     "SequenceConfig",
+    "TrackingFitter",
+    "TrackingModeSetup",
+    "TrackingPlan",
+    "WorkerRangeSpec",
+    "acd_marker_setup",
+    "arc_by_arc_setup",
     "create_arc_measurement_config",
+    "full_ring_setup",
+    "kicker_setup",
     "DataManager",
     "OptimisationLoop",
     "LRScheduler",

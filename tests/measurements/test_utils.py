@@ -2,19 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import numpy as np
 import pandas as pd
 
-from aba_optimiser.measurements.utils import (
-    find_all_bad_bpms,
-    find_all_bad_bpms_from_analysis,
-    merge_horizontal_vertical_bpms,
-)
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from aba_optimiser.measurements.utils import merge_horizontal_vertical_bpms
 
 
 class TestMergeHorizontalVerticalBPMs:
@@ -209,36 +200,3 @@ class TestMergeHorizontalVerticalBPMs:
         # Check float columns are float64
         for col in ["x", "y", "var_x", "var_y", "px", "py", "var_px", "var_py"]:
             assert merged[col].dtype == np.float64
-
-
-def test_find_all_bad_bpms_reads_all_summary_files(tmp_path: Path) -> None:
-    (tmp_path / "file_a.bad_bpms_x").write_text("BPM1 why\nBPM2 why\n")
-    (tmp_path / "file_b.bad_bpms_y").write_text("BPM2 why\nBPM3 why\n")
-
-    result = find_all_bad_bpms(tmp_path)
-
-    assert result == {"BPM1", "BPM2", "BPM3"}
-
-
-def test_find_all_bad_bpms_from_analysis_reads_measurement_folders(tmp_path: Path) -> None:
-    measurement_a = tmp_path / "meas_a"
-    measurement_b = tmp_path / "meas_b"
-    measurement_a.mkdir()
-    measurement_b.mkdir()
-    (measurement_a / "a.bad_bpms_x").write_text("BPM1 x\n")
-    (measurement_b / "b.bad_bpms_y").write_text("BPM2 y\n")
-    (tmp_path / "analysis_test.ini").write_text(
-        f"[DEFAULT]\nfiles = ['{measurement_a / 'file1.sdds'}', '{measurement_b / 'file2.sdds'}']\n"
-    )
-
-    result = find_all_bad_bpms_from_analysis(tmp_path)
-
-    assert result == {"BPM1", "BPM2"}
-
-
-def test_find_all_bad_bpms_from_analysis_returns_empty_for_invalid_config(tmp_path: Path) -> None:
-    (tmp_path / "analysis_test.ini").write_text("[DEFAULT]\nfiles = not-a-python-list\n")
-
-    result = find_all_bad_bpms_from_analysis(tmp_path)
-
-    assert result == set()

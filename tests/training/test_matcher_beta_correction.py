@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
 
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
+LOGGER = logging.getLogger(__name__)
 
 def _rms_beta_beating(
     twiss: pd.DataFrame,
@@ -63,7 +65,8 @@ def _get_beta_correctors() -> list[str]:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("match_method", ["lbfgs"])
+# @pytest.mark.skip(reason="Possible issue with MAD-NG beta matching, needs investigation")
+@pytest.mark.parametrize("match_method", ["lbfgs", "lm"])
 def test_matcher_reduces_beta_beating(
     tmp_path: Path,
     seq_b1: Path,
@@ -104,16 +107,20 @@ def test_matcher_reduces_beta_beating(
     )
     matcher = BetaMatcher(config)
 
-    if match_method == "lbfgs":
-        final_knobs, _ = matcher.run_lbfgs_match()
-    else:
-        pytest.fail(f"Unknown match method: {match_method}")
+    final_knobs, _ = matcher.run_match(match_method)
 
     # Apply corrections back to the perturbed interface and measure improvement
     loaded_interface.set_madx_variables(**final_knobs)
     corrected_twiss = loaded_interface.run_twiss()
 
     rms_x_after, rms_y_after = _rms_beta_beating(corrected_twiss, model_twiss)
+    LOGGER.info(
+        "RMS beta beating before: %.4%% (X), %.4%% (Y); after: %.4%% (X), %.4%% (Y)",
+        rms_x_before * 100,
+        rms_y_before * 100,
+        rms_x_after * 100,
+        rms_y_after * 100,
+    )
 
     assert rms_x_after < rms_x_before, (
         f"Beta-X beating did not improve: {rms_x_before:.4%} -> {rms_x_after:.4%}"

@@ -9,13 +9,13 @@ import pytest
 
 from aba_optimiser.accelerators import PSB
 from aba_optimiser.config import OptimiserConfig
-from aba_optimiser.training.controller import Controller
-from aba_optimiser.training.controller_config import (
+from aba_optimiser.training.config.helpers import create_arc_measurement_config
+from aba_optimiser.training.config.models import (
     KickerConfig,
-    MeasurementConfig,
     OutputConfig,
     SequenceConfig,
 )
+from aba_optimiser.training.tracking_fitter import KickerFitter
 from tests.training.controller_test_utils import (
     _generate_kicker_track,
     _make_simulation_config_quad,
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.serial
 
 
 def _build_kicker_controller(
@@ -36,13 +37,11 @@ def _build_kicker_controller(
     seq_psb: Path,
     loaded_psb_interface: AbaMadInterface,
     flattop_turns: int = 10,
-) -> tuple[Controller, dict[str, float]]:
+) -> tuple[KickerFitter, dict[str, float]]:
     magnet_range = "$start/$end"
-    bpm_start_points: list[str] = []
-    bpm_end_points: list[str] = []
     off_magnet_path = tmp_path / "track_kicker_off_magnet.parquet"
 
-    corrector_file, magnet_strengths, tune_knobs_file, kicker_name = _generate_kicker_track(
+    corrector_file, magnet_strengths, tune_knobs, kicker_name = _generate_kicker_track(
         loaded_psb_interface,
         flattop_turns,
         off_magnet_path,
@@ -58,7 +57,7 @@ def _build_kicker_controller(
         gradient_converged_value=5e-20,
     )
 
-    ctrl = Controller(
+    ctrl = KickerFitter(
         PSB(
             ring=3,
             kinetic_energy=loaded_psb_interface.accelerator.kinetic_energy,
@@ -67,32 +66,62 @@ def _build_kicker_controller(
         ),
         optimiser_config,
         _make_simulation_config_quad(),
-        SequenceConfig(
-            magnet_range=magnet_range,
-            first_bpm=kicker_name,
+        SequenceConfig(magnet_range=magnet_range),
+        create_arc_measurement_config(
+            off_magnet_path, corrector_knobs=corrector_file, tune_knobs=tune_knobs
         ),
-        MeasurementConfig(
-            measurement_files=off_magnet_path,
-            corrector_files=corrector_file,
-            tune_knobs_files=tune_knobs_file,
-            flattop_turns=flattop_turns,
-            bunches_per_file=1,
+        KickerConfig(
+            kicker_name=kicker_name,
+            turns_after_kicker=flattop_turns,
         ),
-        bpm_start_points,
-        bpm_end_points,
         output_config=OutputConfig(
             mad_logfile=tmp_path / "mad_logfile_kicker.log",
             write_tensorboard_logs=False,
         ),
         true_strengths=magnet_strengths.copy(),
-        kicker_config=KickerConfig(
-            kicker_name=kicker_name,
-            turns_after_kicker=flattop_turns,
-        ),
     )
     return ctrl, magnet_strengths.copy()
 
-@pytest.mark.slow
+
+def test_controller_kicker_has_no_held_out_validation(
+    tmp_path: Path,
+    seq_psb: Path,
+    loaded_psb_interface: AbaMadInterface,
+) -> None:
+    """The kicker plan disables validation, so no turns are held out.
+
+    KickerTrackingPlan sets enable_validation=False: DataManager reserves no
+    validation turns and compute_validation_loss returns None (the caller then
+    falls back to training loss). This asserts the real behaviour of a Kicker-style
+    run, complementing the arc-by-arc case where validation returns a real number.
+    """
+    ctrl, _magnet_strengths = _build_kicker_controller(
+        tmp_path=tmp_path,
+        seq_psb=seq_psb,
+        loaded_psb_interface=loaded_psb_interface,
+        flattop_turns=4,
+    )
+    assert not ctrl.tracking_plan.enable_validation
+    assert ctrl.data_manager.validation_turn_batches == []
+
+    ctrl.worker_manager.start_workers(
+        ctrl.data_manager.track_data,
+        ctrl.data_manager.turn_batches,
+        ctrl.data_manager.validation_turn_batches,
+        ctrl.data_manager.file_map,
+        ctrl.config_manager.start_bpms,
+        ctrl.config_manager.end_bpms,
+        ctrl.simulation_config,
+        ctrl.machine_deltaps,
+        ctrl.initial_knobs,
+        enable_validation=ctrl.tracking_plan.enable_validation,
+    )
+    try:
+        assert ctrl.worker_manager.compute_validation_loss(ctrl.initial_knobs) is None
+    finally:
+        ctrl.worker_manager.terminate_workers()
+
+
 def test_controller_quad_opt_with_kicker(
     tmp_path: Path,
     seq_psb: Path,

@@ -74,12 +74,22 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         self.conn = conn
         self.config = config
         self.simulation_config = simulation_config
+        # Populated in setup_mad_interface: the knobs this worker actually created
+        # (its optimisation range). Runtime knob-updates are filtered to this set so
+        # values for magnets outside the worker's range are ignored rather than
+        # applied to a nonexistent MAD variable.
+        self.knob_name_set: set[str] = set()
         bpm_range_start = config.observation_range_start_bpm or config.tracking_start_bpm
         self.bpm_range = f"{bpm_range_start}/{config.tracking_end_bpm}"
 
         self.tracking_range = self.bpm_range
         if config.sdir < 0:
             self.tracking_range = f"{config.tracking_end_bpm}/{config.tracking_start_bpm}"
+        if config.initial_condition_marker is not None:
+            # Kicker mode: the sequence is already cycled to start at the kicker.
+            # Pass nil so MAD-NG tracks through the full sequence for all N turns
+            # rather than a named range that would treat elements outside it as drifts.
+            self.tracking_range = None
 
         LOGGER.debug(
             "Initializing worker %d for BPM range %s -> %s",
@@ -256,34 +266,70 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
 
         worker_logfile = self._resolve_per_worker_logfile(self.config.mad_logfile)
 
+        # Cycle to the initial-condition marker (kicker) or to the point where this
+        # worker's measured turn increment starts. For backward ranges that is the
+        # tracking end, because the payload initial coordinates are taken there.
+        # Full-ring workers keep the natural $start so no BPM is duplicated at the
+        # ring wrap.
+        tracking_init_bpm = (
+            self.config.tracking_start_bpm
+            if self.config.sdir > 0
+            else self.config.tracking_end_bpm
+        )
+        cycle_target = (
+            self.config.cycle_marker or self.config.initial_condition_marker or tracking_init_bpm
+            if self.config.cycle_sequence
+            else None
+        )
+
         # Use accelerator factory to create MAD interface
         mad_iface = GradientDescentMadInterface(
             accelerator=self.config.accelerator,
-            start_bpm=self.config.initial_condition_marker or self.config.tracking_start_bpm,
             magnet_range=self.config.magnet_range,
             bpm_range=self.bpm_range,
-            corrector_strengths=self.config.corrector_strengths,
-            tune_knobs_file=self.config.tune_knobs_file,
+            **self.config.interface_options,
+            initial_model_values=init_knobs,
             bad_bpms=self.config.bad_bpms,
             debug=self.config.debug,
             mad_logfile=worker_logfile,
             py_name=PYTHON_IN_MAD,
+            tracking_anchor_mode=self.config.tracking_anchor_mode,
+            tracking_anchor_markers=self.config.tracking_anchor_sources,
+            observed_tracking_anchor_markers=self.config.observed_tracking_anchor_markers,
         )
 
+        # Range-limited plans (arc-by-arc, kicker, ACD) cycle the sequence to this
+        # worker's init marker so its tracking range is one contiguous segment.
+        # Full-ring workers keep the natural $start and do not cycle.
+        if cycle_target is not None:
+            mad_iface.cycle_to_start(cycle_target)
+
         knob_names = mad_iface.knob_names
-        if knob_names != list(init_knobs.keys()):
-            init_set = set(init_knobs.keys())
-            mad_set = set(knob_names)
-            diff_init_mad = init_set.symmetric_difference(mad_set)
+        self.knob_name_set = set(knob_names)
+        # Every knob this worker created (its optimisation range) must have an initial
+        # value. The caller provides initial values for the whole optimisation, which may
+        # also include magnets in this worker's tracking range that it does not optimise.
+        missing = self.knob_name_set - set(init_knobs)
+        if missing:
             raise ValueError(
-                f"Worker {self.worker_id}: Knob names from MAD {len(knob_names)} "
-                f"do not match initial knobs {len(list(init_knobs.keys()))}"
-                f"\nDifferent knobs: {diff_init_mad}"
+                f"Worker {self.worker_id}: {len(missing)} MAD knobs have no initial value, "
+                f"e.g. {sorted(missing)[:5]}"
             )
+
+        # Non-optimised pt is not an element strength, so keep it as a fixed tracking
+        # scalar while the optimiser updates only its own knob vector.
+        self.fixed_pt = (
+            float(init_knobs.get("pt", 0.0)) if "pt" not in self.knob_name_set else 0.0
+        )
 
         mad = mad_iface.mad
         mad["knob_names"] = knob_names
-        mad["nbpms"] = mad_iface.nbpms
+        # With no tracking range (kicker mode) MAD tracks the full cycled ring and
+        # observes every monitor, so the observable vectors must be sized for all
+        # BPMs. The named range count would miss the BPM that wraps past the start
+        # marker, undersizing the vectors and overflowing during tracking.
+        nbpms = len(mad_iface.all_bpms) if self.tracking_range is None else mad_iface.nbpms
+        mad["nbpms"] = nbpms
         mad["sdir"] = self.config.sdir
 
         # Import required MAD-NG modules
@@ -296,16 +342,7 @@ class AbstractWorker(Process, ABC, Generic[WorkerDataType]):
         # Setup differential algebra maps
         self._setup_da_maps(mad)
 
-        # Apply initial knob values to the DA objects (constant term = initial value)
-        init_commands = [
-            f"loaded_sequence['{name}']:set0({val:.15e})"
-            for name, val in init_knobs.items()
-            if name != "pt"
-        ]
-        if init_commands:
-            mad.send("\n".join(init_commands))
-
-        return mad, mad_iface.nbpms
+        return mad, nbpms
 
     @abstractmethod
     def _setup_da_maps(self, mad: MAD) -> None:

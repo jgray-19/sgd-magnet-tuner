@@ -27,11 +27,16 @@ def raise_for_worker_error_payload(
 ) -> NoReturn:
     """Raise a RuntimeError from a worker payload."""
     if isinstance(payload, dict) and payload.get("status") == "error":
-        worker_id = payload.get("worker_id", "?")
-        phase = payload.get("phase", "unknown")
-        error_type = payload.get("error_type", "Exception")
-        error = payload.get("error", "unknown worker error")
-        raise RuntimeError(f"Worker {worker_id} failed during {phase}: {error_type}: {error}")
+        p: WorkerErrorPayload = payload  # type: ignore[assignment]
+        worker_id = p.get("worker_id", "?")
+        phase = p.get("phase", "unknown")
+        error_type = p.get("error_type", "Exception")
+        error = p.get("error", "unknown worker error")
+        tb = p.get("traceback", "")
+        tb_section = f"\n\nWorker traceback:\n{tb}" if tb else ""
+        raise RuntimeError(
+            f"Worker {worker_id} failed during {phase}: {error_type}: {error}{tb_section}"
+        )
 
     exitcode = None if worker is None else worker.exitcode
     raise RuntimeError(f"Unexpected worker payload: {payload!r} (worker exitcode={exitcode})")

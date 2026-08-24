@@ -1,5 +1,9 @@
 """LHC squeeze quadrupole optimisation package."""
 
+from aba_optimiser.measurements.ac_dipole import (
+    ACDipoleOptimisationWindow,
+    window_from_attrs,
+)
 from aba_optimiser.measurements.squeeze.constants import (
     MEAS_TIMES,
     MINUS_50HZ,
@@ -35,19 +39,20 @@ from aba_optimiser.measurements.squeeze.io import (
     validate_processed_files,
 )
 from aba_optimiser.measurements.squeeze.optimisation import (
-    ACDipoleOptimisationWindow,
     create_configs,
     get_ac_dipole_bpm_points,
     get_default_simulation_config,
     optimise_arc,
     resolve_restore_resume,
-    window_from_attrs,
 )
 from aba_optimiser.measurements.squeeze.pipeline import (
     load_measurements_from_reload,
     main,
     process_measurements_fresh,
     process_squeeze_step,
+)
+from aba_optimiser.measurements.squeeze.reconstruction import (
+    reconstruct_ac_dipole_measurements,
 )
 
 __all__ = [
@@ -86,6 +91,7 @@ __all__ = [
     "get_ac_dipole_bpm_points",
     "get_default_simulation_config",
     "optimise_arc",
+    "reconstruct_ac_dipole_measurements",
     "resolve_restore_resume",
     "window_from_attrs",
     "load_measurements_from_reload",

@@ -9,25 +9,37 @@ application, and knob discovery for gradient-based tuning.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import re
+from collections.abc import Mapping
+from pathlib import Path
+from typing import TYPE_CHECKING, TypeAlias
 
 import numpy as np
 import tfs
 from pymadng_utils.io.utils import read_knobs
-
-from .aba_mad_interface import (
+from pymadng_utils.mad.accelerator_mad_interface import (
+    MAGNET_STRENGTH_SUFFIXES,
     MAX_MULTIPOLE,
     MULTIPOLE_ATTRS,
-    AbaMadInterface,
-    indexed_multipole_attr_info,
+    MultipoleInfo,
 )
+from pymadng_utils.mad.knob_mad_interface import resolve_knobs
+
+from aba_optimiser.accelerators import LHC
+from aba_optimiser.measurements.b2_errors import read_b2_error_table
+
+from .aba_mad_interface import AbaMadInterface
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Iterable
 
     from pymadng_utils.accelerators import Accelerator as PyMadAccelerator
 
     from aba_optimiser.accelerators import Accelerator, KnobSpec
+
+# Knobs travel as name/value pairs; a path is accepted for the user-authored
+# files the LHC measurement scripts still keep on disk.
+KnobsInput: TypeAlias = Mapping[str, float] | str | Path
 
 BPM_PATTERN = "^BPM"
 LOGGER = logging.getLogger(__name__)
@@ -37,6 +49,34 @@ _CORRECTOR_ATTRS_BY_KIND: dict[str, tuple[tuple[str, str], ...]] = {
     "vkicker": (("kick", "vkick"),),
     "tkicker": (("hkick", "hkick"), ("vkick", "vkick")),
 }
+_INDEXED_MULTIPOLE_RE = re.compile(r"^(knl|ksl)\[(\d+)\]$")
+
+
+def is_magnet_strength_name(name: str) -> bool:
+    """True if ``name`` is a settable magnet-strength name (e.g. ``MQ.1.dk1l``).
+
+    These are exactly the names accepted by
+    :meth:`AcceleratorMadInterface.set_magnet_strengths`, so callers can use this
+    to tell a genuine magnet strength from a stray/typo'd knob name before routing
+    values to the model.
+    """
+    return any(name.endswith(suffix) for suffix in MAGNET_STRENGTH_SUFFIXES)
+
+
+def indexed_multipole_attr_info(attr: str) -> MultipoleInfo | None:
+    """Return multipole metadata for indexed MAD attrs such as ``knl[3]`` or ``ksl[3]``."""
+    match = _INDEXED_MULTIPOLE_RE.fullmatch(attr)
+    if match is None:
+        return None
+
+    base_table, index_str = match.groups()
+    index = int(index_str)
+    if index < 1 or index > MAX_MULTIPOLE:
+        return None
+
+    order = index - 1
+    base_attr = f"k{order}" if base_table == "knl" else f"k{order}s"
+    return MULTIPOLE_ATTRS[base_attr]
 
 
 def _ensure_cycleable_start_element(
@@ -60,6 +100,11 @@ correct_elm = nil
     LOGGER.info("Replaced non-BPM start element with cycle marker: %s", start_bpm)
 
 
+def _unique_names(names: Iterable[str]) -> list[str]:
+    """Return names deduplicated in first-seen order."""
+    return list(dict.fromkeys(names))
+
+
 def _absolute_name_from_dk_knob(knob_name: str) -> str | None:
     """Map a dknl/dksl perturbation knob name back to its absolute strength attribute."""
     for abs_attr, mp in MULTIPOLE_ATTRS.items():
@@ -69,20 +114,94 @@ def _absolute_name_from_dk_knob(knob_name: str) -> str | None:
 
 
 def _deferred_table_helpers() -> str:
-    """Lua helpers that lazily initialise dknl/dksl tables the first time they are written."""
-    zeros = ", ".join(["0.0"] * MAX_MULTIPOLE)
+    """Lua helpers that defer dknl/dksl tables without resetting current values."""
+    values = ",\n        ".join(f"old[{idx}] or 0.0" for idx in range(1, MAX_MULTIPOLE + 1))
     return f"""
 local function make_dknl_deferred_knob(e)
     if not MAD.typeid.is_deferred(loaded_sequence[e.name].dknl) then
-        loaded_sequence[e.name].dknl = MAD.typeid.deferred {{{zeros}}}
+        local old = loaded_sequence[e.name].dknl or {{}}
+        loaded_sequence[e.name].dknl = MAD.typeid.deferred {{
+        {values},
+        }}
     end
 end
 local function make_dksl_deferred_knob(e)
     if not MAD.typeid.is_deferred(loaded_sequence[e.name].dksl) then
-        loaded_sequence[e.name].dksl = MAD.typeid.deferred {{{zeros}}}
+        local old = loaded_sequence[e.name].dksl or {{}}
+        loaded_sequence[e.name].dksl = MAD.typeid.deferred {{
+        {values},
+        }}
     end
 end
 """
+
+
+def apply_b2_errors_to_sequence(
+    mad,
+    py_name: str,
+    b2_errors: Path | None,
+    tune_knobs: KnobsInput | None,
+) -> None:
+    """Route a b2 dipole error table into the loaded sequence's dknl[2] slots.
+
+    Works on any MAD interface whose sequence is bound to the ``loaded_sequence``
+    global (the reconstruction ``ACDipoleMadDriver`` and the optimisation
+    ``GenericMadInterface`` both qualify). The b2 K1L is added to the quadrupole
+    perturbation slot (dknl[2]), leaving the dipole slot dknl[1] untouched. b2
+    errors shift the machine tunes, so a tune knobs file is required to restore
+    them.
+    """
+    if b2_errors is None:
+        return
+    if tune_knobs is None:
+        raise ValueError(
+            "The tune knobs are designed to compensate for the known b2 errors."
+            "Therefore it makes no sense to apply b2 errors without also applying the tune knobs."
+        )
+
+    b2_table = read_b2_error_table(b2_errors)
+    if not b2_table:
+        LOGGER.warning("No entries found in b2 error table %s", b2_errors)
+        return
+
+    zeros = ", ".join(["0.0"] * MAX_MULTIPOLE)
+    mad.send(
+        f"""
+local b2_errors = {py_name}:recv()
+local applied = {{}}
+local missing = {{}}
+
+for name, k1l in pairs(b2_errors) do
+    local element = loaded_sequence[name]
+    if element == nil then
+        table.insert(missing, name)
+    elseif k1l ~= 0 then
+        -- Route the b2 K1L into the dknl perturbation table, leaving the
+        -- dipole slot dknl[1] at 0 and adding the quadrupole error to dknl[2].
+        if not MAD.typeid.is_deferred(element.dknl) then
+            element.dknl = MAD.typeid.deferred {{{zeros}}}
+        end
+        element.dknl[2] = (element.dknl[2] or 0.0) + k1l
+        applied[name] = element.dknl[2]
+    end
+end
+
+{py_name}:send(applied, true)
+{py_name}:send(missing, true)
+"""
+    )
+    mad.send(b2_table)
+    applied = mad.recv()
+    missing = mad.recv()
+
+    if missing:
+        preview = ", ".join(sorted(str(name) for name in missing[:8]))
+        raise ValueError(
+            f"B2 error table {b2_errors} contains elements not present in the loaded "
+            f"sequence: {preview}"
+        )
+
+    LOGGER.info("Applied %d b2 dipole error entries from %s", len(applied), b2_errors)
 
 
 class GenericMadInterface(AbaMadInterface):
@@ -107,13 +226,16 @@ class GenericMadInterface(AbaMadInterface):
         magnet_range: str = "$start/$end",
         bpm_range: str | None = None,
         bad_bpms: list[str] | None = None,
-        corrector_strengths: Path | None = None,
-        tune_knobs_file: Path | None = None,
-        start_bpm: str | None = None,
+        corrector_knobs: KnobsInput | None = None,
+        tune_knobs: KnobsInput | None = None,
+        b2_errors: Path | None = None,
         py_name: str = "py",
         debug: bool = False,
         mad_logfile: Path | None = None,
         discard_mad_output: bool = False,
+        tracking_anchor_mode: str | None = None,
+        tracking_anchor_markers: list[str] | None = None,
+        observed_tracking_anchor_markers: list[str] | None = None,
     ):
         stdout, redirect_stderr = self._resolve_mad_stdout(mad_logfile, discard_mad_output)
 
@@ -136,40 +258,77 @@ class GenericMadInterface(AbaMadInterface):
         self.mad["magnet_range"] = self.magnet_range
         self.mad["bpm_range"] = self.bpm_range
 
-        self.observe_bpms(bad_bpms=bad_bpms)
-        all_bpms, _ = self.get_bpm_list(self.bpm_range)
-        self.make_all_monitors_thin(all_bpms)
-        self.unobserve_all_elements()
-
-        if start_bpm is not None:
-            _ensure_cycleable_start_element(self, start_bpm, all_bpms)
-            self.cycle_sequence(marker_name=start_bpm)
-            LOGGER.info(f"Cycled sequence to start at BPM: {start_bpm}")
-        else:
-            LOGGER.info("Skipping sequence cycling (no start BPM provided)")
-
-        # Setup observation and ranges
-        self.observe_bpms(bad_bpms=bad_bpms)
-        self.bpms_in_range, self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
-        observe_set = (
-            self.all_bpms
-            if start_bpm is not None and start_bpm not in self.bpms_in_range
-            else self.bpms_in_range
+        anchor_markers = self.prepare_tracking_anchors(
+            mode=tracking_anchor_mode,
+            marker_names=tracking_anchor_markers,
         )
-        self.observe_elements(observe_set)
-        LOGGER.info("Restricted active observation set to %d BPMs", len(observe_set))
+
+        self.observe_bpms(bad_bpms=bad_bpms, unobserve_first=True)
+        observed_anchor_markers = (
+            anchor_markers
+            if observed_tracking_anchor_markers is None
+            else _unique_names(observed_tracking_anchor_markers)
+        )
+        for marker in observed_anchor_markers:
+            self.observe_element(marker)
+        self.bpms_in_range, self.nbpms, self.all_bpms = self.count_bpms(self.bpm_range)
+        self.make_all_monitors_thin(list(set(self.all_bpms) - set(anchor_markers)))
 
         # Apply corrector strengths if provided
-        if corrector_strengths is not None:
-            self._set_correctors(corrector_strengths)
+        if corrector_knobs is not None:
+            self._set_correctors(corrector_knobs)
         else:
             LOGGER.info("Skipping corrector strengths (not provided)")
 
+        self._apply_b2_errors(b2_errors, tune_knobs)
+
         # Apply tune knobs if provided
-        if tune_knobs_file is not None:
-            self._set_tune_knobs(tune_knobs_file)
+        if tune_knobs is not None:
+            self._set_tune_knobs(tune_knobs)
         else:
             LOGGER.info("Skipping tune knobs (not provided)")
+
+    def prepare_tracking_anchors(
+        self,
+        *,
+        mode: str | None,
+        marker_names: list[str] | None,
+    ) -> list[str]:
+        """Prepare marker-anchored tracking modes through one monitor-anchor path.
+
+        Returns the observed anchor markers the caller must keep through the BPM
+        observation filter (the ACD before/after monitors; none for kicker mode).
+        """
+        anchor_markers = _unique_names(marker_names or [])
+        if mode == "acd":
+            acd_before, acd_after = self.insert_acd_markers()
+            LOGGER.info("Installed ACD markers: before=%s, after=%s", acd_before, acd_after)
+            anchor_markers = _unique_names([*anchor_markers, acd_before, acd_after])
+        elif mode == "kicker":
+            if not anchor_markers:
+                raise ValueError("Kicker tracking anchor mode requires a marker name")
+            for source_name in anchor_markers:
+                self.make_element_thin(
+                    source_name,
+                    marker_name=f"{source_name}_centre",
+                    observe_after=False,
+                )
+            anchor_markers = []
+        elif mode is not None:
+            raise ValueError(f"Unsupported tracking anchor mode: {mode!r}")
+        return anchor_markers
+
+    def cycle_to_start(self, start_marker: str) -> None:
+        """Cycle the loaded sequence so it begins at ``start_marker``.
+
+        Cycling is never done implicitly during construction; callers (e.g. a
+        worker that must track a range as one contiguous segment) request it
+        explicitly. A non-BPM start element is first replaced with a same-name
+        marker so MAD can cycle to it.
+        """
+        _ensure_cycleable_start_element(self, start_marker, self.all_bpms)
+        self.cycle_sequence(marker_name=start_marker)
+        LOGGER.info("Cycled sequence to start at: %s", start_marker)
 
     @staticmethod
     def _resolve_mad_stdout(
@@ -187,22 +346,40 @@ class GenericMadInterface(AbaMadInterface):
             return "/dev/null", True
         return None, False
 
+    def _apply_b2_errors(self, b2_errors: Path | None, tune_knobs: KnobsInput | None) -> None:
+        """Route a b2 dipole error table into this interface's loaded sequence."""
+        if b2_errors is not None and not isinstance(self.accelerator, LHC):
+            raise ValueError("b2_errors are only supported for LHC MAD interfaces.")
+        apply_b2_errors_to_sequence(self.mad, self.py_name, b2_errors, tune_knobs)
+
     def count_bpms(self, bpm_range: str) -> tuple[list[str], int, list[str]]:
         """Count the number of BPM elements in the specified range."""
         all_bpms, bpms_in_range = self.get_bpm_list(bpm_range)
-        LOGGER.info(f"Counted {len(bpms_in_range)} BPMs in range: {bpm_range}")
+        LOGGER.info(
+            "Counted %d BPMs in observation range: %s",
+            len(bpms_in_range),
+            self._format_range_for_log(bpm_range),
+        )
         return bpms_in_range, len(bpms_in_range), all_bpms
 
-    def make_all_monitors_thin(self, monitors: list[str]) -> None:
+    def make_all_monitors_thin(self, monitors: list[str], observe_after: bool = True) -> None:
         """Replace monitor elements with markers in the specified BPM range."""
         for bpm in monitors:
             assert "monitor" in self.mad.MADX[bpm].kind, (
                 f"Element {bpm} is not a monitor, cannot be made thin"
             )
-            self.make_element_thin(bpm)
+            self.make_element_thin(bpm, observe_after=observe_after)
         LOGGER.info(
-            f"Replaced {len(monitors)} monitor BPMs with markers in range: {self.bpm_range}"
+            "Replaced %d monitor BPMs with thin observation markers in range: %s",
+            len(monitors),
+            self._format_range_for_log(self.bpm_range),
         )
+
+    @staticmethod
+    def _format_range_for_log(bpm_range: str) -> str:
+        if bpm_range == "$start/$end":
+            return "full cycled sequence ($start/$end)"
+        return bpm_range
 
     def _sync_corrector_table_to_loaded_sequence(self, corrector_table: tfs.TfsDataFrame) -> None:
         """Mirror applied corrector strengths onto the tracked sequence copy."""
@@ -220,14 +397,28 @@ class GenericMadInterface(AbaMadInterface):
         if synced:
             LOGGER.info("Mirrored %d corrector strengths onto loaded_sequence", synced)
 
-    def _set_correctors(self, corrector_strengths: Path) -> None:
-        """Load corrector strengths from file and apply them to the sequence."""
-        if not corrector_strengths.exists():
-            LOGGER.warning(f"Corrector strengths file not found: {corrector_strengths}")
+    def _set_correctors(self, corrector_knobs: KnobsInput) -> None:
+        """Apply corrector settings, given as knobs or as a corrector table file.
+
+        A mapping is a set of MAD-X knob variables; a path may be either a TFS
+        corrector table or a knobs file, and the parser order below decides.
+        """
+        if not isinstance(corrector_knobs, (str, Path)):
+            knobs = resolve_knobs(corrector_knobs)
+            for name, val in knobs.items():
+                self.mad.send(f"MADX['{name}'] = {val}")
+            LOGGER.info(f"Set {len(knobs)} corrector knobs")
+            self.mad.send(f"{self.py_name}:send('done')")
+            self._check_mad_response("done", "Failed to apply corrector knobs")
+            return
+
+        corrector_knobs = Path(corrector_knobs)
+        if not corrector_knobs.exists():
+            LOGGER.warning(f"Corrector strengths file not found: {corrector_knobs}")
             return
 
         def _apply_from_tfs() -> None:
-            corrector_table = tfs.read(corrector_strengths)
+            corrector_table = tfs.read(corrector_knobs)
             required_cols = {"kind", "hkick", "hkick_old", "vkick", "vkick_old"}
             missing_cols = required_cols.difference(corrector_table.columns)
             if missing_cols:
@@ -240,18 +431,18 @@ class GenericMadInterface(AbaMadInterface):
             changed = (corrector_table["hkick"] != corrector_table["hkick_old"]) | (
                 corrector_table["vkick"] != corrector_table["vkick_old"]
             )
-            LOGGER.info(f"Applying {changed.sum()} non-zero corrector strengths from {corrector_strengths}")  # ty:ignore[unresolved-attribute]
+            LOGGER.info(f"Applying {changed.sum()} non-zero corrector strengths from {corrector_knobs}")  # ty:ignore[unresolved-attribute]
             changed_table = corrector_table[changed]
             self.apply_corrector_strengths(changed_table)  # ty:ignore[invalid-argument-type]
             self._sync_corrector_table_to_loaded_sequence(changed_table)  # ty:ignore[invalid-argument-type]
 
         def _apply_from_knobs() -> None:
-            knobs = read_knobs(corrector_strengths)
+            knobs = read_knobs(corrector_knobs)
             for name, val in knobs.items():
                 self.mad.send(f"MADX['{name}'] = {val}")
-            LOGGER.info(f"Set {len(knobs)} corrector knobs from {corrector_strengths}")
+            LOGGER.info(f"Set {len(knobs)} corrector knobs from {corrector_knobs}")
 
-        suffix = corrector_strengths.suffix.lower()
+        suffix = corrector_knobs.suffix.lower()
         parser_order = {
             ".tfs": [("tfs", _apply_from_tfs)],
             ".txt": [("knobs", _apply_from_knobs)],
@@ -267,26 +458,26 @@ class GenericMadInterface(AbaMadInterface):
         else:
             details = "; ".join(f"{n}: {type(e).__name__}: {e}" for n, e in parser_errors)
             raise ValueError(
-                f"Failed to apply corrector strengths from {corrector_strengths}. "
+                f"Failed to apply corrector strengths from {corrector_knobs}. "
                 f"Parsers attempted: {details}"
             ) from parser_errors[-1][1]
 
         self.mad.send(f"{self.py_name}:send('done')")
         self._check_mad_response(
-            "done", f"Failed to apply corrector strengths from {corrector_strengths}"
+            "done", f"Failed to apply corrector strengths from {corrector_knobs}"
         )
 
-    def _set_tune_knobs(self, tune_knobs_file: Path) -> None:
-        """Load and set predefined tune knobs from file."""
-        tune_knobs = read_knobs(tune_knobs_file)
+    def _set_tune_knobs(self, tune_knobs: KnobsInput) -> None:
+        """Set predefined tune knobs, given directly or as a knobs file."""
+        knobs = resolve_knobs(tune_knobs)
         # Get existing tune knob names in MAD
-        prev = self.mad.recv_vars(*[f"MADX['{name}']" for name in tune_knobs])
-        for name, val in tune_knobs.items():
+        prev = self.mad.recv_vars(*[f"MADX['{name}']" for name in knobs])
+        for name, val in knobs.items():
             self.mad.send(f"MADX['{name}'] = {val}")
         self.mad.send(f"{self.py_name}:send('done')")
-        self._check_mad_response("done", f"Failed to set tune knobs from {tune_knobs_file}")
+        self._check_mad_response("done", "Failed to set tune knobs")
         LOGGER.debug(f"Previous tune knob values: {prev}")
-        LOGGER.debug(f"Set tune knobs from {tune_knobs_file}: {len(tune_knobs)}")
+        LOGGER.debug(f"Set {len(knobs)} tune knobs")
 
 
 class GradientDescentMadInterface(GenericMadInterface):
@@ -306,26 +497,33 @@ class GradientDescentMadInterface(GenericMadInterface):
         magnet_range: str = "$start/$end",
         bpm_range: str | None = None,
         bad_bpms: list[str] | None = None,
-        corrector_strengths: Path | None = None,
-        tune_knobs_file: Path | None = None,
-        start_bpm: str | None = None,
+        corrector_knobs: KnobsInput | None = None,
+        tune_knobs: KnobsInput | None = None,
+        b2_errors: Path | None = None,
+        initial_model_values: dict[str, float] | None = None,
         py_name: str = "py",
         debug: bool = False,
         mad_logfile: Path | None = None,
         discard_mad_output: bool = False,
+        tracking_anchor_mode: str | None = None,
+        tracking_anchor_markers: list[str] | None = None,
+        observed_tracking_anchor_markers: list[str] | None = None,
     ):
         super().__init__(
             accelerator,
             magnet_range,
             bpm_range,
             bad_bpms,
-            corrector_strengths,
-            tune_knobs_file,
-            start_bpm,
+            corrector_knobs,
+            tune_knobs,
+            b2_errors,
             py_name,
             debug,
             mad_logfile,
             discard_mad_output,
+            tracking_anchor_mode,
+            tracking_anchor_markers,
+            observed_tracking_anchor_markers,
         )
 
         if accelerator.has_any_optimisation():
@@ -335,6 +533,45 @@ class GradientDescentMadInterface(GenericMadInterface):
                 "Gradient descent optimisation interface initialised without any optimisation enabled."
                 "\nUse GenericMadInterface if no optimisation is required."
             )
+
+        # Apply after knob creation
+        self.apply_initial_model_values(initial_model_values)
+
+    def apply_initial_model_values(self, values: dict[str, float] | None) -> None:
+        """Apply a full initial machine-state map without changing the trainable set."""
+        if not values:
+            return
+
+        unknown = [
+            name
+            for name in values
+            if name != "pt" and not is_magnet_strength_name(name) and name not in self.knob_name_set
+        ]
+        if unknown:
+            raise ValueError(
+                "Unknown initial model value names: "
+                + ", ".join(sorted(unknown)[:10])
+                + ("..." if len(unknown) > 10 else "")
+            )
+
+        if "pt" in values:
+            self.mad["loaded_sequence['pt']"] = float(values["pt"])
+
+        knob_values = {
+            name: float(value)
+            for name, value in values.items()
+            if name in self.knob_name_set
+        }
+        if knob_values:
+            self.update_knob_values(knob_values)
+
+        magnet_values = {
+            name: float(value)
+            for name, value in values.items()
+            if name != "pt" and name not in self.knob_name_set and is_magnet_strength_name(name)
+        }
+        if magnet_values:
+            self.set_magnet_strengths(magnet_values)
 
     def get_knob_specs(self) -> list[KnobSpec]:
         """
@@ -370,11 +607,10 @@ class GradientDescentMadInterface(GenericMadInterface):
         strength is never mutated. For direct attrs (kick, dx, …) the element
         attribute itself becomes a deferred variable.
         """
-        attr_specs = self.accelerator.get_mad_attr_specs()
         lines: list[str] = []
 
         for kind, attr, condition in attr_conditions:
-            spec = attr_specs.get(kind, {})
+            spec = self.accelerator.get_mad_attr_spec(kind, attr)
             mp = MULTIPOLE_ATTRS.get(attr) or indexed_multipole_attr_info(attr)
 
             # The knob variable name in MAD (e.g. "MQXA.1R1.dk1l")
@@ -387,16 +623,19 @@ class GradientDescentMadInterface(GenericMadInterface):
             tmpl = [
                 f"if {condition} then",
                 f"    local k_str_name = {name_expr}",
-                "    loaded_sequence[k_str_name] = loaded_sequence[k_str_name] or 0.0",
             ]
             if mp is not None:
                 tmpl += [
                     f"    make_{mp.dk_table}_deferred_knob(e)",
+                    (
+                        f"    loaded_sequence[k_str_name] = loaded_sequence[k_str_name] "
+                        f"or loaded_sequence[e.name].{mp.dk_table}[{mp.index}] or 0.0"
+                    ),
                     f"    loaded_sequence[e.name].{mp.dk_table}[{mp.index}] = \\->loaded_sequence[k_str_name]",
                 ]
             else:
                 tmpl += [
-                    f"    loaded_sequence[k_str_name] = {mad_value}",
+                    f"    loaded_sequence[k_str_name] = loaded_sequence[k_str_name] or {mad_value}",
                     f"    loaded_sequence[e.name].{attr} = \\->loaded_sequence[k_str_name]",
                 ]
             tmpl.append(f"    store_knobs(k_str_name, {mad_value}, '{attr}', s)")
@@ -432,9 +671,15 @@ class GradientDescentMadInterface(GenericMadInterface):
             attr_block = f"""
 local function store_knobs(k_str_name, mad_value, attr, spos)
     if not used[k_str_name] then
-        used[k_str_name] = true  ! deduplicate (e.g. bends with shared k0)
+        used[k_str_name] = #knob_names + 1  ! deduplicate (e.g. shared PSB QFO knobs)
+        counts[k_str_name] = 1
         table.insert(knob_names, k_str_name)
         table.insert(spos_list, spos)
+    else
+        local count = counts[k_str_name] + 1
+        local index = used[k_str_name]
+        spos_list[index] = (spos_list[index] * (count - 1) + spos) / count
+        counts[k_str_name] = count
     end
 end
 {_deferred_table_helpers()}
@@ -454,6 +699,7 @@ table.insert(knob_names, "pt")
 local knob_names = {{}}
 local spos_list = {{}}
 local used = {{}}
+local counts = {{}}
 {attr_block}
 {energy_block}
 coord_names = {{"x", "px", "y", "py", "t", "pt"}}
@@ -482,6 +728,28 @@ coord_names = {{"x", "px", "y", "py", "t", "pt"}}
             LOGGER.debug(f"Knob names: {self.knob_names}")
         else:
             LOGGER.info("No knobs created")
+
+    def _set_multipole_perturbation(
+        self,
+        element_name: str,
+        attr: str,
+        info: MultipoleInfo,
+        integrated_delta: float,
+        target_strength: float,
+    ) -> None:
+        """Apply a perturbation through an existing optimisation knob when possible."""
+        knob_name = f"{element_name}.{info.dk_suffix}"
+        if self.accelerator.has_any_optimisation() and knob_name in self.knob_name_set:
+            self.mad[f"loaded_sequence['{knob_name}']"] = integrated_delta
+            return
+
+        super()._set_multipole_perturbation(
+            element_name,
+            attr,
+            info,
+            integrated_delta,
+            target_strength,
+        )
 
     def receive_knob_values(self) -> np.ndarray:
         """Retrieve the current values of all knobs from the MAD-NG session."""

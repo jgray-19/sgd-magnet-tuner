@@ -11,9 +11,16 @@ import time
 from typing import TYPE_CHECKING
 
 import numpy as np
+import tfs
 
 from aba_optimiser.accelerators import LHC, SPS
 from aba_optimiser.mad.optimising_mad_interface import GradientDescentMadInterface
+from aba_optimiser.optimisers import (
+    LevenbergMarquardtConfig,
+    LevenbergMarquardtOptimiser,
+)
+from aba_optimiser.optimisers.lbfgs import LBFGSOptimiser
+from aba_optimiser.training.optimisation.scheduler import LRScheduler
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -27,10 +34,10 @@ class BetaMatcher:
     """
     Matches computed beta functions to a target model by adjusting knob strengths.
 
-    This class is designed to be run after the Controller has estimated the main
+    This class is designed to be run after a tracking fitter has estimated the main
     quadrupole strengths from measurement. It takes:
     - A target model twiss (the betas we want to achieve)
-    - The estimated quadrupole strengths from the Controller
+    - The estimated quadrupole strengths from the fitter
     - A list of knobs that can be adjusted
 
     The workflow is:
@@ -60,122 +67,140 @@ class BetaMatcher:
 
         self._init_mad_interface()
 
-    def run_lbfgs_match(self) -> tuple[dict[str, float], dict[str, float]]:
-        """Execute beta matching using LBFGS optimisation.
+    def run_match(
+        self,
+        optimiser_type: str = "lbfgs",
+        max_iterations: int = 100,
+    ) -> tuple[dict[str, float], dict[str, float]]:
+        """Run beta matching with the selected optimiser.
 
-        Returns:
-            Tuple of (final_knob_values, uncertainties).
+        Supported optimisers:
+            - ``"lbfgs"``
+            - ``"lm"`` (Levenberg-Marquardt)
         """
-        logger.info("Starting LBFGS beta matching procedure")
+        optimiser_type = self._validate_optimiser_type(optimiser_type)
 
-        bpm_names = self._get_bpm_list()
-        logger.info(f"Found {len(bpm_names)} BPMs in range {self.config.magnet_range}")
-        bpm_names_filtered = [bpm for bpm in bpm_names if bpm in self.model_twiss.index]
+        logger.info("Starting %s beta matching", optimiser_type.upper())
 
-        all_knobs = self.knobs + list(self.tune_knobs.keys())
-        knobs_list = all_knobs
-        initial_values = np.array(
-            [self.mad_interface.mad[f"MADX['{knob}']"] for knob in knobs_list]
-        )
+        knobs = self.knobs + list(self.tune_knobs)
+        current = self._get_current_knob_values(knobs)
+        if optimiser_type == "lbfgs":
+            step, state = self._build_lbfgs_step(current)
+        else:
+            step, state = self._build_lm_step(current, max_iterations)
+        best = current.copy()
+        best_loss = np.inf
 
-        target_betax = np.array([self.model_twiss.loc[bpm, "beta11"] for bpm in bpm_names_filtered])
-        target_betay = np.array([self.model_twiss.loc[bpm, "beta22"] for bpm in bpm_names_filtered])
-        n = len(bpm_names_filtered)
+        for iteration in range(max_iterations):
+            residual, jacobian = self._match_residual_and_jacobian(current, knobs)
+            loss = 0.5 * float(residual @ residual)
+            gradient = jacobian.T @ residual
 
-        def objective_and_grad(x):
-            for i, knob in enumerate(knobs_list):
-                self.mad_interface.mad[f"MADX['{knob}']"] = x[i]
+            if optimiser_type == "lbfgs" and loss < best_loss:
+                best_loss = loss
+                best = current.copy()
 
-            twiss_df_no_deriv = self._compute_twiss_without_derivatives()
-            bpm_indices = [twiss_df_no_deriv.index.get_loc(bpm) for bpm in bpm_names_filtered]
-
-            betax = twiss_df_no_deriv["beta11"].values[bpm_indices]
-            betay = twiss_df_no_deriv["beta22"].values[bpm_indices]
-
-            diffx = betax - target_betax
-            diffy = betay - target_betay
-            rms_x = np.sqrt(np.mean(diffx**2))
-            rms_y = np.sqrt(np.mean(diffy**2))
-            f = rms_x + rms_y
-
-            current_q1 = twiss_df_no_deriv.headers["q1"]
-            current_q2 = twiss_df_no_deriv.headers["q2"]
-            tune_penalty = 10 * (
-                abs(current_q1 - self.target_q1) + abs(current_q2 - self.target_q2)
-            )
-            f += tune_penalty
-
-            if self._cached_loss is None or abs(f - self._cached_loss) >= 0.1:
-                twiss_df, kopt_list = self._compute_twiss_with_derivatives(knobs_list)
-                self._cached_derivatives = (twiss_df, kopt_list)
-                self._cached_loss = f
-            else:
-                assert self._cached_derivatives is not None
-                twiss_df, kopt_list = self._cached_derivatives
-
-            bpm_indices_d = [twiss_df.index.get_loc(bpm) for bpm in bpm_names_filtered]
-            nknobs = len(knobs_list)
-
-            derivatives_beta_x = np.array(
-                [twiss_df[kopt_list[0][j]].values[bpm_indices_d] for j in range(nknobs)]
-            ).T
-            derivatives_beta_y = np.array(
-                [twiss_df[kopt_list[1][j]].values[bpm_indices_d] for j in range(nknobs)]
-            ).T
-
-            d_rms_x_all = (
-                (1 / (n * rms_x)) * np.sum(diffx[:, None] * derivatives_beta_x, axis=0)
-                if rms_x > 0
-                else np.zeros(nknobs)
-            )
-            d_rms_y_all = (
-                (1 / (n * rms_y)) * np.sum(diffy[:, None] * derivatives_beta_y, axis=0)
-                if rms_y > 0
-                else np.zeros(nknobs)
-            )
-            grad = d_rms_x_all + d_rms_y_all
-
-            last_element = twiss_df.index[-1]
-            for j in range(nknobs):
-                d_mu1 = twiss_df[kopt_list[0][nknobs + j]].loc[last_element]
-                d_mu2 = twiss_df[kopt_list[1][nknobs + j]].loc[last_element]
-                grad[j] += 10 * (
-                    np.sign(current_q1 - self.target_q1) * d_mu1 / (2 * np.pi)
-                    + np.sign(current_q2 - self.target_q2) * d_mu2 / (2 * np.pi)
-                )
-
-            return f, grad
-
-        from aba_optimiser.optimisers.lbfgs import LBFGSOptimiser
-        from aba_optimiser.training.scheduler import LRScheduler
-
-        optimiser = LBFGSOptimiser(history_size=20, use_adaptive_lr=True)
-        scheduler = LRScheduler(warmup_epochs=10, decay_epochs=0, start_lr=1e-13, max_lr=3, min_lr=3)
-        x = initial_values.copy()
-        loss = np.inf
-        start_time = time.time()
-        for iteration in range(200):
-            f, grad = objective_and_grad(x)
-            lr = scheduler(iteration)
-            x = optimiser.step(x, grad, lr)
-            logger.info(
-                f"Iteration {iteration + 1}: loss={f:.5f}, lr={lr:.2e}, time={time.time() - start_time:.1f}s"
-            )
-            if f < 0.1 or abs(loss - f) < 1e-4:
+            if step(iteration, loss, gradient, jacobian):
                 logger.info("Convergence achieved")
                 break
-            loss = f
 
-        final_knobs = {knobs_list[i]: x[i] for i in range(len(knobs_list))}
-        for knob, value in final_knobs.items():
-            self.mad_interface.mad[f"MADX['{knob}']"] = value
-
-        logger.info("LBFGS beta matching completed")
+        final_values = best if optimiser_type == "lbfgs" else state.best_params
+        final_knobs = self._set_final_knob_values(knobs, final_values)
+        logger.info(
+            "%s beta matching completed after %d iterations",
+            optimiser_type.upper(),
+            iteration + 1,
+        )
         return final_knobs, {}
 
-    def _load_model_twiss(self):
-        import tfs
+    @staticmethod
+    def _validate_optimiser_type(optimiser_type: str) -> str:
+        optimiser_type = optimiser_type.lower()
+        if optimiser_type not in {"lbfgs", "lm"}:
+            raise ValueError(
+                f"Unknown beta-matching optimiser: {optimiser_type}. Choose 'lbfgs' or 'lm'."
+            )
+        return optimiser_type
 
+    def _get_current_knob_values(self, knobs: list[str]) -> np.ndarray:
+        return np.array(
+            [self.mad_interface.mad[f"MADX['{knob}']"] for knob in knobs], dtype=float
+        )
+
+    def _build_lbfgs_step(self, current: np.ndarray):
+        optimiser = LBFGSOptimiser(history_size=20, use_adaptive_lr=True)
+        scheduler = LRScheduler(
+            warmup_epochs=1, decay_epochs=0, start_lr=1e-4, max_lr=1e-4, min_lr=1e-4
+        )
+        previous_loss = np.inf
+        start_time = time.time()
+
+        def step(iteration: int, loss: float, gradient: np.ndarray, jacobian: np.ndarray) -> bool:
+            nonlocal previous_loss
+            lr = scheduler(iteration)
+            logger.info(
+                "Iteration %d: loss=%.5f, lr=%.2e, time=%.1fs",
+                iteration + 1,
+                loss,
+                lr,
+                time.time() - start_time,
+            )
+            converged = loss < 0.1 or abs(previous_loss - loss) < 1e-4
+            previous_loss = loss
+            if not converged:
+                current[:] = optimiser.step(current, gradient, lr)
+            return converged
+
+        return step, optimiser
+
+    def _build_lm_step(self, current: np.ndarray, max_iterations: int):
+        optimiser = LevenbergMarquardtOptimiser(
+            LevenbergMarquardtConfig(max_iterations=max_iterations), initial_params=current
+        )
+
+        def step(iteration: int, loss: float, gradient: np.ndarray, jacobian: np.ndarray) -> bool:
+            update = optimiser.update(current, loss, gradient, jacobian.T @ jacobian)
+            current[:] = update.next_params
+            logger.info("Iteration %d: loss=%.5f", iteration + 1, loss)
+            return update.converged
+
+        return step, optimiser
+
+    def _set_final_knob_values(self, knobs: list[str], values: np.ndarray) -> dict[str, float]:
+        final_knobs = {knob: float(value) for knob, value in zip(knobs, values, strict=True)}
+        for knob, value in final_knobs.items():
+            self.mad_interface.mad[f"MADX['{knob}']"] = value
+        return final_knobs
+
+    def _match_residual_and_jacobian(
+        self, x: np.ndarray, knobs: list[str]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Evaluate the common relative-beta residual and its analytic Jacobian."""
+        for knob, value in zip(knobs, x, strict=True):
+            self.mad_interface.mad[f"MADX['{knob}']"] = value
+        bpm_names = [bpm for bpm in self._get_bpm_list() if bpm in self.model_twiss.index]
+        target_x = self.model_twiss.loc[bpm_names, "beta11"].to_numpy()
+        target_y = self.model_twiss.loc[bpm_names, "beta22"].to_numpy()
+        twiss, kopt = self._compute_twiss_with_derivatives(knobs)
+        indices = [twiss.index.get_loc(bpm) for bpm in bpm_names]
+        nknobs = len(knobs)
+        rx = (twiss["beta11"].to_numpy()[indices] - target_x) / target_x
+        ry = (twiss["beta22"].to_numpy()[indices] - target_y) / target_y
+        jx = np.array([twiss[kopt[0][j]].to_numpy()[indices] / target_x for j in range(nknobs)]).T
+        jy = np.array([twiss[kopt[1][j]].to_numpy()[indices] / target_y for j in range(nknobs)]).T
+        weight = np.sqrt(10.0)
+        rq = weight * np.array(
+            [twiss.headers["q1"] - self.target_q1, twiss.headers["q2"] - self.target_q2]
+        )
+        jq = weight * np.array(
+            [
+                [twiss[kopt[0][nknobs + j]].iloc[-1] / (2 * np.pi) for j in range(nknobs)],
+                [twiss[kopt[1][nknobs + j]].iloc[-1] / (2 * np.pi) for j in range(nknobs)],
+            ]
+        )
+        return np.concatenate((rx, ry, rq)), np.vstack((jx, jy, jq))
+
+    def _load_model_twiss(self):
         logger.info(f"Loading model twiss from {self.config.model_twiss_file}")
         return tfs.read(self.config.model_twiss_file)
 

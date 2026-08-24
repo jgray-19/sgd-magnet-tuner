@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import textwrap
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -11,11 +12,20 @@ from pymadng_utils.accelerators.base import Accelerator as BaseAccelerator
 
 LOGGER = logging.getLogger(__name__)
 _INDEXED_RESULT_MULTIPOLE_RE = re.compile(r"\.(knl|ksl)\[(\d+)\]$")
+_TILT_SEED = 1e-9  # Should discuss this with Laurent.
+_MISALIGN_DEFER_CREATE = """\ne.misalign = MAD.typeid.deferred{dx =\\->e.dx, dy =\\->e.dy}"""
+_KNOB_PREPARATION = {
+    "dx": "e.dx = (e.dx or 0)" + _MISALIGN_DEFER_CREATE,
+    "dy": "e.dy = (e.dy or 0)" + _MISALIGN_DEFER_CREATE,
+    # MAD-NG drops a rotation whose scalar angle is zero (mad_dynmap.cpp:345),
+    # silently zeroing the knob's Jacobian column. Seeding above ``minang``
+    # (1e-10 rad) keeps the derivative; the knob inherits the seed as its value.
+    "tilt": f"e.tilt = (e.tilt or 0) + {_TILT_SEED:.15e}",
+}
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from aba_optimiser.mad.aba_mad_interface import AbaMadInterface
     from aba_optimiser.mad.optimising_mad_interface import GradientDescentMadInterface
 
 
@@ -49,6 +59,9 @@ class Accelerator(BaseAccelerator, ABC):
         optimise_sextupoles: bool = False,
         optimise_quad_dx: bool = False,
         optimise_quad_dy: bool = False,
+        optimise_quad_tilt: bool = False,
+        optimise_bpm_dx: bool = False,
+        optimise_bpm_dy: bool = False,
         custom_knobs_to_optimise: list[str] | None = None,
         **kwargs,
     ):
@@ -71,6 +84,9 @@ class Accelerator(BaseAccelerator, ABC):
         self.optimise_sextupoles = optimise_sextupoles
         self.optimise_quad_dx = optimise_quad_dx
         self.optimise_quad_dy = optimise_quad_dy
+        self.optimise_quad_tilt = optimise_quad_tilt
+        self.optimise_bpm_dx = optimise_bpm_dx
+        self.optimise_bpm_dy = optimise_bpm_dy
         self.custom_knobs_to_optimise = custom_knobs_to_optimise
         if self.custom_knobs_to_optimise is not None:
             legacy = [
@@ -91,6 +107,11 @@ class Accelerator(BaseAccelerator, ABC):
             or self.optimise_energy
             or bool(self.custom_knobs_to_optimise)
         )
+
+    @property
+    def ac_dipole_name(self) -> str:
+        """Return the AC-dipole exciter name for machines that define one."""
+        raise NotImplementedError(f"{type(self).__name__} does not define an AC-dipole exciter")
 
     @property
     @abstractmethod
@@ -169,10 +190,12 @@ class Accelerator(BaseAccelerator, ABC):
         if not self.optimise_energy:
             return formatted
 
-        if "pt" in formatted:
-            formatted.remove("pt")
-            formatted.append("deltap")
         return formatted
+
+    def format_result_knobs(self, knobs: dict[str, float]) -> dict[str, float]:
+        """Map optimisation-space knob values to user-facing result names."""
+        names = self.format_result_knob_names(list(knobs))
+        return dict(zip(names, knobs.values(), strict=True))
 
     @abstractmethod
     def get_supported_knob_specs(self) -> list[KnobSpec]:
@@ -184,53 +207,62 @@ class Accelerator(BaseAccelerator, ABC):
         """Return quadrupole misalignment patterns keyed by attribute name."""
         return {}
 
+    @property
+    def bpm_misalignment_patterns(self) -> dict[str, tuple[str, ...]]:
+        """Return BPM/monitor misalignment patterns keyed by attribute name."""
+        return {}
+
     def prepare_mad_for_knob_creation(
         self,
         mad_iface: GradientDescentMadInterface,
         selected_specs: list[tuple[str, str, str, str | None]],
     ) -> None:
-        """Prepare accelerator-specific MAD state before knob creation."""
-        del selected_specs
-        quadrupole_dx_patterns = (
-            self.quadrupole_misalignment_patterns.get("dx", ())
-            if self.optimise_quad_dx
-            else ()
-        )
-        quadrupole_dy_patterns = (
-            self.quadrupole_misalignment_patterns.get("dy", ())
-            if self.optimise_quad_dy
-            else ()
-        )
-        if not quadrupole_dx_patterns and not quadrupole_dy_patterns:
-            return
+        """Run each selected attribute's ``_KNOB_PREPARATION`` before knob creation."""
+        grouped: dict[tuple[str, str], list[str]] = {}
+        for kind, attr, pattern, _nonzero_attr in selected_specs:
+            body = _KNOB_PREPARATION.get(attr)
+            if body is not None:
+                grouped.setdefault((kind, body), []).append(pattern)
 
+        for (element_kind, body), patterns in grouped.items():
+            self._prepare_matching_elements(
+                mad_iface, element_kind, tuple(dict.fromkeys(patterns)), body
+            )
+
+    def _prepare_matching_elements(
+        self,
+        mad_iface: GradientDescentMadInterface,
+        element_kind: str,
+        patterns: tuple[str, ...],
+        body: str,
+    ) -> None:
+        """Run Lua ``body`` once per element of ``element_kind`` matching ``patterns``.
+
+        Args:
+            mad_iface: Interface owning the MAD-NG process holding ``loaded_sequence``
+            element_kind: MAD-NG element kind to match (e.g. ``"quadrupole"``)
+            patterns: Element name patterns to match
+            body: Lua statements, seeing the matched element as ``e``
+        """
         mad_iface.mad.send(f"""
-        local tblcat in MAD.utility
-        local dx_patterns = {mad_iface.py_name}:recv()
-        local dy_patterns = {mad_iface.py_name}:recv()
-        local patterns = tblcat(dx_patterns, dy_patterns)
+        local element_kind = {mad_iface.py_name}:recv()
+        local patterns = {mad_iface.py_name}:recv()
         for i, e in loaded_sequence:siter(magnet_range) do
-            if e.kind == "quadrupole" then
+            if e.kind == element_kind then
                 for _, pattern in ipairs(patterns) do
                     if string.match(e.name, pattern) then
-                        e.dx = e.dx or 0
-                        e.dy = e.dy or 0
-                        e.misalign = MAD.typeid.deferred{{dx =\\->e.dx, dy =\\->e.dy}}
+{textwrap.indent(body, " " * 24)}
                         break
                     end
                 end
             end
         end
         """)
-        mad_iface.mad.send(quadrupole_dx_patterns).send(quadrupole_dy_patterns)
+        mad_iface.mad.send(element_kind).send(patterns)
 
-    @abstractmethod
-    def apply_accelerator_specific_errors(self, mad_iface: AbaMadInterface) -> None:
-        """Apply accelerator-specific model errors to the loaded MAD sequence."""
-        pass
-
-    def get_mad_attr_specs(self) -> dict[str, dict[str, str]]:
-        """Return accelerator-specific attr name/value expressions for knob creation."""
+    def get_mad_attr_spec(self, kind: str, attribute: str) -> dict[str, str]:
+        """Return accelerator-specific expressions for one element attribute."""
+        del kind, attribute
         return {}
 
     def get_perturbation_families(self) -> dict[str, dict[str, str | float | dict]]:

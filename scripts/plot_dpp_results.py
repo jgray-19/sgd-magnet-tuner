@@ -5,7 +5,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
@@ -216,7 +215,7 @@ def get_beam_data(beam: int, dispersion_type: str = "estimated") -> BeamData:
     Raises:
         FileNotFoundError: If estimates JSON file is not found
     """
-    folder = Path(f"b{beam}{co}_results")
+    folder = Path(f"artifacts/measurements/results/b{beam}{co}_results")
     data = {}
     for file_key in EXPECTED_MAP:
         filepath = folder / f"{file_key}.txt"
