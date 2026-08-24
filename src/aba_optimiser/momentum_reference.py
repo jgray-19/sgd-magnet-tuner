@@ -53,11 +53,9 @@ the offset degrades the reconstructed ``px`` from 4.741e-4 to 7.702e-2, against
 penalty lands on the second-order dispersion term, so the mistake is invisible on
 a linear lattice and ruinous on a real one.
 
-Do not do that subtraction here. Hand ``tmom_recon`` a
-:class:`tmom_recon.MomentumReference` built as
-``MomentumReference(fitted.closed_orbit, pt=fitted.reference_pt)`` together with
-the measurement's *absolute* ``measurement_pt``; it subtracts internally, which
-is why no entry point there can express the wrong pairing any more.
+Do not do that subtraction here. Build a mandatory
+:class:`tmom_recon.ReconstructionFrame` from the measured positions and fitted
+momenta, then pass only the measurement momentum offset to ``tmom_recon``.
 """
 
 from __future__ import annotations
@@ -140,7 +138,7 @@ def _knobs_provenance(knobs: Any) -> dict[str, float] | str | None:
     """Knob provenance for a saved fit: the values themselves where possible."""
     if knobs is None:
         return None
-    if isinstance(knobs, (str, Path)):
+    if isinstance(knobs, str | Path):
         return str(knobs)
     return {str(name): float(value) for name, value in sorted(dict(knobs).items())}
 
@@ -261,7 +259,19 @@ def fit_momentum_reference(
         observables=observables,
         lm_config=lm_config,
         initial_knob_strengths=dict(initial_knob_strengths) if initial_knob_strengths else None,
-        prior_strength=prior_strength,
+        prior_strengths=(
+            {
+                {
+                    "k0": "dk0l",
+                    "k1": "dk1l",
+                    "k2": "dk2l",
+                }.get(spec.attribute, spec.attribute): prior_strength
+                for spec in accelerator.get_supported_knob_specs()
+                if spec.enabled
+            }
+            if prior_strength > 0.0
+            else None
+        ),
         corrector_knobs=corrector_knobs,
         tune_knobs=tune_knobs,
         output_config=output_config,

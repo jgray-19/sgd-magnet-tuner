@@ -9,7 +9,6 @@ import tfs
 
 from aba_optimiser.accelerators import PSB
 from aba_optimiser.measurements.loading import build_dataframe_file_indices
-from aba_optimiser.measurements.preprocessing import preprocess_measurement_dataframe
 from aba_optimiser.measurements.reconstruction import (
     _scale_position_variances_after_svd,
     process_single_dataframe,
@@ -35,7 +34,7 @@ def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path:
     pytest.importorskip("tmom_recon")
     pytest.importorskip("omc3")
 
-    from tmom_recon import ModelDetails
+    from tmom_recon import ModelDetails, ReconstructionFrame
 
     base_dir = Path("tests/data/model_creator")
     analysis_dir = generate_fake_analysis_dir_from_twiss(
@@ -78,6 +77,11 @@ def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path:
     )
 
     model_details = ModelDetails(accelerator=PSB(ring=3, sequence_file=base_dir / "psb3_saved.seq"))
+    orbit_zero = pd.DataFrame(
+        0.0,
+        index=pd.Index(df["name"].unique(), name="name"),
+        columns=["x", "y"],
+    )
 
     idx, result = process_single_dataframe(
         df_with_index=(7, df),
@@ -87,7 +91,7 @@ def test_process_single_dataframe_reconstructs_with_generated_analysis(tmp_path:
         use_uniform_vars=True,
         beam=1,
         model_details=model_details,
-        reference_closed_orbit="model",
+        frame=ReconstructionFrame(orbit_zero, dynamic_planes=("x", "y")),
     )
 
     assert idx == 7
@@ -154,82 +158,3 @@ def test_assign_known_noise_variances_allows_nan_variance_patterns_on_real_data(
     assert pd.isna(result.loc["BR3.BPMT3L1", "var_y"])
     assert result.loc["BR3.BPM2L3", "var_x"] > 0.0
     assert result.loc["BR3.BPM2L3", "var_y"] > 0.0
-
-
-def test_preprocess_measurement_dataframe_requires_x_and_y() -> None:
-    tws = pd.DataFrame({"x": [0.1], "y": [0.2]}, index=pd.Index(["BPM1"], name="name"))
-    df = pd.DataFrame({"name": ["BPM1"], "turn": [1], "x": [1.0], "y": [2.0]})
-
-    with pytest.raises(ValueError, match="both x and y"):
-        preprocess_measurement_dataframe(
-            df,
-            tws,
-            remove_closed_orbit={"BPM1": {"x": 0.5}},
-        )
-
-
-def test_preprocess_measurement_dataframe_requires_px_and_py_together() -> None:
-    tws = pd.DataFrame({"x": [0.1], "y": [0.2]}, index=pd.Index(["BPM1"], name="name"))
-    df = pd.DataFrame({"name": ["BPM1"], "turn": [1], "x": [1.0], "y": [2.0]})
-
-    with pytest.raises(ValueError, match="both px and py"):
-        preprocess_measurement_dataframe(
-            df,
-            tws,
-            remove_closed_orbit={"BPM1": {"x": 0.5, "y": 0.25, "px": 1e-6}},
-        )
-
-
-def test_preprocess_measurement_dataframe_accepts_name_column_and_warns_without_momenta() -> None:
-    tws = pd.DataFrame({"x": [0.0], "y": [0.0]}, index=pd.Index(["BPM1"], name="name"))
-    df = pd.DataFrame({"name": ["BPM1"], "turn": [1], "x": [1.0], "y": [2.0]})
-    orbit = pd.DataFrame({"NAME": ["BPM1"], "x": [0.25], "y": [0.5]})
-
-    with pytest.warns(UserWarning, match="px/py"):
-        result = preprocess_measurement_dataframe(
-            df,
-            tws,
-            remove_closed_orbit=orbit,
-        )
-
-    assert result.loc[0, "x"] == pytest.approx(0.75)
-    assert result.loc[0, "y"] == pytest.approx(1.5)
-
-
-def test_preprocess_measurement_dataframe_average_trims_from_kick() -> None:
-    tws = pd.DataFrame(
-        {"s": [1.0, 2.0, 3.0]},
-        index=pd.Index(["BPM1", "BPM2", "BPM3"], name="name"),
-    )
-    df = pd.DataFrame(
-        {
-            "name": ["BPM1", "BPM2", "BPM3"] * 5,
-            "turn": [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5],
-            "x": [0.0] * 9 + [0.0, 1e-3, 8e-4, -2e-4, 9e-4, 7e-4],
-            "y": [0.0] * 15,
-        }
-    )
-
-    result = preprocess_measurement_dataframe(
-        df,
-        tws,
-        remove_closed_orbit="average",
-        n_turns_free=3,
-    )
-
-    assert list(result["name"]) == ["BPM2", "BPM3", "BPM1", "BPM2", "BPM3"]
-    assert list(result["turn"]) == [1, 1, 2, 2, 2]
-    assert result.iloc[0]["x"] == pytest.approx(1e-3)
-
-def test_preprocess_measurement_dataframe_average_skips_already_aligned() -> None:
-    tws = pd.DataFrame({"s": [0.0]}, index=pd.Index(["KICKER"], name="name"))
-    df = pd.DataFrame({"name": ["KICKER"], "turn": [1], "x": [0.0], "y": [0.0]})
-
-    result = preprocess_measurement_dataframe(
-        df,
-        tws,
-        remove_closed_orbit="average",
-        kicker_name="KICKER",
-    )
-
-    pd.testing.assert_frame_equal(result, df)

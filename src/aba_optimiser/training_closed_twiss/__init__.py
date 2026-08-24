@@ -7,6 +7,12 @@ orbit, beta, phase and dispersion all come from a single parametric MAD-NG
 point seeded from the measurement.
 """
 
+from aba_optimiser.training_closed_twiss.closed_orbit import (
+    CLOSED_ORBIT_OBSERVABLES,
+    ClosedOrbitFitter,
+    ClosedOrbitMeasurement,
+    ClosedOrbitSeries,
+)
 from aba_optimiser.training_closed_twiss.fitter import (
     DEFAULT_OBSERVABLES,
     MEASUREMENT_COLUMNS,
@@ -21,4 +27,8 @@ __all__ = [
     "ClosedTwissFitter",
     "LevenbergMarquardtConfig",
     "load_measurement",
+    "CLOSED_ORBIT_OBSERVABLES",
+    "ClosedOrbitFitter",
+    "ClosedOrbitMeasurement",
+    "ClosedOrbitSeries",
 ]

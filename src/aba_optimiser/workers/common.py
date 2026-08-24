@@ -217,6 +217,11 @@ class ClosedTwissData:
     weight_scale: float = 1.0
     total_points: int = 1
 
+    @property
+    def all_observables(self) -> list[Observable]:
+        """Observable blocks contributing to this worker's loss."""
+        return self.observables
+
 
 class WeightProcessor:
     """Utility class for processing and normalizing measurement weights.

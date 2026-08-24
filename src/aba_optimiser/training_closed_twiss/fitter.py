@@ -25,6 +25,8 @@ from aba_optimiser.workers.common import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from aba_optimiser.accelerators import Accelerator
     from aba_optimiser.training.config.models import OutputConfig, SequenceConfig
 
@@ -85,121 +87,38 @@ DEFAULT_OBSERVABLES: tuple[str, ...] = (
 )
 
 
-class ClosedTwissFitter(BaseFitter):
-    """Optimise knobs so the model's closed twiss matches measured optics.
-
-    Each measured momentum is fitted by one full-ring worker that computes the
-    *periodic* solution with the knobs as TPSA parameters, and reads the closed
-    orbit, beta, phase and dispersion - and their per-knob derivatives - off the
-    resulting normal-form maps. The optimiser drives the shared knobs to minimise
-    the summed weighted residual over every enabled observable.
-
-    Nothing is seeded from the measurement. There is no starting point to
-    propagate from, so measurement noise never enters as an initial condition and
-    no error can be silently absorbed by an assumed anchor.
-
-    Passing several measurements taken at different momenta (``measurements``
-    keyed by the known MAD-NG momentum coordinate ``pt``) fits them jointly: ``pt`` is
-    a fixed per-worker input to twiss, not a knob, so the off-momentum bend
-    response and the dispersive orbit come from the physics. The differing-
-    ``pt`` Jacobians are independent, which lifts the single-measurement rank
-    deficiency.
-
-    Observables in different units (beta in m, phase in turns, orbit in m) are
-    made commensurable purely by inverse-variance weighting from the measured
-    errors; there is deliberately no per-family scale factor to tune.
-    """
+class _GaussNewtonFitter(BaseFitter):
+    """Shared lifecycle and solve for full-ring Gauss-Newton fitters."""
 
     _defer_managers = True
+    worker_class: type
+    log_suffix: str
+    fit_label: str
 
     def __init__(
         self,
         accelerator: Accelerator,
         sequence_config: SequenceConfig,
-        measurements: dict[float, str | Path | pd.DataFrame],
-        observables: tuple[str, ...] = DEFAULT_OBSERVABLES,
+        *,
+        num_workers: int,
         lm_config: LevenbergMarquardtConfig | None = None,
         initial_knob_strengths: dict[str, float] | None = None,
-        corrector_knobs: Path | None = None,
-        tune_knobs: Path | None = None,
         true_strengths: Path | dict[str, float] | None = None,
         use_errors: bool = True,
-        prior_strength: float = 0.0,
+        prior_strengths: Mapping[str, float] | None = None,
         output_config: OutputConfig | None = None,
-    ):
-        """Initialise the closed-twiss fitter.
-
-        Args:
-            accelerator: Accelerator instance defining machine configuration.
-            sequence_config: Sequence configuration (``magnet_range`` selects the
-                optimised elements; use ``"$start/$end"`` for the whole ring).
-            measurements: Measured optics keyed by their known momentum offset
-                MAD-NG ``pt``. Each value is either a path to an omc3 measurement
-                folder or a DataFrame indexed by BPM name carrying the columns in
-                :data:`MEASUREMENT_COLUMNS` for the enabled observables. A single
-                on-momentum measurement is ``{0.0: measurement}``.
-            observables: Observable families to fit. See :data:`DEFAULT_OBSERVABLES`.
-            lm_config: Levenberg-Marquardt solve configuration.
-            initial_knob_strengths: Initial knob strengths in optimisation space.
-            corrector_knobs: Optional corrector strengths file.
-            tune_knobs: Optional tune knobs file.
-            true_strengths: Optional true strengths for reporting.
-            use_errors: Weight the residual by measurement errors when available.
-                When ``False``, each observable family is weighted by the inverse
-                of its own mean square target, which keeps families in different
-                units commensurable without any measured error bars.
-            prior_strength: Dimensionless strength of an isotropic Gaussian prior
-                on the knobs, centred on ``initial_knob_strengths`` (the nominal
-                model). ``0`` disables it. When set, a fixed Tikhonov term
-                ``alpha·I`` is added to the Gauss-Newton Hessian and
-                ``alpha·(theta - theta0)`` to the gradient, with
-                ``alpha = prior_strength · median(diag H)`` fixed from the first
-                iteration's data Hessian. This is a MAP prior, not Marquardt
-                damping: it is isotropic, fixed, and shrinks toward the nominal
-                knobs rather than the current point - so it regularises the
-                noise-dominated weak directions without biasing the
-                well-determined ones. Start small (``1e-6``-``1e-3``) and increase
-                until the recovered knobs stop chasing noise.
-            output_config: Output and logging configuration.
-        """
-        if not measurements:
-            raise ValueError("measurements must contain at least one measured optics set")
-        unknown = [name for name in observables if name not in MEASUREMENT_COLUMNS]
-        if unknown:
-            raise ValueError(
-                f"Unknown observables {unknown}; known: {sorted(MEASUREMENT_COLUMNS)}"
-            )
-        if not observables:
-            raise ValueError("At least one observable must be fitted")
+    ) -> None:
         if accelerator.optimise_energy:
-            # ``pt`` is an input here, not a knob: each worker pins its own
-            # measured momentum on the parametric map so cofind returns that
-            # worker's off-momentum closed solution. Fitting a global energy knob
-            # on top would be both unidentifiable against the per-worker pin and
-            # inconsistent - the knob list MAD-NG sees would be one shorter than
-            # the one the fitter aggregates over.
             raise ValueError(
-                "ClosedTwissFitter does not support accelerator.optimise_energy: the "
-                "momentum of each measurement is a fixed input, supplied as the key of "
-                "`measurements` (as pt, not dp/p). Set optimise_energy=False."
+                f"{type(self).__name__} does not support accelerator.optimise_energy; "
+                "measurement momenta are fixed pt inputs"
             )
 
         self.lm_config = lm_config or LevenbergMarquardtConfig()
         self.diagnostics: dict[str, object] = {}
-        self.observable_names = tuple(observables)
-        logger.info("LevenbergMarquardtConfig: %s", self.lm_config)
-        logger.info(
-            "Optimising knobs to match %d measured closed twiss set(s), observables: %s",
-            len(measurements),
-            ", ".join(self.observable_names),
-        )
-
         simulation_config = SimulationConfig(
-            num_workers=len(measurements),
-            num_batches=1,
-            use_fixed_bpm=True,
+            num_workers=num_workers, num_batches=1, use_fixed_bpm=True
         )
-
         super().__init__(
             accelerator=accelerator,
             optimiser_config=_base_optimiser_config(self.lm_config),
@@ -213,39 +132,12 @@ class ClosedTwissFitter(BaseFitter):
         )
 
         self.use_errors = use_errors
-        self.prior_strength = float(prior_strength)
-        if self.prior_strength < 0.0:
-            raise ValueError("prior_strength must be >= 0")
-        self.measurements = {
-            float(pt): load_measurement(source, self.observable_names)
-            for pt, source in measurements.items()
-        }
-
-        interface_options = {
-            key: value
-            for key, value in (
-                ("corrector_knobs", corrector_knobs),
-                ("tune_knobs", tune_knobs),
-            )
-            if value is not None
-        }
-        self.worker_payloads = create_worker_payloads(
-            self.measurements,
-            self.observable_names,
-            self.config_manager.all_bpms,
-            sequence_config.magnet_range,
-            sequence_config.bad_bpms,
-            accelerator,
-            interface_options,
-            self.use_errors,
-            self.mad_logfile,
-            self.python_logfile,
-        )
+        self.prior_strengths = _validate_prior_strengths(prior_strengths)
 
     def run(self) -> tuple[dict[str, float], dict[str, float]]:
         """Execute the closed-twiss optimisation with a Gauss-Newton solve."""
-        writer = self.setup_logging("closed_twiss_opt")
-        worker_manager = WorkerLifecycleManager(ClosedTwissWorker)
+        writer = self.setup_logging(self.log_suffix)
+        worker_manager = WorkerLifecycleManager(self.worker_class)
         self.final_knobs = None
 
         try:
@@ -267,9 +159,12 @@ class ClosedTwissFitter(BaseFitter):
 
         if writer is not None:
             writer.close()
-        logger.info("Closed-twiss optimisation complete.")
+        logger.info("%s optimisation complete.", self.fit_label)
         uncertainties = _hessian_uncertainties(hessian, knob_names)
-        return self.final_knobs, uncertainties
+        return (
+            self.accelerator.format_result_knobs(self.final_knobs),
+            self.accelerator.format_result_knobs(uncertainties),
+        )
 
     def _gauss_newton(
         self, channels, writer
@@ -286,7 +181,7 @@ class ClosedTwissFitter(BaseFitter):
         knob_names = list(self.config_manager.knob_names)
         current = np.array([float(self.initial_knobs[name]) for name in knob_names], dtype=float)
         prior_mean = current.copy()
-        prior_alpha: float | None = None
+        prior_alphas: np.ndarray | None = None
         run_start = time.time()
 
         optimiser = LevenbergMarquardtOptimiser(self.lm_config, initial_params=current)
@@ -299,11 +194,16 @@ class ClosedTwissFitter(BaseFitter):
             loss, grad, hessian, _hessian_phys, particle_loss = self._collect_gn(
                 channels, current_knobs, knob_names
             )
-            if self.prior_strength > 0.0 and not particle_loss:
-                if prior_alpha is None:
-                    prior_alpha = _prior_alpha(self.prior_strength, hessian)
+            if self.prior_strengths and not particle_loss:
+                if prior_alphas is None:
+                    prior_alphas = _prior_alphas(
+                        self.prior_strengths,
+                        hessian,
+                        knob_names,
+                        log=True,
+                    )
                 loss, grad, hessian = _apply_prior(
-                    loss, grad, hessian, current, prior_mean, prior_alpha
+                    loss, grad, hessian, current, prior_mean, prior_alphas
                 )
             update = optimiser.update(current, loss, grad, hessian, particle_loss)
             last_update = update
@@ -369,10 +269,14 @@ class ClosedTwissFitter(BaseFitter):
         _l, _g, _h, normal_matrix, particle_loss = self._collect_gn(
             channels, best_knobs, knob_names
         )
-        if not particle_loss and self.prior_strength > 0.0:
-            normal_matrix = normal_matrix + _prior_alpha(
-                self.prior_strength, normal_matrix
-            ) * np.eye(normal_matrix.shape[0])
+        if not particle_loss and self.prior_strengths:
+            normal_matrix = normal_matrix + np.diag(
+                _prior_alphas(
+                    self.prior_strengths,
+                    normal_matrix,
+                    knob_names,
+                )
+            )
         return best_knobs, normal_matrix, knob_names
 
     def _collect_gn(
@@ -430,11 +334,82 @@ class ClosedTwissFitter(BaseFitter):
             writer.flush()
 
 
+class ClosedTwissFitter(_GaussNewtonFitter):
+    """Optimise knobs so periodic model optics match measured closed twiss."""
+
+    worker_class = ClosedTwissWorker
+    log_suffix = "closed_twiss_opt"
+    fit_label = "Closed-twiss"
+
+    def __init__(
+        self,
+        accelerator: Accelerator,
+        sequence_config: SequenceConfig,
+        measurements: dict[float, str | Path | pd.DataFrame],
+        observables: tuple[str, ...] = DEFAULT_OBSERVABLES,
+        lm_config: LevenbergMarquardtConfig | None = None,
+        initial_knob_strengths: dict[str, float] | None = None,
+        corrector_knobs: Path | None = None,
+        tune_knobs: Path | None = None,
+        true_strengths: Path | dict[str, float] | None = None,
+        use_errors: bool = True,
+        prior_strengths: Mapping[str, float] | None = None,
+        output_config: OutputConfig | None = None,
+    ) -> None:
+        if not measurements:
+            raise ValueError("measurements must contain at least one measured optics set")
+        observables = tuple(observables)
+        if not observables:
+            raise ValueError("At least one observable must be fitted")
+        unknown = [name for name in observables if name not in MEASUREMENT_COLUMNS]
+        if unknown:
+            raise ValueError(
+                f"Unknown observables {unknown}; known: {sorted(MEASUREMENT_COLUMNS)}"
+            )
+
+        self.observable_names = observables
+        super().__init__(
+            accelerator,
+            sequence_config,
+            num_workers=len(measurements),
+            lm_config=lm_config,
+            initial_knob_strengths=initial_knob_strengths,
+            true_strengths=true_strengths,
+            use_errors=use_errors,
+            prior_strengths=prior_strengths,
+            output_config=output_config,
+        )
+        self.measurements = {
+            float(pt): load_measurement(source, observables)
+            for pt, source in measurements.items()
+        }
+        interface_options = {
+            key: value
+            for key, value in (
+                ("corrector_knobs", corrector_knobs),
+                ("tune_knobs", tune_knobs),
+            )
+            if value is not None
+        }
+        self.worker_payloads = create_worker_payloads(
+            self.measurements,
+            observables,
+            self.config_manager.all_bpms,
+            sequence_config.magnet_range,
+            sequence_config.bad_bpms,
+            accelerator,
+            interface_options,
+            self.use_errors,
+            self.mad_logfile,
+            self.python_logfile,
+        )
+
+
 def _base_optimiser_config(lm_config: LevenbergMarquardtConfig) -> OptimiserConfig:
     """Build the minimal config required by BaseFitter setup.
 
-    ClosedTwissFitter defers the shared optimisation-loop manager and runs its own
-    LM solve, so only the logging/configuration-manager path observes this.
+    The Gauss-Newton fitters defer the shared optimisation-loop manager and run
+    their own LM solve, so only the logging/configuration-manager path uses this.
     """
     return OptimiserConfig(
         max_epochs=lm_config.max_iterations,
@@ -447,24 +422,60 @@ def _base_optimiser_config(lm_config: LevenbergMarquardtConfig) -> OptimiserConf
     )
 
 
-def _prior_alpha(prior_strength: float, data_hessian: np.ndarray) -> float:
-    """Fix the isotropic Tikhonov coefficient from the first data Hessian.
+def _validate_prior_strengths(
+    strengths: Mapping[str, float] | None,
+) -> dict[str, float]:
+    """Validate exact terminal knob-family prior strengths."""
+    result: dict[str, float] = {}
+    for family, value in (strengths or {}).items():
+        family = str(family)
+        if not family or "." in family:
+            raise ValueError(
+                f"Prior family {family!r} must be an exact terminal attribute such as 'dk1l'"
+            )
+        value = float(value)
+        if value < 0.0:
+            raise ValueError("prior strengths must be >= 0")
+        result[family] = value
+    return result
 
-    Scaling to ``median(diag H)`` makes ``prior_strength`` dimensionless and
-    invariant to the worker-side weight normalisation, so the same value
-    regularises regardless of the absolute residual scale.
-    """
-    diag = np.abs(np.diag(np.asarray(data_hessian, dtype=float)))
-    positive = diag[diag > 0.0]
-    scale = float(np.median(positive)) if positive.size else 0.0
-    alpha = prior_strength * scale
-    logger.info(
-        "Knob prior enabled: alpha=%.3e (strength=%.3e x median diag H=%.3e)",
-        alpha,
-        prior_strength,
-        scale,
-    )
-    return alpha
+
+def _prior_alphas(
+    strengths: Mapping[str, float],
+    data_hessian: np.ndarray,
+    knob_names: list[str],
+    *,
+    log: bool = False,
+) -> np.ndarray:
+    """Return one independently scaled Tikhonov precision per knob family."""
+    strengths = _validate_prior_strengths(strengths)
+    diagonal = np.abs(np.diag(np.asarray(data_hessian, dtype=float)))
+    alphas = np.zeros(len(knob_names))
+    knob_families = [name.rpartition(".")[2] for name in knob_names]
+    missing = sorted(set(knob_families) - set(strengths))
+    unused = sorted(set(strengths) - set(knob_families))
+    if missing or unused:
+        raise ValueError(
+            f"Prior families must exactly cover optimised knobs; missing={missing}, unused={unused}"
+        )
+    families = np.asarray(knob_families)
+    for family, strength in strengths.items():
+        indices = np.flatnonzero(families == family)
+        positive = diagonal[indices][diagonal[indices] > 0.0]
+        scale = float(np.median(positive)) if positive.size else 0.0
+        alphas[indices] = float(strength) * scale
+        if log:
+            logger.info(
+                "Knob prior for %s: %d knobs, alpha=%.3e "
+                "(strength=%.3e x median diag H=%.3e)",
+                family,
+                len(indices),
+                alphas[indices[0]],
+                strength,
+                scale,
+            )
+
+    return alphas
 
 
 def _apply_prior(
@@ -473,22 +484,22 @@ def _apply_prior(
     hessian: np.ndarray,
     params: np.ndarray,
     prior_mean: np.ndarray,
-    alpha: float,
+    coefficients: np.ndarray,
 ) -> tuple[float, np.ndarray, np.ndarray]:
-    """Add an isotropic Gaussian knob prior to the loss, gradient and Hessian.
+    """Add a diagonal Gaussian knob prior to the loss, gradient and Hessian.
 
     Implements the MAP term ``0.5·alpha·||theta - theta0||²`` consistently with
     the worker convention (``grad = dL/dtheta``, ``hessian = d²L/dtheta²``): the
-    gradient gains ``alpha·(theta - theta0)`` and the Hessian ``alpha·I``. Because
-    ``alpha·I`` is isotropic and fixed (unlike Marquardt's annealed
-    ``lam·diag H``), it floors every eigenvalue of ``H`` at ``alpha``, damping the
-    noise-amplifying weak directions while shrinking toward the nominal knobs
-    rather than the current point.
+    gradient and Hessian gain the corresponding fixed diagonal precision. This
+    allows families with different units to use independent curvature scales.
     """
     delta = params - prior_mean
-    grad = grad + alpha * delta
-    hessian = hessian + alpha * np.eye(hessian.shape[0])
-    loss = loss + 0.5 * alpha * float(delta @ delta)
+    coefficients = np.asarray(coefficients, dtype=float)
+    if coefficients.shape != delta.shape:
+        raise ValueError("Prior coefficients must have one entry per optimisation knob")
+    grad = grad + coefficients * delta
+    hessian = hessian + np.diag(coefficients)
+    loss = loss + 0.5 * float(delta @ (coefficients * delta))
     return loss, grad, hessian
 
 
@@ -633,7 +644,7 @@ def _stamp_global_normalisation(payloads: list[tuple[WorkerConfig, ClosedTwissDa
     weights = [
         WeightProcessor.variance_to_weight(np.asarray(observable.variances, dtype=float))
         for _config, data in payloads
-        for observable in data.observables
+        for observable in data.all_observables
     ]
     largest = max((float(np.max(w)) for w in weights if w.size), default=0.0)
     scale = largest if largest > 0.0 else 1.0

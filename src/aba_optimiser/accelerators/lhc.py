@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from pymadng_utils.accelerators.lhc import LHC as BaseLHC  # noqa: N811
 
 from aba_optimiser.accelerators.base import Accelerator, KnobSpec
-from aba_optimiser.physics.lhc_bends import normalise_lhcbend_magnets
+from aba_optimiser.accelerators.magnet_grouping import normalise_lhcbend_magnets
 
 LOGGER = logging.getLogger(__name__)
 
@@ -201,15 +201,13 @@ class LHC(BaseLHC, Accelerator):
             normalised_names = normalise_lhcbend_magnets(true_strengths_dict, self.bend_lengths)
             mad_iface.mad.send(normalised_names)
 
-    def get_mad_attr_specs(self) -> dict[str, dict[str, str]]:
+    def get_mad_attr_spec(self, kind: str, attribute: str) -> dict[str, str]:
         """Return LHC-specific attr naming/value expressions."""
-        if not self.normalise_bends:
+        if not self.normalise_bends or kind != "sbend" or attribute != "k0":
             return {}
         return {
-            "sbend": {
-                "name_expr": 'string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".dk0l"',
-                "mad_value": "bend_dict[k_str_name]",
-            },
+            "name_expr": 'string.gsub(e.name, "(MB%.)([ABCD])([0-9]+[LR][1-8]%.B[12])", "%1%3") .. ".dk0l"',
+            "mad_value": "bend_dict[k_str_name]",
         }
 
     @staticmethod

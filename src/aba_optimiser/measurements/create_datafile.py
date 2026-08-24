@@ -37,10 +37,7 @@ from aba_optimiser.measurements.sequence import extract_tunes_from_job_file
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from aba_optimiser.measurements.preprocessing import (
-        ClosedOrbitInput,
-    )
-    from aba_optimiser.measurements.reference import ClosedOrbitReference
+    from tmom_recon import ReconstructionFrame
 LOGGER = logging.getLogger(__name__)
 
 AC_DIPOLE_ATTR_KEYS = (
@@ -113,11 +110,8 @@ def expand_machine_deltaps(
 ) -> list[float | None]:
     """Return one machine deltap value per measurement file.
 
-    These are absolute machine ``dp/p`` values. The reconstruction never sees them
-    as such: :func:`~aba_optimiser.measurements.reconstruction.process_single_dataframe`
-    reduces each to an offset from the reference orbit's own momentum origin before
-    handing it over, because an absolute momentum against a reference that sits off
-    momentum costs a factor 66 in reconstructed px.
+    These are converted to the momentum offset used with the explicit
+    setting-zero reconstruction frame.
     """
     if machine_deltaps is None:
         return [None] * file_count
@@ -224,7 +218,7 @@ def process_measurements(
     output_dir: Path,
     model_dir: str | Path,
     accelerator: LHC,
-    reference_closed_orbit: ClosedOrbitReference,
+    frame: ReconstructionFrame,
     filename: str | None = "pz_data.parquet",
     bad_bpms: list[str] | None = None,
     b2_errors: Path | None = None,
@@ -236,7 +230,7 @@ def process_measurements(
     tunes: list[float] | None = None,
     machine_deltaps: float | list[float] | None = None,
     ac_dipole_reconstruction_config: ACDipoleReconstructionConfig | None = None,
-    remove_closed_orbit: ClosedOrbitInput = None,
+    trim_to_kick: bool = False,
     n_turns_free: int = 1000,
     kicker_name: str | None = None,
     nan_variance_patterns: str | list[str] | None = None,
@@ -249,12 +243,7 @@ def process_measurements(
         output_dir: Directory for analysis outputs
         model_dir: Directory containing model files
         accelerator: LHC accelerator carrying beam, sequence_file and pc
-        reference_closed_orbit: Fitted MomentumReference the reconstruction references
-                to (orbit plus the momentum origin it was evaluated at), or the literal
-                "model" to fall back on the model closed orbit at pt=0. The model
-                fallback is a bias of one to two orders of magnitude that no fit-quality
-                metric exposes, so it has to be asked for by name --- see
-                :mod:`aba_optimiser.measurements.reference`.
+        frame: Measured orbit-zero frame used by every reconstruction.
         filename: Output filename for parquet file (None to skip saving)
         bad_bpms: List of bad BPM names (None to run analysis)
         b2_errors: Optional LHC dipole b2 error table applied to each AC-dipole
@@ -269,16 +258,8 @@ def process_measurements(
         tunes: Driven tunes [Qx, Qy, Qz] (None to extract from model)
         machine_deltaps: Optional machine momentum offsets used during px/py reconstruction.
                 If a list, must match files length and will be expanded per bunch.
-        remove_closed_orbit: Optional closed-orbit subtraction strategy. Supported values are
-                None, "twiss", "average", a dataframe indexed by BPM name (or with NAME/name
-                column), or a dict mapping BPM name to x/y/(px/py) values.
-                "average" removes the per-BPM turn mean, which deletes every static
-                contribution exactly --- dispersive orbit, error orbit, BPM reading
-                offsets and any constant per-BPM px bias. That is what makes it robust,
-                and it is also why it can never reveal such a bias: a real ~5.9e-4 rad
-                constant horizontal px bias sat undetected under this subtraction. Use
-                it when only the turn-varying motion matters.
-        n_turns_free: Number of pre-kick turns used when remove_closed_orbit="average".
+        trim_to_kick: Trim raw data to the detected kick without subtracting its orbit.
+        n_turns_free: Number of pre-kick turns used for kick detection.
         kicker_name: Optional kicker marker name used to detect already-aligned input.
         nan_variance_patterns: Optional regex pattern or patterns for names that should receive
                 NaN variances instead of failing the known-noise lookup.
@@ -442,10 +423,10 @@ def process_measurements(
                         use_uniform_vars=use_uniform_vars,
                         beam=accelerator.beam,
                         model_details=default_model_details,
-                        reference_closed_orbit=reference_closed_orbit,
+                        frame=frame,
                         ac_dipole_inputs_factory=get_thread_local_ac_dipole_inputs,
                         machine_deltap=machine_deltap_for_dataframe(i),
-                        remove_closed_orbit=remove_closed_orbit,
+                        trim_to_kick=trim_to_kick,
                         n_turns_free=n_turns_free,
                         kicker_name=kicker_name,
                         nan_variance_patterns=nan_variance_patterns,
@@ -477,10 +458,10 @@ def process_measurements(
                 use_uniform_vars=use_uniform_vars,
                 beam=accelerator.beam,
                 model_details=default_model_details,
-                reference_closed_orbit=reference_closed_orbit,
+                frame=frame,
                 ac_dipole_inputs_factory=get_thread_local_ac_dipole_inputs,
                 machine_deltap=machine_deltap_for_dataframe(i),
-                remove_closed_orbit=remove_closed_orbit,
+                trim_to_kick=trim_to_kick,
                 n_turns_free=n_turns_free,
                 kicker_name=kicker_name,
                 nan_variance_patterns=nan_variance_patterns,

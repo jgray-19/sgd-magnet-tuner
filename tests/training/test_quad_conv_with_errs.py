@@ -20,7 +20,7 @@ pytest.importorskip("xtrack_tools")
 import tfs
 from omc3.scripts.fake_measurement_from_model import generate as fake_measurement
 from pymadng_utils.io.utils import save_knobs
-from tmom_recon import ACDipoleConfig, ModelDetails
+from tmom_recon import ACDipoleConfig, ModelDetails, ReconstructionFrame
 from xtrack_tools.acd import run_ac_dipole_tracking
 from xtrack_tools.monitors import line_to_dataframes
 
@@ -194,9 +194,14 @@ def test_controller_bend_opt_simple(
             use_uniform_vars=False,
             beam=1,
             model_details=ac_dipole_model_details,
-            # This test reconstructs against the nominal model twiss, which is
-            # what the removed silent default did; now it has to say so.
-            reference_closed_orbit="model",
+            frame=ReconstructionFrame(
+                pd.DataFrame(
+                    0.0,
+                    index=pd.Index(measurement_df["name"].unique(), name="name"),
+                    columns=["x", "y"],
+                ),
+                dynamic_planes=("x", "y"),
+            ),
             ac_dipole_inputs_factory=lambda _idx: (ac_dipole_model_details, ac_dipole_config),
         )
         processed_measurements.append(processed_df)

@@ -7,9 +7,11 @@ import logging
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 import numpy as np
+import pandas as pd
 from nxcals.spark_session_builder import get_or_create
 from omc3.machine_data_extraction.nxcals_knobs import get_energy
 from pymadng_utils.io.utils import save_knobs
@@ -39,6 +41,7 @@ from aba_optimiser.measurements.create_datafile import (
 from aba_optimiser.measurements.online_knobs import save_online_knobs
 from aba_optimiser.measurements.orbit_averaging import compute_three_turn_averages
 from aba_optimiser.measurements.output import measurement_output_config
+from aba_optimiser.measurements.reference import reconstruction_frame
 from aba_optimiser.measurements.sequence import (
     get_or_make_sequence,
     make_machine_settings_knobs_file,
@@ -47,6 +50,9 @@ from aba_optimiser.physics.deltap import deltap_wrt_reference_total_energy
 from aba_optimiser.training.config.helpers import create_arc_measurement_config
 from aba_optimiser.training.config.models import SequenceConfig
 from aba_optimiser.training.tracking_fitter import ArcByArcFitter
+
+if TYPE_CHECKING:
+    from tmom_recon import ReconstructionFrame
 
 logger = logging.getLogger(__name__)
 
@@ -459,6 +465,7 @@ def process_single_config(
     date: str,
     skip_reload: bool,
     optimise_correctors: bool,
+    frame: ReconstructionFrame,
     use_fixed_bpm: bool = True,
     acdipole_n_bpms_each_side: int = 1,
     sequence_time: str | None = None,
@@ -557,9 +564,7 @@ def process_single_config(
         temp_analysis_dir,
         config.model_dir,
         accelerator=accelerator,
-        # No blank orbit is acquired by this workflow, so the model closed orbit is
-        # the reference. See aba_optimiser.measurements.reference for the cost.
-        reference_closed_orbit="model",
+        frame=frame,
         filename=None,
         bad_bpms=bad_bpms,
         b2_errors=b2_errors,
@@ -717,6 +722,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--beam", type=int, choices=[1, 2], help="Beam number 1 or 2", default=2)
     parser.add_argument(
+        "--orbit-zero",
+        type=Path,
+        required=True,
+        help="Parquet table containing the measured setting-zero x/y orbit.",
+    )
+    parser.add_argument(
         "--skip-reload",
         action="store_true",
         help="Skip reloading strengths from LSA and redoing analysis",
@@ -758,6 +769,7 @@ def main():
         ),
     )
     args = parser.parse_args()
+    frame = reconstruction_frame(pd.read_parquet(args.orbit_zero), dynamic_planes=("x", "y"))
 
     # Define date
     date = "2025-11-07"
@@ -786,6 +798,7 @@ def main():
             date,
             args.skip_reload,
             args.optimise_correctors,
+            frame,
             use_fixed_bpm,
             args.acdipole_n_bpms_each_side,
             args.time,

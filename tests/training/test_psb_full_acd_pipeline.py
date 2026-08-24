@@ -38,7 +38,6 @@ from aba_optimiser.measurements.acd_pipeline import (
     build_mixed_closed_orbit_reference,
     run_driven_and_compensated_optics,
 )
-from aba_optimiser.measurements.preprocessing import preprocess_measurement_dataframe
 from aba_optimiser.measurements.reconstruction import _scale_position_variances_after_svd
 from aba_optimiser.measurements.variances import assign_known_noise_variances
 from aba_optimiser.momentum_reference import ORBIT_AND_PHASE, fit_momentum_reference
@@ -63,7 +62,7 @@ pytest.importorskip("tmom_recon")
 from tmom_recon import (  # noqa: E402
     ACDipoleConfig,
     ModelDetails,
-    MomentumReference,
+    ReconstructionFrame,
     calculate_pz,
 )
 from tmom_recon.acd.integration import (  # noqa: E402
@@ -138,7 +137,6 @@ MAX_ACTION_ERROR = 0.10
 # psb_md refuses to reconstruct in the dynamic-part frame against a model carrying
 # more than 5e-5 m of closed orbit; the model there is meant to be flat, not nearly
 # flat, because the data has had its orbit removed outright.
-MAX_DYNAMIC_PART_MODEL_ORBIT = 5e-5
 # Per-BPM constant px offset, as a fraction of the px signal std. A turn-independent
 # offset is not averageable and displaces the loss minimum, so it must stay well under
 # the signal. Measured 0.162 with the closed orbit correct; it was 1.28 while the ACD
@@ -199,8 +197,7 @@ class MeasurementScenario:
     """
 
     name: str
-    #: Passed to ``preprocess_measurement_dataframe``. ``None`` keeps the orbit.
-    remove_closed_orbit: str | None
+    dynamic_planes: tuple[str, ...]
     #: Reference-fit observables. Phase alone cannot constrain bends.
     observables: tuple[str, ...]
     optimise_bends: bool
@@ -210,14 +207,14 @@ class MeasurementScenario:
 
 FULL_ORBIT = MeasurementScenario(
     name="full-orbit",
-    remove_closed_orbit=None,
+    dynamic_planes=(),
     observables=ORBIT_AND_PHASE,
     optimise_bends=True,
     use_correctors=True,
 )
 DYNAMIC_PART = MeasurementScenario(
     name="dynamic-part",
-    remove_closed_orbit="data-mean",
+    dynamic_planes=("x", "y"),
     observables=("mu1", "mu2"),
     optimise_bends=False,
     use_correctors=False,
@@ -833,33 +830,15 @@ def _mixed_reference(
     ``full-orbit`` mixes the measured positions with the fitted model momenta, which
     is what the production PSB reconstruction does.
 
-    ``dynamic-part`` takes the model's own closed orbit instead. That fit ran with
-    no bend knobs and no correctors, so its lattice has no closed orbit to speak of
-    and the reference is flat by construction -- which is the point: the data has had
-    its orbit subtracted, and the model has to be built in the same frame rather than
-    have a measured orbit forced onto it. psb_md section 8.3 records what happens
-    otherwise, a model and data disagreeing on the orbit rejecting every acquisition.
+    ``dynamic-part`` uses the simulated setting-zero acquisition as its measured
+    orbit zero. No model-orbit or per-file-mean fallback is permitted.
     """
-    if scenario.remove_closed_orbit is None:
+    if not scenario.dynamic_planes:
         LOGGER.info("Building mixed closed-orbit reference")
         measured = machine.free_twiss[REFERENCE_DPP]
         reference = build_mixed_closed_orbit_reference(measured[["x", "y"]], fitted.closed_orbit)
     else:
-        reference = fitted.closed_orbit.copy()
-        orbit_rms = _rms(
-            reference[[c for c in reference.columns if str(c).lower() in ("x", "y")]]
-            .to_numpy(dtype=float)
-        )
-        LOGGER.info(
-            "Using the bend-free, corrector-free model closed orbit as the "
-            "dynamic-part reference; orbit_rms=%.3e m",
-            orbit_rms,
-        )
-        assert orbit_rms < MAX_DYNAMIC_PART_MODEL_ORBIT, (
-            f"the dynamic-part reference model still carries {orbit_rms:.3e} m of "
-            f"closed orbit (limit {MAX_DYNAMIC_PART_MODEL_ORBIT:.1e}); it was not "
-            f"built without bends and correctors"
-        )
+        reference = machine.free_twiss[REFERENCE_DPP][["x", "px", "y", "py"]].copy()
     fitted_angles = fitted.closed_orbit[["px", "py"]].to_numpy(dtype=float)
     reference_angles = reference[["px", "py"]].to_numpy(dtype=float)
     LOGGER.warning(
@@ -930,7 +909,7 @@ def _bpm_momentum_bias(
     """
     estimate = estimate.assign(name=estimate["name"].astype(str).str.upper())
     truth = truth.assign(name=truth["name"].astype(str).str.upper())
-    if scenario.remove_closed_orbit is not None:
+    if scenario.dynamic_planes:
         truth = truth.copy()
         for column in ("px", "py"):
             truth[column] = truth[column] - truth.groupby("name", observed=True)[
@@ -959,49 +938,6 @@ def _bpm_momentum_bias(
         per_bpm["px_res"].abs().max(),
     )
     return fraction
-
-
-def _closed_orbit_reference(
-    bpm_data: pd.DataFrame,
-    scenario: MeasurementScenario,
-    *,
-    model_twiss: pd.DataFrame,
-    pt: float,
-) -> pd.DataFrame | None:
-    """Build the closed-orbit reference the scenario wants removed from the data.
-
-    The dynamic-part frame subtracts each BPM's own flat-top mean, not the model
-    orbit: the mean of a driven oscillation over the flat top *is* the closed orbit
-    at that BPM, so this is a data-only estimate that removes the static orbit
-    without biasing the driven betatron motion, and it stays exact when the model's
-    orbit is wrong. Subtracting the model instead would fold the model-vs-machine
-    orbit error into the measurement.
-
-    The dispersive part ``pt * D`` is put back, so only the zero-energy closed orbit
-    is removed. That is what keeps the frame exact off momentum: the model twiss the
-    reconstruction transports with is taken at ``pt`` and therefore still carries its
-    dispersive orbit, so removing the measurement's would leave the two disagreeing
-    by ``pt * D`` -- 1.8 mm at the PSB's Dx = -2.9 m and pt = -6.2e-4.
-    """
-    if scenario.remove_closed_orbit is None:
-        return None
-    if scenario.remove_closed_orbit != "data-mean":
-        raise ValueError(f"Unsupported closed-orbit source {scenario.remove_closed_orbit!r}")
-    means = bpm_data.groupby("name", observed=True)[["x", "y"]].mean()
-    means.index = means.index.astype(str).str.upper()
-    means.index.name = "name"
-    dispersion = model_twiss.reindex(means.index)
-    for plane, column in (("x", "dx"), ("y", "dy")):
-        if column in dispersion.columns:
-            means[plane] -= pt * dispersion[column].to_numpy(dtype=float)
-    LOGGER.info(
-        "Dynamic-part reference; pt=%+.6e, dispersive orbit removed from the "
-        "reference: rms_x=%.3e m, rms_y=%.3e m",
-        pt,
-        _rms(pt * dispersion["dx"].to_numpy(dtype=float)) if "dx" in dispersion else 0.0,
-        _rms(pt * dispersion["dy"].to_numpy(dtype=float)) if "dy" in dispersion else 0.0,
-    )
-    return means
 
 
 def _reconstruct_one(
@@ -1115,56 +1051,31 @@ def _reconstruct_one(
     # let this path drift from the pipeline it is supposed to represent.
     model_twiss = model_closed_orbit.loc[:, ~model_closed_orbit.columns.duplicated()].copy()
     model_twiss.index = model_twiss.index.astype(str).str.upper()
-    orbit_before = float(bpm_data.groupby("name", observed=True)["x"].mean().abs().mean())
-    prepared = preprocess_measurement_dataframe(
-        bpm_data,
-        model_twiss,
-        remove_closed_orbit=_closed_orbit_reference(
-            bpm_data, scenario, model_twiss=model_twiss, pt=pt
-        ),
+    prepared = bpm_data[bpm_data["name"].isin(model_twiss.index)]
+    frame = ReconstructionFrame(
+        orbit_zero=reference_co[["x", "y"]],
+        dynamic_planes=scenario.dynamic_planes,
+        fitted_momenta=None if scenario.dynamic_planes else reference_co[["px", "py"]],
     )
-    prepared = prepared[prepared["name"].isin(model_twiss.index)]
-    orbit_after = float(prepared.groupby("name", observed=True)["x"].mean().abs().mean())
     LOGGER.info(
-        "Measurement preprocessed; dpp=%+.4e, scenario=%s, remove_closed_orbit=%s, "
-        "rows=%d -> %d, mean_|x| %.3e -> %.3e m",
+        "Measurement framed; dpp=%+.4e, scenario=%s, dynamic_planes=%s, "
+        "rows=%d -> %d",
         dpp,
         scenario.name,
-        scenario.remove_closed_orbit,
+        scenario.dynamic_planes,
         len(bpm_data),
         len(prepared),
-        orbit_before,
-        orbit_after,
     )
-    # A closed-orbit removal that silently matches nothing looks exactly like one
-    # that ran, which is how psb_md ended up with two orbits' worth of runs it
-    # believed were in the dynamic-part frame (section 8.6). Prove it happened.
-    if scenario.remove_closed_orbit is None:
-        assert orbit_after == pytest.approx(orbit_before), (
-            f"dpp={dpp:+.4e}: {scenario.name} must not touch the closed orbit"
-        )
-    else:
-        # Only the zero-energy orbit is removed; the dispersive pt*D part stays, so
-        # what should remain is exactly that and nothing else.
-        expected = float(
-            np.abs(pt * model_twiss.reindex(
-                prepared["name"].astype(str).str.upper().unique()
-            )["dx"].to_numpy(dtype=float)).mean()
-        )
-        assert orbit_after == pytest.approx(expected, rel=0.05, abs=1e-6), (
-            f"dpp={dpp:+.4e}: {scenario.name} left mean|x|={orbit_after:.3e} m in the "
-            f"data against the {expected:.3e} m of dispersive orbit it should keep "
-            f"(was {orbit_before:.3e} m); the subtraction removed the wrong thing"
-        )
     result = calculate_pz(
         prepared,
         model_details,
-        reference=MomentumReference(closed_orbit=reference_co, pt=0.0),
+        frame=frame,
         measurement_dir=compensated_dir,
         model_optics=("alpha", "beta"),
-        measurement_pt=pt,
+        measurement_pt_offset=pt,
         acd=acd_config,
         info=False,
+        barrier_s=acd_config.barrier_s,
     )
     assert isinstance(result, pd.DataFrame)
     acd_result = result.attrs["acd_result"]
@@ -1251,14 +1162,15 @@ def _reconstruct_one(
     generator = calculate_pz(
         prepared,
         model_details,
-        reference=MomentumReference(closed_orbit=reference_co, pt=0.0),
+        frame=frame,
         measurement_dir=compensated_dir,
         model_optics=("alpha", "beta"),
-        measurement_pt=pt,
+        measurement_pt_offset=pt,
         acd=acd_config,
         acd_only=True,
         generator=True,
         info=False,
+        barrier_s=acd_config.barrier_s,
     )
     _log_elapsed(
         "ACD momentum reconstruction",
@@ -1480,7 +1392,7 @@ def test_psb_acd_initial_conditions_and_fit_r2(
             compensated_dir=compensated_dirs[pt_values[dpp]],
             machine=machine,
             fitted=fitted,
-            reference_co=MomentumReference(closed_orbit=mixed_reference, pt=0.0).closed_orbit,
+            reference_co=mixed_reference,
             scenario=scenario,
         )
         acd_result = result.attrs["acd_result"]
@@ -1559,9 +1471,7 @@ def test_psb_acd_campaign_snr_guard_pass_rate(
                 compensated_dir=compensated_dirs[pt_values[REFERENCE_DPP]],
                 machine=machine,
                 fitted=fitted,
-                reference_co=MomentumReference(
-                    closed_orbit=_mixed_reference(machine, fitted, scenario), pt=0.0
-                ).closed_orbit,
+                reference_co=_mixed_reference(machine, fitted, scenario),
                 scenario=scenario,
             )
         except ACDipoleStateConsistencyError as error:
@@ -2110,7 +2020,7 @@ def test_psb_full_acd_reconstruction_and_optimisation(
             compensated_dir=compensated_dirs[pt_values[dpp]],
             machine=machine,
             fitted=fitted,
-            reference_co=MomentumReference(closed_orbit=mixed_reference, pt=0.0).closed_orbit,
+            reference_co=mixed_reference,
         )
         guard_records = (
             reconstruction_results[dpp].attrs["acd_result"].attrs["acd_state_consistency"]

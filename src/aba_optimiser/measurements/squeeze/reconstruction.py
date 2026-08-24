@@ -15,14 +15,13 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 import tfs
-from tmom_recon import ACDipoleConfig, ModelDetails, calculate_pz
+from tmom_recon import ACDipoleConfig, ModelDetails, ReconstructionFrame, calculate_pz
 from tmom_recon.acd.integration import apply_precomputed_ac_dipole_bpm_overrides
 from tmom_recon.physics.pt_calculation import estimate_pt_from_model
 from tmom_recon.svd import svd_clean_measurements, weighted_svd_clean_measurements
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.measurements.loading import read_lhc_bpm_tbt, tbt_xy_to_long_dataframe
-from aba_optimiser.measurements.reference import model_closed_orbit_reference
 from aba_optimiser.measurements.sequence import extract_tunes_from_job_file
 from aba_optimiser.noise import assign_bpm_variances
 
@@ -61,6 +60,7 @@ def reconstruct_ac_dipole_measurements(
     sequence_path: Path,
     beam: int,
     energy: float,
+    frame: ReconstructionFrame,
     use_weighted_svd: bool = True,
     tune_knobs_files: list[Path | None] | None = None,
     corrector_knobs_files: list[Path | None] | None = None,
@@ -132,14 +132,11 @@ def reconstruct_ac_dipole_measurements(
             )
             orig_data = orig_data[~orig_data["name"].str.upper().isin(unknown_bpms)].copy()
 
-        # acd_only=True: calculate_pz returns before reconstruct_momenta, so this
-        # reference is only consumed by estimate_pt_from_model above.
-        reference_co = model_closed_orbit_reference(model_twiss)
         pt_est = float(
             estimate_pt_from_model(
                 orig_data.copy(deep=True),
                 model_twiss,
-                reference=reference_co,
+                frame=frame,
             )
         )
         dpp_est = float(lhc_accel.pt2dp(pt_est))
@@ -160,10 +157,12 @@ def reconstruct_ac_dipole_measurements(
         reconstructed = calculate_pz(
             orig_data,
             model_details,
-            reference=reference_co,
+            frame=frame,
+            measurement_pt_offset=pt_est,
             acd=acd_config,
             acd_only=True,
             info=False,
+            barrier_s=None,
         )
 
         if not isinstance(reconstructed, pd.DataFrame) or reconstructed.empty:

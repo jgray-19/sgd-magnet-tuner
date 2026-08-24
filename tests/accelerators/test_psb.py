@@ -32,6 +32,32 @@ class TestPSBAccelerator:
         assert psb.optimise_quadrupoles is False
         assert psb.optimise_correctors is False
         assert psb.optimise_energy is False
+        assert psb.group_quadrupoles_by_cell is False
+
+    def test_group_quadrupoles_by_cell_is_copied(self, test_sequence_file: Path) -> None:
+        psb = PSB(
+            ring=3,
+            sequence_file=test_sequence_file,
+            group_quadrupoles_by_cell=True,
+        )
+        assert psb.copy_with().group_quadrupoles_by_cell is True
+        assert psb.copy_with(group_quadrupoles_by_cell=False).group_quadrupoles_by_cell is False
+
+    def test_grouped_results_are_expanded_to_physical_magnets(
+        self, test_sequence_file: Path
+    ) -> None:
+        psb = PSB(
+            ring=3,
+            sequence_file=test_sequence_file,
+            group_quadrupoles_by_cell=True,
+        )
+        assert psb.format_result_knobs(
+            {"BR.QFOCELL1.dk1l": 2e-4, "BR.QDE1.dk1l": -1e-4}
+        ) == {
+            "BR.QFO11.dk1l": 2e-4,
+            "BR.QFO12.dk1l": 2e-4,
+            "BR.QDE1.dk1l": -1e-4,
+        }
 
     @pytest.mark.parametrize("ring", [1, 2, 3, 4])
     def test_seq_name_uses_ring_number(self, test_sequence_file: Path, ring: int) -> None:

@@ -17,13 +17,13 @@ from typing import TYPE_CHECKING, TypeAlias
 import numpy as np
 import tfs
 from pymadng_utils.io.utils import read_knobs
-from pymadng_utils.mad.knob_mad_interface import resolve_knobs
 from pymadng_utils.mad.accelerator_mad_interface import (
     MAGNET_STRENGTH_SUFFIXES,
     MAX_MULTIPOLE,
     MULTIPOLE_ATTRS,
     MultipoleInfo,
 )
+from pymadng_utils.mad.knob_mad_interface import resolve_knobs
 
 from aba_optimiser.accelerators import LHC
 from aba_optimiser.measurements.b2_errors import read_b2_error_table
@@ -607,11 +607,10 @@ class GradientDescentMadInterface(GenericMadInterface):
         strength is never mutated. For direct attrs (kick, dx, …) the element
         attribute itself becomes a deferred variable.
         """
-        attr_specs = self.accelerator.get_mad_attr_specs()
         lines: list[str] = []
 
         for kind, attr, condition in attr_conditions:
-            spec = attr_specs.get(kind, {})
+            spec = self.accelerator.get_mad_attr_spec(kind, attr)
             mp = MULTIPOLE_ATTRS.get(attr) or indexed_multipole_attr_info(attr)
 
             # The knob variable name in MAD (e.g. "MQXA.1R1.dk1l")
@@ -636,7 +635,7 @@ class GradientDescentMadInterface(GenericMadInterface):
                 ]
             else:
                 tmpl += [
-                    f"    loaded_sequence[k_str_name] = {mad_value}",
+                    f"    loaded_sequence[k_str_name] = loaded_sequence[k_str_name] or {mad_value}",
                     f"    loaded_sequence[e.name].{attr} = \\->loaded_sequence[k_str_name]",
                 ]
             tmpl.append(f"    store_knobs(k_str_name, {mad_value}, '{attr}', s)")
@@ -672,9 +671,15 @@ class GradientDescentMadInterface(GenericMadInterface):
             attr_block = f"""
 local function store_knobs(k_str_name, mad_value, attr, spos)
     if not used[k_str_name] then
-        used[k_str_name] = true  ! deduplicate (e.g. bends with shared k0)
+        used[k_str_name] = #knob_names + 1  ! deduplicate (e.g. shared PSB QFO knobs)
+        counts[k_str_name] = 1
         table.insert(knob_names, k_str_name)
         table.insert(spos_list, spos)
+    else
+        local count = counts[k_str_name] + 1
+        local index = used[k_str_name]
+        spos_list[index] = (spos_list[index] * (count - 1) + spos) / count
+        counts[k_str_name] = count
     end
 end
 {_deferred_table_helpers()}
@@ -694,6 +699,7 @@ table.insert(knob_names, "pt")
 local knob_names = {{}}
 local spos_list = {{}}
 local used = {{}}
+local counts = {{}}
 {attr_block}
 {energy_block}
 coord_names = {{"x", "px", "y", "py", "t", "pt"}}

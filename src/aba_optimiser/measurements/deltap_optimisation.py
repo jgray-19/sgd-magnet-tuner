@@ -13,6 +13,7 @@ import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -39,6 +40,9 @@ from aba_optimiser.training.config.models import (
     SequenceConfig,
 )
 from aba_optimiser.training.tracking_fitter import ArcByArcFitter
+
+if TYPE_CHECKING:
+    from tmom_recon import ReconstructionFrame
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +190,7 @@ def process_single_config(
     config: MeasurementSetupConfig,
     temp_analysis_dir: Path,
     date: str,
+    frame: ReconstructionFrame,
 ) -> list[float]:
     """Reconstruct one campaign setting and run its arc-by-arc deltap optimisation.
 
@@ -219,9 +224,7 @@ def process_single_config(
         temp_analysis_dir,
         config.model_dir,
         accelerator=accelerator,
-        # No blank orbit is acquired by this campaign, so the model closed orbit is
-        # the reference. See aba_optimiser.measurements.reference for the cost.
-        reference_closed_orbit="model",
+        frame=frame,
         filename=_MEASUREMENT_FILENAME,
     )
     bad_bpms = _load_bad_bpms(bad_bpms_file, bad_bpms)
@@ -243,6 +246,7 @@ def process_single_config(
 
 def run_beam_campaign(
     beam: int,
+    frame: ReconstructionFrame,
     *,
     date: str = "2025-11-07",
     folder: str = "/nfs/cs-ccr-nfs4/lhc_data/OP_DATA/FILL_DATA/11259/BPM",
@@ -258,10 +262,11 @@ def run_beam_campaign(
     )
     temp_analysis_dir = MEASUREMENTS_ARTIFACTS_ROOT / "temp" / "temp_analysis"
     for config in configs:
-        process_single_config(config, temp_analysis_dir, date)
+        process_single_config(config, temp_analysis_dir, date, frame)
 
 
 def run_beam2_2025_04_09_campaign(
+    frame: ReconstructionFrame,
     analysis_dir: Path = PROJECT_ROOT / "analysis_b2",
 ) -> list[float]:
     """Run the older 2025-04-09 beam-2 campaign (per-time subfolder SDDS layout)."""
@@ -293,9 +298,7 @@ def run_beam2_2025_04_09_campaign(
         analysis_dir,
         model_dir,
         accelerator=accelerator,
-        # No blank orbit is acquired by this campaign, so the model closed orbit is
-        # the reference. See aba_optimiser.measurements.reference for the cost.
-        reference_closed_orbit="model",
+        frame=frame,
         filename=_MEASUREMENT_FILENAME,
     )
     bad_bpms = _load_bad_bpms(bad_bpms_file, bad_bpms)

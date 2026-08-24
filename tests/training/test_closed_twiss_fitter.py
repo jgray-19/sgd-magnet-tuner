@@ -152,13 +152,26 @@ def _fit(
     prior_strength: float = 0.0,
 ) -> dict[str, float]:
     """Run the real ``ClosedTwissFitter`` and return the recovered knobs."""
+    families = {
+        family
+        for flag, family in (
+            ("optimise_quadrupoles", "dk1l"),
+            ("optimise_bends", "dk0l"),
+            ("optimise_quad_dx", "dx"),
+            ("optimise_quad_dy", "dy"),
+            ("optimise_quad_tilt", "tilt"),
+        )
+        if accelerator_kwargs.get(flag)
+    }
     fitter = ClosedTwissFitter(
         accelerator=PSB(ring=3, sequence_file=seq_psb, **accelerator_kwargs),
         sequence_config=SequenceConfig(magnet_range="$start/$end"),
         lm_config=LevenbergMarquardtConfig(max_iterations=40, gradient_converged_value=1e-12),
         measurements=measurements,
         observables=observables,
-        prior_strength=prior_strength,
+        prior_strengths=(
+            dict.fromkeys(families, prior_strength) if prior_strength > 0.0 else None
+        ),
     )
     final_knobs, _ = fitter.run()
     return final_knobs

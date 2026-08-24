@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from pymadng_utils.accelerators.psb import PSB as BasePSB  # noqa: N811
 
 from aba_optimiser.accelerators.base import Accelerator, KnobSpec
+from aba_optimiser.accelerators.magnet_grouping import expand_psb_grouped_quadrupole_knobs
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -46,6 +47,7 @@ class PSB(BasePSB, Accelerator):
         optimise_energy: bool = False,
         optimise_bpm_dx: bool = False,
         optimise_bpm_dy: bool = False,
+        group_quadrupoles_by_cell: bool = False,
         custom_knobs_to_optimise: list[str] | None = None,
     ):
         """Initialise PSB accelerator for a specific ring."""
@@ -71,6 +73,7 @@ class PSB(BasePSB, Accelerator):
         # PSB-specific optimisation flags not handled by any parent
         self.optimise_bends = optimise_bends
         self.optimise_correctors = optimise_correctors
+        self.group_quadrupoles_by_cell = bool(group_quadrupoles_by_cell)
 
     def copy_with(self, **overrides) -> PSB:
         """Return a new PSB instance with selected parameters overridden."""
@@ -91,8 +94,33 @@ class PSB(BasePSB, Accelerator):
             optimise_quad_tilt=o.get("optimise_quad_tilt", self.optimise_quad_tilt),
             optimise_bpm_dx=o.get("optimise_bpm_dx", self.optimise_bpm_dx),
             optimise_bpm_dy=o.get("optimise_bpm_dy", self.optimise_bpm_dy),
+            group_quadrupoles_by_cell=o.get(
+                "group_quadrupoles_by_cell", self.group_quadrupoles_by_cell
+            ),
             custom_knobs_to_optimise=o.get("custom_knobs_to_optimise", self.custom_knobs_to_optimise),
         )
+
+    def get_mad_attr_spec(self, kind: str, attribute: str) -> dict[str, str]:
+        """Share the two QFO knobs in each cell when native grouping is enabled."""
+        suffixes = {"k1": "dk1l", "dx": "dx", "dy": "dy", "tilt": "tilt"}
+        if not self.group_quadrupoles_by_cell or kind != "quadrupole":
+            return {}
+        suffix = suffixes.get(attribute)
+        if suffix is None:
+            return {}
+        return {
+            "name_expr": (
+                'string.gsub(e.name, "^(BR%.QFO)(%d+)(%d)$", '
+                f'"%1CELL%2") .. ".{suffix}"'
+            )
+        }
+
+    def format_result_knobs(self, knobs: dict[str, float]) -> dict[str, float]:
+        """Return physical PSB knob values, expanding cell-grouped QFO knobs."""
+        formatted = super().format_result_knobs(knobs)
+        if not self.group_quadrupoles_by_cell:
+            return formatted
+        return expand_psb_grouped_quadrupole_knobs(formatted)
 
     @property
     def seq_name(self) -> str:

@@ -132,45 +132,17 @@ class ClosedTwissWorker(AbstractWorker[ClosedTwissData]):
         BPM ordering and the twiss ordering are both monotonic in ``s``, that is
         the same permutation applied to the first BPM of each interval.
         """
-        missing = [n for n in twiss_names if n not in self._measured_index]
-        if missing:
-            raise RuntimeError(
-                f"Worker {self.worker_id}: {len(missing)} observed BPMs have no "
-                f"measurement, e.g. {missing[:5]}"
-            )
-        order = np.array([self._measured_index[n] for n in twiss_names])
-        # Contiguous, not merely monotonic. ``idx = order[:-1]`` selects the
-        # measured interval *starting* at each BPM, i.e. order[j] -> order[j]+1,
-        # while the model interval is order[j] -> order[j+1]. A gap makes those
-        # two different intervals and mis-assigns every phase target downstream
-        # of it, silently. Unreachable today - the worker marks unmeasured BPMs
-        # bad so twiss observes exactly the measured set - but the alignment
-        # depends on it, so it is checked rather than assumed.
-        if not np.all(np.diff(order) == 1):
-            raise RuntimeError(
-                f"Worker {self.worker_id}: the observed BPMs are not a contiguous run "
-                "of the measured ordering; phase advances cannot be aligned by interval."
-            )
-
-        raw_weights: list[np.ndarray] = []
-        targets: list[np.ndarray] = []
-        for obs in self.observables:
-            idx = order if obs.kind is ObservableKind.POINTWISE else order[:-1]
-            targets.append(np.asarray(obs.targets, dtype=float)[idx])
-            raw_weights.append(
-                WeightProcessor.variance_to_weight(np.asarray(obs.variances, dtype=float)[idx])
-            )
-
-        self.targets = targets
+        self.targets, self.raw_weights, self.weights = _align_observables(
+            self.observables,
+            self._measured_index,
+            twiss_names,
+            self.weight_scale,
+            worker_id=self.worker_id,
+        )
         # Physical inverse-variance weights, kept un-normalised so the normal
         # matrix below is the true chi-square curvature and its inverse is a
         # covariance in real knob units. The optimiser steps with the normalised
         # copy (the scale cancels in H^-1 g), but the reported 1-sigma must not.
-        self.raw_weights = raw_weights
-        # Divided by the *fit-wide* largest weight, not this worker's own: the
-        # fitter sums the workers' losses, so a per-worker divisor would silently
-        # re-weight each momentum by how precise its best BPM happened to be.
-        self.weights = [weights / self.weight_scale for weights in raw_weights]
         self._twiss_bpm_order = twiss_names
 
     def compute_gradients_and_loss(
@@ -260,32 +232,14 @@ class ClosedTwissWorker(AbstractWorker[ClosedTwissData]):
         real knob units. Only the latter gives a meaningful 1-sigma, and it
         follows the ``JᵀWJ`` (no factor 2) convention of ``hessian_uncertainties``.
         """
-        n_knobs = jacobian.shape[-1]
-        grad = np.zeros(n_knobs)
-        hessian = np.zeros((n_knobs, n_knobs))
-        normal_matrix = np.zeros((n_knobs, n_knobs))
-        loss = 0.0
-
-        for i, obs in enumerate(self.observables):
-            values, jac = model[i], jacobian[i]
-            if obs.kind is ObservableKind.ADVANCE:
-                values, jac = _to_advance(values, jac)
-
-            weight, raw_weight = self.weights[i], self.raw_weights[i]
-            # A zero weight must actually remove the point, which needs the
-            # residual zeroed too: ``0 * nan`` is ``nan``, so a single unmeasured
-            # target would otherwise poison loss, grad and hessian for the whole
-            # worker. The fitter reads a non-finite loss as "cofind lost the
-            # closed orbit" and stops with ``no_progress``, returning the nominal
-            # knobs - a bad measurement cell masquerading as an unstable machine.
-            residual = np.where(weight > 0.0, values - self.targets[i], 0.0)
-
-            grad += 2.0 * (weight * residual) @ jac
-            hessian += 2.0 * (jac.T * weight) @ jac
-            normal_matrix += (jac.T * raw_weight) @ jac
-            loss += float(np.sum(weight * residual**2))
-
-        return grad, loss, hessian, normal_matrix
+        return _weighted_loss_gradient_hessian(
+            model,
+            jacobian,
+            self.observables,
+            self.targets,
+            self.weights,
+            self.raw_weights,
+        )
 
     def run(self) -> None:
         """Main worker loop for closed-twiss optimisation."""
@@ -344,6 +298,71 @@ class ClosedTwissWorker(AbstractWorker[ClosedTwissData]):
     def get_n_data_points(nbpms: int) -> int:
         """Number of BPMs the closed twiss is observed at."""
         return nbpms
+
+
+def _align_observables(
+    observables,
+    measured_index: dict[str, int],
+    twiss_names: list[str],
+    weight_scale: float,
+    *,
+    worker_id: int,
+):
+    """Align observable targets and weights to the model BPM ordering."""
+    missing = [name for name in twiss_names if name not in measured_index]
+    if missing:
+        raise RuntimeError(
+            f"Worker {worker_id}: {len(missing)} observed BPMs have no measurement, "
+            f"e.g. {missing[:5]}"
+        )
+    order = np.array([measured_index[name] for name in twiss_names])
+    if not np.all(np.diff(order) == 1):
+        raise RuntimeError(
+            f"Worker {worker_id}: the observed BPMs are not a contiguous run of "
+            "the measured ordering; phase advances cannot be aligned by interval."
+        )
+
+    targets = []
+    raw_weights = []
+    for observable in observables:
+        indices = order if observable.kind is ObservableKind.POINTWISE else order[:-1]
+        targets.append(np.asarray(observable.targets, dtype=float)[indices])
+        raw_weights.append(
+            WeightProcessor.variance_to_weight(
+                np.asarray(observable.variances, dtype=float)[indices]
+            )
+        )
+    return targets, raw_weights, [weight / weight_scale for weight in raw_weights]
+
+
+def _weighted_loss_gradient_hessian(
+    model: np.ndarray,
+    jacobian: np.ndarray,
+    observables,
+    targets,
+    weights,
+    raw_weights,
+) -> tuple[np.ndarray, float, np.ndarray, np.ndarray]:
+    """Evaluate weighted least squares for explicitly supplied observable blocks."""
+    n_knobs = jacobian.shape[-1]
+    grad = np.zeros(n_knobs)
+    hessian = np.zeros((n_knobs, n_knobs))
+    normal_matrix = np.zeros((n_knobs, n_knobs))
+    loss = 0.0
+
+    for index, observable in enumerate(observables):
+        values, jac = model[index], jacobian[index]
+        if observable.kind is ObservableKind.ADVANCE:
+            values, jac = _to_advance(values, jac)
+
+        weight, raw_weight = weights[index], raw_weights[index]
+        residual = np.where(weight > 0.0, values - targets[index], 0.0)
+        grad += 2.0 * (weight * residual) @ jac
+        hessian += 2.0 * (jac.T * weight) @ jac
+        normal_matrix += (jac.T * raw_weight) @ jac
+        loss += float(np.sum(weight * residual**2))
+
+    return grad, loss, hessian, normal_matrix
 
 
 def _knob_monomial(index: int, n_knobs: int) -> str:

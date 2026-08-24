@@ -7,8 +7,10 @@ import logging
 import shutil
 from typing import TYPE_CHECKING
 
+import pandas as pd
 from pymadng_utils.accelerators.lhc import LHC as MadngLHCAccelerator  # noqa: N811
 from pymadng_utils.model_creator.madng_utils import update_model_with_madng
+from tmom_recon import ReconstructionFrame
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -16,6 +18,7 @@ if TYPE_CHECKING:
 from aba_optimiser.config import MEASUREMENTS_ARTIFACTS_ROOT
 from aba_optimiser.measurements.ac_dipole import ACDipoleOptimisationWindow
 from aba_optimiser.measurements.b2_errors import resolve_b2_error_table
+from aba_optimiser.measurements.loading import read_lhc_bpm_tbt, tbt_xy_to_long_dataframe
 from aba_optimiser.measurements.online_knobs import get_online_energy
 from aba_optimiser.measurements.sequence import (
     extract_tunes_from_job_file,
@@ -44,6 +47,19 @@ from aba_optimiser.measurements.squeeze.reconstruction import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _measured_zero_frame(files: list[Path], beam: int) -> ReconstructionFrame:
+    """Build the dynamic x/y frame from the campaign's measured zero setting."""
+    samples = []
+    for path in files:
+        tbt_data = read_lhc_bpm_tbt(path, beam=beam)
+        for matrix in tbt_data.matrices:
+            samples.append(tbt_xy_to_long_dataframe(matrix.X, matrix.Y))
+    if not samples:
+        raise ValueError("The zero-setting campaign contains no BPM samples")
+    orbit_zero = pd.concat(samples, ignore_index=True).groupby("name")[["x", "y"]].mean()
+    return ReconstructionFrame(orbit_zero=orbit_zero, dynamic_planes=("x", "y"))
 
 
 def process_measurements_fresh(
@@ -96,12 +112,14 @@ def process_measurements_fresh(
     )
 
     logger.info("Processing %d measurement files with AC-dipole reconstruction...", len(all_files))
+    frame = _measured_zero_frame(freq_metadata[ZEROHZ][0], beam)
     pzs_dict = reconstruct_ac_dipole_measurements(
         measurement_files=all_files,
         model_dir=model_dir,
         sequence_path=sequence_path,
         beam=beam,
         energy=energy,
+        frame=frame,
         use_weighted_svd=use_weighted_svd,
         tune_knobs_files=acd_tune_knobs_files or None,
         corrector_knobs_files=acd_corrector_knobs_files or None,

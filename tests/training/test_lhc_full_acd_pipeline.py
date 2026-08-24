@@ -45,7 +45,6 @@ from aba_optimiser.measurements.acd_pipeline import (
     ACDOpticsAnalysisConfig,
     run_driven_and_compensated_optics,
 )
-from aba_optimiser.measurements.preprocessing import preprocess_measurement_dataframe
 from aba_optimiser.training.config.models import (
     MeasurementConfig,
     MeasurementDetails,
@@ -56,7 +55,7 @@ from aba_optimiser.training.tracking_fitter import ACDMarkerFitter
 
 pytest.importorskip("tmom_recon")
 
-from tmom_recon import ACDipoleConfig, ModelDetails, MomentumReference, calculate_pz  # noqa: E402
+from tmom_recon import ACDipoleConfig, ModelDetails, ReconstructionFrame, calculate_pz  # noqa: E402
 from tmom_recon.acd.integration import (  # noqa: E402
     apply_precomputed_ac_dipole_bpm_overrides,
     resolve_ac_dipole_config,
@@ -261,18 +260,22 @@ def _reconstruct(*, root: Path, machine: LhcMachine, compensated_dir: Path) -> p
     model_twiss = model_closed_orbit.loc[:, ~model_closed_orbit.columns.duplicated()].copy()
     model_twiss.index = model_twiss.index.astype(str).str.upper()
     bpm_rows = machine.tracking[machine.tracking["name"].str.match(r"(?i)^BPM.*$")]
-    prepared = preprocess_measurement_dataframe(bpm_rows, model_twiss, remove_closed_orbit=None)
-    prepared = prepared[prepared["name"].isin(model_twiss.index)]
+    prepared = bpm_rows[bpm_rows["name"].isin(model_twiss.index)]
+    frame = ReconstructionFrame(
+        orbit_zero=machine.reference_co[["x", "y"]],
+        fitted_momenta=machine.reference_co[["px", "py"]],
+    )
 
     result = calculate_pz(
         prepared,
         model_details,
-        reference=MomentumReference(closed_orbit=machine.reference_co, pt=0.0),
+        frame=frame,
         measurement_dir=compensated_dir,
         model_optics=("alpha", "beta"),
-        measurement_pt=0.0,
+        measurement_pt_offset=0.0,
         acd=acd_config,
         info=False,
+        barrier_s=acd_config.barrier_s,
     )
     acd_result = result.attrs["acd_result"]
 

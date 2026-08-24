@@ -7,17 +7,10 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 from pymadng_utils.physics import beta_from_energy, dp2pt
-from tmom_recon import ACDipoleConfig, ModelDetails, calculate_pz
+from tmom_recon import ACDipoleConfig, ModelDetails, ReconstructionFrame, calculate_pz
 from tmom_recon.svd import weighted_svd_clean_measurements
 
-from aba_optimiser.measurements.preprocessing import (
-    ClosedOrbitInput,
-    preprocess_measurement_dataframe,
-)
-from aba_optimiser.measurements.reference import (
-    ClosedOrbitReference,
-    resolve_closed_orbit_reference,
-)
+from aba_optimiser.measurements.preprocessing import trim_measurement_to_kick
 from aba_optimiser.measurements.variances import (
     assign_known_noise_variances,
     assign_uniform_variances,
@@ -38,11 +31,11 @@ def process_single_dataframe(
     use_uniform_vars: bool,
     beam: int,
     model_details: ModelDetails,
-    reference_closed_orbit: ClosedOrbitReference,
+    frame: ReconstructionFrame,
     ac_dipole_inputs_factory: Callable[[int], tuple[ModelDetails, ACDipoleConfig] | None]
     | None = None,
     machine_deltap: float | None = None,
-    remove_closed_orbit: ClosedOrbitInput = None,
+    trim_to_kick: bool = False,
     n_turns_free: int = 1000,
     kicker_name: str | None = None,
     nan_variance_patterns: str | list[str] | None = None,
@@ -50,14 +43,8 @@ def process_single_dataframe(
 ) -> tuple[int, pd.DataFrame]:
     """Preprocess, weight, and reconstruct one measurement dataframe.
 
-    ``reference_closed_orbit`` is the fitted
-    :class:`~tmom_recon.reference.MomentumReference` the reconstruction
-    subtracts and restores. It is mandatory because referencing to the model orbit
-    instead is a bias of one to two orders of magnitude, and it carries its own
-    momentum origin so that ``machine_deltap`` can be reduced to an offset from it
-    rather than passed absolute (a factor 66; see
-    :mod:`aba_optimiser.measurements.reference`). Pass ``"model"`` to opt into the
-    model orbit at ``pt = 0`` explicitly.
+    ``frame`` owns the measured orbit-zero transformation. Raw BPM positions are
+    passed to tmom-recon; this wrapper never subtracts an orbit itself.
     """
     index, df = df_with_index
     # Each input dataframe is a single bunch; preserve its identifier across the
@@ -73,13 +60,13 @@ def process_single_dataframe(
         ac_dipole_inputs if ac_dipole_inputs is not None else (model_details, None)
     )
 
-    df = preprocess_measurement_dataframe(
-        df,
-        twiss,
-        remove_closed_orbit=remove_closed_orbit,
-        n_turns_free=n_turns_free,
-        kicker_name=kicker_name,
-    )
+    if trim_to_kick:
+        df = trim_measurement_to_kick(
+            df,
+            twiss,
+            n_turns_free=n_turns_free,
+            kicker_name=kicker_name,
+        )
     df = df[df["name"].isin(twiss.index)]
     df = _assign_variances(
         df,
@@ -94,16 +81,15 @@ def process_single_dataframe(
     df = cleaned
 
     machine_pt = _machine_deltap_to_pt(machine_deltap, twiss)
-    # The reference is a momentum origin as well as an orbit; calculate_pz expands the
-    # dispersion in machine_pt - reference.pt, never in the absolute machine_pt.
     df = calculate_pz(
         df,
         call_model_details,
-        reference=resolve_closed_orbit_reference(reference_closed_orbit, twiss),
+        frame=frame,
         measurement_dir=analysis_dir,
         reverse_meas_tws=beam == 2,
-        measurement_pt=machine_pt,
+        measurement_pt_offset=machine_pt,
         acd=ac_dipole_config,
+        barrier_s=None if ac_dipole_config is None else ac_dipole_config.barrier_s,
     )
     if not isinstance(df, pd.DataFrame):
         raise ValueError(f"Reconstruction returned unexpected type {type(df)} for dataframe")

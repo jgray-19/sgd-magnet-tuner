@@ -192,6 +192,11 @@ class Accelerator(BaseAccelerator, ABC):
 
         return formatted
 
+    def format_result_knobs(self, knobs: dict[str, float]) -> dict[str, float]:
+        """Map optimisation-space knob values to user-facing result names."""
+        names = self.format_result_knob_names(list(knobs))
+        return dict(zip(names, knobs.values(), strict=True))
+
     @abstractmethod
     def get_supported_knob_specs(self) -> list[KnobSpec]:
         """Return the knob specifications supported by this accelerator."""
@@ -255,8 +260,9 @@ class Accelerator(BaseAccelerator, ABC):
         """)
         mad_iface.mad.send(element_kind).send(patterns)
 
-    def get_mad_attr_specs(self) -> dict[str, dict[str, str]]:
-        """Return accelerator-specific attr name/value expressions for knob creation."""
+    def get_mad_attr_spec(self, kind: str, attribute: str) -> dict[str, str]:
+        """Return accelerator-specific expressions for one element attribute."""
+        del kind, attribute
         return {}
 
     def get_perturbation_families(self) -> dict[str, dict[str, str | float | dict]]:

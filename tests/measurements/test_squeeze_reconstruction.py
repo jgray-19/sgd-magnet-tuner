@@ -18,6 +18,7 @@ pytest.importorskip("tmom_recon")
 pytest.importorskip("xtrack_tools")
 
 import turn_by_turn as tbt
+from tmom_recon import ReconstructionFrame
 from turn_by_turn.structures import TbtData, TransverseData
 from xtrack_tools.acd import run_ac_dipole_tracking
 from xtrack_tools.monitors import line_to_dataframes
@@ -112,6 +113,10 @@ def test_reconstruct_ac_dipole_measurements_end_to_end(
         sequence_path=seq_b1,
         beam=1,
         energy=6800.0,
+        frame=ReconstructionFrame(
+            orbit_zero=track_df.groupby("name")[["x", "y"]].mean(),
+            dynamic_planes=("x", "y"),
+        ),
         num_workers=1,
     )
 
